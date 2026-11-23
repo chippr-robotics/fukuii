@@ -237,9 +237,6 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
 
 object LegacyPreByzantiumBlockchainTestsSpec:
 
-  /** Pre-existing divergences in this slice, each a separate consensus fix (measured against legacytests
-    * 1f581b8ccdc4c63acf5f2c5c1b155c690c32a8eb, LegacyTests/Cancun/BlockchainTests). All fail on gasUsed.
-    */
   /** Fixtures whose outcome depends on the test JVM's heap, not on consensus logic: exempt from both ratchet checks.
     * randomStatetest94 expands EVM memory to ~1.5 GB (header gasUsed 0x0449e8c0a3dd); with `Memory`'s ByteString
     * representation it passes under -Xmx4g in-process and exhausts the heap below that (hive runs it under a smaller
@@ -248,29 +245,17 @@ object LegacyPreByzantiumBlockchainTestsSpec:
   val HeapBound: Set[String] =
     Seq("Homestead", "Byzantium", "Constantinople", "ConstantinopleFix").map(n => s"randomStatetest94_$n").toSet
 
-  /** Byzantium..Berlin slice (legacytests 1f581b8c, Constantinople + Cancun BlockchainTests): 63 pre-existing failures,
-    * all the EIP-2681 CREATE/CREATE2 nonce-cap class (see KnownFailures) — being fixed separately.
+  /** Pre-existing divergences of the Byzantium..Berlin slice (legacytests 1f581b8c, Constantinople + Cancun
+    * BlockchainTests). Empty: the 63 it held, the EIP-2681 CREATE/CREATE2 nonce-cap class, pass now that `VM.create`
+    * applies the cap on every fork; spec 018 C0 recorded every vector of both slices passing (B-432).
     */
-  val KnownFailuresPostByzantium: Set[String] =
-    val create2Forks = Seq("Constantinople", "ConstantinopleFix", "Istanbul", "Berlin")
-    Seq("Byzantium", "Constantinople", "ConstantinopleFix", "Istanbul", "Berlin")
-      .map(n => s"CREATE_HighNonce_d0g0v0_$n")
-      .toSet ++
-      create2Forks.map(n => s"CREATE2_HighNonce_d0g0v0_$n").toSet ++
-      Seq(5, 6, 7, 8, 9, 11).map(d => s"CREATE2_HighNonceDelegatecall_d${d}g0v0_Byzantium").toSet ++
-      (for
-        d <- Seq(5, 6, 7, 8, 9, 11, 17, 18, 19, 20, 21, 23)
-        n <- create2Forks
-      yield s"CREATE2_HighNonceDelegatecall_d${d}g0v0_$n").toSet
+  val KnownFailuresPostByzantium: Set[String] = Set.empty
 
-  val KnownFailures: Set[String] =
-    // EIP-2681 nonce cap (2^64-1) on CREATE/CREATE2 from an account at max nonce: CreateOp applies the cap only
-    // inside the Amsterdam charge decision, so pre-Amsterdam the create proceeds and the gas differs.
-    Seq("Frontier", "Homestead", "EIP150", "EIP158").map(n => s"CREATE_HighNonce_d0g0v0_$n").toSet ++
-      (for
-        d <- Seq(5, 6, 7, 8, 9, 11)
-        n <- Seq("Homestead", "EIP150", "EIP158")
-      yield s"CREATE2_HighNonceDelegatecall_d${d}g0v0_$n").toSet
+  /** Pre-existing divergences of the Frontier/Homestead/EIP150/EIP158 slice (legacytests 1f581b8c). Empty: the 22 it
+    * held, the same EIP-2681 class, pass (B-432). A new divergence is added here by name, each a separate consensus
+    * fix.
+    */
+  val KnownFailures: Set[String] = Set.empty
 
   /** `EthereumTestHelper` inherits `MockValidatorsAlwaysSucceed`, under which `executeAndValidateBlock` checks only
     * gasUsed and the state root: the receipts root and logs bloom are never compared, so a wrong intermediate state

@@ -23,6 +23,9 @@ import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
+import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
+import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -47,6 +50,9 @@ import com.chipprbots.ethereum.utils.Config
   * guard is on for a proof-of-work node). On the unified layout the pre-state is loaded as the node loads a genesis, as
   * rows, and the genesis block the loader builds must be the fixture's; a branch is executed on pinned layers and the
   * head is moved to it in place, with no rewind.
+  *
+  * Each layout runs under both pruning modes (spec 018 T007, B-432): `basic`, the shipped default
+  * (`conf/base/pruning.conf`: history 64), and `archive`. The spec runs only in the nightly ethereum/tests job.
   */
 class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
 
@@ -60,15 +66,29 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
 
   final private case class Outcome(name: String, error: Option[String], reorgs: Int)
 
-  private class FixtureNode(bc: BlockchainConfig, unified: Boolean) extends EphemBlockchainTestSetup:
+  /** The node a case runs on: its state layout and its pruning mode. */
+  final private case class Variant(layout: String, unified: Boolean, pruningName: String, pruning: PruningMode)
+
+  private val Variants: Seq[Variant] =
+    for
+      (layout, unified) <- Seq("the hash layout" -> false, "the unified layout" -> true)
+      (pruningName, pruning) <- Seq("basic" -> BasicPruning(64), "archive" -> ArchivePruning)
+    yield Variant(layout, unified, pruningName, pruning)
+
+  private class FixtureNode(bc: BlockchainConfig, variant: Variant) extends EphemBlockchainTestSetup:
     implicit override lazy val blockchainConfig: BlockchainConfig = bc
+
+    // mixed in before Storages.DefaultStorages, so the storages are built with this mode
+    private trait VariantPruning extends LocalPruningConfigBuilder:
+      override val pruningMode: PruningMode = variant.pruning
+
     override lazy val storagesInstance
         : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
       new EphemDataSourceComponent
-        with LocalPruningConfigBuilder
+        with VariantPruning
         with Storages.DefaultStorages
         with com.chipprbots.ethereum.TestInstanceConfigProvider:
-        override protected def statePathLive: Boolean = unified
+        override protected def statePathLive: Boolean = variant.unified
 
   private def quantity(value: BigInt): String = "0x" + value.toString(16)
 
@@ -78,15 +98,17 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
 
   private def big(s: String): BigInt = if s.startsWith("0x") then BigInt(1, hex(s)) else BigInt(s)
 
-  private def runOne(name: String, testJson: Json, unified: Boolean): Outcome =
+  private def runOne(name: String, testJson: Json, variant: Variant): Outcome =
+    val unified = variant.unified
     val test = testJson.as[BlockchainTest].fold(e => throw new RuntimeException(e.toString), identity)
     val lastBlockHash = testJson.hcursor.downField("lastblockhash").as[String].toOption.map(h => ByteString(hex(h)))
     val bc: BlockchainConfig = TestConverter.networkToConfig(test.network, Config.blockchains.blockchainConfig)
-    val node = new FixtureNode(bc, unified)
+    val node = new FixtureNode(bc, variant)
     import node.*
     val genesisHeader = TestConverter.toBlockHeader(test.genesisBlockHeader.get)
     // the node is on the layout the case is named for, or the two runs would be one
     require(storagesInstance.storages.pathStateStorage.isDefined == unified, s"$name: the node is not on its layout")
+    require(storagesInstance.pruningMode == variant.pruning, s"$name: the node is not on its pruning mode")
     if unified then
       // The pre-state as rows, by the loader a node starts with: the block it builds must be the fixture's genesis.
       val alloc = test.pre.map { case (addr, acc) =>
@@ -233,7 +255,7 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
       headError.orElse(postError).orElse(failures.headOption).map(e => (e +: failures.take(3)).mkString(" | "))
     Outcome(name, verdict, reorgs)
 
-  private def runCategory(category: String, unified: Boolean): Seq[Outcome] =
+  private def runCategory(category: String, variant: Variant): Seq[Outcome] =
     val dir = new File(s"$Base/$category")
     assume(dir.isDirectory, s"ethereum/tests fixtures not present at $dir")
     dir.listFiles().filter(_.getName.endsWith(".json")).sortBy(_.getName).toSeq.flatMap { f =>
@@ -243,12 +265,12 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
         finally src.close()
       json.asObject.get.toList.collect {
         case (name, t) if t.hcursor.downField("network").as[String].toOption.exists(Networks.contains) =>
-          runOne(s"${f.getName}/$name", t, unified)
+          runOne(s"${f.getName}/$name", t, variant)
       }
     }
 
-  private def check(category: String, unified: Boolean): Unit =
-    val outcomes = runCategory(category, unified)
+  private def check(category: String, variant: Variant): Unit =
+    val outcomes = runCategory(category, variant)
     val failed = outcomes.filter(_.error.isDefined)
     info(
       s"$category: ${outcomes.size - failed.size}/${outcomes.size} passed; " +
@@ -258,32 +280,32 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
     outcomes should not be empty
     failed.map(o => s"${o.name}: ${o.error.get}") shouldBe empty
 
-  for (layout, unified) <- Seq("the hash layout" -> false, "the unified layout" -> true) do
-    s"Fork-choice BlockchainTests on $layout" should "pass bcMultiChainTest" taggedAs (
+  for variant <- Variants do
+    s"Fork-choice BlockchainTests on ${variant.layout}, ${variant.pruningName} pruning" should "pass bcMultiChainTest" taggedAs (
       IntegrationTest,
       EthereumTest,
       SlowTest
     ) in {
-      check("bcMultiChainTest", unified)
+      check("bcMultiChainTest", variant)
     }
 
     it should "pass bcTotalDifficultyTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
-      check("bcTotalDifficultyTest", unified)
+      check("bcTotalDifficultyTest", variant)
     }
 
     it should "pass bcForkStressTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
-      check("bcForkStressTest", unified)
+      check("bcForkStressTest", variant)
     }
 
     it should "pass bcRandomBlockhashTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
-      check("bcRandomBlockhashTest", unified)
+      check("bcRandomBlockhashTest", variant)
     }
 
     // uncles on side branches and uncle races between two chains
     it should "pass bcUncleTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
-      check("bcUncleTest", unified)
+      check("bcUncleTest", variant)
     }
 
     it should "pass bcUncleSpecialTests" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
-      check("bcUncleSpecialTests", unified)
+      check("bcUncleSpecialTests", variant)
     }
