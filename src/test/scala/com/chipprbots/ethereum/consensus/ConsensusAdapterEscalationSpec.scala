@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.EscalationTrigger
 import com.chipprbots.ethereum.blockchain.sync.EscalationWatch
 import com.chipprbots.ethereum.blockchain.sync.PowEscalationFeed
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedDueToMissingNode
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
@@ -131,6 +132,32 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
         rig.feed.refusedWeight shouldBe None
       }
     }
+  }
+
+  // B-337: a prefix that became the head before a missing node (a reorganisation's, or an extension's) is the head:
+  // whoever follows it is told, as for any import that moved it, and the missing node is fetched as ever
+  it should "tell the feed of the head a prefix became before a missing node, on the hash layout" taggedAs UnitTest in {
+    val corrupt = new ReorgTooDeep(ReorgRefusal.Corrupt, "a record is not what it should be")
+    val missing =
+      new com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException(ByteString(Array.fill[Byte](32)(9)))
+    val hashLayout = new com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup {}.blockchainReader
+    var refuse = true
+    val rig = new Rig(
+      blocks =>
+        if refuse then ConsensusStateFault(corrupt, Nil, Nil)
+        else Consensus.ConsensusErrorDueToMissingNode(Nil, missing, blocks.toList.take(2).map(data)),
+      hashLayout
+    )
+    rig.imported(branch(5, 3))
+    rig.feed.refusedWeight.isDefined shouldBe true
+    refuse = false
+    rig.head = ChainWeight.totalDifficultyOnly(1300)
+    rig.imported(branch(5, 3)) match
+      case BlockImportFailedDueToMissingNode(reason, imported) =>
+        (reason should be).theSameInstanceAs(missing)
+        imported.map(_.block) shouldBe branch(5, 3).toList.take(2)
+      case other => fail(s"not the missing node, with the prefix: $other")
+    rig.feed.refusedWeight shouldBe None
   }
 
   // spec 018 C5a part 10 (forge): on the unified layout a node missing from the held state is no hole to fetch, which

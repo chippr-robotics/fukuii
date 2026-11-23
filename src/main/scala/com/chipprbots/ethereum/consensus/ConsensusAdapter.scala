@@ -38,6 +38,7 @@ import com.chipprbots.ethereum.domain.BlockAccessList
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationBeforeExecError
 import com.chipprbots.ethereum.ledger.BlockExecutionSuccess
 import com.chipprbots.ethereum.ledger.BlockQueue
@@ -215,6 +216,25 @@ class ConsensusAdapter(
         case SelectedNewBestBranchPartially(
               oldBranch,
               adopted,
+              weights,
+              BranchExecutionFailure(blocksToEnqueue, failingBlockHash, error)
+            ) if Consensus.isLocalStateFault(error) =>
+          // B-337: the prefix became the head, as above, and what stopped it is this node's own state fault (spec 022
+          // T062). The blocks it replaced are queued again and the head's followers told, as for any reorganisation;
+          // the failing block and those after it were not judged, so they wait in the queue and none is dropped. The
+          // failure is answered as the fault the importer escalates, with the blocks of the batch that are the head
+          // now as imported, so that the escalation starts at the failing block and blames no peer.
+          oldBranch.foreach(blockQueue.enqueueBlock(_))
+          queuedAgain(blocksToEnqueue)
+          toldOfTheHead(adopted.lastOption)
+          val ofTheBatch = newBranch.toList.map(_.header.hash).toSet
+          val imported = adopted.zip(weights).collect {
+            case (block, weight) if ofTheBatch(block.header.hash) => BlockData(block, Nil, weight)
+          }
+          new BlockImportFailedAt(error, failingBlockHash, imported)
+        case SelectedNewBestBranchPartially(
+              oldBranch,
+              adopted,
               _,
               BranchExecutionFailure(_, failingBlockHash, error)
             ) =>
@@ -277,6 +297,8 @@ class ConsensusAdapter(
           if Consensus.isUnknownParent(error) then UnknownParent else BlockImportFailed(error)
         case ConsensusErrorDueToMissingNode(blocksToEnqueue, reason, imported) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
+          // the blocks of the batch that became the head before the missing node (B-337): its followers are told
+          toldOfTheHead(imported.lastOption.map(_.block))
           BlockImportFailedDueToMissingNode(reason, imported)
         case ConsensusStateFault(fault, imported, blocksToEnqueue) =>
           // The blocks were not judged: they wait in the queue to be tried again, and none of them is dropped from it
