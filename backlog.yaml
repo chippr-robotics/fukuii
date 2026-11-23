@@ -4189,3 +4189,13 @@ items:
     refs: []
     links: {}
     notes: B-426 added the actor tree and busy dispatcher stacks to the WARN when the actor system passes shutdown-timeout. EG-6's cause could not be told from code.
+  - id: B-446
+    title: RegularSyncSpec 'ask again for ancestor bodies when the fetch in flight is not answered within the deadline' times out under machine load
+    priority: P3
+    status: open
+    area: ci
+    opened: 2026-11-23
+    refs: []
+    links:
+      spec: 018
+    notes: "forge-b344: failed 3 of 5 full-spec runs on a loaded host (5 s fishForSpecificMessage at RegularSyncSpec:2844), passed alone every time and in the full spec once load dropped; seen with and without B-344's change."
