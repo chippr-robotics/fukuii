@@ -8,7 +8,6 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Await
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.*
 import scala.util.Failure
 import scala.util.Success
@@ -811,55 +810,98 @@ abstract class BaseNode extends Node:
 
   override def shutdown: () => Unit = () => if shutdownStarted.compareAndSet(false, true) then shutDownOnce()
 
-  private def shutDownOnce(): Unit =
-    def tryAndLogFailure(f: () => Any): Unit = Try(f()) match // Any: accepts any thunk — return value discarded
-      case Failure(e) => log.warn("Error while shutting down...", e)
-      case Success(_) =>
+  // The first stop's outcome, read by the SIGTERM handler for the exit status (B-426).
+  @volatile private var shutdownOutcome: Option[ShutdownSequence.Outcome] = None
 
-    tryAndLogFailure(() => tlsReloader.shutdown())
-    tryAndLogFailure(() => tuiProbe.foreach(_.stop()))
-    tryAndLogFailure(() => tuiUpdater.foreach(_.stop()))
-    tryAndLogFailure(() => Tui.current.foreach(_.shutdown()))
-    tryAndLogFailure(() => peerDiscoveryManagerTyped ! PeerDiscoveryManager.Stop)
-    tryAndLogFailure(() => mining.stopProtocol())
-    // Stop the Engine API server first: it owns its own Http() binding (port 8551) on a dedicated
-    // ActorSystem + IORuntime. Terminate them before the main ActorSystem so the port is released
-    // and its dispatcher/compute pools don't outlive node death.
-    tryAndLogFailure(() =>
-      maybeEngineApiServer.foreach { engineServer =>
-        shutdownTimeoutDuration match
-          case fd: scala.concurrent.duration.FiniteDuration => engineServer.stopSync(fd)
-          case _                                            => engineServer.stopSync()
-      }
-    )
-    // The recovery of a state that is no longer held stops once nothing can ask for one, and before the data source
-    // closes: one under way ends after the block it is executing (spec 018 C4d part 3).
-    tryAndLogFailure(() => stateRecovery.foreach(_.close()))
-    // Discovery's own runtime goes once the Stop sent above has released the service (UDP socket, feeder), and before
-    // the actor system that hosts PeerDiscoveryManager is terminated (task #52).
-    tryAndLogFailure(() => shutdownDiscoveryIoRuntime(10.seconds))
-    // Terminate the secondary ActorSystem hosting the periodic DB consistency check.
-    tryAndLogFailure(() =>
-      periodicConsistencyCheckSystem.foreach { s =>
-        s.terminate()
-        Await.ready(s.whenTerminated, shutdownTimeoutDuration)
-      }
-    )
-    tryAndLogFailure(() =>
-      Await.ready(
-        system.classicSystem
-          .terminate()
-          .map(
-            _ ->
-              log.info("actor system finished")
-          ),
-        shutdownTimeoutDuration
+  /** Whether this node's stop has run and closed the database: the exit status of a SIGTERM stop is 0 only then. */
+  def stoppedCleanly: Boolean = shutdownOutcome.exists(_.completed(StdNode.CloseDatabase))
+
+  private def shutDownOnce(): Unit =
+    import ShutdownSequence.Budget
+    import ShutdownSequence.Step
+    val quick = Budget.Bounded(StdNode.QuickStepBudget)
+    // A step that bounds its own wait by `shutdown-timeout` is given that much and a little more, so its own wait, not
+    // the sequence's, is what ends it.
+    val ownWait: Budget = Budget.upTo(shutdownTimeoutDuration + StdNode.OwnWaitMargin)
+    val steps = Seq(
+      Step("TLS reloader", quick, () => tlsReloader.shutdown()),
+      Step("TUI probe", quick, () => tuiProbe.foreach(_.stop())),
+      Step("TUI updater", quick, () => tuiUpdater.foreach(_.stop())),
+      Step("TUI", quick, () => Tui.current.foreach(_.shutdown())),
+      Step("discovery stop", quick, () => peerDiscoveryManagerTyped ! PeerDiscoveryManager.Stop),
+      Step("miner", quick, () => mining.stopProtocol()),
+      // Stop the Engine API server first: it owns its own Http() binding (port 8551) on a dedicated ActorSystem +
+      // IORuntime. Terminate them before the main ActorSystem so the port is released and its dispatcher/compute pools
+      // don't outlive node death. It is also the one writer from outside: no newPayload executes a block after it.
+      Step(
+        "Engine API server",
+        ownWait,
+        () =>
+          maybeEngineApiServer.foreach { engineServer =>
+            shutdownTimeoutDuration match
+              case fd: FiniteDuration => engineServer.stopSync(fd)
+              case _                  => engineServer.stopSync()
+          }
+      ),
+      // The recovery of a state that is no longer held stops once nothing can ask for one, and before the data source
+      // closes: one under way ends after the block it is executing (spec 018 C4d part 3).
+      Step("state recovery", quick, () => stateRecovery.foreach(_.close())),
+      // Discovery's own runtime goes once the Stop sent above has released the service (UDP socket, feeder), and before
+      // the actor system that hosts PeerDiscoveryManager is terminated (task #52).
+      Step(
+        "discovery runtime",
+        Budget.Bounded(StdNode.DiscoveryRuntimeWait + StdNode.OwnWaitMargin),
+        () => shutdownDiscoveryIoRuntime(StdNode.DiscoveryRuntimeWait)
+      ),
+      // The secondary ActorSystem hosting the periodic DB consistency check.
+      Step(
+        "consistency-check actor system",
+        Budget.upTo(shutdownTimeoutDuration),
+        () =>
+          periodicConsistencyCheckSystem.foreach { s =>
+            s.terminate()
+            Await.ready(s.whenTerminated, Duration.Inf): Unit
+          }
+      ),
+      // Sync (SNAP and regular), the peers, the miner's coordinator, the JSON-RPC and WebSocket servers' streams: every
+      // actor. It terminates once each actor has returned from the message it is handling, so past its budget the log
+      // names the actors still alive and the calls their threads are in (B-426: 15 s passed and nothing said which).
+      Step(
+        "actor system",
+        Budget.upTo(shutdownTimeoutDuration),
+        () => Await.ready(system.classicSystem.terminate(), Duration.Inf): Unit,
+        onOverrun = () =>
+          val tree = Try(system.printTree).getOrElse("(no actor tree)")
+          Some(
+            s"actors still alive:\n$tree\n" +
+              ShutdownSequence
+                .busyThreadStacks(system.name)
+                .fold("no busy thread of the actor system")(stacks => s"its busy threads:\n$stacks")
+          )
+      ),
+      Step(
+        "port forwarding",
+        Budget.upTo(shutdownTimeoutDuration),
+        () => Await.ready(stopPortForwarding(), Duration.Inf): Unit
+      ),
+      Step("IPC server", quick, () => if jsonRpcConfig.ipcServerConfig.enabled then jsonRpcIpcServer.close()),
+      Step("metrics", quick, () => Metrics.get().close()),
+      // Last, once nothing that writes is left running, and with no budget: a close cut short is the corruption a
+      // clean stop is there to avoid. It waits for the block import under way, if any, to commit, and holds the import
+      // lock while it closes, so no other block import starts; RocksDB's close then waits for the writes in progress and
+      // cancels the running compactions (B-281).
+      Step(
+        StdNode.CloseDatabase,
+        Budget.Unbounded(ShutdownSequence.DefaultNotice),
+        () =>
+          StdNode.closeAfterImports(
+            StdNode.ImportWait,
+            wait => close => com.chipprbots.ethereum.ledger.ChainInsertLock.tryExclusive(wait)(close()),
+            () => storagesInstance.dataSource.close()
+          )
       )
     )
-    tryAndLogFailure(() => Await.ready(stopPortForwarding(), shutdownTimeoutDuration))
-    if jsonRpcConfig.ipcServerConfig.enabled then tryAndLogFailure(() => jsonRpcIpcServer.close())
-    tryAndLogFailure(() => Metrics.get().close())
-    tryAndLogFailure(() => storagesInstance.dataSource.close())
+    shutdownOutcome = Some(ShutdownSequence.run(steps))
 
   /** `-Dfukuii.snap.clearDoneOnStart` on the unified state layout (spec 018 C5a part 10): refused, and the node does
     * not start. It re-runs SNAP's healing over a state the node holds, on the hash-keyed store, which this layout never
@@ -1011,6 +1053,50 @@ class StdNode(
   override lazy val instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = _instanceConfig
 
 object StdNode:
+
+  /** The name of the stop's last step, whose completion makes a stop clean (B-426). */
+  val CloseDatabase: String = "database close"
+
+  /** The budget of a stop step that only signals or closes something in memory (B-426): milliseconds when it works. */
+  val QuickStepBudget: FiniteDuration = 5.seconds
+
+  /** What a step that bounds its own wait is given on top of it, so its own wait ends it (B-426). */
+  val OwnWaitMargin: FiniteDuration = 2.seconds
+
+  /** How long the stop waits for discovery to release its runtime (task #52). */
+  val DiscoveryRuntimeWait: FiniteDuration = 10.seconds
+
+  /** How long the database's close waits for a block import under way to commit before it closes regardless (B-426).
+    * One block: milliseconds on ETC, seconds for a full Ethereum block executed cold.
+    */
+  val ImportWait: FiniteDuration = 30.seconds
+
+  /** Closes the database once no block import is under way (B-426): `exclusively(wait)(body)` runs `body` holding the
+    * chain insert lock exclusively, if it can be had within `wait` (the block every import path holds it for has
+    * committed), and gives `None` otherwise. An import still running after `importWait` does not hold the close off: it
+    * closes regardless, and RocksDB's close waits for that import's write in progress. The close itself is never cut.
+    */
+  private[nodebuilder] def closeAfterImports(
+      importWait: FiniteDuration,
+      exclusively: FiniteDuration => (() => Unit) => Option[Unit],
+      close: () => Unit,
+      report: ShutdownSequence.Report = ShutdownSequence.Report.log
+  ): Unit =
+    val started = System.nanoTime()
+    exclusively(importWait) { () =>
+      report.info(
+        s"[SHUTDOWN] No block import under way (waited ${(System.nanoTime() - started) / 1000000} ms): " +
+          "closing the database"
+      )
+      close()
+    } match
+      case Some(_) => ()
+      case None =>
+        report.warn(
+          s"[SHUTDOWN] A block import still runs after $importWait: the database closes regardless, after that " +
+            "import's write in progress"
+        )
+        close()
 
   /** The repairs a start makes of the datadir before anything reads it (spec 018 C4b part 4; B-251): on the unified
     * state layout, the reconciliation (and what comes before it); on the hash layout, its own two repairs, which trust
