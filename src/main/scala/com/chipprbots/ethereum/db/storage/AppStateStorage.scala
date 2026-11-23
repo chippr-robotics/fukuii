@@ -552,8 +552,9 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       archiveId: Option[ByteString] = None
   ): DataSourceBatchUpdate =
     update(
-      // #1692: the archive holds each node once, so a node two positions use is counted once. Basic pruning would then
-      // delete nodes by a count that is too low, so the stamp goes in the same write as the first of them, on any scheme.
+      // #1692: the stamp goes in the same write as the first node, on any scheme: until the import ends, counts are
+      // partial, and a kill leaves it absent. A hash-layout import that succeeds restores it in its final batch when it
+      // stood before (B-377: format version 2 counts every occurrence, as block import does); nothing else does.
       // #1654: the importer stores the archive's weight for the checkpoint block, trusted and not derived from
       // genesis, so the chain-weight marker goes too; `ChainWeightReconcile` checks it once the headers below are in.
       toRemove = Seq(Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor, Keys.RefCountsExact, Keys.ChainWeightInvariant),

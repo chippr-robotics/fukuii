@@ -14,11 +14,14 @@ import com.chipprbots.ethereum.utils.Logger
   *
   * One stamp, `state.refcounts.exact`, on both schemes; the rule is one way, and it fails safe:
   *   - The genesis write sets it (`AppStateStorage.markDatadirCreated`) when the genesis counts every position
-  *     (`GenesisDataLoader.countsExact`). Nothing sets it again: counts can go negative, so a stamp set after a stretch
-  *     without pruning, plus a republish, could meet a live node at zero in a death row.
+  *     (`GenesisDataLoader.countsExact`). Nothing else sets it again: counts can go negative, so a stamp set after a
+  *     stretch without pruning, plus a republish, could meet a live node at zero in a death row.
   *   - It is taken away in a synced write before the first write that could count a node short: a Hash-scheme SNAP
   *     start ([[withdrawAtSnapStart]]), a checkpoint import (`AppStateStorage.beginCheckpointImport`, any scheme), and
   *     the publish of a Path hand-off that is not clean ([[withdrawAtPathPublish]]).
+  *   - The one exception to "nothing sets it again": a hash-layout checkpoint import that succeeds, over a datadir that
+  *     had it when the import began, puts it back in its final batch (B-377). Archive format version 2 holds a shared
+  *     subtree under each position and the importer stores each, so the counts equal block import's.
   *   - A datadir an older binary made has none, whatever it holds, so every one keeps its trie nodes.
   *   - A read that fails answers no.
   */

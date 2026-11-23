@@ -215,6 +215,32 @@ class CheckpointImportInterruptSpec
       appState.getCheckpointImportInProgress() shouldBe None
     }
 
+  it should "put the count stamp back in the done-flags write when it stood and the import succeeds (B-377)" taggedAs UnitTest in new Datadir:
+    appState.markDatadirCreated(countsExact = true).commitSync()
+    source.batches.clear()
+    importFrom(this, archive).isRight shouldBe true
+    appState.hasRefCountsExact() shouldBe true
+    val keyWrite: Option[(Boolean, Seq[Op])] =
+      source.batches.toSeq.find(_._2.contains(Op(AppNs, delete = false, key(Keys.CheckpointImportInProgress))))
+    keyWrite.exists(_._2.contains(Op(AppNs, delete = true, key(Keys.RefCountsExact)))) shouldBe true
+    val flags: Seq[(Boolean, Seq[Op])] =
+      source.batches.toSeq.filter(_._2.contains(Op(AppNs, delete = false, key(Keys.SnapSyncDone))))
+    flags.size shouldBe 1
+    flags.head._1 shouldBe true
+    flags.head._2 should contain(Op(AppNs, delete = false, key(Keys.RefCountsExact)))
+
+  it should "never hold the count stamp over an interrupted import, nor restore it on the retry (B-377)" taggedAs UnitTest in new Datadir:
+    appState.markDatadirCreated(countsExact = true).commitSync()
+    importFrom(this, truncated).isLeft shouldBe true
+    appState.hasRefCountsExact() shouldBe false
+    // the cut-off nodes are in the store: a retry would count them twice, so the stamp stays away
+    importFrom(this, archive).isRight shouldBe true
+    appState.hasRefCountsExact() shouldBe false
+
+  it should "not set the count stamp when it was absent before the import (B-377)" taggedAs UnitTest in new Datadir:
+    importFrom(this, archive).isRight shouldBe true
+    appState.hasRefCountsExact() shouldBe false
+
   it should "keep a marker when nothing was going to be written: a bad header, or another chain's archive" taggedAs UnitTest in new Datadir:
     appState.stampSnapHealInvariant().commit()
     importFrom(this, Array[Byte](1, 2, 3)).isLeft shouldBe true
