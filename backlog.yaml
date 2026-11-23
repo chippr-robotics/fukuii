@@ -1977,7 +1977,7 @@ items:
       by: cloud-dc960fdc
       agent: conduit-b228
       since: 2026-11-23T22:06:11Z
-      heartbeat: 2026-11-23T22:06:11Z
+      heartbeat: 2026-11-23T22:06:28Z
     notes: Found by conduit in the spec 018 C4a part 4b consult. Wrong on any layout; the comment at :481 already says a fault must not be 'no account'. A guard-off behaviour change, so not in the storage PRs.
   - id: B-229
     title: debug_traceChain has no range limit (trace_filter has MaxTraceFilterRange); cap it, and retry a stale state per block in both
