@@ -115,8 +115,7 @@ object ShutdownSequence extends Logger:
         try
           step.run()
           finished.complete(()): Unit
-        catch case e: Throwable => finished.completeExceptionally(e): Unit,
-      s"shutdown-${step.name.replace(' ', '-')}"
+        catch case e: Throwable => finished.completeExceptionally(e): Unit, s"shutdown-${step.name.replace(' ', '-')}"
     )
     // A step left running past its budget must not keep the JVM alive.
     thread.setDaemon(true)
