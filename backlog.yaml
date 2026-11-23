@@ -4038,7 +4038,7 @@ items:
       by: cloud-dc960fdc
       agent: herald-b435
       since: 2026-11-23T21:32:05Z
-      heartbeat: 2026-11-23T21:32:05Z
+      heartbeat: 2026-11-23T21:32:23Z
     notes: "dev-node B-424 re-check 2026-11-23: 73 'Mining waits' lines on node A, alternating 'syncing' / 'did not say' (5 s ask timeout). Harmless (miner waits either way) but suggests the SyncController blocks its mailbox during SNAP. Find what it does while not answering."
   - id: B-436
     title: Peer best-block re-probe asks for the peer's handshake bestHash, so maxBlockNumber never advances without announcements
