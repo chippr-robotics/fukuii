@@ -2424,8 +2424,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-23T21:03:05Z
-      heartbeat: 2026-11-23T21:03:05Z
-    notes: forge N2, C4e part 3; before fukuii.state.path-live is on by default
+      heartbeat: 2026-11-23T21:03:26Z
+    notes: |-
+      forge N2, C4e part 3; before fukuii.state.path-live is on by default
+      2026-11-23 claimed: forge triage: real gap, hard gate before path-live default; order B-292, B-343, B-239, B-344(+B-345), B-294.
   - id: B-294
     title: "Writer-side exclusion: an import onto an intermediate head during an in-place adoption (test mode today)"
     priority: P2
