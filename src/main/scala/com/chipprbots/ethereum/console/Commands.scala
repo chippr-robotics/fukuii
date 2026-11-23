@@ -41,7 +41,7 @@ object Commands:
   private val Fixed: Seq[String] =
     Seq("peer", "block", "tx", "receipt", "account", "glyphs", "graphics", "art", "help", "detach", "quit") ++
       Seq("config", "tunables", "deps", "test-rpc", "net", "loglevel", "maxpeers", "threshold", "mining") ++
-      Seq("coinbase", "dbcheck", "detect-ip", "bundle")
+      Seq("coinbase", "dbcheck", "compact", "detect-ip", "bundle")
 
   /** The commands that take an argument: completing one leaves a space after it. */
   private val WithArgument: Set[String] =
@@ -158,13 +158,12 @@ object Commands:
           // `rpc` alone, or with anything else, is the view.
           case _ => None
       case "dbcheck"   => Some(Command.Act(ActionRequest(Actions.DbCheck.name)))
+      case "compact"   => Some(Command.Act(ActionRequest(Actions.Compact.name)))
       case "detect-ip" => Some(Command.Act(ActionRequest(Actions.DetectIp.name)))
       case "bundle"    => Some(Command.Act(ActionRequest(Actions.Bundle.name)))
       case "quit"      => Some(Command.Act(ActionRequest(Actions.Quit.name)))
-      case "compact" =>
-        Some(Command.Usage(s"compact is not offered: ${Actions.NotOffered.toMap.apply("Compact the database")}"))
-      case "peer" => peerAction(args)
-      case _      => None
+      case "peer"      => peerAction(args)
+      case _           => None
 
   private def isHex(text: String, digits: Int): Boolean =
     val body = if text.startsWith("0x") || text.startsWith("0X") then text.drop(2) else text

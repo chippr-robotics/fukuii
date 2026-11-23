@@ -454,6 +454,7 @@ so and cannot be confirmed.
 | `coinbase <address>` (ETC) | Disrupt | The address blocks mined from now on pay |
 | `rpc stop <http or ws>`, `rpc start <http or ws>` | Disrupt | Stops a JSON-RPC server: HTTP requests in flight finish, WebSocket connections are closed at once and their subscriptions dropped. `rpc start` binds it again. Only a server that was enabled when the node started can be started: the dashboard enables nothing |
 | `dbcheck` | Disrupt | The start-up database check, run now: it reads every thousandth block's number-to-hash entry and header, reports what is missing, and stops nothing. On a node that took its state by SNAP, or takes its blocks from a consensus client, it says the check means nothing there |
+| `compact` | Disrupt | Compacts every column family, the largest first, one at a time (B-371). Heavy disk I/O: import, sync and RPC slow, and on a large database it takes hours; it needs free disk. No lock is held across it, it ends when the node stops, and a second request while one runs is answered `already running`. Always confirmed with `y` |
 | `detect-ip` | Disrupt | Asks the gateway and outside services for this node's address, and reports it. They see this node's address. It changes nothing the node advertises |
 | `bundle` | Disrupt | Writes a support bundle under `<datadir>/support/`: see below |
 | `mining stop` (ETC) | Halt | Stops the node's own miner. It cannot be started again until the node restarts. `a` on the RPC view of a mining node types this |
@@ -463,8 +464,7 @@ so and cannot be confirmed.
 or start one again after it was stopped.
 
 **Not offered.** Starting or restarting the node (the dashboard runs inside it); restarting the Engine API server,
-peer discovery or sync; reloading configuration from file; creating a snapshot; compacting the database (it would
-hold the database's lock, and so stop block import, for as long as it ran); changing the pruning mode or the state
+peer discovery or sync; reloading configuration from file; creating a snapshot; changing the pruning mode or the state
 scheme. The Ops view lists each with its reason.
 
 **The support bundle** is a directory of text files for whoever is asked to look at the node: the build, the
@@ -737,7 +737,7 @@ An operator who knew the dashboard of spec 027 will meet four differences:
 
 ## Not in the dashboard
 
-- Starting or restarting the node, reloading its configuration, compacting the database, creating a snapshot,
+- Starting or restarting the node, reloading its configuration, creating a snapshot,
   changing the pruning mode or the state scheme: the [Ops](#ops) view lists each with its reason.
 - Starting the built-in miner: this client cannot start one that was off or was stopped.
 - A time limit on an action of its own: each node function an action calls has one.

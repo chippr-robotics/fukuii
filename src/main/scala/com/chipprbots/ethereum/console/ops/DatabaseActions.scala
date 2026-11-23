@@ -1,9 +1,9 @@
 package com.chipprbots.ethereum.console.ops
 
-/** `dbcheck` (spec 029 FR-054, contracts/actions.md): the database consistency check of the node's start, run now,
-  * reporting what it finds and stopping nothing. On a node where that check is not meaningful (one that synced by SNAP
-  * or takes its blocks from the Engine API has no headers below its pivot, by design) it is not run, and the dialog
-  * says why: it would report faults that are not faults (vault, slice 7).
+/** `dbcheck` and `compact` (spec 029 FR-054, contracts/actions.md): the database consistency check of the node's start,
+  * run now, reporting what it finds and stopping nothing. On a node where that check is not meaningful (one that synced
+  * by SNAP or takes its blocks from the Engine API has no headers below its pivot, by design) it is not run, and the
+  * dialog says why: it would report faults that are not faults (vault, slice 7).
   */
 object DatabaseActions:
 
@@ -28,6 +28,67 @@ object DatabaseActions:
       best: () => BigInt,
       step: Int,
       scan: ((Long, Long) => Unit) => Result
+  )
+
+  /** One store compacted: its SST bytes before and after, where they could be read. */
+  final case class Compacted(store: String, before: Option[Long], after: Option[Long])
+
+  /** How a whole-database compaction ended.
+    *
+    * @param notReached
+    *   the stores a cancellation (the node stopping) left uncompacted
+    */
+  enum CompactResult:
+    case AlreadyRunning
+    case Finished(compacted: Vector[Compacted], notReached: Vector[String], cancelled: Boolean)
+
+  /** What `compact` needs of the node.
+    *
+    * @param sstBytes
+    *   the database's SST bytes now, if they can be read
+    * @param stores
+    *   how many stores it compacts
+    * @param compact
+    *   runs the compaction, largest store first, telling each store as it starts (name, place from 1, how many)
+    */
+  final case class CompactNode(
+      sstBytes: () => Option[Long],
+      stores: Int,
+      compact: ((String, Int, Int) => Unit) => CompactResult
+  )
+
+  private def bytes(n: Long): String = com.chipprbots.ethereum.console.TuiText.formatBytes(n)
+
+  def compactHandlers(node: CompactNode): Map[String, ActionHandler] = Map(
+    Actions.Compact.name -> ActionHandler(
+      _ =>
+        Preview(
+          Vector(
+            s"Rewrites the files of all ${node.stores} stores, the largest first, one store at a time.",
+            "It reads and writes a great deal: block import, sync and RPC slow while it runs, and on a large database " +
+              "it takes hours.",
+            "It needs free disk for the files it writes before the old ones go: up to the size of the store it is on.",
+            "Block import and sync go on beside it; no lock is held across it.",
+            "It stops by itself, between stores or inside one, when the node stops. Only one runs at a time."
+          ),
+          figures = Vector(
+            node
+              .sstBytes()
+              .fold("The database's size cannot be read now.")(b => s"The database's files hold ${bytes(b)} now.")
+          )
+        ),
+      (_, progress) =>
+        node.compact((store, at, of) => progress(s"compacting store $store ($at of $of)")) match
+          case CompactResult.AlreadyRunning => Left("already running: a compaction started earlier has not ended")
+          case CompactResult.Finished(compacted, notReached, cancelled) =>
+            val (before, after) = (compacted.flatMap(_.before).sum, compacted.flatMap(_.after).sum)
+            val said =
+              s"compacted ${compacted.size} of ${node.stores} stores (${bytes(before)} of files before, " +
+                s"${bytes(after)} after)"
+            if cancelled then
+              Left(s"cancelled because the node is stopping: $said; not reached: ${notReached.mkString(", ")}")
+            else Right(said)
+    )
   )
 
   def handlers(node: Node): Map[String, ActionHandler] = Map(

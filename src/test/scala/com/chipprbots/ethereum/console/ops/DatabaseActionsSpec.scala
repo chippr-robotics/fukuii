@@ -103,3 +103,75 @@ class DatabaseActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
       "read 21885 of 21885 sample points"
     )
   }
+
+  // ---- compact (B-371) ----------------------------------------------------------------------------------------------
+
+  private val Gib = 1024L * 1024 * 1024
+
+  /** The node's side of `compact`: what the compaction answers, the stores it tells of, and how often it ran. */
+  private class FakeCompact(result: DatabaseActions.CompactResult, told: Seq[(String, Int, Int)] = Nil):
+    var runs = 0
+    val handler: ActionHandler = DatabaseActions
+      .compactHandlers(
+        DatabaseActions.CompactNode(
+          sstBytes = () => Some(3 * Gib),
+          stores = 3,
+          compact = onStore =>
+            runs += 1
+            told.foreach((store, at, of) => onStore(store, at, of))
+            result
+        )
+      )(Actions.Compact.name)
+    val said: mutable.Buffer[String] = mutable.Buffer.empty
+    private val request = ActionRequest(Actions.Compact.name)
+    def preview: Preview = handler.preview(request)
+    def run(): Either[String, String] = handler.run(request, said += _)
+
+  private val Done: DatabaseActions.CompactResult.Finished = DatabaseActions.CompactResult.Finished(
+    Vector(
+      DatabaseActions.Compacted("nodes", Some(2 * Gib), Some(Gib)),
+      DatabaseActions.Compacted("bodies", Some(Gib), Some(Gib / 2))
+    ),
+    Vector.empty,
+    cancelled = false
+  )
+
+  "compact" should "be a registry action, and the one other action of this object" taggedAs (UnitTest) in {
+    DatabaseActions
+      .compactHandlers(DatabaseActions.CompactNode(() => None, 1, _ => Done))
+      .keySet shouldBe Set("compact")
+    Actions.named("compact") shouldBe Some(Actions.Compact)
+  }
+
+  it should "say what it costs before it is confirmed: heavy I/O, hours, free disk, the size now" taggedAs (UnitTest) in {
+    val preview = new FakeCompact(Done).preview
+    preview.refusal shouldBe None
+    preview.lines.mkString(" ") should include("all 3 stores")
+    preview.lines.mkString(" ") should include("takes hours")
+    preview.lines.mkString(" ") should include("free disk")
+    preview.figures shouldBe Vector("The database's files hold 3.0G now.")
+  }
+
+  it should "report each store as it starts, and the bytes before and after" taggedAs (UnitTest) in {
+    val fake = new FakeCompact(Done, told = Seq(("nodes", 1, 3), ("bodies", 2, 3)))
+    fake.run() shouldBe Right("compacted 2 of 3 stores (3.0G of files before, 1.5G after)")
+    fake.said shouldBe Seq("compacting store nodes (1 of 3)", "compacting store bodies (2 of 3)")
+  }
+
+  it should "report 'already running' for a second request, and not as a success" taggedAs (UnitTest) in {
+    val fake = new FakeCompact(DatabaseActions.CompactResult.AlreadyRunning)
+    fake.run() shouldBe Left("already running: a compaction started earlier has not ended")
+  }
+
+  it should "report a cancellation as a failure naming the stores not reached" taggedAs (UnitTest) in {
+    val cancelled = DatabaseActions.CompactResult.Finished(
+      Done.compacted.take(1),
+      Vector("bodies", "receipts"),
+      cancelled = true
+    )
+    val answer = new FakeCompact(cancelled).run()
+    answer.isLeft shouldBe true
+    answer.merge should include("cancelled")
+    answer.merge should include("not reached: bodies, receipts")
+    answer.merge should include("compacted 1 of 3 stores")
+  }

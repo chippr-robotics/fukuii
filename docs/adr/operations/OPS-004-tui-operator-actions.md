@@ -78,8 +78,7 @@ not an action of the dashboard.
 
 ### The dashboard says what it does not offer
 
-The Ops view lists what an operator may look for and not find (restarting the node, reloading configuration,
-compacting the database) with the reason for each.
+The Ops view lists what an operator may look for and not find (restarting the node, reloading configuration) with the reason for each.
 
 ## Consequences
 
@@ -96,8 +95,9 @@ compacting the database) with the reason for each.
 - An action is only as good as the service function behind it. Where that function is weak the action says so
   instead of covering for it: `mining start` is always refused, because `miner_start` cannot start a miner that was
   stopped (B-278, B-279).
-- Compaction is not offered. A whole-database compaction holds the data source's lock for its whole run, and the
-  node would import nothing until it ended. Offering it needs a change to that locking first (B-281).
+- Compaction is offered as `compact`, a Disrupt that asks for confirmation (B-281, B-371). The data source no longer
+  holds its lock across a compaction, and `compactAll` takes the column families one at a time, the largest first, so
+  closing the node cancels it between or inside families. Only one runs at a time.
 - The preview reads the node when the dialog opens, on a worker thread. An action on a node that is slow to answer
   shows "reading" until it does, and cannot be confirmed before then.
 

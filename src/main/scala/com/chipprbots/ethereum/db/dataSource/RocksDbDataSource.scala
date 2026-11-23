@@ -385,6 +385,57 @@ class RocksDbDataSource(
         throw RocksDbDataSourceException(s"DataSource error while compacting range", error)
     finally compactionGuard.readLock().unlock()
 
+  /** Set while a [[compactAll]] runs: a second request is told, not queued (B-371). */
+  private val compactingAll = new java.util.concurrent.atomic.AtomicBoolean(false)
+
+  /** The SST bytes of one column family, `None` when it cannot be read or the database is closed. dbLock is held for
+    * the one in-memory property read only.
+    */
+  private def sstBytesOf(namespace: Namespace): Option[Long] =
+    dbLock.readLock().lock()
+    try
+      if isClosed then None
+      else
+        try handles.get(namespace).map(h => db.getLongProperty(h, "rocksdb.total-sst-files-size"))
+        catch case NonFatal(_) => None
+    finally dbLock.readLock().unlock()
+
+  /** How many column families [[compactAll]] goes over: the namespaces and RocksDB's default family. */
+  def familyCount: Int = nameSpaces.size
+
+  /** Compact every column family, the one with the most SST bytes first (B-371).
+    *
+    * Each family is one [[compactRange]] over its whole key space, so what B-281 gave a single compaction holds for the
+    * whole: no lock is held across families (the guard is taken and released per family), writers and readers go on,
+    * and `close()` cancels the running family and no later one starts. The families are ordered once, at the start, by
+    * the SST bytes each held then. BLOCKING, for as long as the compaction takes, which on a large database is hours:
+    * call it off actor threads. A second call while one runs returns [[CompactAllOutcome.AlreadyRunning]] at once.
+    *
+    * @param onFamily
+    *   told before each family starts: the family, its place (from 1) and how many there are
+    */
+  def compactAll(onFamily: (Namespace, Int, Int) => Unit = (_, _, _) => ()): CompactAllOutcome =
+    if !compactingAll.compareAndSet(false, true) then CompactAllOutcome.AlreadyRunning
+    else
+      try
+        val order = RocksDbDataSource.largestFirst(nameSpaces.map(ns => ns -> sstBytesOf(ns)))
+        val done = Vector.newBuilder[CompactedFamily]
+        var cancelled = false
+        var remaining = order
+        while remaining.nonEmpty && !cancelled do
+          val (namespace, before) = remaining.head
+          onFamily(namespace, order.size - remaining.size + 1, order.size)
+          try
+            // null bounds: the whole family. RocksDB's Java API takes them as unbounded.
+            compactRange(namespace, null, null)
+            done += CompactedFamily(namespace, before, sstBytesOf(namespace))
+            remaining = remaining.tail
+          catch
+            case _: RocksDbDataSourceClosedException =>
+              cancelled = true
+        CompactAllOutcome.Finished(done.result(), remaining.map(_._1), cancelled)
+      finally compactingAll.set(false)
+
   /** Forward range scan via a single seek+next over a bounded `[fromKey, toKeyExclusive)` window. Uses
     * `scanReadOptions` (fillCache=false) so a large queue scan does not evict the hot block cache. Drains the window
     * into a buffer and CLOSES the native iterator before returning, so no `RocksIterator` handle outlives the call —
@@ -870,6 +921,26 @@ final class MemoryResources(
     cache.close()
 
 object RocksDbDataSource extends Logger:
+
+  /** One column family compacted by [[RocksDbDataSource.compactAll]]: its SST bytes before and after (`None` where they
+    * could not be read).
+    */
+  final case class CompactedFamily(namespace: Namespace, sstBytesBefore: Option[Long], sstBytesAfter: Option[Long])
+
+  /** The end of a [[RocksDbDataSource.compactAll]]. */
+  sealed trait CompactAllOutcome
+  object CompactAllOutcome:
+    /** Another compactAll was running; this one did nothing. */
+    case object AlreadyRunning extends CompactAllOutcome
+
+    /** `compacted` in the order done; `notReached` are the families a cancellation (the database closing) left out. */
+    final case class Finished(compacted: Vector[CompactedFamily], notReached: Vector[Namespace], cancelled: Boolean)
+        extends CompactAllOutcome
+
+  /** The families by SST bytes, the largest first; one whose size is unknown counts as empty. Ties keep their order. */
+  private[dataSource] def largestFirst(sizes: Seq[(Namespace, Option[Long])]): Vector[(Namespace, Option[Long])] =
+    sizes.toVector.sortBy(entry => -entry._2.getOrElse(0L))
+
   /** How the write-ahead log is replayed at open (`wal_recovery_mode`), set explicitly since B-078.
     *
     * '''Point-in-time recovery''' replays the log up to the first record that does not read back (a torn tail after a
