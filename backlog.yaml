@@ -4012,20 +4012,18 @@ items:
   - id: B-432
     title: "Spec 018 C0 test gaps: ForkChoice spec runs archive not basic, EEST replayers lack BPO3/BPO4 transitions, 85 stale legacy known failures"
     priority: P3
-    status: review
+    status: done
     area: tests
     size: S
     opened: 2026-11-22
+    closed: 2026-11-23
     refs: []
     links:
       prs: [2011]
       spec: specs/018-storage-engine-consolidation
-    claim:
-      by: cloud-dc960fdc
-      agent: eye-b432
-      since: 2026-11-23T22:22:49Z
-      heartbeat: 2026-11-23T22:29:33Z
-    notes: "Found recording T006/T007 on v0.12.1 source: ForkChoiceBlockchainTestsSpec takes ArchivePruning from LocalPruningConfigBuilder, so T007's basic half is not recorded; EestBlockchainReplay.scala:46 has no BPO3/BPO4 (96 fixtures unreplayed); LegacyPreByzantium ratchet lists 85 vectors that pass with legacytests@1f581b8."
+    notes: |-
+      Found recording T006/T007 on v0.12.1 source: ForkChoiceBlockchainTestsSpec takes ArchivePruning from LocalPruningConfigBuilder, so T007's basic half is not recorded; EestBlockchainReplay.scala:46 has no BPO3/BPO4 (96 fixtures unreplayed); LegacyPreByzantium ratchet lists 85 vectors that pass with legacytests@1f581b8.
+      2026-11-23 done: Merged 663f124ec. BPO3/BPO4 replay split to B-443 (needs a decision).
   - id: B-433
     title: "Engine API payload builder: stop adding transactions at the EIP-7934 8 MiB RLP cap post-Osaka (geth miner does)"
     priority: P3
