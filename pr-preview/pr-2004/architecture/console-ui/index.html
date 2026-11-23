@@ -7293,7 +7293,7 @@ so and cannot be confirmed.</p>
 <tr>
 <td><code>compact</code></td>
 <td>Disrupt</td>
-<td>Compacts every column family, the largest first, one at a time (B-371). Heavy disk I/O: import, sync and RPC slow, and on a large database it takes hours; it needs free disk. No lock is held across it, it ends when the node stops, and a second request while one runs is answered <code>already running</code>. Always confirmed with <code>y</code></td>
+<td>Compacts every column family, the largest first, one at a time (B-371). Heavy disk I/O: import, sync and RPC slow, and on a large database it takes hours; it needs free disk (about the size of the largest store, worst case the whole database). No lock is held across it, it ends when the node stops (quitting the console does not stop it), a failing store ends it and is reported with its error and the stores done and not reached, and a second request while one runs is answered <code>already running</code>. Always confirmed with <code>y</code></td>
 </tr>
 <tr>
 <td><code>detect-ip</code></td>
