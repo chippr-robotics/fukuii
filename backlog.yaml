@@ -484,7 +484,7 @@ items:
       by: cloud-dc960fdc
       agent: dev-node
       since: 2026-11-22T19:33:05Z
-      heartbeat: 2026-11-22T19:33:09Z
+      heartbeat: 2026-11-23T04:04:02Z
     notes: |-
       Then T003 ranges (user, beacon, forge), T004-T007 runs on the jar (live host), T011, T017 (user).
       Gates B-203, B-207, B-212 and C7's exit (Track C).
@@ -644,7 +644,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-15T17:59:02Z
-      heartbeat: 2026-11-18T18:33:00Z
+      heartbeat: 2026-11-23T04:04:02Z
     notes: |-
       cloud-dc960fdc: heartbeat or release by 11-17 17:06 UTC; C5a code merged (#1855-#1880), T209 + Sepolia fresh sync + 24 h remain.
       2026-11-18 blocked: C5a code merged (#1855-#1880 and follow-ups). Remaining gates need a live host: T209, a fresh Sepolia sync and 24 h following the head. Not doable in the cloud container.
@@ -1797,7 +1797,7 @@ items:
       by: cloud-dc960fdc
       agent: vault-b207b
       since: 2026-11-22T20:35:18Z
-      heartbeat: 2026-11-23T04:03:45Z
+      heartbeat: 2026-11-23T04:04:02Z
     notes: |-
       2026-11-22 review: ethtests half run: 32,087 fixtures, 0 findings. Left: diff vs T007 baseline (dev-node).
       2026-11-22 review: T007 diff still to do: run staging over legacytests@1f581b8 Constantinople+Cancun trees (spec's own selection) and diff (file,name) against #1989's ethtests-2026-11-22-legacy-vectors.tsv.gz (61,314 rows, all pass). #1987's 32,087 is a different corpus (ets Frontier-EIP158 + Constantinople tree only).
@@ -2514,7 +2514,7 @@ items:
       by: cloud-dc960fdc
       agent: hive-b314
       since: 2026-11-18T00:57:40Z
-      heartbeat: 2026-11-18T18:33:00Z
+      heartbeat: 2026-11-23T04:04:02Z
     notes: |-
       hive client has no switch for fukuii.state.path-live; needs one, and a host
       2026-11-18 blocked: The hive client switch for path-live landed (#1910). Remaining: the gate run itself, which needs a hive host or a dispatch: gh workflow run hive-engine.yml --ref staging -f path_live=true -f sim_limit='/re-?org' (or scripts/hive/local.sh ethereum/engine --limit '/re-?org' --path-live).
@@ -3162,7 +3162,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-18T16:08:42Z
-      heartbeat: 2026-11-20T18:19:03Z
+      heartbeat: 2026-11-23T04:04:02Z
     notes: |-
       Seen 2026-11-18 on #1916 (LookupsSpec) and #1921 (both), unrelated diffs; both pass locally 2/2 on the same heads. LookupsSpec uses PatienceConfig(5 s) eventually throughout. Synchronise on the event instead of a timeout; never skip.
       2026-11-18 in-progress: LookupsSpec race fixed in #1927 (waited on a count true part-way). Left: EngineApiHttpServerObservationSpec and JsonRpcHttpServerLifecycleSpec each failed once on CI 2026-11-18 (#1921); capture their failure text from the full job log (logs_url, not the 5000-line tail) when they recur.
@@ -3940,7 +3940,7 @@ items:
       by: cloud-dc960fdc
       agent: herald-b434b
       since: 2026-11-23T00:30:45Z
-      heartbeat: 2026-11-23T01:46:06Z
+      heartbeat: 2026-11-23T04:04:02Z
     notes: |-
       Staging 8d2dcea7b, Mordor, re-imported node B with mining: after 00:13:29Z no network block imported; GetBlockHeaders to peer e514276e timed out 7x at 90 s, no other peer tried, peers' best frozen at 17450195. Miner mined 17450196-17450204, none known to core-geth; head ended 46 behind. Theory: fetcher pinned to one dead peer + mining gate has no 'behind the network' check. Logs: ~/work/s018-recheck-b424/OUT/node-b.log
       2026-11-23 in-progress: Round 2 (branch head 107ea73d19): blacklist/selection paths hold in code+tests; 60s-vs-90s theory wrong, reverted. Remaining hypotheses: PeerDisconnected clears blacklist on a live peer; ask timeout (92s) beats request failure so no BlacklistPeer. Waiting on dev-node greps (B-437).
