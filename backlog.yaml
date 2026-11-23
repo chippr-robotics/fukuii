@@ -162,13 +162,18 @@ items:
   - id: B-014
     title: Path recovery never republishes recovered nodes to the hash store, so post-sync readers miss them
     priority: P3
-    status: open
+    status: claimed
     area: storage
     size: M
     opened: 2026-11-07
     refs: [10g, "#1692 N3 review"]
     links: {}
     depends_on: [B-069]
+    claim:
+      by: cloud-dc960fdc
+      agent: vault-b014
+      since: 2026-11-23T21:24:00Z
+      heartbeat: 2026-11-23T21:24:00Z
     notes: |-
       beacon + vault. Liveness, not loss. Check first whether Track C C8a makes it moot.
       2026-11-17 priority P3: liveness, not loss; C8a likely moots it
