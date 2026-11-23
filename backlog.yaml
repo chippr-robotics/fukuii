@@ -2746,7 +2746,7 @@ items:
   - id: B-336
     title: A partial extension's local state fault drops the failing block from the queue as invalid, and loses the escalation (ExtendedCurrentBestBranchPartially)
     priority: P2
-    status: claimed
+    status: in-progress
     area: sync
     size: S
     opened: 2026-11-17
@@ -2757,7 +2757,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b336
       since: 2026-11-23T22:32:09Z
-      heartbeat: 2026-11-23T22:32:09Z
+      heartbeat: 2026-11-23T22:32:41Z
     notes: "forge F1 on B-291's review: ConsensusImpl ~:341 and adapter ExtendedCurrentBestBranchPartially arm call removeSubtree and answer BlockImportedToTop for an MPTError too; the importer never sees the [LOCAL-STATE-FAULT] text (T062). Keep a local fault on the BranchExecutionFailure path, as B-291 does for reorgs."
   - id: B-337
     title: "Hash layout: a MissingNode (or state fault) after a reorganisation's adopted prefix re-queues the canonical prefix, loses the old branch, tells no head"
