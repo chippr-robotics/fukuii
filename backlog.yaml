@@ -2437,22 +2437,19 @@ items:
   - id: B-292
     title: Fault-injection tests for reverse-then-commit at the pinned cap (fault after commits, failed move back, partial first move)
     priority: P2
-    status: review
+    status: done
     area: consensus
     size: M
     opened: 2026-11-15
+    closed: 2026-11-23
     refs: []
     links:
       prs: [2001]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: forge-b292
-      since: 2026-11-23T21:03:05Z
-      heartbeat: 2026-11-23T21:19:59Z
     notes: |-
       forge N2, C4e part 3; before fukuii.state.path-live is on by default
       2026-11-23 claimed: forge triage: real gap, hard gate before path-live default; order B-292, B-343, B-239, B-344(+B-345), B-294.
+      2026-11-23 done: Merged d14bba56b
   - id: B-294
     title: "Writer-side exclusion: an import onto an intermediate head during an in-place adoption (test mode today)"
     priority: P2
