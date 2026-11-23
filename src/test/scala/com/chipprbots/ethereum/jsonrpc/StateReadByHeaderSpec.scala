@@ -149,6 +149,68 @@ class StateReadByHeaderSpec
       .unsafeRunSync()
       .isLeft shouldBe true
 
+  it should "answer eth_getHeaderByNumber and eth_getRawHeader from the header (B-412)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    for param <- Seq(
+        BlockParam.Latest,
+        BlockParam.WithNumber(header.number.value),
+        BlockParam.WithHash(header.hash.value)
+      )
+    do
+      ethBlocksService
+        .getHeaderByNumber(HeaderByNumberRequest(param))
+        .unsafeRunSync()
+        .map(_.headerResponse.map(_.number)) shouldEqual Right(Some(header.number.value))
+      ethBlocksService.getRawHeader(GetRawHeaderRequest(param)).unsafeRunSync().map(_.rawHeader.isDefined) shouldEqual
+        Right(true)
+    ethBlocksService
+      .getHeaderByNumber(HeaderByNumberRequest(BlockParam.WithNumber(header.number.value + 1)))
+      .unsafeRunSync()
+      .map(_.headerResponse) shouldEqual Right(None)
+
+  it should "answer eth_feeHistory without percentiles, and truncate it at a block without a body (B-412)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val noRewards: FeeHistoryRequest = FeeHistoryRequest(1, BlockParam.Latest, None)
+    val response: FeeHistoryResponse = ethBlocksService.feeHistory(noRewards).unsafeRunSync().toOption.value
+    response.oldestBlock shouldEqual header.number.value
+    response.gasUsedRatio shouldEqual Seq(header.gasUsed.value.toDouble / header.gasLimit.value.toDouble)
+    response.reward shouldEqual None
+
+    // geth: the only block cannot be fetched, so nothing is answered, and it is not an error
+    val withRewards: FeeHistoryRequest = FeeHistoryRequest(1, BlockParam.Latest, Some(Seq(50.0)))
+    val truncated: FeeHistoryResponse = ethBlocksService.feeHistory(withRewards).unsafeRunSync().toOption.value
+    truncated.oldestBlock shouldEqual header.number.value
+    truncated.gasUsedRatio shouldBe empty
+    truncated.baseFeePerGas shouldBe empty
+    truncated.reward shouldEqual Some(Seq.empty)
+    // with the body stored the same request answers
+    blockchainWriter.storeBlockBody(header.hash, body).commit()
+    ethBlocksService.feeHistory(withRewards).unsafeRunSync().map(_.reward.map(_.size)) shouldEqual Right(Some(1))
+
+  it should "cut eth_feeHistory short at a header-only block in the middle of the range (B-412)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    // three blocks: parent (full), header (header-only), child (full); the range ends at the child
+    val parent: BlockHeader = header.copy(number = header.number - 1, parentHash = BlockHash(ByteString("p")))
+    val midHeader: BlockHeader = header.copy(parentHash = parent.hash)
+    val child: BlockHeader = header.copy(number = header.number + 1, parentHash = midHeader.hash)
+    for h <- Seq(parent, midHeader, child) do blockchainWriter.storeBlockHeader(h).commit()
+    for h <- Seq(parent, child) do blockchainWriter.storeBlockBody(h.hash, body).commit()
+    blockchainWriter.saveBestKnownBlocks(child.hash, child.number.value)
+    blockchainReader.getBlockHeaderByNumber(midHeader.number.value) shouldEqual Some(midHeader)
+
+    val request: FeeHistoryRequest = FeeHistoryRequest(3, BlockParam.Latest, Some(Seq(50.0)))
+    val response: FeeHistoryResponse = ethBlocksService.feeHistory(request).unsafeRunSync().toOption.value
+    response.oldestBlock shouldEqual parent.number.value
+    response.reward.map(_.size) shouldEqual Some(1)
+    response.gasUsedRatio.size shouldEqual 1
+    response.baseFeePerGas.size shouldEqual 2
+
   it should "resolve by header what resolveBlock cannot, and agree with it when the body is there" taggedAs (
     UnitTest,
     RPCTest
