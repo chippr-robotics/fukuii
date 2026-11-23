@@ -4041,3 +4041,13 @@ items:
     notes: |-
       Read and tested (HeadersFetcher+PeersClient+production blacklist stack): retry after timeout goes to the other peer. Unruled-out: PeerDisconnected(nodeId) for the live peer clearing its blacklist (PeerListHelper.removePeerById, blacklist.remove) while it stays connected; ask timeout (92 s) path that skips BlacklistPeer. Grep node-b.log for 'Blacklisting peer', 'Blacklisting of peer .* dropped' (now WARN), 'Removed peer .* from blacklist', 'is blacklisted and excluded', PEER_REQUEST_DISCONNECTED around e514276e.
       2026-11-23 dropped: Duplicate of B-434 (same investigation; the DEBUG repro runs under B-434).
+  - id: B-438
+    title: "Verify B-433 proposer size cap against geth miner source: txFitsSize fork gating, buffer value, blob tx Size() with sidecar"
+    priority: P3
+    status: open
+    area: engine
+    opened: 2026-11-23
+    refs: []
+    links:
+      spec: none
+    notes: B-433 matched geth miner/worker.go from memory (break on !txFitsSize, maxBlockSizeBufferZone=1e6, env.size=header+withdrawals). No local geth clone. Confirm; geth may apply the check pre-Osaka too (fukuii gates on Osaka).
