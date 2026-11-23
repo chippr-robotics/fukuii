@@ -450,20 +450,8 @@ class TraceService(
           (),
           JsonRpcError.InvalidParams(s"Requested range exceeds max of $MaxTraceFilterRange blocks")
         )
-        allTraces = (fromNum to toNum).flatMap { blockNum =>
-          if blockNum == 0 then Nil // skip genesis — no parent state
-          else
-            val branch = blockchainReader.getBestBranch
-            blockchainReader
-              .getBlockByNumber(branch, blockNum)
-              .flatMap { block =>
-                blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
-                  // one scope of reads for each block of the range, held for this block and no longer
-                  val flat = StateRead.scoped(traceAllTxsFlat(block, parentHeader))
-                  applyAddressFilter(flat, req.fromAddress, req.toAddress)
-                }
-              }
-              .getOrElse(Nil)
+        allTraces <- (fromNum to toNum).foldLeft[Either[JsonRpcError, Vector[JValue]]](Right(Vector.empty)) {
+          case (acc, blockNum) => acc.flatMap(done => traceFilterBlock(blockNum, req).map(done ++ _))
         }
         paginatedTraces =
           val afterN = req.after.getOrElse(0)
@@ -473,6 +461,26 @@ class TraceService(
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
+
+  /** One block of trace_filter's range: its flat traces after the address filters. A read of the parent's state that
+    * the disk moved under is run again on a fresh view, the whole block of it ([[StateRead.attempting]]), so one stale
+    * read does not fail the range; a state that stays unreadable ends the range with the error
+    * [[StateRead.unavailable]] says.
+    */
+  private def traceFilterBlock(blockNum: Long, req: TraceFilterRequest): Either[JsonRpcError, Seq[JValue]] =
+    if blockNum == 0 then Right(Nil) // skip genesis — no parent state
+    else
+      val branch = blockchainReader.getBestBranch
+      blockchainReader
+        .getBlockByNumber(branch, blockNum)
+        .flatMap { block =>
+          blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
+            StateRead
+              .attempting(traceAllTxsFlat(block, parentHeader))
+              .map(flat => applyAddressFilter(flat, req.fromAddress, req.toAddress))
+          }
+        }
+        .getOrElse(Right(Nil))
 
   /** Applies fromAddress/toAddress filters to a flat trace sequence.
     *
