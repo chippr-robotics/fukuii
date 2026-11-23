@@ -394,17 +394,21 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     it should s"count reseeds per root, so a re-peg starts the count over, on $scheme" taggedAs UnitTest in {
       val rig = new Rig(scheme, absent = Set("root", "ext", "brX"), unreadable = Some("leafX2"))
       val next = PathHealPresenceFixtures.accountTrieNew()
-      // Answered by hand until the first reseed, so the root goes no further than that before the re-peg.
+      // Answered by hand until the first reseed, so the root goes no further than that before the re-peg. The root's
+      // asks are counted as the requests reach the test, not from `asked`: the peer records on its own actor, so after
+      // a settle the reseed can be on its way here and not yet recorded, and the loop would answer it (CI, c9d7716).
       rig.start()
       rig.available()
-      def answerUntilAsked(n: Placed, times: Int): Unit =
-        val deadline = 30.seconds.fromNow
-        while rig.asked(n) < times do
-          withClue("the reseed within the deadline: ")(deadline.hasTimeLeft() shouldBe true)
-          rig.peer.answerFrom(rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds), rig.trie.served)
-          rig.settle()
-      answerUntilAsked(rig.trie.root, 2)
-      val request = rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
+      def rootAsks(req: SNAP.GetTrieNodes): Int = req.paths.count(_ == rig.trie.root.pathset)
+      val deadline = 30.seconds.fromNow
+      var request = rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
+      var asks = rootAsks(request)
+      while asks < 2 do
+        withClue("the reseed within the deadline: ")(deadline.hasTimeLeft() shouldBe true)
+        rig.peer.answerFrom(request, rig.trie.served)
+        rig.settle()
+        request = rig.peer.manual.expectMessageType[SNAP.GetTrieNodes](30.seconds)
+        asks += rootAsks(request)
       request.paths shouldBe Seq(rig.trie.root.pathset)
       rig.peer.serveFrom.set(Some(next.served))
       // Both roots are asked for at the empty path.
@@ -432,6 +436,9 @@ class HealNoWalkCompletionSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       rig.settle()
       rig.ec.runNext()
       rig.driveUntil("the completion of the new root")(rig.decided.get() == next.root.hash)
+      // The check can decide before the stale walk's last step has run on the executor, so its end is waited for, not
+      // assumed: a second walk would still show, as more on the executor or a second end (CI, PR #1948).
+      rig.driveUntil("the end of the fallback walk")(rig.walksEnded >= 1)
       withClue("one walk, the one the fallback started: ")(rig.walksEnded shouldBe 1)
       withClue("nothing more to run: ")(rig.ec.pending shouldBe 0)
       rig.completions(rig.seen()) shouldBe 1
