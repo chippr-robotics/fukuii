@@ -4190,12 +4190,17 @@ items:
   - id: B-446
     title: RegularSyncSpec 'ask again for ancestor bodies when the fetch in flight is not answered within the deadline' times out under machine load
     priority: P3
-    status: open
+    status: claimed
     area: ci
     opened: 2026-11-23
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: eye-b446
+      since: 2026-11-23T23:46:02Z
+      heartbeat: 2026-11-23T23:46:02Z
     notes: |-
       forge-b344: failed 3 of 5 full-spec runs on a loaded host (5 s fishForSpecificMessage at RegularSyncSpec:2844), passed alone every time and in the full spec once load dropped; seen with and without B-344's change.
       2026-11-23 claimed: Pre-existing: RegularSyncSpec 'ask again for ancestor bodies... deadline' timed out 1/3 on plain staging (2026-11-23). Not caused by B-344. Needs a deterministic fix (test uses a 5 s real deadline).
