@@ -4116,3 +4116,13 @@ items:
     links:
       spec: 018
     notes: Found in B-439. importWith handleError (BlockImporter.scala:1927) logs and goes Running, so no crash; but ConsensusAdapter's re-queue is skipped and no LocalFault is told the feed. ReorgBlockhashParitySpec pins the rethrow as intended (#2001); decide whether the adapter should map a thrown write failure to a StateFault.
+  - id: B-441
+    title: SyncController idle() drops GetStatus before Start; answer it (NotSyncing/starting)
+    priority: P3
+    status: open
+    area: sync
+    opened: 2026-11-23
+    refs: []
+    links:
+      spec: 018
+    notes: "B-435 follow-up: idle() has no GetStatus arm (unhandled), so an ask before Start times out. Rare (Start is sent at boot) but the same class."
