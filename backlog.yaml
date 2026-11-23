@@ -4057,3 +4057,18 @@ items:
     links:
       spec: none
     notes: B-433 matched geth miner/worker.go from memory (break on !txFitsSize, maxBlockSizeBufferZone=1e6, env.size=header+withdrawals). No local geth clone. Confirm; geth may apply the check pre-Osaka too (fukuii gates on Osaka).
+  - id: B-439
+    title: "commitInPlaceAtTheCap: a failed move back that leaves the head off the branch is told wrongly (imported/queued/where the head is)"
+    priority: P2
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-23
+    refs: [B-292]
+    links:
+      spec: 018
+      branch: test/b292-reverse-commit-faults
+    notes: |-
+      Found by B-292 fault tests. Move back stops on the old chain: leftOnTheBranch reports b4..b6 as imported (announced, pool updated) while head is h6; not requeued.
+      Partial first move + failed move back: rethrown first fault, head (h9) not named, old chain above it not queued. Disk state consistent; re-offer adopts.
+      Red tests: scratchpad b292-failing-tests.diff (assert toldWhereTheHeadIs). Gate before path-live default.
