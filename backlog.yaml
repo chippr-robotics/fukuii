@@ -5316,11 +5316,16 @@ items:
   - id: B-516
     title: "CL branch evaluated while the head is already past its tip: the head is moved back below the named head and told as ChainReorganised"
     priority: P2
-    status: open
+    status: claimed
     area: consensus
     size: S
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T11:13:55Z
+      heartbeat: 2026-11-24T11:13:55Z
     notes: "beacon, found as B-318 item 3. Pre-move check (ConsensusImpl ~:1293 plan.anchor.hash != bestBlockHash) only refuses a head that moved after weighing. Fix: refuse a backward-only move in that check (like 'moved meanwhile'). Repro in B-318 report: import 1-5, adopt b3'-b6', import b7 named, evaluate b3'-b6' again -> head back to b6'."
