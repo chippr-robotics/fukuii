@@ -123,6 +123,10 @@ object DiscoveryConfig extends Logger:
           else defaultWalk.treeDeadline,
         concurrency =
           if discoveryConfig.hasPath("dns-concurrency") then discoveryConfig.getInt("dns-concurrency")
-          else defaultWalk.concurrency
+          else defaultWalk.concurrency,
+        recheckInterval =
+          if discoveryConfig.hasPath("dns-recheck-interval") then
+            discoveryConfig.getDuration("dns-recheck-interval").toMillis.millis
+          else defaultWalk.recheckInterval
       )
     )
