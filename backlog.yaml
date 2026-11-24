@@ -4944,3 +4944,12 @@ items:
     links:
       spec: 018
     notes: Found in B-210 round 2. ResolveHeader.forkChoiceManagerOpt defaults to None; NodeBuilder passes forkChoiceManagerForRpc only to EthBlocksService and (since B-210) EthProofService. EthUserService (getBalance/getCode/getStorageAt/getTransactionCount), EthInfoService (call/estimateGas), EthTxService, EthSimulateService, TraceService and DebugTracingService resolve Safe/Finalized to InvalidParams. Wire forkChoiceManagerForRpc into each builder; test with a real ForkChoiceManager as EthProofServiceSpec does.
+  - id: B-490
+    title: "Chain weights: check StateRecovery's in-place adoption and the p2p hand-off re-derive weights of blocks they make canonical (B-126 covers fork-choice moves)"
+    priority: P3
+    status: open
+    area: sync
+    opened: 2026-11-24
+    refs: []
+    links: {}
+    notes: "B-126 re-derives weights in ForkChoiceManager only (hash: move.adopted; unified: walk before moveHeadInPlace, bounded 8192). Blocks a recovery commits in place (C4d part 4) or adopts take keepExecuted's parent+difficulty at execution time; if ChainWeightReconcile repaired the parent in between they keep the stale value. Verify, and route through the same helper if so. beacon."
