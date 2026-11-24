@@ -27,7 +27,6 @@ import com.chipprbots.ethereum.transactions.TxTypeGate
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.utils.Logger
-import com.chipprbots.ethereum.utils.NetworkType
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.BlockAccessRecorder
 import com.chipprbots.ethereum.vm.EvmConfig
@@ -839,18 +838,20 @@ class EthSimulateService(
     // for the first simulated block, then each simulated block's own, so an override carries forward. (Not zero.)
     val beneficiary = ov.feeRecipient.map(_.bytes).getOrElse(parentHeader.beneficiary)
     val prevRandao = ov.prevRandao.getOrElse(ByteString(new Array[Byte](32)))
-    // ETC: Olympia (ECIP-1111) is a block-number fork, so the header has a base fee from the Olympia block on, whatever
-    // the parent has, and with validation it is import's: BaseFeeCalculator.calcBaseFee, the function the header
-    // validator (validateBaseFee) and the miner (BlockGeneratorSkeleton.baseFeeFields) use, which gives the activation
-    // block InitialBaseFee and floors at baseFeeFloor. Read from the parent's header instead, the activation block had
-    // no base fee at all, and with a pre-Olympia parent the copy below gave it zero.
-    val etcOlympia = blockchainConfig.networkType == NetworkType.ETC &&
-      number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
+    // The header has a base fee from the fork that brings EIP-1559 on: London on ETH, Olympia (ECIP-1111) on ETC. Both
+    // are block-number forks, and fukuii's configuration names both `olympiaBlockNumber` (eth-chain.conf: 12965000;
+    // Sepolia, Hoodi: 0). So the header has one from that block on, whatever the parent has, gated as import's header
+    // validator (validateHeaderExtraFields, validateBaseFee) gates it and as go-ethereum's makeHeaders gates it
+    // (`IsLondon(header.Number)`). With validation the value is import's: BaseFeeCalculator.calcBaseFee, the function
+    // the validator and the miner (BlockGeneratorSkeleton.baseFeeFields) use, which gives the activation block
+    // InitialBaseFee (go-ethereum CalcBaseFee: `params.InitialBaseFee` when the parent is not London) and floors at
+    // baseFeeFloor. Read from the parent's header instead, the activation block had no base fee on either chain, and an
+    // inline copy of the update gave it zero on ETH (B-180 on ETC, B-519 on ETH). Without validation it is zero, as
+    // go-ethereum's simulator sets it.
+    val feeMarket = number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
     val baseFee = ov.baseFeePerGas.getOrElse(
       if !validation then BigInt(0)
-      else if blockchainConfig.networkType == NetworkType.ETC then
-        BaseFeeCalculator.calcBaseFee(parentHeader, blockchainConfig)
-      else computeNextBaseFee(parentHeader)
+      else BaseFeeCalculator.calcBaseFee(parentHeader, blockchainConfig)
     )
     // go-ethereum makeHeaders (simulate.go:654-660): from Cancun on, the block's parent beacon block root is the
     // `beaconRoot` override, and zero without one. Before Cancun the header has no such field, so the override is not
@@ -913,10 +914,8 @@ class EthSimulateService(
           parentBeaconBlockRoot
         )
       else if blockchainConfig.isShanghaiTimestamp(ts) then HefPostShanghai(baseFee, EmptyWithdrawalsRoot)
-      else if etcOlympia then HefPostOlympia(baseFee) // ETC from Olympia: by block number, as import
-      else if blockchainConfig.networkType == NetworkType.ETC then HefEmpty // ETC before Olympia
-      else if parentHeader.baseFee.isDefined then HefPostOlympia(baseFee) // ETH: post-London but pre-Shanghai
-      else HefEmpty // Pre-London
+      else if feeMarket then HefPostOlympia(baseFee) // ETH from London, ETC from Olympia: by block number, as import
+      else HefEmpty // ETH before London, ETC before Olympia
 
     // The difficulty: the `difficulty` override, or the one the block inherits (see inheritedDifficulty).
     // buildAndFinalizeBlock refuses an override where the inherited difficulty is zero.
@@ -1475,26 +1474,6 @@ class EthSimulateService(
       )
     )
   }
-
-  /** EIP-1559: Compute the base fee for the next block */
-  private def computeNextBaseFee(parentHeader: BlockHeader): BigInt =
-    val parentBaseFee = parentHeader.baseFee.getOrElse(BigInt(0))
-    if parentBaseFee == 0 then BigInt(0)
-    else
-      val elasticityMultiplier = 2
-      val baseFeeChangeDenominator = 8
-      val parentGasTarget = parentHeader.gasLimit / elasticityMultiplier
-      if parentGasTarget == GasAmount.Zero then parentBaseFee
-      else if parentHeader.gasUsed == parentGasTarget then parentBaseFee
-      else if parentHeader.gasUsed > parentGasTarget then
-        val gasUsedDelta = (parentHeader.gasUsed - parentGasTarget).value
-        val baseFeePerGasDelta =
-          (parentBaseFee * gasUsedDelta / parentGasTarget.value / baseFeeChangeDenominator).max(1)
-        parentBaseFee + baseFeePerGasDelta
-      else
-        val gasUsedDelta = (parentGasTarget - parentHeader.gasUsed).value
-        val baseFeePerGasDelta = parentBaseFee * gasUsedDelta / parentGasTarget.value / baseFeeChangeDenominator
-        (parentBaseFee - baseFeePerGasDelta).max(0)
 
   private def computeTransactionsRoot(txs: Seq[SignedTransaction]): ByteString =
     if txs.isEmpty then EmptyMpt
