@@ -300,12 +300,15 @@ class StateRecovery(
     // a fork choice walks as far as an extension of the head is caught up over; a payload, as far as its blocks are
     // kept as layers
     val reach = if authority == Authority.ForkChoice then maxCatchUp else maxBlocks
-    walk(head, reach) match
+    // a fork choice's walk also ends where the head's chain meets the chain whose state is held, however far behind
+    // what a view reaches: the head is moved there by the records (B-316)
+    val byRecords = authority == Authority.ForkChoice
+    walk(head, reach, byRecords) match
       case Left(outcome) =>
         logEnd(head, why, outcome)
         outcome
-      case Right((_, Nil)) => Outcome.AlreadyHeld
-      case Right((held, chain)) if authority == Authority.ForkChoice && chain.size > maxAdoptedBlocks =>
+      case Right(Walked(_, Nil, _)) => Outcome.AlreadyHeld
+      case Right(Walked(held, chain, _)) if authority == Authority.ForkChoice && chain.size > maxAdoptedBlocks =>
         // Beyond what a branch is adopted over (C5a part 8; the user's decision of 2026-11-15): only a straight
         // extension of the head, which is what stands between a sync's hand-off and the consensus client's head.
         // A branch that leaves the chain keeps its bound: its way back is kept in records, which reach that far.
@@ -318,12 +321,14 @@ class StateRecovery(
             )
         logEnd(head, why, outcome)
         outcome
-      case Right((held, chain))
+      case Right(Walked(held, chain, viewless))
           if authority == Authority.ForkChoice &&
-            chain.size + state.heldDepth(refOf(held)).getOrElse(0) > maxBlocks =>
-        // more than the layers may hold, with those it stands on: committed in place, as a long branch is (C4d part 4)
+            (viewless || chain.size + state.heldDepth(refOf(held)).getOrElse(0) > maxBlocks) =>
+        // more than the layers may hold, with those it stands on: committed in place, as a long branch is (C4d part 4).
+        // So too a branch whose fork no view reaches: nothing can be executed on a view of it, and the head is moved
+        // down to it by the records first, as the import path adopts a heavier chain that forks that deep (C4e part 4)
         adopt(head, held, chain, sink, why)
-      case Right((_, chain)) =>
+      case Right(Walked(_, chain, _)) =>
         log.info(
           s"[STATE-RECOVERY] Executing ${chain.size} stored block(s) again, ${chain.head.number.value} to " +
             s"${chain.last.number.value}, for head ${hex(head)} ($why): their state is not held"
@@ -342,9 +347,9 @@ class StateRecovery(
                 Outcome.Superseded
               case Done(Outcome.NotKept(_)) if authority == Authority.ForkChoice =>
                 // a layer did not fit: what is left is committed in place, as a long branch is (beacon)
-                walk(head, reach) match
-                  case Right((_, Nil))     => Outcome.AlreadyHeld
-                  case Right((held, rest)) => adopt(head, held, rest, sink, why)
+                walk(head, reach, byRecords) match
+                  case Right(Walked(_, Nil, _))     => Outcome.AlreadyHeld
+                  case Right(Walked(held, rest, _)) => adopt(head, held, rest, sink, why)
                   case Left(outcome) =>
                     logEnd(head, why, outcome)
                     outcome
@@ -354,11 +359,24 @@ class StateRecovery(
 
   /** The highest block of `head`'s chain whose state is held, and the blocks above it, oldest first: no more than
     * `reach` of them.
+    *
+    * With `byRecords`, for a fork choice that may move the head: or the block where `head`'s chain meets the chain
+    * whose state is held (the index of blocks by number, I6), when no view of it can be made (B-316). In the archive
+    * mode the records lead further back than a view reaches (`state.archive.view-reach`), and in the basic mode they
+    * can when the floor lags: a branch that forks there is otherwise walked down past its fork to no state, and is
+    * adopted by no one. Whether the records do lead there is the move's to say ([[adopt]]): it is refused, with nothing
+    * written, when they do not.
     */
-  private def walk(head: ByteString, reach: Int): Either[Outcome, (BlockHeader, List[BlockHeader])] =
+  private def walk(head: ByteString, reach: Int, byRecords: Boolean): Either[Outcome, Walked] =
     @tailrec
-    def down(at: BlockHeader, above: List[BlockHeader]): Either[Outcome, (BlockHeader, List[BlockHeader])] =
-      if state.stateAvailable(refOf(at)) then Right((at, above))
+    def down(at: BlockHeader, above: List[BlockHeader]): Either[Outcome, Walked] =
+      if state.stateAvailable(refOf(at)) then Right(Walked(at, above, viewless = false))
+      // Only where the head's chain leaves the index: the block above it is not of the index. Never the head itself,
+      // nor a block of a head that is an ancestor of the head, which a fork choice does not move the head down to (the
+      // walk goes on down, and finds no state). And behind the anchor, where the index is the anchor's ancestry: it
+      // may run ahead of the anchor (after a sync's hand-off), and a block there is reached by no record (B-480)
+      else if byRecords && above.headOption.exists(child => !ofTheIndex(child)) && behindTheAnchor(at) then
+        Right(Walked(at, above, viewless = true))
       else if above.size >= reach then
         Left(
           Outcome.TooLong(
@@ -372,6 +390,8 @@ class StateRecovery(
         reader.getBlockHeaderByHash(BlockHash(at.parentHash.value)) match
           case Some(parent) => down(parent, at :: above)
           case None         => Left(Outcome.MissingHeader(at.parentHash.value))
+    def ofTheIndex(at: BlockHeader): Boolean = reader.getCanonicalHashByNumber(at.number.value).contains(at.hash)
+    def behindTheAnchor(at: BlockHeader): Boolean = state.anchor.exists(_.number > at.number.value) && ofTheIndex(at)
     reader.getBlockHeaderByHash(BlockHash(head)) match
       case None         => Left(Outcome.MissingHeader(head))
       case Some(header) => down(header, Nil)
@@ -926,6 +946,11 @@ object StateRecovery:
     val admit: com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan => Option[String] = plan =>
       met = above(plan.anchor.hash) || standsOnTheTip(plan.anchor)
       Option.when(met)(s"the head is at ${plan.anchor.show}, on the chain above the block it was to be moved to")
+
+  /** What [[StateRecovery.walk]] found: `held`, the highest block of the head's chain whose state is held, and the
+    * blocks above it, oldest first. `viewless` when no view of `held` can be made: it is reached by the records only.
+    */
+  final private case class Walked(held: BlockHeader, chain: List[BlockHeader], viewless: Boolean)
 
   sealed private trait Step
   private case object Moved extends Step

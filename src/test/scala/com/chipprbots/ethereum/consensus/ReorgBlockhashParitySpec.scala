@@ -40,6 +40,7 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StagedBlockState
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
@@ -722,6 +723,133 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         (3 to 6).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 3).hash))
       finally recovery.close()
   }
+
+  // B-316: in the archive mode the records lead further back than a view reaches. The consensus layer's branch that
+  // leaves the chain below what a view reaches, its blocks stored by hash (as engine_newPayload stores those whose
+  // parent's state is not held), is adopted by the fork choice's recovery as the import path adopts a heavier chain
+  // that forks that deep: the head moved down to the fork by the records, with no view, and the branch committed in
+  // place. A payload's recovery, which never moves the head, still walks only to a state a view reaches.
+  it should "be adopted by the fork choice's recovery when it forks below what a view reaches, by the records" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture(archiveOfShortViews):
+    val recovery = new StateRecovery(
+      node.blockchainReader,
+      node.blockchainWriter,
+      node.blockExecution,
+      node.storagesInstance.storages.pathStateStorage.get,
+      maxBlocks = 2
+    )(using node.blockchainConfig)
+    val sink: Sink = new StateRecovery.Sink:
+      def executed(
+          block: Block,
+          receipts: Seq[Receipt],
+          accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+      ): Unit = ()
+      def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+      override def requestedHead: Option[ByteString] = namedNow()
+      override def followedHead: Option[ByteString] = Some(aChain.last.hash.value)
+    try
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      // the fork, block 2, is three blocks below the head: behind what a view reaches (two), and the records lead there
+      val state = node.storagesInstance.storages.pathStateStorage.get
+      state.stateAvailable(BlockRef(aChain(1).hash.value, 2, aChain(1).header.stateRoot.value)) shouldBe false
+      bChain.foreach(block => node.blockchainWriter.storeBlockByHashOnly(block).commit())
+      named.set(Some(bChain.last.hash.value))
+      // a payload's recovery moves no head: it does not get there, and nothing moves
+      recovery
+        .requestFor(bChain.last.hash.value, sink, "a payload")
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe a[StateRecovery.Outcome.TooLong]
+      node.bestHash shouldBe aChain.last.hash
+      // the fork choice's: down to block 2 by the records, and blocks 3' to 6' committed in place
+      recovery
+        .requestFor(bChain.last.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Adopted(4)
+      node.bestHash shouldBe bChain.last.hash
+      (1 to 2).foreach(n => node.indexed(n) shouldBe Some(aChain(n - 1).hash))
+      (3 to 6).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 3).hash))
+      state.anchor.map(_.hash) shouldBe Some(bChain.last.hash.value)
+      reported shouldBe Nil
+    finally recovery.close()
+  )
+
+  // B-480 (beacon): the head itself is never a stop by the records. A fork choice to an ancestor of the head that no
+  // view reaches is not "already held": its walk goes on down, and finds no state
+  it should "not take a head of the index below what a view reaches for one whose state is held" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture(archiveOfShortViews):
+    val recovery = new StateRecovery(
+      node.blockchainReader,
+      node.blockchainWriter,
+      node.blockExecution,
+      node.storagesInstance.storages.pathStateStorage.get,
+      maxBlocks = 2
+    )(using node.blockchainConfig)
+    val sink: Sink = new StateRecovery.Sink:
+      def executed(
+          block: Block,
+          receipts: Seq[Receipt],
+          accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+      ): Unit = ()
+      def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+      override def requestedHead: Option[ByteString] = namedNow()
+    try
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      val state = node.storagesInstance.storages.pathStateStorage.get
+      // block 2: of the index, behind the anchor, three blocks below the head, where no view reaches
+      state.stateAvailable(BlockRef(aChain(1).hash.value, 2, aChain(1).header.stateRoot.value)) shouldBe false
+      named.set(Some(aChain(1).hash.value))
+      recovery
+        .requestFor(aChain(1).hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe a[StateRecovery.Outcome.TooLong]
+      node.bestHash shouldBe aChain.last.hash
+      state.anchor.map(_.hash) shouldBe Some(aChain.last.hash.value)
+    finally recovery.close()
+  )
+
+  it should "be taken back up to the head followed, by the records, when its tip is invalid below what a view reaches" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture(archiveOfShortViews):
+    val recovery = new StateRecovery(
+      node.blockchainReader,
+      node.blockchainWriter,
+      node.blockExecution,
+      node.storagesInstance.storages.pathStateStorage.get,
+      maxBlocks = 2
+    )(using node.blockchainConfig)
+    val refused = new java.util.concurrent.ConcurrentLinkedQueue[ByteString]()
+    val sink: Sink = new StateRecovery.Sink:
+      def executed(
+          block: Block,
+          receipts: Seq[Receipt],
+          accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+      ): Unit = ()
+      def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit =
+        refused.add(block.hash.value)
+      override def requestedHead: Option[ByteString] = namedNow()
+      override def followedHead: Option[ByteString] = Some(aChain.last.hash.value)
+    try
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      // 6' names a state its execution does not leave
+      val bad = bChain.last.copy(header = bChain.last.header.copy(stateRoot = TrieRoot.Empty))
+      (bChain.init :+ bad).foreach(block => node.blockchainWriter.storeBlockByHashOnly(block).commit())
+      named.set(Some(bad.hash.value))
+      recovery
+        .requestFor(bad.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe a[StateRecovery.Outcome.Invalid]
+      refused.toArray.toSeq shouldBe Seq(bad.hash.value)
+      // back on block 5, the head followed, with its chain
+      node.bestHash shouldBe aChain.last.hash
+      (1 to 5).foreach(n => node.indexed(n) shouldBe Some(aChain(n - 1).hash))
+      node.storagesInstance.storages.pathStateStorage.get.anchor.map(_.hash) shouldBe Some(aChain.last.hash.value)
+    finally recovery.close()
+  )
 
   it should "set what hangs from it aside while the head stays, once it is handed off, and not hand off a fork below the views" taggedAs (
     UnitTest,
