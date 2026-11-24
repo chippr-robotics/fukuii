@@ -644,6 +644,57 @@ class RegularSyncSpec
       while resolved.get() <= before && System.nanoTime() < deadline do Thread.onSpinWait()
       resolved.get() shouldBe before + 1
 
+  /** An importer whose branch resolution answers every batch `NoChainSwitch`, on the unified layout (`unified`) or on
+    * the hash layout, with what it offers the ommer pool recorded (B-299). This node's chain is the test blocks, its
+    * head block 20; a side branch leaves it at block 14 or at block 16.
+    */
+  abstract class OmmerOfferFixture(name: String, unified: Boolean)
+      extends ForkRecoveryOnTheUnifiedLayout(name, recoveryStarted = false, unified = unified):
+    val resolved = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    def own(number: Int): Block = testBlocks.find(_.number.value == number).get
+
+    /** `count` blocks of a side branch that stands on this node's block `from`. */
+    def sideOf(from: Int, count: Int): List[Block] =
+      (1 to count).foldLeft(List.empty[Block]) { (made, i) =>
+        val parent = made.lastOption.map(_.header.hash).getOrElse(own(from).hash)
+        val template = own(from + i)
+        made :+ template.copy(
+          header = template.header.copy(parentHash = parent, extraData = ByteString(s"of the side branch from $from"))
+        )
+      }
+
+    override lazy val consensusAdapter: ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
+      // a proof-of-work chain: no consensus layer refuses a branch (B-297)
+      override def refusedWithTheirParent(blocks: NonEmptyList[Block]): Boolean = false
+      override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
+          blockExecutionScheduler: IORuntime,
+          blockchainConfig: BlockchainConfig
+      ): IO[BlockImportResult] = IO.pure(BlockImportedToTop(Nil))
+
+    override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
+      override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
+        resolved.incrementAndGet()
+        NoChainSwitch
+      override def notTaken(headers: NonEmptyList[BlockHeader]): Option[BranchNotTaken] = None
+      override def withoutForkWeight(headers: NonEmptyList[BlockHeader]): Option[NonEmptyList[BlockHeader]] = None
+      override def acrossAGap(headers: NonEmptyList[BlockHeader]): Option[ChainGap] = None
+
+    /** One batch, and the importer has resolved it. */
+    def deliver(blocks: List[Block]): Unit =
+      val before = resolved.get()
+      importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.fromListUnsafe(blocks)))
+      val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+      while resolved.get() <= before && System.nanoTime() < deadline do Thread.onSpinWait()
+      resolved.get() shouldBe before + 1
+
+    /** The headers the ommer pool was offered, until it is sent no more. */
+    def offered(): Seq[BlockHeader] =
+      ommersPool.receiveWhile(max = 3.seconds, idle = 500.millis) { case m => m }.flatMap {
+        case com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers(headers) => headers
+        case _                                                            => Nil
+      }
+
   /** An importer whose every import of block 15 is refused because the window its ommers are checked against is not
     * stored whole (B-301): the headers of blocks 9 to 14 are stored, each committing to a body of one ommer, and of
     * their bodies only those of blocks 13 and 14. The check reads the bodies of blocks 10 to 14, the five nearest that
@@ -1434,6 +1485,31 @@ class RegularSyncSpec
           unweighed.isEmpty shouldBe true
           testKit.stop(importer)
       )
+
+      // B-299 (forge): a batch that is not taken offered its first block to the ommer pool as an ommer, though after a
+      // fetcher reset from the common block that block is this node's own. Only the branch's first block off this
+      // node's chain is offered, as core-geth offers only side blocks as uncles
+      for (layout, unified) <- Seq("the unified state layout" -> true, "the hash layout" -> false) do
+        s"offer the ommer pool no block of this node's own chain from a branch not taken, on $layout" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new OmmerOfferFixture(s"ommer-offer-$unified", unified):
+            // as the fetcher serves after a reset from the common block: this node's own blocks, the chain whole
+            deliver(List(own(15), own(16), own(17)))
+            // this node's own blocks, then a branch that leaves its chain at block 16
+            val leavesAt16: List[Block] = sideOf(16, 2)
+            deliver(List(own(15), own(16)) ++ leavesAt16)
+            // a branch whole, from block 14
+            val leavesAt14: List[Block] = sideOf(14, 2)
+            deliver(leavesAt14)
+            val headers: Seq[BlockHeader] = offered()
+            withClue(headers.map(h => s"${h.number} ${h.hashAsHexString}").mkString("\n")) {
+              headers.map(_.hash).toSet shouldBe Set(leavesAt16.head.hash, leavesAt14.head.hash)
+              headers.exists(h => testBlocks.exists(_.hash == h.hash)) shouldBe false
+            }
+            testKit.stop(importer)
+        )
 
       // B-385: where the chain weight of the block a branch stands on is not stored, the fork choice answers
       // NoChainSwitch with an error and nothing else ends the wait for it: told to the escalation's feed
