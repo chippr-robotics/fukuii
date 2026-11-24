@@ -4109,10 +4109,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T05:14:41Z
-      heartbeat: 2026-11-24T05:14:45Z
+      heartbeat: 2026-11-24T06:01:03Z
     notes: |-
       Found in B-207 (#1987). Add a sparse legacytests checkout to the nightly ethtest job, or document the gap.
       2026-11-24 in-progress: clone-e lane batch 3
+      2026-11-24 in-progress: Pushed chore/b429-legacy-tests-ci (9ef9bb9553); local run 61,314/61,314 PASS in 20 min; PR not opened yet.
   - id: B-430
     title: Recovery scans don't detect a lost node below a storage-trie root (only the root's presence is checked); same in v0.12.1
     priority: P3
