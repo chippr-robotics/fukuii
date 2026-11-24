@@ -4149,12 +4149,17 @@ items:
   - id: B-441
     title: SyncController idle() drops GetStatus before Start; answer it (NotSyncing/starting)
     priority: P3
-    status: open
+    status: claimed
     area: sync
     opened: 2026-11-23
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T03:17:49Z
+      heartbeat: 2026-11-24T03:17:49Z
     notes: "B-435 follow-up: idle() has no GetStatus arm (unhandled), so an ask before Start times out. Rare (Start is sent at boot) but the same class."
   - id: B-442
     title: GraphQL sendRawTransaction answers a missing trie node as the start nonce (GraphQLSchema.scala currentNonce)
