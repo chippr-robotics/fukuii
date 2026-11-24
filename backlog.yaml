@@ -5199,18 +5199,19 @@ items:
   - id: B-507
     title: test_getLogHash and the MCP GetTransactionTool / McpResources tx readers follow a lookup with no canonical check (B-495 leftovers)
     priority: P3
-    status: in-progress
+    status: review
     area: rpc
     size: S
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2072]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T10:42:26Z
-      heartbeat: 2026-11-24T10:42:31Z
+      heartbeat: 2026-11-24T10:51:06Z
     notes: |-
       Found during B-495; reuse CanonicalTxLookup. MCP deps may need blockchainReader.
       2026-11-24 in-progress: conduit agent clone-e
