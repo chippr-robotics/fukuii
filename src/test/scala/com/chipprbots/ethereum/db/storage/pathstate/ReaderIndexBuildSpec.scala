@@ -316,6 +316,25 @@ class ReaderIndexBuildSpec extends AnyFlatSpec with Matchers with LayerChains:
       a[StateUnavailable] should be thrownBy chain.state.stageOf(refs(refs.size - 5))
     }
 
+  // B-239: a reader is never handed a view through forward layers, so it is refused when they are found, before an
+  // index is built for the fork they leave from.
+  "A reader of a block kept beside the disk on a fork" should "be refused before any index is built for it" taggedAs
+    UnitTest in {
+      val rig = new Rig
+      import rig.*
+      val fork = chain.onAny(refs(3))(slots(bob, 7 -> 7)).layered()
+      // the execution's index is of the epoch it was made in: the disk moves on, and the layer is still kept
+      chain.on(head)(slots(alice, 99 -> 1)).inPlace()
+      val builtBefore = told.built.get
+      Seq(Reader.Peer, Reader.Rpc).foreach { as =>
+        val refused = the[StateUnavailable] thrownBy behind(fork.block, as)
+        // refused for the layer, which is still kept: a block no layer and no record leads to is "not held"
+        refused.getMessage should include("kept beside it")
+      }
+      told.built.get shouldBe builtBefore
+      chain.state.indexBuildsInFlight shouldBe 0
+    }
+
   "A view" should "not be made by the holder of the state lock: it may wait for records to be read" taggedAs UnitTest in {
     val rig = new Rig
     import rig.*

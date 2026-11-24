@@ -503,7 +503,10 @@ final class PathStateStorage(
       triesLeft: Int = ViewTries,
       // told, before anything is read for it, that the block is not the one the disk holds: at the look at the anchor
       // the view itself is made from, so that whoever counts such views counts exactly those that are made
-      notTheAnchor: () => Unit = () => ()
+      notTheAnchor: () => Unit = () => (),
+      // a reader of the chain the disk is on ([[viewBehind]]): a block that forward layers lead to is refused as soon
+      // as the layers are found, before an index is built for a fork the reader would never be handed
+      layersRefused: Boolean = false
   ): StateView =
     // The view may wait for an index another builds, and reads records to build one: under the state lock that is
     // every commit held up behind one read.
@@ -523,6 +526,11 @@ final class PathStateStorage(
           try
             windowFor(anchor, epoch).map { behind =>
               overlay.chainFrom(anchor, block, behind.contains) match
+                case Some(_) if layersRefused =>
+                  throw new StateUnavailable(
+                    s"the state of block ${block.show} is not held as a state of the chain the disk is on: it is an " +
+                      "executed block kept beside it"
+                  )
                 case Some((layers, on)) =>
                   val reverse = Option.when(on != anchor)(indexBetween(anchor, on, epoch, reader))
                   new StateView(block, epoch, clock, rows, layers, reverse)
@@ -538,12 +546,12 @@ final class PathStateStorage(
         made.filter(_ => clock.epoch == epoch).getOrElse {
           if clock.epoch == epoch then
             // the window was of another anchor and the epoch has not moved: the clock is read again
-            if triesLeft > 0 then viewOf(block, reader, triesLeft - 1, notTheAnchor)
+            if triesLeft > 0 then viewOf(block, reader, triesLeft - 1, notTheAnchor, layersRefused)
             else
               throw new StateUnavailable(s"the state of block ${block.show} is not held: the anchor could not be read")
           else if triesLeft > 0 then
             told("a view made again")(settings.observer.viewRetried())
-            viewOf(block, reader, triesLeft - 1, notTheAnchor)
+            viewOf(block, reader, triesLeft - 1, notTheAnchor, layersRefused)
           else
             told("a view that could not be made")(settings.observer.viewStale())
             throw new StaleStateViewException(
@@ -647,14 +655,15 @@ final class PathStateStorage(
     // more than may be is refused before it costs a walk.
     viewBehind(block, Reader.Rpc, () => counted())
 
-  /** The view of the anchor, or of a block behind it on its own chain, for a reader. */
+  /** The view of the anchor, or of a block behind it on its own chain, for a reader. A block that forward layers lead
+    * to is refused when they are found, before any index is built for it (B-239): on a fork that index would be built
+    * for a view the reader is never handed.
+    */
   private def viewBehind(block: BlockRef, reader: Reader, notTheAnchor: () => Unit = () => ()): StateView =
-    val view = viewOf(block, Some(reader), notTheAnchor = notTheAnchor)
+    val view = viewOf(block, Some(reader), notTheAnchor = notTheAnchor, layersRefused = true)
+    // refused in viewOf already; checked again so that no view through a layer is ever handed to a reader
     if view.layers.nonEmpty then
-      throw new StateUnavailable(
-        s"the state of block ${block.show} is not held as a state of the chain the disk is on: it is an executed " +
-          "block kept beside it"
-      )
+      throw new IllegalStateException(s"a reader's view of block ${block.show} reads through forward layers")
     view
 
   /** `block`'s state for an execution that commits nothing: what it persists is kept beside the view and dropped with

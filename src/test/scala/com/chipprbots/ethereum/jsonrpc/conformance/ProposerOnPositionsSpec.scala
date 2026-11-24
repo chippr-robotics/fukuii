@@ -353,6 +353,33 @@ class ProposerOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
         rig.engine.executableAtParent(chain(index - 2).header, block.body.transactionList)
     }
 
+  // B-239: a parent newPayload executed and no forkchoiceUpdated adopted is kept as a forward layer beside the disk.
+  // The build reads it through the proposer's door, and the pool's filter must read it through the same one: the
+  // anchor-chain door refuses it, and that refusal failed the whole build.
+  it should "be held to the state of a parent that is kept beside the disk, as the build reads it" taggedAs
+    UnitTest in {
+      val index = chain.lastIndexWhere(block => proofOfStake(block) && block.body.transactionList.nonEmpty)
+      index should be > 1
+      // the disk holds the grandparent; the parent is executed apart, as newPayload executes it
+      val rig = new Rig(held = index - 1)
+      import rig.given
+      val parent = chain(index - 1)
+      val block = chain(index)
+      val weight = rig.node.blockchainReader.getChainWeightByHash(parent.header.parentHash).get
+      rig.execution.executeAndValidateBlocks(List(parent), weight, adoptEachBlock = false)._2 shouldBe None
+      rig.pathState.anchor shouldBe Some(rig.refOf(chain(index - 2).header))
+      rig.node.blockchainReader.isHeldInPlace(parent.header.hash.value) shouldBe false
+
+      val included = chain.take(index).flatMap(_.body.transactionList).last
+      val offered = block.body.transactionList :+ included
+      val filtered = rig.engine.executableAtParent(parent.header, offered)
+      filtered shouldBe block.body.transactionList
+      // and the build on that parent, from what the filter kept, is the block the chain has
+      val before = rig.allButCode
+      rig.build(block, filtered, strict = false).map(_.block.header.hash) shouldBe Right(block.header.hash)
+      rig.allButCode shouldBe before
+    }
+
   // ─── T114: testing_commitBlockV1 commits by importing ──────────────────────────────────────────────────────────────
 
   private def testing(rig: Rig, importInPlace: Block => Either[String, Unit]): TestingService =
