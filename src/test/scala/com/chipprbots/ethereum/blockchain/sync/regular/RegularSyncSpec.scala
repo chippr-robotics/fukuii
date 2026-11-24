@@ -405,11 +405,11 @@ class RegularSyncSpec
 
     // What the pool was sent, in order, until it is sent no more
     private lazy val toThePool: Seq[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command] =
-      import com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions
-      // the import's own last message to the pool is a removal: waited for, then whatever follows it
+      import com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset
+      // the import's own last message to the pool is its reset (B-253): waited for, then whatever follows it
       val first = pool.fishForMessage(5.seconds) {
-        case _: RemoveTransactions => FishingOutcome.Complete
-        case _                     => FishingOutcome.Continue
+        case _: HeadReset => FishingOutcome.Complete
+        case _            => FishingOutcome.Continue
       }
       val rest = Iterator
         .continually(scala.util.Try(pool.receiveMessage(500.millis)).toOption)
@@ -419,8 +419,10 @@ class RegularSyncSpec
       first ++ rest
 
     /** The transactions the pool was told to drop, one entry per block. */
-    def removedFromThePool(): Seq[Seq[SignedTransaction]] = toThePool.collect {
-      case com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions(txs) => txs
+    def removedFromThePool(): Seq[Seq[SignedTransaction]] = toThePool.flatMap {
+      case com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions(txs) => Seq(txs)
+      case com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset(included, _)  => included
+      case _                                                                                       => Nil
     }
 
     /** The transactions handed back to the pool, but for the empty hand-back of the branch resolution (no old branch).
@@ -428,6 +430,8 @@ class RegularSyncSpec
     def takenBackByThePool(): Seq[Seq[SignedTransaction]] = toThePool.collect {
       case com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions(txs)
           if txs.nonEmpty =>
+        txs
+      case com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset(_, txs) if txs.nonEmpty =>
         txs
     }
 
@@ -3690,8 +3694,9 @@ class RegularSyncSpec
             case message => message
           }
           val removed: Seq[Seq[SignedTransaction]] = toThePool.collect {
-            case com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions(txs) => txs
-          }
+            case com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions(txs) => Seq(txs)
+            case com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset(included, _)  => included
+          }.flatten
           val ofTheseTwo: Seq[Seq[SignedTransaction]] = Seq(sideParent.body.transactionList, told.body.transactionList)
           removed.filter(ofTheseTwo.contains) should contain theSameElementsAs ofTheseTwo
           // a new-head event for the executed head, none for the side parent (core-geth's chain event); the events
@@ -3740,6 +3745,26 @@ class RegularSyncSpec
           newHeads.receiveMessages(2, 5.seconds) shouldBe executed.map(b => Topic.Publish(NewBlockImported(b)))
           removedFromThePool() shouldBe onto.map(_.body.transactionList)
           takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+          noneTold()
+      )
+
+      // B-253: go-ethereum's pool reset takes back `types.TxDifference(discarded, included)`, not every moved-off tx
+      "take back none of the moved-off txs the new chain includes" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("batch-reorg-shared"):
+          val sideParent: Block = testBlocks.head
+          val executed: List[Block] = testBlocks.slice(1, 3)
+          val onto: List[Block] = sideParent :: executed
+          val shared: SignedTransaction = executed.head.body.transactionList.head
+          val ownBlock: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val movedOff: Block =
+            BlockHelpers.withTransactions(ownBlock, shared :: ownBlock.body.transactionList.toList)
+          answer.set(ChainReorganised(List(movedOff), onto, onto.map(weighed).map(_.weight), branchBlocks = 2))
+
+          importBatch(executed)
+
+          newHeads.receiveMessages(2, 5.seconds) shouldBe executed.map(b => Topic.Publish(NewBlockImported(b)))
+          removedFromThePool() shouldBe onto.map(_.body.transactionList)
+          takenBackByThePool() shouldBe List(ownBlock.body.transactionList)
           noneTold()
       )
 

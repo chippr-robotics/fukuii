@@ -136,6 +136,14 @@ object PendingTransactionsManager:
 
   case class RemoveTransactions(signedTransactions: Seq[SignedTransaction]) extends Command
 
+  /** The head moved (B-253, [[TxPoolReset]]): go-ethereum's `LegacyPool.reset`, as one step of the pool so that no
+    * other message sees half of it. The transactions of the blocks moved onto (`included`, one entry per block) leave
+    * the pool; the nonce gate of every sender concerned is rebuilt from what the pool still holds, as go-ethereum
+    * rebuilds its noncer from the new head's state; then `reinject`, the moved-off transactions the new chain does not
+    * include, is admitted as any unchecked add is, against the new head's state.
+    */
+  case class HeadReset(included: Seq[Seq[SignedTransaction]], reinject: Seq[SignedTransaction]) extends Command
+
   case class PendingTransaction(
       stx: SignedTransactionWithSender,
       addTimestamp: Long,
@@ -348,8 +356,9 @@ object PendingTransactionsManager:
     var connectedPeerCapabilities: Map[PeerId, Capability] = Map.empty
 
     /** High-water mark of the next expected nonce per sender address. Once nonce N is accepted, pendingNonces(sender) =
-      * max(current, N+1). Never decremented on removal — only cleared on ClearPendingTransactions. Applied before MPT
-      * state validation so it works even when state trie is unavailable.
+      * max(current, N+1). Never decremented on removal; cleared on ClearPendingTransactions, and rebuilt for the
+      * senders of a [[HeadReset]] from what the pool holds of them. Applied before MPT state validation so it works
+      * even when state trie is unavailable.
       */
     var pendingNonces: Map[Address, BigInt] = Map.empty
 
@@ -657,6 +666,49 @@ object PendingTransactionsManager:
                 case None => true
             case _ => true
 
+    /** The reinjected txs of a [[HeadReset]] that are to be admitted, against the txs the pool holds at their sender
+      * and nonce. With the nonce gate lifted, [[admit]] would pool a reinjected tx beside a pooled one at the same
+      * sender and nonce: it never evicts by nonce. go-ethereum's `list.Add`: where the pool-state rules apply (ETH), a
+      * reinjected tx that meets the replacement price bump replaces the pooled one, and one that does not is dropped.
+      * On ETC no such rule applies, and the pooled tx is kept: it is the one this node took last, and a reinjected tx
+      * that would replace it with no rule to say so is the conservative one to drop.
+      */
+    def replacing(reinjected: Seq[SignedTransactionWithSender]): Set[SignedTransactionWithSender] =
+      val pooledAt: Map[(Address, BigInt), PendingTransaction] =
+        pendingTransactions
+          .asMap()
+          .values()
+          .asScala
+          .map(ptx => (ptx.stx.senderAddress, ptx.stx.tx.tx.nonce) -> ptx)
+          .toMap
+      reinjected.iterator.flatMap { r =>
+        pooledAt.get((r.senderAddress, r.tx.tx.nonce)).filterNot(_.stx.tx.hash == r.tx.hash) match
+          case None => Some(r)
+          case Some(pooled) =>
+            val replaces = TxAdmission.poolStateRulesApply &&
+              TxAdmission
+                .replacementRejection(
+                  r.tx.tx,
+                  Seq(pooled.stx.tx.tx),
+                  txPoolConfig.priceBump,
+                  txPoolConfig.blobPriceBump
+                )
+                .isEmpty
+            if replaces then
+              remove(Seq(pooled.stx.tx))
+              metrics.replaced(1)
+              Some(r)
+            else None
+      }.toSet
+
+    /** Drop `signedTransactions` from the pool, with whatever is kept beside each. */
+    def remove(signedTransactions: Seq[SignedTransaction]): Unit =
+      pendingTransactions.invalidateAll(signedTransactions.map(_.hash.value).asJava)
+      context.log.debug("Removing transactions: {}", signedTransactions.map(_.hash.toHex))
+      // The removal listener has dropped what was pooled; a hash that was not pooled may still have an entry.
+      knownTransactions.removeAll(signedTransactions.map(_.hash.value))
+      signedTransactions.foreach(stx => dropSidecar(stx.hash.value))
+
     /** Put a local tx in the pool, first dropping any pooled tx from the same sender with the same nonce. */
     def addOrOverride(newStx: SignedTransaction, newStxSender: Address, blobRawBytesOpt: Option[ByteString]): Unit =
       pendingTransactions.cleanUp()
@@ -866,11 +918,50 @@ object PendingTransactionsManager:
         Behaviors.same
 
       case RemoveTransactions(signedTransactions) =>
-        pendingTransactions.invalidateAll(signedTransactions.map(_.hash.value).asJava)
-        context.log.debug("Removing transactions: {}", signedTransactions.map(_.hash.toHex))
-        // The removal listener has dropped what was pooled; a hash that was not pooled may still have an entry.
-        knownTransactions.removeAll(signedTransactions.map(_.hash.value))
-        signedTransactions.foreach(stx => dropSidecar(stx.hash.value))
+        remove(signedTransactions)
+        Behaviors.same
+
+      case HeadReset(included, reinject) =>
+        val removed = included.flatten
+        pendingTransactions.cleanUp()
+        val pool = pendingTransactions.asMap()
+        // read before the removal, which empties what they are read from
+        val removedSenders: Set[Address] =
+          removed.iterator.flatMap(tx => Option(pool.get(tx.hash.value))).map(_.stx.senderAddress).toSet
+        remove(removed)
+        val reinjected = SignedTransactionWithSender.getSignedTransactions(reinject, headTimestamp())
+        val senders = removedSenders ++ reinjected.map(_.senderAddress)
+        // The gate is the high-water mark of every nonce the pool ever took, which a tx moved back off the chain is
+        // below: lifted for these senders, so that the state check alone (nonce not below the account's at the new
+        // head) decides on their reinjected txs, as go-ethereum's reset decides on them against its new noncer
+        pendingNonces = pendingNonces -- senders
+        val admitted = admit(replacing(reinjected), Map.empty)
+        // and set again from what the pool now holds of them: the next nonce after the highest
+        updatePendingNonces(
+          pendingTransactions
+            .asMap()
+            .values()
+            .asScala
+            .iterator
+            .map(_.stx)
+            .filter(stx => senders(stx.senderAddress))
+            .toSeq
+        )
+        context.log.debug(
+          "Head reset: {} txs of {} blocks removed, {} of {} reinjected",
+          removed.size,
+          included.size,
+          admitted.size,
+          reinject.size
+        )
+        // a tx the reset could not take back is said: a nonce the new chain spent, a pooled tx at its nonce, or the new
+        // head's state not read (the pool then takes back no tx of a sender whose gate the reset lifted)
+        if admitted.size < reinject.size then
+          context.log.info(
+            "Head reset: {} of {} txs moved off the chain not taken back into the pool",
+            reinject.size - admitted.size,
+            reinject.size
+          )
         Behaviors.same
 
       // From SignedTransactionsFilterActor, which drops peer Transactions messages itself while the node is not synced.

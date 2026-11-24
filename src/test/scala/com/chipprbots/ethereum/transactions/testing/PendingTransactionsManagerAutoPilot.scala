@@ -51,6 +51,11 @@ case class PendingTransactionsManagerAutoPilot(pendingTransactions: Set[PendingT
       case RemoveTransactions(signedTransactions) =>
         this.removeTransactions(signedTransactions.map(_.hash.value).toSet)
 
+      case HeadReset(included, reinject) =>
+        this
+          .removeTransactions(included.flatten.map(_.hash.value).toSet)
+          .addTransactions(SignedTransactionWithSender.getSignedTransactions(reinject, Timestamp.Zero).toSet)
+
       case ProperSignedTransactions(transactions, _) =>
         this.addTransactions(transactions)
 
