@@ -282,8 +282,8 @@ private[actors] class AccountRangeCoordinatorImpl(
     else BigInt(0)
 
   // Contract accounts persisted to temp files to avoid unbounded memory growth.
-  // On ETC mainnet ~20% of ~67M accounts are contracts — ~13M entries × 64 bytes each
-  // would consume ~1.6GB in memory. Writing to disk keeps memory usage near zero.
+  // On ETC mainnet ~85% of the accounts are contracts (73.5M storage-file entries in the v0.12.117 sync), 64 bytes
+  // each: several GB in memory. Writing to disk keeps memory usage near zero.
   // Each entry is 64 bytes: 32-byte accountHash + 32-byte codeHash (or storageRoot).
   val contractAccountsFile: Path = StorageTaskFile.createFile(taskFileDir, "fukuii-contract-accounts-", ".bin")
   // The storage-task file is the one recovery needs after a restart, so it goes under the datadir (`taskFileDir`)
@@ -430,7 +430,8 @@ private[actors] class AccountRangeCoordinatorImpl(
     catch case e: java.io.IOException => log.warn(s"Failed to delete $contractAccountsFile: ${e.getMessage}")
     log.info(
       s"AccountRangeCoordinator stopped. Downloaded $accountsDownloaded accounts, identified $contractAccountsCount " +
-        s"contracts ($uniqueCodeHashesCount unique codeHashes, $contractStorageCount storage-task entries)"
+        s"contracts ($uniqueCodeHashesCount unique codeHashes, $contractStorageCount storage-file entries: accounts " +
+        s"with code or a storage root, the replays skip the empty roots)"
     )
 
   /** Collect current task positions and send them, with the task-file counts they correspond to, to the controller.
