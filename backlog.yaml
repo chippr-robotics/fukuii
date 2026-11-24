@@ -4304,22 +4304,18 @@ items:
   - id: B-440
     title: "BlockImporter: a throw from evaluateBranch (IOException at the cap, head back) drops the batch unqueued; only re-offered by new announcements"
     priority: P3
-    status: review
+    status: done
     area: consensus
     opened: 2026-11-23
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2049]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T03:21:22Z
-      heartbeat: 2026-11-24T06:33:08Z
     notes: |-
-      2026-11-24 in-progress: forge re-review CHANGES (C1 stop before reads, C2 latch after stop, W1 busy bound); rebuild by cherry-pick after #2034; brief in session scratchpad b440-rebuild-brief.md
       2026-11-24 in-progress: rebuilt clean 0170ea956f; forge round 3: only W1 busy-bound reset needs fixing (see scratchpad b440-rebuild-brief.md round 3); queued for next free clone
       2026-11-24 review: forge round 5: head-hash guard on the busy-count reset needed before merge; queued (brief round 5)
+      2026-11-24 done: merged; refused write stops the node (exit 1), busy bound 5 answers + 10 min
   - id: B-441
     title: SyncController idle() drops GetStatus before Start; answer it (NotSyncing/starting)
     priority: P3
