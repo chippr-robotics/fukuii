@@ -4107,18 +4107,13 @@ items:
   - id: B-423
     title: "EngineCallLog.observe counts a call before it records the CL identity and capability count: a snapshot can show the call without them (record first, then add)"
     priority: P3
-    status: review
+    status: done
     area: engine
     opened: 2026-11-22
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2079]
-    claim:
-      by: cloud-719c6644
-      agent: beacon
-      since: 2026-11-24T12:42:01Z
-      heartbeat: 2026-11-24T13:09:36Z
-      branch: fix/b419-engine-api-parity
     notes: "Made EngineApiHttpServerObservationSpec flaky (PR #1982 CI, line 258); the spec now waits for the values. Reordering is under consensus/engine: route via beacon."
   - id: B-424
     title: "PoWMiningCoordinator hot-loops when getBestBlock is None (SNAP/checkpoint import): ~19k ERROR lines/s, 90.7M lines (11.8 GB) in an 80-min Mordor SNAP"
