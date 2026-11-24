@@ -4963,3 +4963,14 @@ items:
     refs: []
     links: {}
     notes: "B-126 re-derives weights in ForkChoiceManager only (hash: move.adopted; unified: walk before moveHeadInPlace, bounded 8192). Blocks a recovery commits in place (C4d part 4) or adopts take keepExecuted's parent+difficulty at execution time; if ChainWeightReconcile repaired the parent in between they keep the stale value. Verify, and route through the same helper if so. beacon."
+  - id: B-491
+    title: "B-126 follow-ups: log when the fork-choice weight walk hits MaxAdoptedWalk; doc vs code on a missing header; crash window between head move and weight write"
+    priority: P3
+    status: open
+    area: engine
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "beacon review of B-126: W1 ForkChoiceManager ~:272 silent Nil at cap; W2 ~:270 vs scaladoc ~:257 partial branch on missing header; W3 ~:138/:216 head move and weights in separate batches — a crash between leaves stale weights the repair never revisits (record in ChainWeightReconcile 'not covered' or put weights in the move's batch)."
