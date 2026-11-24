@@ -4956,12 +4956,17 @@ items:
   - id: B-492
     title: "Unified layout: index entries a sync left above the head with a gap at the committed height are not cleared by the block's commit (B-482 edge)"
     priority: P3
-    status: open
+    status: claimed
     area: storage
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T07:16:37Z
+      heartbeat: 2026-11-24T07:16:37Z
     notes: B-482's clean-up (BlockExecution.withIndexLeft) runs only where the index names ANOTHER block at the committed height. An index with no entry there but entries above (a gap) keeps them; same-chain entries above a catch-up's tip also stay (by design). Decide whether StateReconciliation-style gap scan is wanted at hand-off instead.
   - id: B-493
     title: "B-217 follow-up: remove the retired parallel-recovery-scan key from conf/base/sync.conf (chore/ branch), then warn on any setting of it"
