@@ -5290,13 +5290,18 @@ items:
   - id: B-513
     title: Post-merge, an invalid block on a branch the CL names is not the serving peer's fault; don't blacklist (followsConsensusLayer)
     priority: P3
-    status: open
+    status: claimed
     area: sync
     size: S
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T11:15:27Z
+      heartbeat: 2026-11-24T11:15:27Z
     notes: "beacon W2 on B-338; geth beacon-mode downloader drops no peer for an invalid chain (from memory, verify). Hive: the only peer gets blacklisted."
   - id: B-514
     title: StateFaultAfterAMove for HeadLeftOnSideBlocks resets the pool with ofBranches(Nil, movedOff); pass headOn as the blocks added
