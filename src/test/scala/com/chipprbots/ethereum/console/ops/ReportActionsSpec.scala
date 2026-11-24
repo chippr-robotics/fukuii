@@ -62,7 +62,7 @@ class ReportActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
   // ---- net ----------------------------------------------------------------------------------------------------------
 
   private val net = ActionRequest(Actions.Net.name)
-  private val Upnp = "UPnP        port mapping is not reported by this node (it is in the log at start)"
+  private val Upnp = "UPnP        not reported by this node"
   private val Evidence =
     "Whether it can be reached is known only from peers that reach it: detect-ip asks outside services what address they see."
 
@@ -92,6 +92,43 @@ class ReportActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
       "Inbound     14 of 41 connected peers dialled this node: it can be reached from outside",
       Evidence
     )
+  }
+
+  // B-287: the report said the mapping was only in the log.
+  it should "say whether a UPnP mapping was asked for, and what the gateway did" taggedAs (UnitTest) in {
+    import com.chipprbots.ethereum.network.PortMappingState
+    import com.chipprbots.ethereum.network.PortMappingState.Snapshot
+    def upnp(s: Snapshot): String = said(reached.copy(upnp = PortMappingState.describe(s)))(3)
+    upnp(Snapshot.NotAsked) shouldBe
+      "UPnP        off: no port mapping asked for (automatic-port-forwarding = false)"
+    upnp(Snapshot.Unavailable("no network interface")) shouldBe
+      "UPnP        asked for, but UPnP did not start: no network interface"
+    upnp(Snapshot.Asked(2, 0, None)) shouldBe
+      "UPnP        2 port mapping(s) asked for; no gateway has mapped one yet"
+    upnp(Snapshot.Asked(2, 2, None)) shouldBe "UPnP        the gateway mapped all 2 port(s)"
+    upnp(Snapshot.Asked(2, 1, Some("Failed to add port mapping: UDP 30303"))) shouldBe
+      "UPnP        the gateway mapped 1 of 2 port(s) (last refusal: Failed to add port mapping: UDP 30303)"
+    upnp(Snapshot.Asked(2, 0, Some("conflict"))) shouldBe
+      "UPnP        no gateway mapped any of the 2 port(s) (last refusal: conflict)"
+  }
+
+  "PortMappingState" should "go from not asked, to asked, and keep the gateway's refusals and grants" taggedAs (
+    UnitTest
+  ) in {
+    import com.chipprbots.ethereum.network.PortMappingState
+    import com.chipprbots.ethereum.network.PortMappingState.Snapshot
+    val state = new PortMappingState
+    state.get shouldBe Snapshot.NotAsked
+    state.failed("ignored before asking")
+    state.get shouldBe Snapshot.NotAsked
+    var granted = 0
+    state.asked(2, () => granted)
+    state.get shouldBe Snapshot.Asked(2, 0, None)
+    granted = 1
+    state.failed("refused")
+    state.get shouldBe Snapshot.Asked(2, 1, Some("refused"))
+    state.unavailable("gone")
+    state.get shouldBe Snapshot.Unavailable("gone")
   }
 
   it should "say when the node is not listening, and that peers are then told no address" taggedAs (UnitTest) in {

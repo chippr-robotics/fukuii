@@ -230,3 +230,16 @@ class TuiViewGoldenSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll
     press(start, "q").overlay shouldBe TuiFixtures.quitDialog(start)
     press(start, "8/block\n").filterOf(TuiView.Logs) shouldBe "block"
   }
+
+  // B-265: with the root logger above the ring's level (LOGSLEVEL=ERROR), the levels in between are never logged. The
+  // Logs view says so, in its title and as the reason it is empty.
+  "The Logs view" should "say when the root logger's level hides lines below it" taggedAs (UnitTest) in {
+    val base = TuiFixtures.syncedEtc().withView(TuiView.Logs).copy(logs = Vector.empty)
+    def screen(s: TuiState): String = renderer.render(still(s), 120, 40).map(_.toString).mkString("\n")
+    val quiet = screen(base.copy(logFloor = Some("ERROR")))
+    quiet should include("ERROR and above (root logger at ERROR, not INFO)")
+    quiet should include("no log line yet: the root logger is at ERROR, so nothing below ERROR is logged")
+    val normal = screen(base)
+    normal should include("INFO and above")
+    (normal should not).include("root logger")
+  }

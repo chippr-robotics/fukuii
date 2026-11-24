@@ -49,6 +49,11 @@ object Kitty:
   /** Takes placement `placement` of image `id` off the screen; the image stays with the terminal. */
   def remove(id: Int, placement: Int): String = s"${Start}a=d,d=i,i=$id,p=$placement,q=2$End"
 
+  /** Frees image `id` and its data: the terminal no longer holds it (B-259). Only an image with no placement on screen
+    * is freed this way.
+    */
+  def free(id: Int): String = s"${Start}a=d,d=I,i=$id,q=2$End"
+
   /** Takes every placement off the screen and frees every image: no image outlives the TUI (FR-016). */
   val RemoveAll: String = s"${Start}a=d,d=A,q=2$End"
 

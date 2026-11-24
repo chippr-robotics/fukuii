@@ -293,6 +293,69 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     localProbe(TuiStatusProbe.LocalSources())().local.diskFree shouldBe None // no datadir, no reading
   }
 
+  // B-192: the disk is read on its own thread. A hung statvfs used to block the poll, so no snapshot was published,
+  // both actors' answers aged to Unresponsive, and the alert row raised them.
+  it should "answer within its wait while the disk read hangs, and keep the last disk reading meanwhile" taggedAs (
+    UnitTest
+  ) in {
+    val dataDir = new java.io.File("/var/lib/fukuii/etc")
+    val hang = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val release = new java.util.concurrent.CountDownLatch(1)
+    val p = localProbe(
+      TuiStatusProbe.LocalSources(
+        dataDir = Some(dataDir),
+        usableSpace = _ =>
+          if hang.get then release.await(30, java.util.concurrent.TimeUnit.SECONDS): Unit
+          42L
+      )
+    )
+    try
+      p().local.diskFree shouldBe Some(42L)
+      hang.set(true)
+      val started = System.nanoTime()
+      val during = p()
+      (System.nanoTime() - started) / 1_000_000L should be < 5_000L
+      during.peers shouldBe a[Sourced.Fresh[?]] // the actors' answers are still published
+      during.local.diskFree shouldBe Some(42L) // the last reading, while the new one hangs
+    finally release.countDown()
+  }
+
+  // prism, B-192 review: with a pool that refused a second task while its one thread was busy, a read started right
+  // after the last one completed could be refused, and poll() then threw.
+  it should "start reads back to back, each right after the last completed, and never refuse one" taggedAs (
+    UnitTest
+  ) in {
+    val reads = new java.util.concurrent.atomic.AtomicLong(0L)
+    val slow = new TuiStatusProbe.SlowReads(
+      () => TuiStatusProbe.SlowReading(Some(reads.incrementAndGet()), None, None),
+      now
+    )
+    (1 to 2000).foreach { i =>
+      slow.latest(slow.start(), 5.seconds, now).diskFree shouldBe Some(i.toLong)
+    }
+  }
+
+  it should "read the disk as unknown once its read has hung past SlowReadMaxAge" taggedAs (UnitTest) in {
+    val reading = new java.util.concurrent.atomic.AtomicLong(0L)
+    val release = new java.util.concurrent.CountDownLatch(1)
+    var at = now
+    val slow = new TuiStatusProbe.SlowReads(
+      () =>
+        if reading.incrementAndGet() > 1 then release.await(30, java.util.concurrent.TimeUnit.SECONDS): Unit
+        TuiStatusProbe.SlowReading(Some(42L), None, None)
+      ,
+      at
+    )
+    try
+      slow.latest(slow.start(), 5.seconds, at).diskFree shouldBe Some(42L)
+      at = now.plusSeconds(30)
+      slow.latest(slow.start(), 10.millis, at).diskFree shouldBe Some(42L) // the second read hangs: the first stands
+      at = now.plusSeconds(61)
+      slow.latest(slow.start(), 10.millis, at).diskFree shouldBe None // too old to show
+      reading.get shouldBe 2L // a hung read is not started again
+    finally release.countDown()
+  }
+
   it should "read the JVM heap, and the GC share of the time between two polls" taggedAs (UnitTest) in {
     val testClock = new TuiFixtures.TestClock(now)
     val gc = Iterator(100L, 150L, 150L)

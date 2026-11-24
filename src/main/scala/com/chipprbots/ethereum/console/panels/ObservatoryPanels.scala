@@ -23,6 +23,12 @@ import com.chipprbots.ethereum.console.panels.Rows.*
   */
 private[console] object ObservatoryPanels:
 
+  /** The first row of the page of `room` rows that holds row `selected` (0 with no selection): the cursor moves within
+    * a page and the list turns a page at a time, as the Peers list does (B-267).
+    */
+  def pageStart(selected: Option[Int], room: Int): Int =
+    if room <= 0 then 0 else selected.fold(0)(at => (at / room) * room)
+
   private val Clock = DateTimeFormatter.ofPattern("HH:mm:ss'Z'").withZone(ZoneOffset.UTC)
 
   /** A row of `label` and as many of `parts`, in order, as fit `w` columns whole: none is ever cut. */
@@ -191,12 +197,13 @@ private[console] object ObservatoryPanels:
       if withBase.length + 2 + ByCols <= w - 1 then s"$withBase  $by" else withBase
     val header =
       TuiText.fitToWidth(text(cells("block", "age", "txs", "gas used", "size", "base fee", "by"), c.t.label), w)
-    // Newest first, a window that keeps the selected block on screen. The selection is a block's hash, so the row
-    // under it moves down as blocks arrive, and the selection goes with it.
+    // Newest first, the page of rows that holds the selected block, as the Peers list pages (B-267): the cursor moves
+    // within the page, and the rows turn over a page at a time. The selection is a block's hash, so the row under it
+    // moves down as blocks arrive, and the selection goes with it.
     val newestFirst = blocks.reverse
     val room = (n - ObservatoryHead).max(0)
     val selected = c.state.selectedBlockIndex
-    val from = selected.fold(0)(at => (at - room + 1).max(0))
+    val from = pageStart(selected, room)
     val rows = newestFirst.slice(from, from + room).zipWithIndex.map { (b, i) =>
       val line = cells(
         formatNumber(b.number),

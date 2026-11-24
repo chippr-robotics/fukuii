@@ -39,21 +39,35 @@ final case class GraphicRegion(
   * image is shown.
   *
   * @param images
-  *   the id each image was sent under, by what it is. It only grows until a clear frees every image: the art bounds it
-  *   (some fifty sprite frames at one scale), but a terminal that evicts images under memory pressure would leave one
-  *   listed here that it no longer holds, blank until the next clear (`r`, a resize). Freeing the least recently shown
-  *   is B-259
+  *   the id each image was sent under, by what it is. Bounded by [[PixelLayer.ImageBudgetBytes]] (B-259): past it, the
+  *   least recently shown images not on screen are freed, so the terminal is never left to evict one under memory
+  *   pressure (kitty's quota is about 320 MB; the mascot's 28 frames at scale 4 are about 112 MB), which would leave
+  *   one listed here that it no longer holds, blank until the next clear
   * @param content
   *   the buffer a chart's image was drawn from when it was last sent
   * @param placed
   *   by region id: the image shown there, its placement id, and where
+  * @param bytes
+  *   by image id: its size as sent, in RGBA bytes
+  * @param shownAt
+  *   by image id: the frame it was last shown in ([[frame]])
+  * @param frame
+  *   how many frames this layer has been diffed for
+  * @param nextId
+  *   the id the next image sent gets: ids are never reused, so a freed image's id names nothing
   */
 final case class PixelLayer(
     images: Map[PixelLayer.ImageKey, Int] = Map.empty,
     content: Map[Int, PixelBuffer] = Map.empty,
     placed: Map[String, PixelLayer.Shown] = Map.empty,
-    placements: Map[String, Int] = Map.empty
-)
+    placements: Map[String, Int] = Map.empty,
+    bytes: Map[Int, Long] = Map.empty,
+    shownAt: Map[Int, Long] = Map.empty,
+    frame: Long = 0L,
+    nextId: Int = 1
+):
+  /** The RGBA bytes of every image the terminal holds. */
+  def heldBytes: Long = bytes.values.sum
 
 object PixelLayer:
 
@@ -72,6 +86,11 @@ object PixelLayer:
     */
   val MaxScale: Int = 8
 
+  /** The most image data, in RGBA bytes, the TUI keeps with the terminal (B-259): a fifth of kitty's default quota of
+    * about 320 MB, room for every frame of the art at a small scale and the recent ones at a large one.
+    */
+  val ImageBudgetBytes: Long = 64L * 1024 * 1024
+
   /** The whole factor a `hi` frame, drawn for [[ArtStore.CellWidth]] × [[ArtStore.CellHeight]] cells, is enlarged by at
     * `cell`: the largest that still fits, at least 1 and at most [[MaxScale]] (spec 029 FR-015).
     */
@@ -84,13 +103,19 @@ object PixelLayer:
     * first and loses the old one after, so nothing flickers. A region that left is removed. An unchanged frame costs
     * nothing (spec 029 FR-017).
     */
-  def diff(previous: PixelLayer, regions: Seq[GraphicRegion], cell: CellSize, art: ArtStore): (String, PixelLayer) =
+  def diff(
+      previous: PixelLayer,
+      regions: Seq[GraphicRegion],
+      cell: CellSize,
+      art: ArtStore,
+      budgetBytes: Long = ImageBudgetBytes
+  ): (String, PixelLayer) =
     val out = new StringBuilder
-    var layer = previous
+    var layer = previous.copy(frame = previous.frame + 1)
     val wanted = regions.flatMap(region => image(region, cell, art).map(region -> _))
     for (region, image) <- wanted do
       val known = layer.images.get(image.key)
-      val id = known.getOrElse(layer.images.size + 1)
+      val id = known.getOrElse(layer.nextId)
       // A sprite's frame never changes; a chart is sent again when what it was drawn from did.
       val stale = known.isEmpty || image.source.exists(source => !layer.content.get(id).contains(source))
       if stale then
@@ -98,7 +123,9 @@ object PixelLayer:
         out.append(Kitty.upload(id, image.pixels()))
         layer = layer.copy(
           images = layer.images.updated(image.key, id),
-          content = image.source.fold(layer.content)(layer.content.updated(id, _))
+          content = image.source.fold(layer.content)(layer.content.updated(id, _)),
+          bytes = layer.bytes.updated(id, image.width.toLong * image.height * 4),
+          nextId = if known.isEmpty then layer.nextId + 1 else layer.nextId
         )
       val placement = layer.placements.getOrElse(region.id, layer.placements.size + 1)
       // The image, centred in its region: whole cells of margin move the cursor, the rest is a pixel offset.
@@ -121,10 +148,32 @@ object PixelLayer:
           placed = layer.placed.updated(region.id, shown),
           placements = layer.placements.updated(region.id, placement)
         )
+    // When each image shown this frame was last shown: one update for the frame, not one a region.
+    val shownNow = wanted.flatMap((_, image) => layer.images.get(image.key))
+    if shownNow.nonEmpty then layer = layer.copy(shownAt = layer.shownAt ++ shownNow.map(_ -> layer.frame))
     val kept = wanted.map(_._1.id).toSet
     for (regionId, old) <- layer.placed.toSeq.sortBy(_._1) if !kept.contains(regionId) do
       out.append(Kitty.remove(old.image, old.placement))
       layer = layer.copy(placed = layer.placed - regionId)
+    // Over the budget, the least recently shown images off screen are freed, oldest first (B-259). The ones on screen
+    // stay whatever they cost: the budget is a bound on what is kept, not on what is shown.
+    if layer.heldBytes > budgetBytes then
+      val onScreen = layer.placed.values.map(_.image).toSet
+      val idle = layer.images.toSeq
+        .filterNot((_, id) => onScreen.contains(id))
+        .sortBy((_, id) => (layer.shownAt.getOrElse(id, 0L), id))
+        .iterator
+      var held = layer.heldBytes
+      while held > budgetBytes && idle.hasNext do
+        val (key, id) = idle.next()
+        out.append(Kitty.free(id))
+        held -= layer.bytes.getOrElse(id, 0L)
+        layer = layer.copy(
+          images = layer.images - key,
+          content = layer.content - id,
+          bytes = layer.bytes - id,
+          shownAt = layer.shownAt - id
+        )
     (out.toString, layer)
 
   /** An image a region shows: what it is, its size once enlarged, and how to build its pixels when they have to be

@@ -81,10 +81,32 @@ private class NoOpUpnpService extends UpnpService:
 object PortForwarder extends Logger:
   final private val description = "Fukuii"
 
-  def openPorts(tcpPorts: Seq[Int], udpPorts: Seq[Int]): Resource[IO, Unit] =
-    Resource.make(startForwarding(tcpPorts, udpPorts))(stopForwarding).void
+  /** Ask any UPnP gateway on the network to map `tcpPorts` and `udpPorts` to this host, for as long as the resource is
+    * held. What becomes of it is recorded in `mappingState` (B-287).
+    */
+  def openPorts(
+      tcpPorts: Seq[Int],
+      udpPorts: Seq[Int],
+      mappingState: PortMappingState = new PortMappingState
+  ): Resource[IO, Unit] =
+    Resource.make(startForwarding(tcpPorts, udpPorts, mappingState))(stopForwarding).void
 
-  private def startForwarding(tcpPorts: Seq[Int], udpPorts: Seq[Int]): IO[UpnpService] = IO {
+  /** jupnp's listener, with what the gateway did kept for the `net` report: its refusals, and the mappings it gave. */
+  final private class ObservedPortMappingListener(mappings: Array[PortMapping], mappingState: PortMappingState)
+      extends PortMappingListener(mappings):
+    def granted: Int =
+      // Written by jupnp's callbacks on its own threads; read for display only.
+      scala.util.Try(synchronized(activePortMappings.values.asScala.map(_.size).sum)).getOrElse(0)
+
+    override protected def handleFailureMessage(s: String): Unit =
+      mappingState.failed(s)
+      super.handleFailureMessage(s)
+
+  private def startForwarding(
+      tcpPorts: Seq[Int],
+      udpPorts: Seq[Int],
+      mappingState: PortMappingState
+  ): IO[UpnpService] = IO {
     log.info("Attempting port forwarding for TCP ports {} and UDP ports {}", tcpPorts, udpPorts)
     try
       new UpnpServiceImpl(new ClientOnlyUpnpServiceConfiguration()).tap { service =>
@@ -104,7 +126,9 @@ object PortForwarder extends Logger:
           (port, protocol) <- tcpPorts.map(_ -> TCP) ++ udpPorts.map(_ -> UDP)
         yield new PortMapping(port, address, protocol).tap(_.setDescription(description))
 
-        service.getRegistry().addListener(new PortMappingListener(portMappings))
+        val listener = new ObservedPortMappingListener(portMappings, mappingState)
+        mappingState.asked(portMappings.length, () => listener.granted)
+        service.getRegistry().addListener(listener)
         log.info("UPnP port forwarding initialized successfully")
       }
     catch
@@ -115,6 +139,7 @@ object PortForwarder extends Logger:
             "Please configure port forwarding manually on your router if needed.",
           ex.getMessage
         )
+        mappingState.unavailable(Option(ex.getMessage).getOrElse(ex.toString))
         // Return a no-op service that can be safely shut down
         new NoOpUpnpService()
       case ex: Throwable =>
@@ -123,6 +148,7 @@ object PortForwarder extends Logger:
             "The node will continue to run without automatic port forwarding.",
           ex.getMessage
         )
+        mappingState.unavailable(Option(ex.getMessage).getOrElse(ex.toString))
         new NoOpUpnpService()
   }
 
