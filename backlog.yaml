@@ -3750,7 +3750,7 @@ items:
   - id: B-410
     title: A heavier PoW branch over a gap at or below the SNAP pivot is not escalated if the backfill never fills the gap (B-407 scope)
     priority: P3
-    status: claimed
+    status: in-progress
     area: sync
     opened: 2026-11-20
     refs: []
@@ -3760,7 +3760,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b410
       since: 2026-11-24T00:37:34Z
-      heartbeat: 2026-11-24T00:37:54Z
+      heartbeat: 2026-11-24T00:43:38Z
     notes: B-407 tells the feed only above the pivot, since a backfill gap there would trip the 64-block threshold. If the backfill stalls, nothing ends the wait. Needs a backfill-done signal or a pivot-clear check.
   - id: B-411
     title: "After a checkpoint import the archive's own block N is not served over RPC: the archive carries no body for N and nothing fetches it"
