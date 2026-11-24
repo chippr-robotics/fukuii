@@ -168,7 +168,10 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         held: () => Option[ByteString],
         choices: com.chipprbots.ethereum.consensus.engine.ForkChoiceManager = node.forkChoiceManager,
         recovery: Option[StateRecovery] = None,
-        escalation: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None
+        escalation: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None,
+        pool: Option[
+          org.apache.pekko.actor.typed.ActorRef[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command]
+        ] = None
     ): EngineApiService =
       given org.apache.pekko.actor.typed.Scheduler = system.scheduler
       new EngineApiService(
@@ -176,7 +179,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         writer,
         execution,
         choices,
-        None,
+        pool,
         stateHeldInPlace = Some(held),
         stateRecovery = recovery,
         escalationWatch = escalation
@@ -664,6 +667,37 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.pathState.finalizedBlock shouldBe Some(FinalizedBlock(1, chain.head.header.hash.value))
       on.storages.appStateStorage.getStateFinalized() shouldBe on.pathState.finalizedBlock
       on.source.offTheLock.toArray.toSeq shouldBe empty
+    }
+
+  // B-253: on the unified layout a block committed in place moves the head before any fork choice names it; the pool
+  // is reset from the head it was last reset to, so those blocks leave it too
+  it should "reset the tx pool over the blocks committed in place since the last fork choice" taggedAs
+    (UnitTest, ConsensusTest) in {
+      import com.chipprbots.ethereum.transactions.PendingTransactionsManager
+      import scala.concurrent.duration.*
+      val on = new Node
+      val chain = blocks.take(10)
+      chain.take(5).foreach(on.imports)
+      val pool = createTestProbe[PendingTransactionsManager.Command]()
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash), pool = Some(pool.ref))
+      def choose(head: Block, upTo: Seq[Block]) =
+        engine
+          .forkchoiceUpdated(choiceOf(head, upTo), None)
+          .unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+          .map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Valid)
+      def told(onto: Seq[Block]): Unit =
+        val included = onto.map(_.body.transactionList).filter(_.nonEmpty)
+        if included.isEmpty then pool.expectNoMessage(200.millis)
+        else pool.expectMessage(PendingTransactionsManager.HeadReset(included, Nil))
+      choose(chain(4), chain.take(5))
+      told(Seq(chain(4)))
+      // five blocks committed in place: the head is at the last before the fork choice names it
+      chain.slice(5, 10).foreach(on.imports)
+      on.reader.getBestBlockNumber shouldBe chain.last.header.number.value
+      choose(chain.last, chain)
+      chain.slice(5, 10).exists(_.body.transactionList.nonEmpty) shouldBe true
+      told(chain.slice(5, 10))
+      pool.expectNoMessage(200.millis)
     }
 
   // C4d part 2b: the fork choice moves the head up, or across, as one move; never down to an ancestor of the head.

@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 
+import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
@@ -20,8 +21,12 @@ import com.chipprbots.ethereum.utils.Logger
   *     to the new head — leave the pool. go-ethereum's pool drops them by nonce against the new head's state; this pool
   *     keeps no such demotion and drops by hash, so the blocks are told one by one.
   *   - '''Reinjected''': the transactions of every block the head moved OFF that the new chain does not include
-  *     (`types.TxDifference(discarded, included)`) go back to the pool, through its ordinary unchecked add, which
-  *     validates each against the new head's state as any other add does (go-ethereum's `addTxsLocked(reinject)`).
+  *     (`types.TxDifference(discarded, included)`) go back to the pool, through its ordinary admission, which validates
+  *     each against the new head's state as any other add does (go-ethereum's `addTxsLocked(reinject)`). Blob
+  *     transactions do not: a block holds no sidecar ([[difference]]).
+  *
+  * The pool takes both in one [[PendingTransactionsManager.HeadReset]], which also rebuilds its nonce gate for the
+  * senders concerned (go-ethereum's reset makes a new noncer from the new head's state).
   *
   * '''Bounded as go-ethereum bounds it''': no reinjection when the two heads are more than [[MaxReorgDepth]] blocks
   * apart (`depth := |oldNum - newNum|; depth > 64` → "Skipping deep transaction reorg"), nor when either chain is not
@@ -54,7 +59,7 @@ object TxPoolReset extends Logger:
     * the block below the lowest one removed.
     */
   def ofBranches(added: Seq[Block], removed: Seq[Block]): Reset =
-    val included = added.map(_.body.transactionList)
+    val included = added.map(_.body.transactionList).filter(_.nonEmpty)
     if removed.isEmpty then Reset(included, Nil)
     else
       val oldHead = removed.map(_.header.number.value).max
@@ -113,13 +118,12 @@ object TxPoolReset extends Logger:
               log.debug("Transaction reorg not reinjected: {}", why)
               told(newest(Some(to), MaxReorgDepth, Nil), Nil)
 
-  /** Tell `pool` of `reset`: the reinjected transactions first, in one add, then a removal per block included. The two
-    * sets are disjoint, so neither message can undo the other, whatever order the pool takes them in (it turns an
-    * unchecked add into a message to itself).
+  /** Tell `pool` of `reset`, in one message the pool acts on as one step ([[PendingTransactionsManager.HeadReset]]): a
+    * build that asks the pool after it is told sees the whole reset. Nothing when there is nothing to tell.
     */
   def tell(pool: ActorRef[PendingTransactionsManager.Command], reset: Reset): Unit =
-    if reset.reinject.nonEmpty then pool ! PendingTransactionsManager.AddUncheckedTransactions(reset.reinject)
-    reset.included.foreach(txs => pool ! PendingTransactionsManager.RemoveTransactions(txs))
+    if reset.included.nonEmpty || reset.reinject.nonEmpty then
+      pool ! PendingTransactionsManager.HeadReset(reset.included, reset.reinject)
 
   private enum Walked:
     case Rooted(discarded: List[Seq[SignedTransaction]], included: List[Seq[SignedTransaction]])
@@ -169,12 +173,16 @@ object TxPoolReset extends Logger:
                 Walked.Unrooted(s"the parent of block ${add.number.value} of the new chain is not stored")
     loop(old, to, Nil, Nil, 0)
 
-  /** The transactions of `discarded`, in block order and once each, that `included` does not hold. */
+  /** The transactions of `discarded`, in block order and once each, that `included` does not hold, but for blob
+    * transactions: a block carries no sidecar, and a blob transaction pooled without one would be built into a payload
+    * whose blobs bundle lacks its blobs, and handed to peers without them. go-ethereum's legacy pool never takes one
+    * back (`LegacyPool.Filter` refuses type 3), and its blob pool keeps the sidecars of the transactions it drops.
+    */
   private def difference(
       discarded: Seq[Seq[SignedTransaction]],
       included: Seq[Seq[SignedTransaction]]
   ): Seq[SignedTransaction] =
     val inNewChain: Set[ByteString] = included.iterator.flatten.map(_.hash.value).toSet
     discarded.flatten
-      .filterNot(tx => inNewChain(tx.hash.value))
+      .filterNot(tx => inNewChain(tx.hash.value) || tx.tx.isInstanceOf[BlobTransaction])
       .distinctBy(_.hash.value)

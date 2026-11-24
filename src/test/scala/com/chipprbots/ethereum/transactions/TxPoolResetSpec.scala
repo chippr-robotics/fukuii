@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.transactions
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
+import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 
@@ -9,10 +10,13 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.BlockHelpers
+import com.chipprbots.ethereum.domain.Address
+import com.chipprbots.ethereum.domain.BlobTransaction
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.GasAmount
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command
@@ -115,15 +119,60 @@ class TxPoolResetSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wit
     reset.reinject shouldBe empty
     reset.included shouldBe txs(added)
 
-  "TxPoolReset.tell" should "send the reinjected txs in one add before a removal per block included" taggedAs UnitTest in new Fork:
+  "TxPoolReset.tell" should "send the whole reset in one message" taggedAs UnitTest in new Fork:
     val pool: TestProbe[Command] = createTestProbe[PendingTransactionsManager.Command]()
     TxPoolReset.tell(pool.ref, TxPoolReset.ofBranches(added, old))
-    pool.expectMessage(PendingTransactionsManager.AddUncheckedTransactions(lost))
-    added.foreach(b => pool.expectMessage(PendingTransactionsManager.RemoveTransactions(b.body.transactionList)))
+    pool.expectMessage(PendingTransactionsManager.HeadReset(txs(added), lost))
     pool.expectNoMessage(100.millis)
 
-  it should "send no add when nothing is reinjected" taggedAs UnitTest in new Fork:
+  it should "send nothing when there is nothing to tell" taggedAs UnitTest in new Fork:
     val pool: TestProbe[Command] = createTestProbe[PendingTransactionsManager.Command]()
-    TxPoolReset.tell(pool.ref, TxPoolReset.ofBranches(added, Nil))
-    added.foreach(b => pool.expectMessage(PendingTransactionsManager.RemoveTransactions(b.body.transactionList)))
+    TxPoolReset.tell(pool.ref, TxPoolReset.Reset.empty)
+    TxPoolReset.tell(pool.ref, TxPoolReset.ofBranches(List(genesis), Nil))
     pool.expectNoMessage(100.millis)
+
+  // ---- round 2 (beacon) ---------------------------------------------------------------------------------------
+
+  "TxPoolReset" should "take back at exactly 64 blocks between the heads, and not at 65 (go-ethereum: depth > 64)" taggedAs UnitTest in new Fork:
+    // the new chain from genesis to 67 and to 68; the old head is at 3
+    val longer: List[Block] = added ++ BlockHelpers.generateChain(TxPoolReset.MaxReorgDepth + 2, added.last)
+    val at67: List[Block] = longer.dropRight(1)
+    at67.last.number.value - old.last.number.value shouldBe 64
+    (TxPoolReset.ofBranches(at67, old).reinject should contain).theSameElementsInOrderAs(lost)
+    TxPoolReset.ofBranches(longer, old).reinject shouldBe empty
+    val chain: Map[BlockHash, Block] = (genesis :: old ++ longer).map(b => b.hash -> b).toMap
+    def between(to: Block): Reset =
+      TxPoolReset.between(Some(old.last.header), to.header, chain.get(_).map(_.header), chain.get(_).map(_.body))
+    (between(at67.last).reinject should contain).theSameElementsInOrderAs(lost)
+    between(at67.last).included shouldBe txs(at67)
+    between(longer.last).reinject shouldBe empty
+
+  it should "never take back a blob transaction, whose sidecar no block holds" taggedAs UnitTest in new Fork:
+    val blob: SignedTransaction = SignedTransaction.sign(
+      BlobTransaction(
+        chainId = 1,
+        nonce = 0,
+        maxPriorityFeePerGas = 1,
+        maxFeePerGas = 1,
+        gasLimit = GasAmount(21000),
+        receivingAddress = Some(Address(42)),
+        value = 0,
+        payload = ByteString.empty,
+        accessList = Nil,
+        maxFeePerBlobGas = 1,
+        blobVersionedHashes = Nil
+      ),
+      BlockHelpers.keyPair,
+      Some(BigInt(1))
+    )
+    val withBlob: List[Block] =
+      old.updated(2, BlockHelpers.withTransactions(old(2), blob :: old(2).body.transactionList.toList))
+    (TxPoolReset.ofBranches(added, withBlob).reinject should contain).theSameElementsInOrderAs(lost)
+    val chain: Map[BlockHash, Block] = (genesis :: withBlob ++ added).map(b => b.hash -> b).toMap
+    (TxPoolReset
+      .between(Some(withBlob.last.header), added.last.header, chain.get(_).map(_.header), chain.get(_).map(_.body))
+      .reinject should contain).theSameElementsInOrderAs(lost)
+
+  it should "tell no removal for a block that holds no transaction" taggedAs UnitTest in new Fork:
+    val empty: Block = BlockHelpers.withTransactions(BlockHelpers.generateBlock(added.last), Nil)
+    TxPoolReset.ofBranches(added :+ empty, old).included shouldBe txs(added)

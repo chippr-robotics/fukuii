@@ -7,6 +7,8 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
+import scala.util.control.NonFatal
+
 import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus.*
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
@@ -21,6 +23,7 @@ import com.chipprbots.ethereum.ledger.ChainInsertLock
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
 import com.chipprbots.ethereum.rlp.encode as rlpEncode
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
 import com.chipprbots.ethereum.transactions.TxPoolReset
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -79,8 +82,34 @@ class EngineApiService(
   import scala.concurrent.duration.*
   implicit private val askTimeout: Timeout = Timeout(3.seconds)
 
-  // The head the tx pool was last reset to by a fork choice (B-253, TxPoolReset.between): None until the first
+  // The head the tx pool was last reset to by a fork choice (B-253, TxPoolReset.between): None until the first. Read
+  // and written under `poolResetLock` only, which orders the resets of two fork choices made at once, so that the pool
+  // is never told a move from B back to A while the head is at B; a lock of its own, held for the reset alone.
   private val poolHead = new AtomicReference[Option[BlockHeader]](None)
+  private val poolResetLock = new Object
+
+  /** Reset the tx pool from the head it was last reset to onto `head`, which a fork choice has just set (B-253). Pool
+    * hygiene only: a reset that fails is logged and the fork choice is answered as it would have been, its head set.
+    */
+  private def resetThePool(
+      pool: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command],
+      head: ByteString
+  ): Unit =
+    try
+      poolResetLock.synchronized {
+        blockchainReader.getBlockHeaderByHash(BlockHash(head)).foreach { newHead =>
+          val reset = poolReset(poolHead.get(), newHead)
+          poolHead.set(Some(newHead))
+          TxPoolReset.tell(pool, reset)
+        }
+      }
+    catch
+      case NonFatal(e) =>
+        log.error(s"[ENGINE-API] the tx pool was not reset onto ${hexOf(head)}: ${e.getMessage}", e)
+
+  /** What the pool is told on a move of the head from `from` to `to` ([[TxPoolReset.between]]). */
+  protected def poolReset(from: Option[BlockHeader], to: BlockHeader): TxPoolReset.Reset =
+    TxPoolReset.between(from, to, blockchainReader)
 
   // spec 022 FR-014: what `newPayload` could not execute a block over. Says so and changes nothing.
   private val stateHoles = new EngineStateHoles(message => log.warn(message))
@@ -1219,12 +1248,7 @@ class EngineApiService(
             // and the txs of the blocks moved off that the new chain lacks go back to it. From the pool's head, not
             // from the best block before this fork choice: on the unified layout a commit in place or a recovery may
             // have moved the head since the last fork choice, and its blocks are told here.
-            pendingTransactionsManager.foreach { ptm =>
-              blockchainReader.getBlockHeaderByHash(BlockHash(forkChoiceState.headBlockHash)).foreach { newHead =>
-                val from = poolHead.getAndSet(Some(newHead))
-                TxPoolReset.tell(ptm, TxPoolReset.between(from, newHead, blockchainReader))
-              }
-            }
+            pendingTransactionsManager.foreach(resetThePool(_, forkChoiceState.headBlockHash))
 
             // CLASS B — finalized-watermark prune (BEACON approved 2026-06-21):
             // Remove stale invalidBlocks / acceptedChildrenByParent entries for blocks at

@@ -445,6 +445,90 @@ class PendingTransactionsManagerSpec
 
     etcPeerManager.expectNoMessage(200.millis)
 
+  // ---- a move of the head (B-253) ---------------------------------------------------------------------------
+
+  it should "take back a tx it held once a reorganisation moves its block off the chain, behind a later nonce it holds" taggedAs (UnitTest) in new TestSetup:
+    // an intrinsic gas the stateless admission takes: a reinjected tx is admitted as an unchecked add is
+    val transfer: LegacyTransaction = tx.copy(gasLimit = GasAmount(21000))
+    def signed(nonce: BigInt): SignedTransactionWithSender =
+      SignedTransactionWithSender(
+        SignedTransaction.sign(transfer.copy(nonce = nonce), keyPair1, Some(0x3d)),
+        Address(keyPair1)
+      )
+    def pooled(): Set[SignedTransactionWithSender] =
+      pendingTransactionsManager
+        .ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
+        .futureValue
+        .pendingTransactions
+        .map(_.stx)
+        .toSet
+    val (first, second) = (signed(1), signed(2))
+    pendingTransactionsManager ! AddTransactions(first, second)
+    pooled() shouldBe Set(first, second)
+    // a block with the first becomes the head: the pool drops it, and asked next, says so
+    pendingTransactionsManager ! HeadReset(Seq(Seq(first.tx)), Nil)
+    pooled() shouldBe Set(second)
+    // a reorganisation moves that block off: the first is taken back, below the nonce the pool took last, and a
+    // build that asks right after the reset sees it
+    pendingTransactionsManager ! HeadReset(Nil, Seq(first.tx))
+    pooled() shouldBe Set(first, second)
+    // the gate is the next nonce after the highest held again: a peer's tx below it is still refused
+    pendingTransactionsManager ! HeadReset(Seq(Seq(first.tx)), Nil)
+    pooled() shouldBe Set(second)
+    val replay: SignedTransactionWithSender =
+      SignedTransactionWithSender(
+        SignedTransaction.sign(transfer.copy(nonce = 1, value = 11), keyPair1, Some(0x3d)),
+        Address(keyPair1)
+      )
+    pendingTransactionsManager ! ProperSignedTransactions(Set(replay), PeerId("1"))
+    pooled() shouldBe Set(second)
+
+  it should "take back a tx it held once a reorganisation moves its block off the chain, the sender holding nothing else" taggedAs (UnitTest) in new TestSetup:
+    val only: SignedTransactionWithSender =
+      SignedTransactionWithSender(
+        SignedTransaction.sign(tx.copy(gasLimit = GasAmount(21000)), keyPair2, Some(0x3d)),
+        Address(keyPair2)
+      )
+    def pooled(): Set[SignedTransactionWithSender] =
+      pendingTransactionsManager
+        .ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
+        .futureValue
+        .pendingTransactions
+        .map(_.stx)
+        .toSet
+    pendingTransactionsManager ! AddTransactions(only)
+    pooled() shouldBe Set(only)
+    pendingTransactionsManager ! HeadReset(Seq(Seq(only.tx)), Nil)
+    pooled() shouldBe empty
+    pendingTransactionsManager ! HeadReset(Nil, Seq(only.tx))
+    pooled() shouldBe Set(only)
+
+  it should "rebuild the nonce gate of the senders whose txs a reset removes from what it still holds of them" taggedAs (UnitTest) in new TestSetup:
+    def signed(nonce: BigInt, value: BigInt = 10): SignedTransactionWithSender =
+      SignedTransactionWithSender(
+        SignedTransaction
+          .sign(tx.copy(nonce = nonce, value = value, gasLimit = GasAmount(21000)), keyPair2, Some(0x3d)),
+        Address(keyPair2)
+      )
+    def pooled(): Set[SignedTransactionWithSender] =
+      pendingTransactionsManager
+        .ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
+        .futureValue
+        .pendingTransactions
+        .map(_.stx)
+        .toSet
+    val (first, second) = (signed(1), signed(2))
+    pendingTransactionsManager ! AddTransactions(first, second)
+    // the gate is 3: another tx at nonce 2 is refused
+    pendingTransactionsManager ! ProperSignedTransactions(Set(signed(2, value = 11)), PeerId("1"))
+    pooled() shouldBe Set(first, second)
+    // the second leaves on a reset: the gate is the next nonce after the first, the highest held, as go-ethereum's
+    // noncer is rebuilt on a reset; another tx at nonce 2 is taken
+    pendingTransactionsManager ! HeadReset(Seq(Seq(second.tx)), Nil)
+    val other: SignedTransactionWithSender = signed(2, value = 12)
+    pendingTransactionsManager ! ProperSignedTransactions(Set(other), PeerId("1"))
+    pooled() shouldBe Set(first, other)
+
   // ---- delivered PooledTransactions vs. the announcement --------------------------------------------------
   //
   // go-ethereum drops a peer over an announced/delivered size gap only above 8 bytes, and the size it announces can
