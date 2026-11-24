@@ -4706,3 +4706,13 @@ items:
     links:
       spec: 018
     notes: B-461 tells the escalation head feed only. The importer (NewBlock path announceAdopted; batch path tells nobody) does not read headOn; forge to rule on broadcast (the head is lighter than what it left) vs pool + newHeads only.
+  - id: B-475
+    title: BlockExecution.executeBlockNoValidation(WithRequests) has no main caller after B-455; move to the test harnesses that replay vectors or retire it
+    priority: P3
+    status: open
+    area: storage
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: none
+    notes: "B-455 routed ChainImporter's hash-store lenient import through executeAndAdoptBlockIf. executeBlockNoValidation writes code and trie nodes before validation; callers left: EestBlockchainReplay, RpcCompatNode, Engine API specs, ReorgBlockhashParitySpec, EtcPowReorgMatrixSpec, OnDemandFetchByPositionSpec. Dead-code review (wire/delete/defer)."
