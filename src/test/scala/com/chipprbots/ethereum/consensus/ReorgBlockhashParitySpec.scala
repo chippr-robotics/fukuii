@@ -26,6 +26,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.consensus.Consensus.*
 import com.chipprbots.ethereum.consensus.engine.BranchHandOff
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
@@ -139,8 +140,15 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       val s9Invalid: Block = oracle.invalidChild(sidePrefix.last, difficulty = 5000)
 
       node.importAll(oldChain) shouldBe a[BlockImportedToTop]
-      // B-291: the heavier prefix became the head before s9 was refused; the failure is still answered, with s9 named
-      node.importAll(sidePrefix :+ s9Invalid) shouldBe a[BlockImportFailed]
+      // B-291: the heavier prefix became the head before s9 was refused; the failure is still answered, with s9 named,
+      // and the head's move with it (B-338): onto s6..s8, off h6..h15
+      node.importAll(sidePrefix :+ s9Invalid) match
+        case ImportedPartially(ChainReorganised(off, onto, _, branchBlocks), failingBlockHash, _) =>
+          failingBlockHash shouldBe s9Invalid.hash.value
+          onto shouldBe sidePrefix
+          branchBlocks shouldBe sidePrefix.size
+          off shouldBe oldChain.drop(5)
+        case other => fail(s"not the partial reorganisation, with s9 named: $other")
 
       // core-geth: writeBlockAndSetHead reorgs as soon as a side block outweighs the head, so the head is s8 and reorg()
       // has deleted the canonical hashes of h9..h15.

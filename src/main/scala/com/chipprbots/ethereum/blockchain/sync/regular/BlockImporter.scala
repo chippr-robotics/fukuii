@@ -309,17 +309,30 @@ object BlockImporter:
       findMissingContractCode: Block => Option[ByteString]
   ): Option[(Block, List[Block])] =
     notImportedBlocks match
-      case Nil => None
+      case Nil          => None
       case head :: tail =>
-        err.asMatchable match
-          case at: BlockImportFailedAt if at.failingBlockHash != head.hash.value =>
+        // the block the failure names: a failed import's, or a partial import's (B-338), whose prefix the importer
+        // counts as imported, so that it is `head` unless the batch does not hold it
+        val named: Option[ByteString] = err.asMatchable match
+          case at: BlockImportFailedAt    => Some(at.failingBlockHash)
+          case partial: ImportedPartially => Some(partial.failingBlockHash)
+          case _                          => None
+        named.filter(_ != head.hash.value) match
+          case Some(failingBlockHash) =>
             if !reportingLive then None
             else
-              notImportedBlocks.dropWhile(_.hash.value != at.failingBlockHash) match
+              notImportedBlocks.dropWhile(_.hash.value != failingBlockHash) match
                 case failing :: rest if findMissingContractCode(failing).isEmpty =>
                   Some(failing -> InvalidChainReporter.provenDescendants(failing, rest))
                 case _ => None
-          case _ => Some(head -> InvalidChainReporter.provenDescendants(head, tail))
+          case None => Some(head -> InvalidChainReporter.provenDescendants(head, tail))
+
+  /** The blocks of `batch` before the one named `failingBlockHash`: what a partial import ([[ImportedPartially]],
+    * B-338) made the head of the batch, which the importer counts as imported. None when the batch does not hold it.
+    */
+  private[ethereum] def beforeTheFailing(batch: List[Block], failingBlockHash: ByteString): List[Block] =
+    val at = batch.indexWhere(_.hash.value == failingBlockHash)
+    if at < 0 then Nil else batch.take(at)
 
   // scalastyle:off parameter.number
   def apply(
@@ -1577,6 +1590,13 @@ final private class BlockImporterLogic(
                         fault.getMessage
                       )
                   BackingOffAfterStateFault
+              case partial: ImportedPartially =>
+                // B-338: the prefix is imported (tryImportBlocks), so the first block not imported is the one that
+                // failed. The fetcher goes back to it and the peer that served it is blamed, as for a batch whose first
+                // block failed; the blocks after it, dropped from the queue with it, are fetched again from there. A
+                // gas-used mismatch took the arm above first, which fetches missing code before it blames anyone.
+                fetcher ! BlockFetcher.InvalidateBlocksFrom(notImportedBlocks.head.number.value, partial.error)
+                RunningAfterFetcherRewind
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number.value
                 fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
@@ -1607,26 +1627,24 @@ final private class BlockImporterLogic(
             )
           }
         evaluated.flatMap {
-          case BlockImportedToTop(blockImportData) =>
-            val importedNow = blockImportData.map(_.block)
-            importedNow.foreach(b => unknownParentStrikes -= b.hash.value)
-            importedNow.foreach(b => forkRecoveredFor -= b.hash.value)
-            tellBatchImported(importedNow, Nil, importedNow)
-            val imported = importedNow.reverse ::: importedBlocks
-            imported.headOption
-              .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
-            IO.pure((imported, None))
+          case moved: BlockImportedToTop =>
+            IO.pure((batchMovedTheHead(moved, importedBlocks), None))
 
-          case ChainReorganised(oldBranch, newBranch, _, branchBlocks) =>
-            newBranch.foreach(b => unknownParentStrikes -= b.hash.value)
-            newBranch.foreach(b => forkRecoveredFor -= b.hash.value)
-            // as importBlock tells a reorganisation, peers aside: the pool of every block told, new-head subscribers of
-            // the blocks this import executed, the head always among them (B-344)
-            tellBatchImported(newBranch, oldBranch, newBranch.takeRight(math.max(1, branchBlocks)))
-            val imported = newBranch.reverse ::: importedBlocks
-            imported.headOption
-              .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
-            IO.pure((imported, None))
+          case moved: ChainReorganised =>
+            IO.pure((batchMovedTheHead(moved, importedBlocks), None))
+
+          // B-338: the head moved part of the way, then a block of the batch failed on its own error. The move is told
+          // as the import it is (pool, new-head subscribers, progress), by the same call as above, once; the blocks of
+          // the batch before the failing one are counted as imported, so that the caller's rewind and blame start at
+          // the failing block (core-geth's downloader drops the peer that served it); and the failing block takes a
+          // strike as any failed block does. The blocks after it are not imported, and are fetched again from it.
+          case partial @ ImportedPartially(headMove, failingBlockHash, _) =>
+            batchMovedTheHead(headMove, Nil)
+            // the failing block is always one of the batch: consensus evaluated no other. Were it not, nothing of the
+            // batch is counted and its first block is the one blamed, as for a failure with no prefix
+            val prefix = BlockImporter.beforeTheFailing(nel.toList, failingBlockHash)
+            struck(nel.toList.drop(prefix.size).headOption.getOrElse(nel.head), partial)
+            IO.pure((prefix.reverse ::: importedBlocks, Some(partial)))
 
           case DuplicateBlock | BlockEnqueued =>
             IO.pure((importedBlocks, None))
@@ -1653,57 +1671,85 @@ final private class BlockImporterLogic(
             IO.pure((adoptedPrefix(BlockImportFailedAt.importedBefore(err), importedBlocks), Some(err)))
 
           case err @ (UnknownParent | BlockImportFailed(_)) =>
-            val failedBlock = nel.head
-            // An orphan batch is a gap of ours, to be fetched: a warning, not an error (B-007).
-            val level = if err == UnknownParent then Logging.WarningLevel else Logging.ErrorLevel
-            log.log(
-              level,
-              "Block {} batch import failed, hash {} parent {}",
-              failedBlock.number,
-              failedBlock.header.hashAsHexString,
-              ByteStringUtils.hash2string(failedBlock.header.parentHash.value)
-            )
-            val strikes = unknownParentStrikes.getOrElse(failedBlock.hash.value, 0) + 1
-            unknownParentStrikes = unknownParentStrikes + (failedBlock.hash.value -> strikes)
-            if strikes == BadBlockEvictionThreshold then
-              log.warning(
-                "BAD-BLOCK-EVICT: block {} (hash={}) import failure x{} — evicting peer",
-                failedBlock.number,
-                failedBlock.header.hashAsHexString,
-                strikes
-              )
-              fetcher ! BlockFetcher.BlockImportFailed(
-                failedBlock.number.value,
-                BlacklistReason
-                  .BlockImportError(s"import failure x$strikes on block ${failedBlock.header.hashAsHexString}")
-              )
-            if strikes >= ForkDetectThreshold && forkRecoveredFor.contains(failedBlock.hash.value) then
-              // only on the unified state layout: nothing was rewound, so this is the same failure again
-              log.error(
-                "[SYNC-FORK] Block {} (hash={}) still fails after a fork recovery was made for it: no other is made " +
-                  "for it. Its strikes start again",
-                failedBlock.number,
-                failedBlock.header.hashAsHexString
-              )
-              // so that the peer that serves it is dropped again at the third, as on the hash layout, where the
-              // strikes start again at every recovery (forge)
-              unknownParentStrikes -= failedBlock.hash.value
-            else if strikes >= ForkDetectThreshold then
-              if blockchainWriter.holdsStateInPlace then forkRecoveredFor += failedBlock.hash.value
-              val ourHashAtHeight = blockchainReader
-                .getBlockHeaderByNumber(failedBlock.number.value)
-                .map(h => ByteStringUtils.hash2string(h.hash.value))
-                .getOrElse("<not found>")
-              log.warning(
-                s"FORK-DETECT: block ${failedBlock.number} (hash=${failedBlock.header.hashAsHexString}) " +
-                  s"has failed $strikes consecutive times. " +
-                  s"Our canonical hash at height ${failedBlock.number}: $ourHashAtHeight. " +
-                  s"Received parent hash: ${ByteStringUtils.hash2string(failedBlock.header.parentHash.value)}. " +
-                  "Triggering chain rollback and header re-sync."
-              )
-              selfRef ! StartForkRecovery(failedBlock.number.value)
+            struck(nel.head, err)
             IO.pure((importedBlocks, Some(err)))
         }
+
+  /** A block of a batch failed, or hangs from a block this node lacks: a strike against it, by its hash. At
+    * [[BadBlockEvictionThreshold]] the peer that serves it is evicted; at [[ForkDetectThreshold]] a fork recovery is
+    * started, once per block on the unified layout.
+    */
+  private def struck(failedBlock: Block, err: Any): Unit =
+    // An orphan batch is a gap of ours, to be fetched: a warning, not an error (B-007).
+    val level = if err == UnknownParent then Logging.WarningLevel else Logging.ErrorLevel
+    log.log(
+      level,
+      "Block {} batch import failed, hash {} parent {}",
+      failedBlock.number,
+      failedBlock.header.hashAsHexString,
+      ByteStringUtils.hash2string(failedBlock.header.parentHash.value)
+    )
+    val strikes = unknownParentStrikes.getOrElse(failedBlock.hash.value, 0) + 1
+    unknownParentStrikes = unknownParentStrikes + (failedBlock.hash.value -> strikes)
+    if strikes == BadBlockEvictionThreshold then
+      log.warning(
+        "BAD-BLOCK-EVICT: block {} (hash={}) import failure x{} — evicting peer",
+        failedBlock.number,
+        failedBlock.header.hashAsHexString,
+        strikes
+      )
+      fetcher ! BlockFetcher.BlockImportFailed(
+        failedBlock.number.value,
+        BlacklistReason
+          .BlockImportError(s"import failure x$strikes on block ${failedBlock.header.hashAsHexString}")
+      )
+    if strikes >= ForkDetectThreshold && forkRecoveredFor.contains(failedBlock.hash.value) then
+      // only on the unified state layout: nothing was rewound, so this is the same failure again
+      log.error(
+        "[SYNC-FORK] Block {} (hash={}) still fails after a fork recovery was made for it: no other is made " +
+          "for it. Its strikes start again",
+        failedBlock.number,
+        failedBlock.header.hashAsHexString
+      )
+      // so that the peer that serves it is dropped again at the third, as on the hash layout, where the
+      // strikes start again at every recovery (forge)
+      unknownParentStrikes -= failedBlock.hash.value
+    else if strikes >= ForkDetectThreshold then
+      if blockchainWriter.holdsStateInPlace then forkRecoveredFor += failedBlock.hash.value
+      val ourHashAtHeight = blockchainReader
+        .getBlockHeaderByNumber(failedBlock.number.value)
+        .map(h => ByteStringUtils.hash2string(h.hash.value))
+        .getOrElse("<not found>")
+      log.warning(
+        s"FORK-DETECT: block ${failedBlock.number} (hash=${failedBlock.header.hashAsHexString}) " +
+          s"has failed $strikes consecutive times. " +
+          s"Our canonical hash at height ${failedBlock.number}: $ourHashAtHeight. " +
+          s"Received parent hash: ${ByteStringUtils.hash2string(failedBlock.header.parentHash.value)}. " +
+          "Triggering chain rollback and header re-sync."
+      )
+      selfRef ! StartForkRecovery(failedBlock.number.value)
+
+  /** A batch moved the head (`move`): told as core-geth tells what its downloader inserts ([[tellBatchImported]]), the
+    * blocks moved onto cleared of their strikes, and the new head reported as progress. Returns `importedBlocks` with
+    * the blocks moved onto ahead of them, newest first. One call per move of the head, whatever result carried it.
+    */
+  private def batchMovedTheHead(move: BlockImportedToTop | ChainReorganised, importedBlocks: List[Block]): List[Block] =
+    val onto = move match
+      case BlockImportedToTop(blockImportData) =>
+        val importedNow = blockImportData.map(_.block)
+        tellBatchImported(importedNow, Nil, importedNow)
+        importedNow
+      case ChainReorganised(oldBranch, newBranch, _, branchBlocks) =>
+        // as importBlock tells a reorganisation, peers aside: the pool of every block told, new-head subscribers of
+        // the blocks this import executed, the head always among them (B-344)
+        tellBatchImported(newBranch, oldBranch, newBranch.takeRight(math.max(1, branchBlocks)))
+        newBranch
+    onto.foreach(b => unknownParentStrikes -= b.hash.value)
+    onto.foreach(b => forkRecoveredFor -= b.hash.value)
+    val imported = onto.reverse ::: importedBlocks
+    imported.headOption
+      .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
+    imported
 
   /** Before a missing node is fetched, the entry under its hash goes if it is not that node (spec 022 T062).
     *
@@ -1816,10 +1862,14 @@ final private class BlockImporterLogic(
     */
   private def timedImport(evaluate: IO[BlockImportResult]): IO[BlockImportResult] =
     evaluate.timed.flatMap { (took, result) =>
-      val blocks = result match
+      def moved(move: BlockImportedToTop | ChainReorganised): Int = move match
         case BlockImportedToTop(imported)         => imported.size
         case ChainReorganised(_, newBranch, _, _) => newBranch.size
-        case _                                    => 0
+      val blocks = result match
+        case move: BlockImportedToTop          => moved(move)
+        case move: ChainReorganised            => moved(move)
+        case ImportedPartially(headMove, _, _) => moved(headMove)
+        case _                                 => 0
       IO(if blocks > 0 then RegularSyncMetrics.recordLastImport(blocks, took.toNanos)).as(result)
     }
 
@@ -1832,31 +1882,41 @@ final private class BlockImporterLogic(
       internally: Boolean
   )(state: ImporterState): Behavior[Command] =
     def doLog(entry: ImportMessages.LogEntry): Unit = log.log(entry._1, entry._2)
+    def headMoved(move: BlockImportedToTop | ChainReorganised): Unit = move match
+      case BlockImportedToTop(importedBlocksData) =>
+        val (blocks, weights) = importedBlocksData.map(data => (data.block, data.weight)).unzip
+        broadcastBlocks(blocks, weights)
+        updateTxPool(importedBlocksData.map(_.block), Seq.empty)
+        blocks.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
+        // this block tops what was imported; after a partial import (B-338) the last block imported is the head
+        supervisor ! ProgressProtocol.ImportedBlock(blocks.lastOption.fold(block.number)(_.number).value, internally)
+      case ChainReorganised(oldBranch, newBranch, weights, branchBlocks) =>
+        updateTxPool(newBranch, oldBranch)
+        // Peers are told of the new head only, as core-geth announces only the block it imported (NewBlock to a
+        // square root of the peers, its hash to the rest), not the side blocks it stands on (B-344). The pool is
+        // told of every block the consensus told, which it bounds. New-head subscribers are told of the blocks this
+        // import executed, the head always among them: core-geth sends a chain event for each block it inserts,
+        // and none for a stored side block a reorganisation makes canonical (B-344).
+        broadcastBlocks(newBranch.lastOption.toList, weights.lastOption.toList)
+        newBranch
+          .takeRight(math.max(1, branchBlocks))
+          .foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
+        newBranch.lastOption.foreach(block =>
+          supervisor ! ProgressProtocol.ImportedBlock(block.number.value, internally)
+        )
     importWith(
       IO(doLog(importMessages.preImport()))
         .flatMap(_ => timedImport(consensus.evaluateBranchBlock(block)))
         .tap(importMessages.messageForImportResult.andThen(doLog))
         .tap {
-          case BlockImportedToTop(importedBlocksData) =>
-            val (blocks, weights) = importedBlocksData.map(data => (data.block, data.weight)).unzip
-            broadcastBlocks(blocks, weights)
-            updateTxPool(importedBlocksData.map(_.block), Seq.empty)
-            blocks.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
-            supervisor ! ProgressProtocol.ImportedBlock(block.number.value, internally)
-          case ChainReorganised(oldBranch, newBranch, weights, branchBlocks) =>
-            updateTxPool(newBranch, oldBranch)
-            // Peers are told of the new head only, as core-geth announces only the block it imported (NewBlock to a
-            // square root of the peers, its hash to the rest), not the side blocks it stands on (B-344). The pool is
-            // told of every block the consensus told, which it bounds. New-head subscribers are told of the blocks this
-            // import executed, the head always among them: core-geth sends a chain event for each block it inserts,
-            // and none for a stored side block a reorganisation makes canonical (B-344).
-            broadcastBlocks(newBranch.lastOption.toList, weights.lastOption.toList)
-            newBranch
-              .takeRight(math.max(1, branchBlocks))
-              .foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
-            newBranch.lastOption.foreach(block =>
-              supervisor ! ProgressProtocol.ImportedBlock(block.number.value, internally)
-            )
+          case move: BlockImportedToTop => headMoved(move)
+          case move: ChainReorganised   => headMoved(move)
+          // B-338: the queued branch this block topped moved the head part of the way, and a block of it failed: the
+          // move is told as above, and the failure as a failed import is (this block stands on the failing one)
+          case ImportedPartially(headMove, _, error) =>
+            headMoved(headMove)
+            if informFetcherOnFail then
+              fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
           case BlockImportFailedDueToMissingNode(missingNodeException, adopted)
               if syncConfig.redownloadMissingStateNodes =>
             announceAdopted(adopted, internally)

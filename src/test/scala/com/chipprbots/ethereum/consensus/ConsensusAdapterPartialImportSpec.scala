@@ -13,6 +13,8 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedAt
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
+import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusResult
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
@@ -85,13 +87,14 @@ class ConsensusAdapterPartialImportSpec extends AnyFlatSpec with Matchers with M
     }
   )
 
-  it should "drop the failing block and what stands on it, and answer the prefix imported, when the block was invalid" taggedAs (
+  // B-338: the prefix imported AND the failing block's error, which the answer used to drop
+  it should "drop the failing block and what stands on it, and answer the prefix imported and the block failed, when the block was invalid" taggedAs (
     UnitTest,
     ConsensusTest
   ) in (new Setup:
     imported(
       ExtendedCurrentBestBranchPartially(prefix, BranchExecutionFailure(Nil, branch(1).hash.value, invalidBlock))
-    ) shouldBe BlockImportedToTop(prefix)
+    ) shouldBe ImportedPartially(BlockImportedToTop(prefix), branch(1).hash.value, invalidBlock)
     queued(branch(1)) shouldBe false
     queued(branch(2)) shouldBe false
   )
@@ -145,17 +148,18 @@ class ConsensusAdapterPartialImportSpec extends AnyFlatSpec with Matchers with M
     queued(branch(2)) shouldBe true
   )
 
-  it should "queue the old branch again and drop the failing block, as before, when the block was invalid" taggedAs (
+  // B-338: answered as the reorganisation it is, with the blocks it moved off, and as the failing block's failure. Of
+  // the blocks moved onto, only the batch's were executed by this call: `side` is a stored block the branch stands on
+  it should "queue the old branch again, drop the failing block, and answer the reorganisation and the failure, when the block was invalid" taggedAs (
     UnitTest,
     ConsensusTest
   ) in (new Reorganised:
     val error: String = s"${Consensus.ReorganiseFailurePrefix}$invalidBlock"
-    imported(partially(Nil, error)) match
-      case at: BlockImportFailedAt =>
-        at shouldBe BlockImportFailed(error)
-        at.failingBlockHash shouldBe branch(1).hash.value
-        at.imported shouldBe Nil
-      case other => fail(s"not the failure at the failing block: $other")
+    imported(partially(Nil, error)) shouldBe ImportedPartially(
+      ChainReorganised(List(oldHead), List(side, branch.head), weights, branchBlocks = 1),
+      branch(1).hash.value,
+      error
+    )
     queued(oldHead) shouldBe true
     queued(branch(1)) shouldBe false
     queued(branch(2)) shouldBe false

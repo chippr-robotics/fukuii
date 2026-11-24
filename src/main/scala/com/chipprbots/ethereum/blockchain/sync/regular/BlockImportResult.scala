@@ -7,6 +7,7 @@ import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
+import com.chipprbots.ethereum.utils.Hex
 
 sealed trait BlockImportResult
 
@@ -29,6 +30,41 @@ case class ChainReorganised(
 
 case class BlockImportFailed(error: String) extends BlockImportResult
 
+/** A batch that moved the head part of the way (B-338): `headMove` is what it made the head, as an import that went
+  * through tells it (an extension of the head, or a reorganisation with the blocks it moved off), and then block
+  * `failingBlockHash` of it failed on its own `error`, a verdict on the block and never a fault of this node's state
+  * (those are answered as [[BlockImportFailedAt]] with the prefix, or [[BlockImportStateFault]]).
+  *
+  * WHY ONE RESULT FOR BOTH. Before B-338 a partial extension was answered as [[BlockImportedToTop]], which dropped the
+  * error, and a partial reorganisation as a bare [[BlockImportFailedAt]], which dropped the head's move: the pool was
+  * not told of the blocks moved onto and off, and the importer counted nothing of the batch as imported and blamed the
+  * batch's first block. core-geth's downloader inserts the prefix (`insertChain` writes it and the pool resets on the
+  * new head) and drops the peer that served the block that failed. So the importer handles this as both: the head's
+  * move as the import it is (pool, new-head subscribers, progress), through the same calls as [[BlockImportedToTop]]
+  * and [[ChainReorganised]]; and the failing block as a failed one (a strike, and the fetcher rewound to it, blaming
+  * the peer that served it).
+  */
+final case class ImportedPartially(
+    headMove: BlockImportedToTop | ChainReorganised,
+    failingBlockHash: ByteString,
+    error: String
+) extends BlockImportResult:
+
+  /** Short: the error is what is read from it (the gas-used arm reads its text), the blocks are not. */
+  override def toString: String =
+    val moved = headMove match
+      case BlockImportedToTop(data)          => s"extended the head by ${data.size} block(s)"
+      case ChainReorganised(off, onto, _, _) => s"reorganised ${off.size} block(s) off, ${onto.size} onto"
+    s"ImportedPartially($moved, then block ${Hex.toHexString(failingBlockHash.toArray).take(16)} " +
+      s"failed: $error)"
+
+  /** The answer a caller that is not regular sync's importer (test mode, the chain-file import) had for this before
+    * B-338, which it keeps: the extension, or the reorganisation's failure at its failing block.
+    */
+  def answeredAsBefore: BlockImportResult = headMove match
+    case extended: BlockImportedToTop => extended
+    case _: ChainReorganised          => new BlockImportFailedAt(error, failingBlockHash)
+
 /** A [[BlockImportFailed]] that also names the block execution stopped at.
   *
   * WHY THIS EXISTS. A failed reorganisation executes a prefix of the batch before it stops, so the failing block is
@@ -47,7 +83,7 @@ case class BlockImportFailed(error: String) extends BlockImportResult
   * `imported` is the prefix of the batch that became the head before the failing block, set only when the failure is a
   * fault of this node's own state (`Consensus.isLocalStateFault`, B-336): those blocks are imported, and are accounted
   * for and announced as any imported blocks are, so that the escalation starts at the failing block. Empty otherwise: a
-  * block's own error after a prefix is answered as that prefix imported (`BlockImportedToTop`).
+  * block's own error after a prefix that became the head is answered as [[ImportedPartially]] (B-338).
   */
 final class BlockImportFailedAt(
     message: String,

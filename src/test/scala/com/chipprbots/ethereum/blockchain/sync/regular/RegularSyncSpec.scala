@@ -364,7 +364,10 @@ class RegularSyncSpec
       override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
           blockExecutionScheduler: IORuntime,
           blockchainConfig: BlockchainConfig
-      ): IO[BlockImportResult] = IO(answer.get())
+      ): IO[BlockImportResult] = IO { evaluations.incrementAndGet(); answer.get() }
+
+    // how many branches were handed to the consensus: a batch whose rest is dropped is not evaluated again
+    val evaluations: java.util.concurrent.atomic.AtomicInteger = new java.util.concurrent.atomic.AtomicInteger(0)
 
     override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
       override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult = NewBetterBranch(Nil)
@@ -434,6 +437,29 @@ class RegularSyncSpec
       case com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset(_, txs) if txs.nonEmpty =>
         txs
     }
+
+    /** The pool's resets: one per move of the head. */
+    def resetsOfThePool(): Int =
+      toThePool.count(_.isInstanceOf[com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset])
+
+    /** Where the fetcher was sent back to, and which block's peer it blamed (B-338). */
+    def fetcherRewound(): InvalidateBlocksFrom =
+      importerFetcher
+        .fishForMessage(5.seconds) {
+          case _: InvalidateBlocksFrom => true
+          case _                       => false
+        }
+        .asInstanceOf[InvalidateBlocksFrom]
+
+    /** The head the importer reported as progress. */
+    def progressReported(): BigInt =
+      importerSupervisor
+        .fishForMessage(5.seconds) {
+          case _: RegularSync.ProgressProtocol.ImportedBlock => true
+          case _                                             => false
+        }
+        .asInstanceOf[RegularSync.ProgressProtocol.ImportedBlock]
+        .blockNumber
 
     /** No peer is told of a fetched batch, and no more new-head events come. */
     def noneTold(): Unit =
@@ -3784,6 +3810,75 @@ class RegularSyncSpec
 
           newHeads.receiveMessages(1, 5.seconds) shouldBe List(Topic.Publish(NewBlockImported(prefix)))
           removedFromThePool() shouldBe List(prefix.body.transactionList)
+          noneTold()
+      )
+
+      // B-338: a batch whose block k failed on its own error after blocks 1..k-1 extended the head. core-geth's
+      // downloader inserts the prefix (the pool resets on the new head) and drops the peer that served the failing
+      // block. The prefix is told once, as any imported blocks are; the fetcher goes back to the failing block and
+      // blames its peer, as for a batch whose first block failed; the blocks after it are not imported or evaluated.
+      "tell of the prefix once and blame the failing block's peer when a later block of the batch is invalid" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("batch-partial-extension"):
+          val batch: List[Block] = testBlocks.take(4)
+          val prefix: List[Block] = batch.take(2)
+          val failing: Block = batch(2)
+          val invalid: String = BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString
+          answer.set(ImportedPartially(BlockImportedToTop(prefix.map(weighed)), failing.hash.value, invalid))
+
+          importBatch(batch)
+
+          newHeads.receiveMessages(2, 5.seconds) shouldBe prefix.map(b => Topic.Publish(NewBlockImported(b)))
+          val rewound: InvalidateBlocksFrom = fetcherRewound()
+          rewound.fromBlock shouldBe failing.number.value
+          withClue("the peer that served the failing block is blamed, as for a batch whose first block failed: ") {
+            rewound.toBlacklist shouldBe Some(failing.number.value)
+          }
+          progressReported() shouldBe prefix.last.number.value
+          removedFromThePool() shouldBe prefix.map(_.body.transactionList)
+          takenBackByThePool() shouldBe empty
+          resetsOfThePool() shouldBe 1
+          withClue("the rest of the batch is dropped, not evaluated again: ")(evaluations.get shouldBe 1)
+          noneTold()
+      )
+
+      // B-338: the same when the prefix outweighed the head and replaced it, then a block failed. The blocks moved off
+      // are taken back by the pool as for a reorganisation that went through (B-253's reset), in the same one reset.
+      "tell of the reorganisation once and blame the failing block's peer when a later block of the branch is invalid" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("batch-partial-reorg"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          // a stored side block the branch stands on, then the batch: two blocks executed, the failing one, one after
+          val sideParent: Block = testBlocks.head
+          val batch: List[Block] = testBlocks.slice(1, 5)
+          val executed: List[Block] = batch.take(2)
+          val failing: Block = batch(2)
+          val onto: List[Block] = sideParent :: executed
+          val invalid: String =
+            s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.ValidationAfterExecError("Block has invalid state root")}"
+          answer.set(
+            ImportedPartially(
+              ChainReorganised(List(movedOff), onto, onto.map(weighed).map(_.weight), branchBlocks = 2),
+              failing.hash.value,
+              invalid
+            )
+          )
+
+          importBatch(batch)
+
+          newHeads.receiveMessages(2, 5.seconds) shouldBe executed.map(b => Topic.Publish(NewBlockImported(b)))
+          val rewound: InvalidateBlocksFrom = fetcherRewound()
+          rewound.fromBlock shouldBe failing.number.value
+          rewound.toBlacklist shouldBe Some(failing.number.value)
+          progressReported() shouldBe executed.last.number.value
+          removedFromThePool() shouldBe onto.map(_.body.transactionList)
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+          resetsOfThePool() shouldBe 1
+          evaluations.get shouldBe 1
           noneTold()
       )
 

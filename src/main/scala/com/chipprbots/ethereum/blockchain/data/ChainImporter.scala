@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
@@ -171,7 +172,11 @@ class ChainImporter(
       // (lotsOfLeafs, sideChainWithMoreTransactions, uncleBlockAtBlock3afterBlock4, ...) ended on the wrong
       // head. core-geth's `import` goes through InsertChain -> writeBlockAndSetHead, which moves the head only
       // when forker.ReorgNeeded says the block is heavier. The node's own fork choice does exactly that.
-      forkChoice.get(block, blockchainConfig).unsafeRunSync()(using IORuntime.global) match
+      // A partial import (B-338) is answered as it was before: the extension imported, a reorganisation failed
+      val chosen = forkChoice.get(block, blockchainConfig).unsafeRunSync()(using IORuntime.global) match
+        case partial: ImportedPartially => partial.answeredAsBefore
+        case other                      => other
+      chosen match
         case BlockImportedToTop(data) =>
           LenientOutcome.Imported(data.size)
         case ChainReorganised(_, newBranch, _, _) =>

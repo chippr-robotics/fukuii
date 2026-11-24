@@ -361,8 +361,8 @@ class ConsensusImpl(
         saveLastBlock(importedBlocks)
         val unexecuted = branch.toList.drop(importedBlocks.length)
         val failingBlock = unexecuted.head
-        // NB: for a block's own error this arm maps to `BlockImportedToTop` in ConsensusAdapter, which DISCARDS
-        // `error`. Reporting here is the only signal that escapes a partially-successful batch at all.
+        // NB: for a block's own error this arm maps to `ImportedPartially` in ConsensusAdapter (B-338; before it,
+        // `BlockImportedToTop`, which discarded `error`). Reporting here is what every typed error is reported by.
         reportIfProvenInvalid(failingBlock, error, unexecuted.tail)
         // A fault of this node's own state (spec 022 T062): the prefix stays the head, and the failing block and those
         // after it were not judged. They wait in the queue to be tried again, and the adapter answers the fault, with
