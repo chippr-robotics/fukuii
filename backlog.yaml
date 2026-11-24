@@ -4667,18 +4667,18 @@ items:
   - id: B-458
     title: "eth_simulateV1 on pending reads the pending header's state from the store, where a PoW build left none: State node doesn't exist"
     priority: P3
-    status: in-progress
+    status: review
     area: rpc
     size: S
     opened: 2026-11-24
     refs: []
     links:
-      prs: [2018]
+      prs: [2018, 2101]
     claim:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T16:21:07Z
-      heartbeat: 2026-11-24T17:15:40Z
+      heartbeat: 2026-11-24T17:17:38Z
       branch: fix/r4-simulate-parity
     notes: |-
       Pre-existing, found in B-230 (#2018). PoW pending build runs over getReadOnlyMptStorage (in-memory buffer); EthSimulateService opens scratchStateAt(pendingHeader). Fix: base on the pending world's storage via a fresh overlay (do NOT write into the shared, non-thread-safe pending buffer) plus its deployedCode. eth_call/estimate/trace already use pendingState.
