@@ -5031,19 +5031,17 @@ items:
   - id: B-487
     title: Lenient chain import (hive loader / start-up import) on the unified layout ends with an ERROR on StateBusy instead of a typed, retryable stop (B-462)
     priority: P3
-    status: review
+    status: done
     area: state
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2108]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T20:10:26Z
-      heartbeat: 2026-11-24T21:30:31Z
-    notes: B-462 typed StateBusy for importChainFileStrict/admin_importChain only. ChainImporter.importLenientStream/importInPlace let it end the import like any fault. It runs at start before any adoption, so not reachable today; revisit if the lenient import can run beside sync.
+    notes: |-
+      B-462 typed StateBusy for importChainFileStrict/admin_importChain only. ChainImporter.importLenientStream/importInPlace let it end the import like any fault. It runs at start before any adoption, so not reachable today; revisit if the lenient import can run beside sync.
+      2026-11-24 done: merged 0a5f12a06f; forge review x2 (APPROVE after fixes); hive engine 210/210, sync 18/18
   - id: B-488
     title: "SNAP: a local store fault (account range, bytecode) restarts SNAP without bound; route it through recordCriticalFailure / dormant mode or stop the node"
     priority: P2
