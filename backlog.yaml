@@ -5618,21 +5618,18 @@ items:
   - id: B-525
     title: "'Finalising 1 uncommitted task StackTries (unexpected)' on both Mordor and ETC mainnet at the end of the account phase: find the missed per-task commit"
     priority: P3
-    status: review
+    status: done
     area: snap
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: ["sync reports v0.12.117, 2026-11-23/24"]
     links:
       prs: [2114]
-    claim:
-      by: cloud-719c6644
-      agent: vault
-      since: 2026-11-24T22:17:20Z
-      heartbeat: 2026-11-24T22:38:16Z
     notes: |-
       AccountTrieAssembly.scala:359 logs it when a task's StackTrie is still open at assembly; it appeared once in each run, and both syncs completed with a matching root.
       Find which completion path skips the per-task commit (last task, or a task finished during a pivot move) and either commit it there or document why the late commit is fine.
+      2026-11-24 done: merged 061aa78fa
   - id: B-526
     title: "ETC mainnet SNAP: 421 account-range requests timed out (30 s) against 2 on Mordor; find whether peers or response size cause it"
     priority: P3
