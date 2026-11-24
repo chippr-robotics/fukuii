@@ -5398,18 +5398,19 @@ items:
   - id: B-515
     title: "Pool reset: the Engine API path and the importer don't share the pool's last head; an FCU after an importer reorg leaves the pool stale"
     priority: P3
-    status: in-progress
+    status: review
     area: rpc
     size: S
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2081]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:15:45Z
-      heartbeat: 2026-11-24T12:16:59Z
+      heartbeat: 2026-11-24T12:51:30Z
     notes: |-
       beacon W1 on B-338 (EngineApiService.poolHead only moves on FCU). Pool contents/RPC only, never a build. One shared tracker for both paths.
       2026-11-24 in-progress: folded into the B-338/B-460 round 2 (user: fix in the PR, don't split)
