@@ -2726,7 +2726,7 @@ items:
   - id: B-318
     title: "B-297 polish: pin Deep/Incomplete/Pivot refusals one by one; a fault of the pin release after a hand-off; a head past the tip told as ChainReorganised again"
     priority: P3
-    status: claimed
+    status: in-progress
     area: consensus
     opened: 2026-11-16
     refs: [B-297]
@@ -2735,7 +2735,8 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T10:51:23Z
-      heartbeat: 2026-11-24T10:51:23Z
+      heartbeat: 2026-11-24T10:51:27Z
+    notes: "2026-11-24 in-progress: beacon agent clone-e"
   - id: B-319
     title: "A sync controller stopped by the hand-off's bound (B-304) does not answer eth_syncing: a final state that answers with the reason"
     priority: P3
