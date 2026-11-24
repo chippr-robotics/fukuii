@@ -294,7 +294,7 @@ items:
       by: cloud-719c6644
       agent: conduit
       since: 2026-11-24T11:48:39Z
-      heartbeat: 2026-11-24T12:18:40Z
+      heartbeat: 2026-11-24T13:09:36Z
       branch: fix/b025-rpc-error-status-codes
     notes: conduit. Check hive rpc-compat's expectations first (JsonRpcHttpServer.scala:148-153).
   - id: B-026
@@ -311,7 +311,7 @@ items:
       by: cloud-719c6644
       agent: conduit
       since: 2026-11-24T11:38:03Z
-      heartbeat: 2026-11-24T12:18:40Z
+      heartbeat: 2026-11-24T13:09:36Z
       branch: fix/b026-trace-error-parity
     notes: |-
       conduit + forge. Regenerate src/test/resources/trace-goldens/ in the same commit.
@@ -1001,7 +1001,7 @@ items:
       by: cloud-719c6644
       agent: conduit
       since: 2026-11-24T11:48:46Z
-      heartbeat: 2026-11-24T12:18:40Z
+      heartbeat: 2026-11-24T13:09:36Z
       branch: fix/b025-rpc-error-status-codes
     notes: |-
       Unverified dev-node item (handoff section 3): check it still applies before starting.
@@ -1808,7 +1808,7 @@ items:
       by: cloud-719c6644
       agent: conduit
       since: 2026-11-24T11:48:42Z
-      heartbeat: 2026-11-24T12:18:40Z
+      heartbeat: 2026-11-24T13:09:36Z
       branch: fix/b025-rpc-error-status-codes
     notes: fukuii returns {code:3, message:Execution error, data:[{code:100, message:State node doesn't exist}]} for a block 335 back on a pruned Ephemery node. Code 3 means execution reverted; geth uses -32000 (missing trie node / historical state not available). conduit owns.
   - id: B-198
@@ -2491,7 +2491,7 @@ items:
       by: cloud-719c6644
       agent: forge
       since: 2026-11-24T12:18:36Z
-      heartbeat: 2026-11-24T13:09:32Z
+      heartbeat: 2026-11-24T13:09:36Z
       branch: fix/b279-miner-control
     notes: |-
       forge, spec 029 slice 7 analysis. PoWMiningCoordinator StopMining returns Behaviors.stopped (PoWMiningCoordinator.scala:103-105); PoWMining.minerCoordinatorRef is never cleared and startMiningProcess runs once at boot (PoWMining.scala:71,107), so a later StartMining/SetMiningMode is dropped. Also nothing records whether the internal miner runs: EthMiningService.isMining is 'someone reported a hashrate recently' and lags both ways. Related: B-278. The TUI will refuse 'mining start' and say why, and treat 'mining stop' as lasting until restart.
@@ -4073,7 +4073,7 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T12:41:57Z
-      heartbeat: 2026-11-24T12:46:01Z
+      heartbeat: 2026-11-24T13:09:36Z
       branch: fix/b419-engine-api-parity
     notes: |-
       Found in beacon review of PR #1980. fukuii ignores exp; geth rejects expired exp. JwtAuthenticatorSpec covers only a future exp.
@@ -4123,7 +4123,7 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T12:42:01Z
-      heartbeat: 2026-11-24T12:46:05Z
+      heartbeat: 2026-11-24T13:09:36Z
       branch: fix/b419-engine-api-parity
     notes: "Made EngineApiHttpServerObservationSpec flaky (PR #1982 CI, line 258); the spec now waits for the values. Reordering is under consensus/engine: route via beacon."
   - id: B-424
@@ -4870,7 +4870,7 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T12:42:05Z
-      heartbeat: 2026-11-24T12:46:10Z
+      heartbeat: 2026-11-24T13:09:36Z
       branch: fix/b419-engine-api-parity
     notes: "beacon review of B-198: cancun.md/osaka.md MUST -38004 if too large; check whether V2 pre-Osaka must answer -38005 before adding it."
   - id: B-478
@@ -5008,7 +5008,7 @@ items:
       by: cloud-719c6644
       agent: vault
       since: 2026-11-24T11:16:12Z
-      heartbeat: 2026-11-24T12:18:40Z
+      heartbeat: 2026-11-24T13:09:36Z
       branch: fix/b488-snap-store-fault-bounded
     notes: "vault review of B-190: restartSnapSync has no bound, so a full or read-only disk loops; ByteCodeResponseHandling ~:221 still logs and re-queues a store failure. A dedicated AccountStoreFaulted command."
   - id: B-489
