@@ -5023,12 +5023,17 @@ items:
   - id: B-495
     title: eth_getTransactionByHash follows a tx lookup to its block by hash with no canonical check (receipt path checks; getBlockByNumber is tip-gated)
     priority: P2
-    status: open
+    status: claimed
     area: jsonrpc
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T08:42:38Z
+      heartbeat: 2026-11-24T08:42:38Z
     notes: "Found in B-482 round 2 (vault item 5). EthTxService.getTransactionDataByHash: transactionMappingStorage.get -> getBlockByHash, no check that the block is at its number in the index and <= best (getTransactionReceipt does both; eth_getBlockByNumber goes through BestBranch, gated by tip). Any stale lookup is served as included. Owners: conduit (RPC), beacon (semantics vs geth)."
   - id: B-496
     title: ConsensusAdapter OfTheState logs a StateBusy as [STATE-FAULT] ERROR; tag it [STATE-BUSY] WARN through tagOf (B-440 + B-462 both merged)
