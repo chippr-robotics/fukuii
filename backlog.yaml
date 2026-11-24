@@ -5502,21 +5502,18 @@ items:
   - id: B-518
     title: StxLedger estimator ignores maxUsedGas (geth gasestimator.go:155 uses it)
     priority: P3
-    status: review
+    status: done
     area: rpc
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: [B-161]
     links:
       prs: [2115]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T22:36:24Z
-      heartbeat: 2026-11-24T23:05:34Z
     notes: |-
       Second half of B-161's note, not in the R4 cluster scope.
       2026-11-24 in-progress: conduit, fix/b518-estimate-maxusedgas
+      2026-11-24 done: merged 06c64e4d3; no ErrorRatio option (exact minimum), no plain-transfer short-circuit
   - id: B-519
     title: eth_simulateV1 on ETH gives London's activation block base fee 0 (inline computeNextBaseFee); import's calcBaseFee gives 1 gwei
     priority: P3
