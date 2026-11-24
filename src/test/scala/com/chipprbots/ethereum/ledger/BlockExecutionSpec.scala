@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.ledger
 
 import org.apache.pekko.util.ByteString
 
+import scala.collection.mutable
+
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.prop.TableFor2
@@ -24,10 +26,21 @@ import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockError
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockValid
 import com.chipprbots.ethereum.crypto.ECDSASignature
+import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
+import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdate
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
+import com.chipprbots.ethereum.db.dataSource.DataUpdate
+import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.Namespaces
+import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
+import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
+import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockRewardCalculatorOps.*
 import com.chipprbots.ethereum.mpt.LeafNode
+import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.ByteStringUtils.*
 import com.chipprbots.ethereum.utils.Hex
@@ -750,6 +763,55 @@ class BlockExecutionSpec
       ) in new DeployedCodeSetup(failAfterExecution = false):
         blockExecution.executeBlockNoValidation(block).isRight shouldBe true
         blockchainStorages.evmCodeStorage.get(codeHash) shouldBe Some(code)
+
+      // B-454: in the SAME batch as the state that refers to it, on every hash-store mode, through the importer's
+      // commit with its block and through the Engine API's commit apart from it.
+      Seq[(String, PruningMode)]("archive" -> ArchivePruning, "basic pruning" -> BasicPruning(2)).foreach {
+        case (modeName, pruning) =>
+          s"write it in the batch that commits the imported block, its records and its state ($modeName)" taggedAs (
+            UnitTest,
+            StateTest
+          ) in new DeployedCodeBatchSetup(pruning):
+            val (blocks, error) = blockExecution.executeAndValidateBlocks(List(block), defaultChainWeight)
+            error shouldBe None
+            blocks.map(_.block) shouldBe List(block)
+            val withCode: mutable.Buffer[Set[IndexedSeq[Byte]]] =
+              recorder.batches.filter(_.contains(Namespaces.CodeNamespace))
+            withCode should have size 1
+            withCode.head should contain(Namespaces.HeaderNamespace)
+            if pruning != ArchivePruning then withCode.head should contain(Namespaces.NodeNamespace)
+            blockchainStorages.evmCodeStorage.get(codeHash) shouldBe Some(code)
+
+          s"write none of it when the batch that commits the imported block is lost ($modeName)" taggedAs (
+            UnitTest,
+            StateTest
+          ) in new DeployedCodeBatchSetup(pruning):
+            recorder.refuse = _.contains(Namespaces.HeaderNamespace)
+            a[RecordingDataSource.Refused] should be thrownBy
+              blockExecution.executeAndValidateBlocks(List(block), defaultChainWeight)
+            blockchainStorages.evmCodeStorage.get(codeHash) shouldBe None
+            blockchainReader.getBlockHeaderByHash(block.header.hash) shouldBe None
+
+          s"write it in the batch that commits the block's state apart from the block ($modeName)" taggedAs (
+            UnitTest,
+            StateTest
+          ) in new DeployedCodeBatchSetup(pruning):
+            blockExecution.executeAndValidateBlock(block).isRight shouldBe true
+            val withCode: mutable.Buffer[Set[IndexedSeq[Byte]]] =
+              recorder.batches.filter(_.contains(Namespaces.CodeNamespace))
+            withCode should have size 1
+            if pruning != ArchivePruning then withCode.head should contain(Namespaces.NodeNamespace)
+            blockchainStorages.evmCodeStorage.get(codeHash) shouldBe Some(code)
+      }
+
+      "write none of it when the batch that commits the block's state apart from the block is lost" taggedAs (
+        UnitTest,
+        StateTest
+      ) in new DeployedCodeBatchSetup(BasicPruning(2)):
+        // the trie nodes are staged until the commit: a batch with a node in it is the commit
+        recorder.refuse = _.contains(Namespaces.NodeNamespace)
+        a[RecordingDataSource.Refused] should be thrownBy blockExecution.executeAndValidateBlock(block)
+        blockchainStorages.evmCodeStorage.get(codeHash) shouldBe None
     }
 
     "EIP-4895 withdrawal processing" should {
@@ -825,6 +887,23 @@ class BlockExecutionSpec
         blockValidation
       )
 
+  /** [[DeployedCodeSetup]] over a data source that records the namespaces of each batch, and can lose one whole. */
+  class DeployedCodeBatchSetup(pruning: PruningMode) extends DeployedCodeSetup(failAfterExecution = false):
+    trait Recording extends EphemDataSourceComponent:
+      override val dataSource: RecordingDataSource = new RecordingDataSource
+    trait Pruning extends PruningConfigBuilder with com.chipprbots.ethereum.TestInstanceConfigProvider:
+      override val pruningMode: PruningMode = pruning
+    override lazy val storagesInstance
+        : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
+      new Recording
+        with LocalPruningConfigBuilder
+        with Pruning
+        with Storages.DefaultStorages
+        with com.chipprbots.ethereum.TestInstanceConfigProvider
+    storagesInstance.storages.appStateStorage.markRefCountsExact().commit() // #1692: a fresh datadir
+    def recorder: RecordingDataSource = storagesInstance.dataSource.asInstanceOf[RecordingDataSource]
+    recorder.batches.clear() // the setup's own writes are not the block's
+
   /** One block of one transaction whose (mocked) execution deploys `code` at `deployed`. */
   class DeployedCodeSetup(failAfterExecution: Boolean) extends BlockchainSetup:
     val code: ByteString = ByteString(Hex.decode("60016000556002600155"))
@@ -865,3 +944,21 @@ class BlockExecutionSpec
       )
     val block: Block =
       Block(validBlockHeader, validBlockBodyWithNoTxs.copy(transactionList = Seq(validStxSignedByOrigin)))
+
+/** An in-memory data source that records the namespaces each batch writes, and loses whole the batches `refuse` names:
+  * a kill at that write.
+  */
+class RecordingDataSource extends EphemDataSource(Map.empty):
+  val batches: mutable.Buffer[Set[IndexedSeq[Byte]]] = mutable.Buffer.empty
+  @volatile var refuse: Set[IndexedSeq[Byte]] => Boolean = _ => false
+  override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
+    val namespaces = dataSourceUpdates.map {
+      case DataSourceUpdate(namespace, _, _)          => namespace
+      case DataSourceUpdateOptimized(namespace, _, _) => namespace
+    }.toSet
+    if refuse(namespaces) then throw new RecordingDataSource.Refused
+    synchronized(batches += namespaces)
+    super.update(dataSourceUpdates)
+
+object RecordingDataSource:
+  final class Refused extends RuntimeException("simulated kill: the batch is lost whole")

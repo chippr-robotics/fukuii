@@ -90,8 +90,10 @@ class BlockExecution(
           result
     })
 
-  /** Writes the code `world` deployed to the code store, for a path that commits the block's state: see
-    * [[InMemoryWorldStateProxy.deployedCodeWrite]]. Every other execution leaves its code in its world (B-230).
+  /** Writes the code `world` deployed to the code store, in a write of its own, for a path that writes the block's
+    * state straight through and so has no state batch for the code to join: see
+    * [[InMemoryWorldStateProxy.deployedCodeWrite]]. A staged block hands its code to its staged state instead
+    * ([[StagedBlockState.stageCode]], B-454), and every other execution leaves its code in its world (B-230).
     */
   def writeDeployedCode(world: InMemoryWorldStateProxy): Unit =
     InMemoryWorldStateProxy.deployedCodeWrite(world).foreach(_.commit())
@@ -144,10 +146,10 @@ class BlockExecution(
         _ <- validateRequestsHash(block, result.executionRequests)
         _ <- validateBlockAccessList(block, result.blockAccessList)
       yield
-        // The block is valid: the code it deployed goes to the code store now, before the caller commits the state
-        // that refers to it (B-230). A block that failed above wrote none. The caller can still refuse the commit (a
-        // head that moved, a branch too large to hold): what is written then is code nothing refers to.
-        writeDeployedCode(result.worldState)
+        // The block is valid: the code it deployed is handed to the staged state, whose commit writes it in the same
+        // batch as the state that refers to it (B-230, B-454). A block that failed above stages none, and a commit the
+        // caller refuses (a head that moved, a branch too large to hold) discards it with the state.
+        InMemoryWorldStateProxy.deployedCodeWrite(result.worldState).foreach(staged.stageCode)
         (result.receipts, result.executionRequests, result.blockAccessList)
 
     if blockExecResult.isRight then

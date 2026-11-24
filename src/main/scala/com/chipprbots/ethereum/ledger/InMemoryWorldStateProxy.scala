@@ -117,7 +117,7 @@ object InMemoryWorldStateProxy:
     * Code is not written to the code store here (B-230). Execution that is thrown away (an `eth_call`, an estimate, a
     * simulation, a trace, a proposer's build, a block that fails validation) persists its world too, and used to write
     * every contract it deployed to disk, without bound. The code stays in the world, read back from there, and the path
-    * that commits a block's state writes it ([[deployedCodeWrite]]).
+    * that commits a block's state writes it ([[deployedCodeWrite]]), in the state's batch (B-454).
     *
     * @param worldState
     *   Proxy to commit
@@ -173,12 +173,14 @@ object InMemoryWorldStateProxy:
     * never an account whose code is missing. Expects a persisted world: code deployed since the last [[persistState]]
     * is not in it yet.
     *
-    * Why a write of its own, ahead of the state batch, is safe today: the code store and the state are column families
-    * of ONE RocksDB, and every write goes through its one write-ahead log (no write bypasses it:
-    * `scripts/check-wal-writes.sh`). The log is written in commit order and recovery replays a prefix of it, so a crash
-    * can keep the code and lose the state batch after it, never the reverse. That stops holding if the code store moves
-    * to another database, or if the code or the state is ever written round the log (`disableWAL`, an ingested SST):
-    * then a crash can keep a state whose code is gone, and the code must go into the state's own batch (B-454).
+    * Block import puts it IN the state's batch: execution hands it to the staged state
+    * ([[com.chipprbots.ethereum.db.storage.StagedBlockState.stageCode]]), whose commit writes it with the state and the
+    * block's records (B-454). It is a write of its own, ahead of the state, only where there is no state batch to join:
+    * a state written straight through as it executes (`BlockExecution.executeBlockNoValidation`, a test-mode commit of
+    * a build), and a forward layer on the unified layout, held in memory. That is safe because the code store and the
+    * state are column families of ONE RocksDB, and every write goes through its one write-ahead log (no write bypasses
+    * it: `scripts/check-wal-writes.sh`). The log is written in commit order and recovery replays a prefix of it, so a
+    * crash can keep the code and lose the state after it, never the reverse.
     */
   def deployedCodeWrite(world: InMemoryWorldStateProxy): Option[DataSourceBatchUpdate] =
     deployedCodeWrite(world.deployedCode, world.evmCodeStorage)
@@ -290,7 +292,7 @@ class InMemoryWorldStateProxy(
     val storageResets: Set[Address] = Set.empty,
     // Code this world has persisted ([[InMemoryWorldStateProxy.persistState]]), by its hash, and not written to
     // `evmCodeStorage`: a world is a value, and only the path that commits a block's state writes its code
-    // ([[InMemoryWorldStateProxy.deployedCodeWrite]], B-230). Read before the code store. Kept whole through a
+    // ([[InMemoryWorldStateProxy.deployedCodeWrite]], B-230; in the state's batch, B-454). Read before the code store. Kept whole through a
     // `deleteAccount`, as the store kept it: content-addressed, and another account may have the same code.
     val deployedCode: Map[ByteString, Code] = Map.empty
 ) extends WorldStateProxy[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]:
