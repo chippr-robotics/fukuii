@@ -12,11 +12,13 @@
 # compile, format or test failure is never retried or hidden: it fails on the first run, with sbt's own exit code.
 #
 # Usage: scripts/ci/sbt-retry.sh [sbt arguments...]
-# Env:   SBT_RETRY_ATTEMPTS (default 4), SBT_RETRY_DELAY (seconds, default 20; doubles each retry), SBT (default sbt).
+# Env:   SBT_RETRY_ATTEMPTS (default 5), SBT_RETRY_DELAY (seconds, default 30; doubles each retry), SBT (default sbt).
+#        The defaults wait 30 + 60 + 120 + 240 s, about 7.5 min, in all: Maven Central's 429 for a runner's address can
+#        outlast a couple of minutes (#2037's first run failed four tries inside 140 s).
 set -uo pipefail
 
-attempts="${SBT_RETRY_ATTEMPTS:-4}"
-delay="${SBT_RETRY_DELAY:-20}"
+attempts="${SBT_RETRY_ATTEMPTS:-5}"
+delay="${SBT_RETRY_DELAY:-30}"
 sbt_cmd="${SBT:-sbt}"
 log="$(mktemp -t sbt-retry.XXXXXX)"
 trap 'rm -f "$log"' EXIT
