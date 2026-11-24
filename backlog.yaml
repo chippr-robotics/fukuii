@@ -4926,3 +4926,13 @@ items:
     refs: [B-190]
     links: {}
     notes: "vault review of B-190: restartSnapSync has no bound, so a full or read-only disk loops; ByteCodeResponseHandling ~:221 still logs and re-queues a store failure. A dedicated AccountStoreFaulted command."
+  - id: B-489
+    title: "RPC: 'safe'/'finalized' state reads answer 'not available' on PoS: only EthBlocksService and EthProofService get the ForkChoiceManager"
+    priority: P2
+    status: open
+    area: rpc
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: Found in B-210 round 2. ResolveHeader.forkChoiceManagerOpt defaults to None; NodeBuilder passes forkChoiceManagerForRpc only to EthBlocksService and (since B-210) EthProofService. EthUserService (getBalance/getCode/getStorageAt/getTransactionCount), EthInfoService (call/estimateGas), EthTxService, EthSimulateService, TraceService and DebugTracingService resolve Safe/Finalized to InvalidParams. Wire forkChoiceManagerForRpc into each builder; test with a real ForkChoiceManager as EthProofServiceSpec does.
