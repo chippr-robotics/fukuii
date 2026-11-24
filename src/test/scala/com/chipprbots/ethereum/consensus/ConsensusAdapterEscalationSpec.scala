@@ -347,9 +347,8 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     later.toList.foreach(block => on.queue.isQueued(block.hash) shouldBe true)
   }
 
-  // forge W1: a store busy on the same block, batch after batch, takes no write. The answers are counted by the block the
-  // batch stands on, until a block becomes the head; at the fifth (some ten minutes, with the importer's backoff) the
-  // node stops as for a store that failed
+  // forge W1: a store busy batch after batch takes no write. Every busy answer is counted, whichever block the batch
+  // stands on, until a block becomes the head; at the fifth the node stops as for a store that failed
   private class BusyRig:
     val busy: Throwable = Thrown.busy.head
     private var answer: NonEmptyList[Block] => ConsensusResult = _ => throw busy
@@ -370,7 +369,7 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
       rig.imported(blocks) match
         case BlockImportStateFault(fault, _) =>
           fault.getMessage should include(
-            s"was busy ${ConsensusAdapter.BusyBeforeStop} times on block ${blocks.head.number}"
+            s"was busy ${ConsensusAdapter.BusyBeforeStop} times with no block made the head between"
           )
           fault.getMessage should include("the node stops")
         case other => fail(s"not a fault of this node's state: $other")
@@ -379,21 +378,15 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
   private val otherParent = BlockHash(ByteString(Array.fill[Byte](32)(3)))
   private val UnderStop = ConsensusAdapter.BusyBeforeStop - 1
 
-  it should "stop the node when the store is busy on the same block too many times" taggedAs UnitTest in {
+  it should "stop the node when the store is busy too many times with no block made the head" taggedAs UnitTest in {
     val on = new BusyRig
     val blocks = branch(5, 3)
     // four, then a batch evaluated that moved the head: the count starts again
     on.busyAnswers(blocks, UnderStop)
     on.answering(blocks)(moved => ExtendedCurrentBestBranch(moved.toList.map(data))) shouldBe a[BlockImportedToTop]
-    // four, then a batch that stands on another block: the count starts again
     on.busyAnswers(blocks, UnderStop)
-    on.busyAnswer(branch(9, 1, parent = otherParent))
-    on.busyAnswers(blocks, UnderStop - 1)
-    on.rig.stopped shouldBe empty
-    // the fifth on the same block stops the node
-    val other = branch(9, 1, parent = otherParent)
-    on.busyAnswers(other, UnderStop)
-    on.stopsOn(other)
+    // the fifth stops the node
+    on.stopsOn(blocks)
     // nothing of it is told to the escalation
     on.rig.feed.refusedWeight shouldBe None
   }
@@ -411,7 +404,18 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     on.stopsOn(blocks)
   }
 
-  // forge W1: siblings stand on the same block; a store busy on one and on the other is busy on that block
+  // forge W1: batches that alternate between branches standing on different blocks are counted together: a store busy
+  // on each takes no write, and a count kept per block would never reach the stop
+  it should "count the busy answers of branches on different blocks together" taggedAs UnitTest in {
+    val on = new BusyRig
+    val one = branch(5, 3)
+    val other = branch(9, 2, parent = otherParent)
+    one.head.header.parentHash should not be other.head.header.parentHash
+    (1 to UnderStop).foreach(i => on.busyAnswer(if i % 2 == 1 then one else other))
+    on.stopsOn(other)
+  }
+
+  // forge W1: siblings at the same height, as any two branches, count together
   it should "count the busy answers of sibling blocks at the same height together" taggedAs UnitTest in {
     val on = new BusyRig
     val one = branch(5, 3)

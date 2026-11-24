@@ -1,7 +1,7 @@
 package com.chipprbots.ethereum.consensus
 
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 
 import org.apache.pekko.util.ByteString
 
@@ -87,12 +87,12 @@ class ConsensusAdapter(
     */
   private val stopAskedFor = new AtomicBoolean(false)
 
-  /** The block the last batches the store answered busy stand on, and how many times it answered busy on it since a
-    * block last became the head (B-440, forge W1). Keyed on the parent: siblings at the same height stand on it too.
+  /** How many times the store answered a batch busy since a block last became the head (B-440, forge W1), whichever
+    * block the batches stand on: batches that alternate between branches, on the same parent or not, count together.
     * Only a head that moved starts the count again ([[toldOfTheHead]]): a branch kept as it is, or another failure,
     * wrote nothing, and says nothing of a store that takes writes.
     */
-  private val busyRunning = new AtomicReference[Option[(BlockHash, Int)]](None)
+  private val busySinceTheHeadMoved = new AtomicInteger(0)
 
   /** Report a block the import path has PROVEN consensus-invalid, so `engine_newPayload` / `engine_forkchoiceUpdated`
     * can answer INVALID for it and its descendants.
@@ -483,7 +483,7 @@ class ConsensusAdapter(
     * are imported, and the others wait in the queue and are fetched again without blame. Only a fault of the state
     * (thrown as it is, or a store that reads as corrupt) is told to the feed as a branch not judged; a store that
     * failed stops the node, and a store that was busy is tried again, up to [[ConsensusAdapter.BusyBeforeStop]] times
-    * on the same parent block with no block made the head between.
+    * with no block made the head between.
     *
     * The stop is asked for before the store is read (forge C1): a disk that refused a write may refuse the reads too,
     * and the stop must not hang on them. Otherwise the reads here run inside the evaluation's `recover`: one that
@@ -497,14 +497,7 @@ class ConsensusAdapter(
     import ConsensusAdapter.StoreFailure
     val blocks = s"[${newBranch.head.number}-${newBranch.last.number}]"
     val busyInARow = failure match
-      case StoreFailure.Busy =>
-        val parent = newBranch.head.header.parentHash
-        busyRunning
-          .updateAndGet {
-            case Some((`parent`, count)) => Some((parent, count + 1))
-            case _                       => Some((parent, 1))
-          }
-          .fold(1)(_._2)
+      case StoreFailure.Busy => busySinceTheHeadMoved.incrementAndGet()
       // no reset here: a store corrupt or a fault of the state wrote nothing; only a head that moved starts the count
       // again, and a store that failed stops the node
       case _ => 0
@@ -535,7 +528,7 @@ class ConsensusAdapter(
         case _ =>
           log.warn(
             s"[STATE-FAULT] The import of blocks $blocks met this node's store busy (${ConsensusAdapter.statusOf(thrown)}, " +
-              s"$busyInARow time(s) on block ${newBranch.head.number} with no block made the head; the node stops at " +
+              s"$busyInARow time(s) with no block made the head between; the node stops at " +
               s"${ConsensusAdapter.BusyBeforeStop}), after ${imported.size} block(s) of it became the head: the others " +
               s"are queued again and tried again, no peer is blamed: $thrown"
           )
@@ -558,7 +551,7 @@ class ConsensusAdapter(
   ): ConsensusResult =
     val why =
       if busyInARow >= ConsensusAdapter.BusyBeforeStop then
-        s"was busy $busyInARow times on block ${newBranch.head.number}, with no block made the head between " +
+        s"was busy $busyInARow times with no block made the head between " +
           s"(${ConsensusAdapter.statusOf(thrown)}), a store that does not take the write"
       else s"failed (${ConsensusAdapter.statusOf(thrown)})"
     val first = stopAskedFor.compareAndSet(false, true)
@@ -605,7 +598,7 @@ class ConsensusAdapter(
     */
   private def toldOfTheHead(head: Option[Block]): Unit =
     head.foreach { block =>
-      busyRunning.set(None)
+      busySinceTheHeadMoved.set(0)
       toldTheFeed("a head that moved")(_.headMoved(block))
     }
 
@@ -680,12 +673,11 @@ object ConsensusAdapter extends Logger:
   val NoStopWired: Throwable => Unit = thrown =>
     log.error(s"[STORE-FAILED] No stop is wired to this import: the node is not stopped ($thrown)")
 
-  /** How many batches standing on the same block the store may answer busy, with no block made the head between, before
-    * the node stops as for a store that failed (forge W1). The importer tries the first two again at once and spaces
-    * the tries out from the third on (`BlockImporter.StateFaultBackoffAfter`, `exhaustBackoff`, 5 minutes), so the
-    * fifth comes some ten minutes after the first. A write stall, a compaction behind or a lock timed out clears in
-    * seconds; a store busy on the same block for ten minutes takes no write, and a node that retries it for ever
-    * follows no chain while it looks alive.
+  /** How many batches the store may answer busy, with no block made the head between, before the node stops as for a
+    * store that failed (forge W1). On the same block the importer tries the first two again at once and spaces the
+    * tries out from the third on (`BlockImporter.StateFaultBackoffAfter`, `exhaustBackoff`, 5 minutes), so the fifth
+    * comes some ten minutes after the first. A write stall, a compaction behind or a lock timed out clears in seconds;
+    * a store that stays busy takes no write, and a node that retries it for ever follows no chain while it looks alive.
     */
   private[consensus] val BusyBeforeStop: Int = 5
 
