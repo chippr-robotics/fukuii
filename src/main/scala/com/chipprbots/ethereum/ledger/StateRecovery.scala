@@ -370,9 +370,12 @@ class StateRecovery(
     @tailrec
     def down(at: BlockHeader, above: List[BlockHeader]): Either[Outcome, Walked] =
       if state.stateAvailable(refOf(at)) then Right(Walked(at, above, viewless = false))
-      // behind the anchor, where the index is the anchor's ancestry (it may run ahead of the anchor, and a block there
-      // is reached by no record); and never the head itself, which a fork choice does not move the head down to
-      else if byRecords && above.nonEmpty && behindTheAnchor(at) then Right(Walked(at, above, viewless = true))
+      // Only where the head's chain leaves the index: the block above it is not of the index. Never the head itself,
+      // nor a block of a head that is an ancestor of the head, which a fork choice does not move the head down to (the
+      // walk goes on down, and finds no state). And behind the anchor, where the index is the anchor's ancestry: it
+      // may run ahead of the anchor (after a sync's hand-off), and a block there is reached by no record (B-480)
+      else if byRecords && above.headOption.exists(child => !ofTheIndex(child)) && behindTheAnchor(at) then
+        Right(Walked(at, above, viewless = true))
       else if above.size >= reach then
         Left(
           Outcome.TooLong(
@@ -386,9 +389,8 @@ class StateRecovery(
         reader.getBlockHeaderByHash(BlockHash(at.parentHash.value)) match
           case Some(parent) => down(parent, at :: above)
           case None         => Left(Outcome.MissingHeader(at.parentHash.value))
-    def behindTheAnchor(at: BlockHeader): Boolean =
-      state.anchor.exists(_.number > at.number.value) &&
-        reader.getCanonicalHashByNumber(at.number.value).contains(at.hash)
+    def ofTheIndex(at: BlockHeader): Boolean = reader.getCanonicalHashByNumber(at.number.value).contains(at.hash)
+    def behindTheAnchor(at: BlockHeader): Boolean = state.anchor.exists(_.number > at.number.value) && ofTheIndex(at)
     reader.getBlockHeaderByHash(BlockHash(head)) match
       case None         => Left(Outcome.MissingHeader(head))
       case Some(header) => down(header, Nil)

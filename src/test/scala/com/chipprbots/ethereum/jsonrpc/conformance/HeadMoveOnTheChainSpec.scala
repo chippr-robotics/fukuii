@@ -1944,6 +1944,43 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       statusOf(choose(blocks(43))) shouldBe PayloadStatus.Valid
     }
 
+  // B-316/B-480 (beacon): after a hand-off the index of blocks by number runs ahead of the anchor, over blocks whose
+  // state no view reaches. A fork choice's walk stops by the records only where the head's chain leaves the index
+  // BEHIND the anchor: a block of the index above it is reached by no record, and a stop there would refuse every
+  // catch-up after a hand-off whose head is not the index's own chain
+  it should "be caught up over in place when the index runs ahead of the head over it, as after a hand-off" taggedAs
+    (UnitTest, ConsensusTest) in {
+      // the head's chain as the index names it (21 to 44), and a branch of it that leaves it at block 30 (31' to 35')
+      val side = blocks
+        .slice(30, 35)
+        .foldLeft(Vector.empty[Block]) { (made, block) =>
+          val parent = made.lastOption.map(_.header.hash).getOrElse(block.header.parentHash)
+          made :+ block
+            .copy(header = block.header.copy(parentHash = parent, extraData = ByteString("a competing head".getBytes)))
+        }
+      for (tip, chainTo, adopted) <- Seq((blocks(43), blocks.take(44), 24), (side.last, blocks.take(30) ++ side, 15))
+      do
+        withClue(s"to block ${tip.header.number.value}: ") {
+          val on = handedOff()
+          side.foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+          // the index names blocks 21 to 44, as a sync leaves it; the head and the state are at block 20
+          (21 to 44).foreach(n => on.putIndex(n, blocks(n - 1).header.hash.value))
+          on.pathState.anchor.map(_.number) shouldBe Some(BigInt(20))
+          on.pathState.stateAvailable(refOf(blocks(29).header)) shouldBe false
+          val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)
+          val (_, choose) = recoveringEngine(on, recovery)
+          statusOf(choose(tip)) shouldBe PayloadStatus.Syncing
+          // walked down to the anchor, and not stopped on the index above it: caught up over, every block
+          recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(adopted)
+          on.pathState.anchor shouldBe Some(refOf(tip.header))
+          on.reader.getBestBlockNumber shouldBe tip.header.number.value
+          on.disk shouldBe stateOf(tip.header)
+          chainTo.foreach(block =>
+            on.reader.getCanonicalHashByNumber(block.header.number.value) shouldBe Some(block.header.hash)
+          )
+        }
+    }
+
   it should "be a head that cannot be reached when it is longer than the catch-up covers" taggedAs (
     UnitTest,
     ConsensusTest

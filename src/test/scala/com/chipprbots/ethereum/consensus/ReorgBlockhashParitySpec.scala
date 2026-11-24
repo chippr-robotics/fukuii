@@ -775,6 +775,42 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     finally recovery.close()
   )
 
+  // B-480 (beacon): the head itself is never a stop by the records. A fork choice to an ancestor of the head that no
+  // view reaches is not "already held": its walk goes on down, and finds no state
+  it should "not take a head of the index below what a view reaches for one whose state is held" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture(archiveOfShortViews):
+    val recovery = new StateRecovery(
+      node.blockchainReader,
+      node.blockchainWriter,
+      node.blockExecution,
+      node.storagesInstance.storages.pathStateStorage.get,
+      maxBlocks = 2
+    )(using node.blockchainConfig)
+    val sink: Sink = new StateRecovery.Sink:
+      def executed(
+          block: Block,
+          receipts: Seq[Receipt],
+          accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+      ): Unit = ()
+      def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+      override def requestedHead: Option[ByteString] = namedNow()
+    try
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      val state = node.storagesInstance.storages.pathStateStorage.get
+      // block 2: of the index, behind the anchor, three blocks below the head, where no view reaches
+      state.stateAvailable(BlockRef(aChain(1).hash.value, 2, aChain(1).header.stateRoot.value)) shouldBe false
+      named.set(Some(aChain(1).hash.value))
+      recovery
+        .requestFor(aChain(1).hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe a[StateRecovery.Outcome.TooLong]
+      node.bestHash shouldBe aChain.last.hash
+      state.anchor.map(_.hash) shouldBe Some(aChain.last.hash.value)
+    finally recovery.close()
+  )
+
   it should "be taken back up to the head followed, by the records, when its tip is invalid below what a view reaches" taggedAs (
     UnitTest,
     ConsensusTest
