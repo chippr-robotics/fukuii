@@ -4098,18 +4098,19 @@ items:
   - id: B-429
     title: "CI never runs LegacyPreByzantiumBlockchainTestsSpec: no ethereum/legacytests checkout, FUKUII_LEGACY_TESTS_DIRS unset"
     priority: P3
-    status: in-progress
+    status: review
     area: ci
     size: S
     opened: 2026-11-22
     refs: []
     links:
+      prs: [2043]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T05:14:41Z
-      heartbeat: 2026-11-24T06:01:03Z
+      heartbeat: 2026-11-24T06:02:21Z
     notes: |-
       Found in B-207 (#1987). Add a sparse legacytests checkout to the nightly ethtest job, or document the gap.
       2026-11-24 in-progress: clone-e lane batch 3
