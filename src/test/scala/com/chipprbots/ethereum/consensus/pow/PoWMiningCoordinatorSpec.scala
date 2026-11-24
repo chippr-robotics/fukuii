@@ -16,6 +16,7 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.Future
+import scala.concurrent.Promise
 import scala.concurrent.duration.*
 
 import org.bouncycastle.util.encoders.Hex
@@ -378,6 +379,41 @@ class PoWMiningCoordinatorSpec
         coordinator ! StopMining // B-279: pauses; the test ends the actor itself
         testKit.stop(coordinator, Timeouts.veryLongTimeout)
 
+      "runs one round at a time when a stop and a start come during a round (B-279, forge)" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in new TestSetup:
+        override def coordinatorName: String = s"OneRound-${System.nanoTime()}"
+        val gated = new GatedMiner
+        override val coordinator: org.apache.pekko.actor.typed.ActorRef[CoordinatorProtocol] = testKit.spawn(
+          PoWMiningCoordinator(
+            sync.ref,
+            ethMiningService,
+            blockCreator,
+            blockchainReader,
+            this,
+            minerOpt = Some(gated)
+          ),
+          coordinatorName
+        )
+        (() => blockchainReader.getBestBlock).expects().returns(Some(parentBlock)).anyNumberOfTimes()
+
+        coordinator ! SetMiningMode(RecurrentMining)
+        val first: Promise[CoordinatorProtocol] = gated.started.poll(10, java.util.concurrent.TimeUnit.SECONDS)
+        first should not be null
+        coordinator ! StopMining
+        coordinator ! SetMiningMode(RecurrentMining) // resumes while the first round still runs
+        coordinator ! SetMiningMode(RecurrentMining) // and a second start
+        first.success(MiningUnsuccessful) // the round across the stop ends: exactly one next round starts
+        val second: Promise[CoordinatorProtocol] = gated.started.poll(10, java.util.concurrent.TimeUnit.SECONDS)
+        second should not be null
+        second.success(MiningUnsuccessful)
+        val third: Promise[CoordinatorProtocol] = gated.started.poll(10, java.util.concurrent.TimeUnit.SECONDS)
+        third should not be null
+        gated.maxRunning.get shouldBe 1
+        third.success(MiningUnsuccessful)
+        testKit.stop(coordinator, Timeouts.veryLongTimeout)
+
       "StopMining pauses PoWMinerCoordinator, and a start resumes mining (B-279)" taggedAs (
         UnitTest,
         ConsensusTest,
@@ -416,6 +452,24 @@ class PoWMiningCoordinatorSpec
   /** Miner that bypasses Ethash DAG generation for fast, reliable testing. Immediately returns a successful mining
     * result without loading the ~1GB DAG file.
     */
+  /** A miner whose rounds end only when the test says so, counting how many run at once (B-279). */
+  private class GatedMiner extends Miner:
+    val started = new java.util.concurrent.LinkedBlockingQueue[scala.concurrent.Promise[CoordinatorProtocol]]()
+    private val running = new AtomicInteger(0)
+    val maxRunning = new AtomicInteger(0)
+
+    def processMining(
+        bestBlock: Block
+    )(implicit blockchainConfig: BlockchainConfig): Future[CoordinatorProtocol] =
+      val now = running.incrementAndGet()
+      maxRunning.accumulateAndGet(now, math.max)
+      val done = scala.concurrent.Promise[CoordinatorProtocol]()
+      started.put(done)
+      done.future.map { r =>
+        running.decrementAndGet()
+        r
+      }(using scala.concurrent.ExecutionContext.parasitic)
+
   private class InstantMiner(
       blockCreator: PoWBlockCreator,
       syncController: ActorRef,

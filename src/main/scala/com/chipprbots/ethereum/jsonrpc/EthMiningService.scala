@@ -234,13 +234,16 @@ class EthMiningService(
 
   // B-279: with no built-in miner (mining disabled, an Engine API node) the message went nowhere and the call still
   // answered success. It is refused instead, and says why.
-  private val NoInternalMiner: JsonRpcError =
-    JsonRpcError.LogicError("this node runs no built-in miner: mining is disabled in its configuration")
+  private def noInternalMiner(ethash: com.chipprbots.ethereum.consensus.pow.PoWMining): JsonRpcError =
+    JsonRpcError.LogicError(
+      if ethash.miningEnabled then "the built-in miner has not started yet"
+      else "this node runs no built-in miner: mining is disabled in its configuration"
+    )
 
   def startMiner(@unused req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
     mining.ifEthash[ServiceResponse[StartMinerResponse]] { ethash =>
       IO {
-        if !ethash.hasInternalMiner then Left(NoInternalMiner)
+        if !ethash.hasInternalMiner then Left(noInternalMiner(ethash))
         else
           ethash.sendMiner(MinerProtocol.StartMining)
           log.info("Mining started via RPC")
@@ -251,7 +254,7 @@ class EthMiningService(
   def stopMiner(@unused req: StopMinerRequest): ServiceResponse[StopMinerResponse] =
     mining.ifEthash[ServiceResponse[StopMinerResponse]] { ethash =>
       IO {
-        if !ethash.hasInternalMiner then Left(NoInternalMiner)
+        if !ethash.hasInternalMiner then Left(noInternalMiner(ethash))
         else
           ethash.sendMiner(MinerProtocol.StopMining)
           log.info("Mining stopped via RPC")
