@@ -3194,19 +3194,17 @@ items:
   - id: B-371
     title: TUI compact action over the cancellable compactRange (largest family first, guard released between families)
     priority: P3
-    status: review
+    status: done
     area: storage
     opened: 2026-11-18
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2004]
       spec: 029
-    claim:
-      by: cloud-dc960fdc
-      agent: vault-b371
-      since: 2026-11-23T21:37:21Z
-      heartbeat: 2026-11-23T21:47:17Z
-    notes: "Follow-up of B-281 (compactRange no longer holds dbLock, close() cancels). Not done there: a whole-database compact needs a compactAll over the families, largest first, calling compactRange per family so close() can cancel between them, plus the dashboard action and removing the 'not offered, and why' line."
+    notes: |-
+      Follow-up of B-281 (compactRange no longer holds dbLock, close() cancels). Not done there: a whole-database compact needs a compactAll over the families, largest first, calling compactRange per family so close() can cancel between them, plus the dashboard action and removing the 'not offered, and why' line.
+      2026-11-24 done: Merged b9f8a6ded (prism approved; should-fixes applied).
   - id: B-372
     title: "B-065 follow-up: IntegrationTest OnDemandFetchByPosition, importer over a real PathStateStorage (T212 IT)"
     priority: P2
