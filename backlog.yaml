@@ -318,20 +318,17 @@ items:
   - id: B-030
     title: Failed UDP sends log ERROR with a stack trace (IPv6 unreachable spam); demote, rate-limit, or skip IPv6
     priority: P2
-    status: review
+    status: done
     area: p2p
     size: S
     opened: 2026-11-05
+    closed: 2026-11-24
     refs: [H9 rest, CHASE C]
     links:
       prs: [2050]
-    claim:
-      by: cloud-719c6644
-      agent: herald
-      since: 2026-11-24T06:31:16Z
-      heartbeat: 2026-11-24T06:41:32Z
-      branch: fix/b030-udp-send-failure-log
-    notes: herald. Pollutes the gate's ERROR tally.
+    notes: |-
+      herald. Pollutes the gate's ERROR tally.
+      2026-11-24 done: merged as 781e7abba
   - id: B-031
     title: SNAP pivot roll fires at the serve window's edge with no slack; roll at about 3/4 of the window
     priority: P2
