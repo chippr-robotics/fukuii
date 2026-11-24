@@ -5524,17 +5524,18 @@ items:
   - id: B-519
     title: eth_simulateV1 on ETH gives London's activation block base fee 0 (inline computeNextBaseFee); import's calcBaseFee gives 1 gwei
     priority: P3
-    status: in-progress
+    status: review
     area: rpc
     size: S
     opened: 2026-11-24
     refs: ["forge, #2101 review"]
-    links: {}
+    links:
+      prs: [2116]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T22:36:28Z
-      heartbeat: 2026-11-24T22:36:56Z
+      heartbeat: 2026-11-24T23:18:35Z
     notes: |-
       Found by forge while fixing the ETC Olympia activation base fee in #2101 (which uses BaseFeeCalculator.calcBaseFee). ETH path: beacon. Reuse calcBaseFee as #2101 does for ETC; test a simulated block at London activation.
       2026-11-24 in-progress: beacon, branch fix/b519-simulate-parity (with B-517)
