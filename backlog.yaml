@@ -2551,22 +2551,18 @@ items:
   - id: B-284
     title: "PoW tie rule: on equal total difficulty core-geth prefers the lower number then random; fukuii keeps its head (strict >)"
     priority: P2
-    status: review
+    status: done
     area: evm
     size: S
     opened: 2026-11-15
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2108]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T20:10:16Z
-      heartbeat: 2026-11-24T21:30:27Z
     notes: |-
-      Recorded by forge at spec 018 C4e; pre-existing on both layouts; a decision, not a defect to fix silently.
       2026-11-24 user 2026-11-24: adopt core-geth's tie rule (equal TD: lower number, then random); consensus protocol, forge first
       2026-11-24 priority P3->P2 by cloud-719c6644: user decided to adopt core-geth's tie rule; consensus change now scheduled
+      2026-11-24 done: merged 0a5f12a06f; forge review x2 (APPROVE after fixes); hive engine 210/210, sync 18/18
   - id: B-285
     title: StorageConsistencyChecker never reads the best block's own entry, and best.intValue wraps past 2^31-1
     priority: P3
