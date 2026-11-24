@@ -3087,7 +3087,10 @@ class RegularSyncSpec
 
         regularSync ! SyncProtocol.Start
 
-        awaitCond(repairNodeWasCalled)
+        // From Start to the repair is the whole chain (fetch, import, missing node, node fetch, repair), which the
+        // testkit's default 3 s did not always cover on a loaded runner (B-352). Nothing here is timed: the wait ends
+        // when the repair is seen, and the bound only stops a hang.
+        awaitCond(repairNodeWasCalled, 30.seconds)
         saveNodeWasCalled shouldBe false
         // The importer must resume the import as soon as the node arrives, not wait out the 30 s ResolvingMissingNode
         // SyncRetryTick (which stays only as a fallback). The bound is far below that tick.
