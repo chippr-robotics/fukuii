@@ -179,11 +179,19 @@ Lane parallelism is safe except in these places:
 - R4 touches import code (`BlockExecution`), so it goes in a forge+beacon review slot.
 - B-213 and B-084 touch 018-owned storage, so coordinate them with the 018 host.
 
-## 4. Decisions for the user
-1. B-151: a Windows BLS holder, or a release note?
-2. B-284: the PoW equal-TD tie rule.
-3. B-210: account reads for held blocks above best.
-4. Wontfix: B-112, B-114, B-115 (or rewrite it), B-202 (after a property test).
-5. B-366: close as met by the manual run?
-6. Spec 022 T063: is the skipped 24 h head-follow subsumed by the 018 C7 gates?
-7. B-023: OK to close #1571 and #1660 on GitHub?
+## 4. Decisions (user, 2026-11-24)
+1. **B-151:** build the Windows BLS backend (not a release note). It needs a holder.
+2. **B-284:** adopt core-geth's tie rule. Raised to P2; a consensus change, forge first.
+3. **B-210:** follow core-geth's answers for a held block above best.
+4. **Wontfix:** B-112, B-114 and B-115 are dropped. B-202 gets a property test, then closes.
+5. **B-366:** closed as met by the manual three-node run.
+6. **Spec 022 T063:** the skipped 24 h head-follow is covered by spec 018's C7 live gates (recorded in 022's header).
+7. **B-023:** close #1571 and #1660 on GitHub.
+
+## 5. Wave 0 record (2026-11-24)
+- **Tracker:** one commit on `tracker`.
+  - Closed as done: B-017, B-091, B-099, B-113, B-156, B-215, B-366.
+  - Dropped: B-335, B-112, B-114, B-115, and the merged losers (B-181 and B-166 into B-180; B-171 and B-172 into B-026; B-278 into B-279; B-416 into B-021; B-286 into B-288; B-143 into B-140; B-387 into B-419).
+  - Rescope and decision notes added. B-049 moved from blocked to open. B-284 raised to P2.
+- **PR #2029:** this plan, the spec 021/022/027 header refresh (B-469), and the B-374 cherry-pick of e1b5790b0's ObservationSpec wait to staging.
+- **Not done in wave 0:** B-404's stale claim (another host's Chocolatey moderation; check it with that host), and ticking spec 027's merged-slice exit boxes, which needs each box's exit criteria checked first.
