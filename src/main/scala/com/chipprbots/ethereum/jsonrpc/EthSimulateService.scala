@@ -1113,23 +1113,20 @@ class EthSimulateService(
             )
           )
         else Right(())
-      // execute: intrinsic gas (state_transition.go:677-682), -38013 (errors.go:141-142)
+      // execute: intrinsic gas (state_transition.go:677-682), -38013 (errors.go:141-142); then, where a calldata floor
+      // is a validity rule (EIP-7623 from Prague, ETC Olympia; EIP-7976 at Amsterdam), the floor: geth's `execute`
+      // refuses a gas limit below it right after the intrinsic check, `ErrFloorDataGas`. txValidationError has no code
+      // of its own for it, so it is -32603 (errors.go default), wrapped as every other pre-check error. Without this a
+      // gas limit between the two reached execution and BlockPreparator's #1438 guard threw IllegalStateException
+      // (B-161). The function and the words are the message-call pre-check's (StxLedger.callPreCheck).
       _ <-
-        val intrinsic = evmConfig.calcTransactionIntrinsicGas(
-          tx.payload,
-          tx.isContractInit,
-          Transaction.accessList(tx),
-          tx match
-            case s: SetCodeTransaction => s.authorizationList.size
-            case _                     => 0
-          ,
-          tx.receivingAddress,
-          UInt256(tx.value),
-          sender
-        )
+        val (intrinsic, floor) = StxLedger.intrinsicAndFloor(tx, sender, header)
         if gas < intrinsic then
           Left(JsonRpcError.SimulateIntrinsicGasTooLow(wrap(s"intrinsic gas too low: have $gas, want $intrinsic")))
-        else Right(())
+        else
+          floor match
+            case Some(f) if gas < f => internal(StxLedger.floorDataGasError(gas, f))
+            case _                  => Right(())
     yield ()
 
   private def executeCalls(

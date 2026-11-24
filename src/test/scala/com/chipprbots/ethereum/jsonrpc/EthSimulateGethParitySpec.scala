@@ -203,6 +203,36 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     new Node().run(payload).isRight shouldBe true
   }
 
+  // ── B-161: the EIP-7623 calldata floor is a pre-check (state_transition.go `execute`, ErrFloorDataGas) ─────────
+
+  /** One call from `From` to `To` with `gas` and 1,000 non-zero calldata bytes: at the Osaka base block the intrinsic
+    * cost is 21,000 + 16 x 1,000 = 37,000 and the EIP-7623 floor 21,000 + 40 x 1,000 = 61,000.
+    */
+  private def floorCall(gas: String): String =
+    s"""{"blockStateCalls":[{"calls":[{"from":"$From","to":"$To","gas":"$gas","input":"0x${"01" * 1000}"}]}]}"""
+
+  it should "refuse a gas limit below the calldata floor before execution, as go-ethereum's ErrFloorDataGas" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // between intrinsic (37,000) and floor (61,000): this reached execution and threw IllegalStateException
+    new Node().error(floorCall("0xc350")) shouldBe
+      ((-32603, "err: insufficient gas for floor data gas cost: have 50000, want 61000 (supplied gas 50000)"))
+    new Node().error(floorCall("0xee47")) shouldBe
+      ((-32603, "err: insufficient gas for floor data gas cost: have 60999, want 61000 (supplied gas 60999)"))
+  }
+
+  it should "still answer the intrinsic-gas check first, below both" taggedAs (UnitTest, RPCTest) in {
+    new Node().error(floorCall("0x7530")) shouldBe
+      ((-38013, "err: intrinsic gas too low: have 30000, want 37000 (supplied gas 30000)"))
+  }
+
+  it should "run a call whose gas limit is the floor exactly, and charge it the floor" taggedAs (UnitTest, RPCTest) in {
+    val (res, _) = new Node().blocks(floorCall("0xee48"))
+    val call = res.blocks.head.calls.head
+    (call.status, call.gasUsed, call.error) shouldBe ((BigInt(1), BigInt(61000), None))
+  }
+
   // ── 1: traceTransfers on a creation (geth's tracer `OnEnter` is given the created address) ──────────────
 
   /** Sender 0x6ac7ea33f8831ea9dcc53393aaa88b25a785dbf0 at nonce 0 / 1 deploys to the widely published addresses. */

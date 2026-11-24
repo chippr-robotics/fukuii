@@ -27,6 +27,7 @@ import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.transactions.TxTypeGate
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.vm.CodeStoreOutOfGas
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ExecutionTracer
@@ -533,7 +534,7 @@ class StxLedger(
         else
           floor match
             case Some(f) if gas < f =>
-              Left(E(s"insufficient gas for floor data gas cost: have $gas, want $f"))
+              Left(E(StxLedger.floorDataGasError(gas, f)))
             case _ => Right(())
       // execute's top-frame transfer check (state_transition.go:765-773): after buyGas has taken the upfront charge,
       // gas * effective price + blob gas * blob base fee, the sender must still cover the value. buyGas reserved at
@@ -556,42 +557,9 @@ class StxLedger(
   def callFloorGas(stx: SignedTransactionWithSender, blockHeader: BlockHeader): Option[BigInt] =
     intrinsicAndFloor(stx, blockHeader)._2
 
-  /** The intrinsic gas of `stx` and, where a calldata floor is a validity rule, the floor; the same functions
-    * [[estimationLowerBound]] and the validator use.
-    */
+  /** [[StxLedger.intrinsicAndFloor]] of `stx`. */
   private def intrinsicAndFloor(stx: SignedTransactionWithSender, blockHeader: BlockHeader): (BigInt, Option[BigInt]) =
-    val number = blockHeader.number.value
-    val timestamp = blockHeader.unixTimestamp
-    val tx = stx.tx.tx
-    val sender = stx.senderAddress
-    val config = EvmConfig.forBlock(number, timestamp, blockchainConfig)
-    val accessList = Transaction.accessList(tx)
-    val authorizations = tx match
-      case sct: SetCodeTransaction => sct.authorizationList.size
-      case _                       => 0
-    val intrinsic = config.calcTransactionIntrinsicGas(
-      tx.payload,
-      tx.isContractInit,
-      accessList,
-      authorizations,
-      tx.receivingAddress,
-      UInt256(tx.value),
-      sender
-    )
-    val floor =
-      if config.amsterdamEnabled then
-        Some(
-          config.calcAmsterdamCalldataFloorGas(tx.payload, accessList, tx.receivingAddress, UInt256(tx.value), sender)
-        )
-      else if BlockPreparator.eip7623Active(number, timestamp) then
-        Some(
-          BlockPreparator.calcFloorDataGas(
-            tx.payload,
-            config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
-          )
-        )
-      else None
-    (intrinsic, floor)
+    StxLedger.intrinsicAndFloor(stx.tx.tx, stx.senderAddress, blockHeader)
 
   def binarySearchGasEstimation(
       stx: SignedTransactionWithSender,
@@ -679,6 +647,51 @@ class StxLedger(
       intrinsic.max(floor)
 
 object StxLedger:
+
+  /** The intrinsic gas of `tx` sent by `sender` in `blockHeader`'s block and, where a calldata floor is a validity rule
+    * (EIP-7623 from Prague / ETC Olympia, EIP-7976 at Amsterdam), the floor; the same functions `estimationLowerBound`
+    * and the validator use. eth_simulateV1's pre-check reads it too, so that it refuses what the message-call pre-check
+    * refuses (B-161).
+    */
+  def intrinsicAndFloor(tx: Transaction, sender: Address, blockHeader: BlockHeader)(implicit
+      blockchainConfig: BlockchainConfig
+  ): (BigInt, Option[BigInt]) =
+    val number = blockHeader.number.value
+    val timestamp = blockHeader.unixTimestamp
+    val config = EvmConfig.forBlock(number, timestamp, blockchainConfig)
+    val accessList = Transaction.accessList(tx)
+    val authorizations = tx match
+      case sct: SetCodeTransaction => sct.authorizationList.size
+      case _                       => 0
+    val intrinsic = config.calcTransactionIntrinsicGas(
+      tx.payload,
+      tx.isContractInit,
+      accessList,
+      authorizations,
+      tx.receivingAddress,
+      UInt256(tx.value),
+      sender
+    )
+    val floor =
+      if config.amsterdamEnabled then
+        Some(
+          config.calcAmsterdamCalldataFloorGas(tx.payload, accessList, tx.receivingAddress, UInt256(tx.value), sender)
+        )
+      else if BlockPreparator.eip7623Active(number, timestamp) then
+        Some(
+          BlockPreparator.calcFloorDataGas(
+            tx.payload,
+            config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
+          )
+        )
+      else None
+    (intrinsic, floor)
+
+  /** go-ethereum `core.ErrFloorDataGas` as `execute` words it: `insufficient gas for floor data gas cost: have %d, want
+    * %d` (core/state_transition.go).
+    */
+  def floorDataGasError(gas: BigInt, floor: BigInt): String =
+    s"insufficient gas for floor data gas cost: have $gas, want $floor"
 
   /** What an RPC message call carries besides its transaction and header (see [[StxLedger.simulateCall]]).
     *
