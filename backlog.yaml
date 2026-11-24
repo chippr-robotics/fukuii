@@ -5107,18 +5107,19 @@ items:
   - id: B-502
     title: StorageRecoveryActor StorageSlotProgress(_) ignores n and adds 1 per message to the downloaded gauge (same shape as B-494)
     priority: P3
-    status: in-progress
+    status: review
     area: sync
     size: S
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2067]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T08:56:39Z
-      heartbeat: 2026-11-24T08:56:43Z
+      heartbeat: 2026-11-24T09:20:12Z
     notes: |-
       Found during B-494; check what n means at the sender before fixing.
       2026-11-24 in-progress: agent clone-e
