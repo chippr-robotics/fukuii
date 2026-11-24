@@ -812,6 +812,11 @@ object SyncController:
           // Buffer for the eventual SNAP startup; idle predates startSnapSync().
           handleBeaconHead(bh, snapSyncOpt = None)
           Behaviors.same
+        // B-441: JSON-RPC, the TUI and MCP are up before Start is sent, so an ask can come first. Answered as syncing,
+        // never NotSyncing: the miner mines on NotSyncing (a lone miner), and must not before the sync has begun.
+        case msg: SyncProtocol.GetStatus =>
+          replySyncing(msg.replyTo)
+          Behaviors.same
         // a controller that was not started gives no state up: said by the watch, and dropped here (beacon)
         case _: SyncProtocol.StateEscalationRequested => Behaviors.same
         case _                                        => Behaviors.unhandled
