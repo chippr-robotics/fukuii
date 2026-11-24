@@ -4326,7 +4326,7 @@ items:
   - id: B-453
     title: "SNAP-peer precondition counts admin_addPeer peers: declared set is read at start only (split from B-386)"
     priority: P3
-    status: claimed
+    status: in-progress
     area: sync
     opened: 2026-11-24
     refs: []
@@ -4336,8 +4336,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:17:53Z
-      heartbeat: 2026-11-24T03:17:53Z
-    notes: NodeBuilder.snapPeerPrecondition builds PathLiveSync.SnapPeerPrecondition.declared once from static-nodes.json + snap-server-peers. Runtime admin_addPeer peers (PeerManagerActor maintained set; PeerEventBus MaintainedPeersChanged event, see PeersClient) are not counted in SnapPeerCount.declaredSnapCapable, which only feeds the [SNAP-PEERS] log line and does not change the verdict. Needs a SyncController subscription/adapter or a supplier on the port; log-only effect, so low value.
+      heartbeat: 2026-11-24T03:27:46Z
+    notes: |-
+      NodeBuilder.snapPeerPrecondition builds PathLiveSync.SnapPeerPrecondition.declared once from static-nodes.json + snap-server-peers. Runtime admin_addPeer peers (PeerManagerActor maintained set; PeerEventBus MaintainedPeersChanged event, see PeersClient) are not counted in SnapPeerCount.declaredSnapCapable, which only feeds the [SNAP-PEERS] log line and does not change the verdict. Needs a SyncController subscription/adapter or a supplier on the port; log-only effect, so low value.
+      2026-11-24 in-progress: clone-e lane, branch fix/b453-snap-peer-precondition
   - id: B-454
     title: Block import writes a block's deployed code in its own write just before the state batch (B-230); move it into the commitWith batch, vault to review
     priority: P3
