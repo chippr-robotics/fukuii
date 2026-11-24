@@ -249,7 +249,10 @@ class EthInfoService(
       ft.osakaTimestamp,
       ft.bpo1Timestamp,
       ft.bpo2Timestamp,
-      ft.amsterdamTimestamp
+      ft.amsterdamTimestamp,
+      ft.bpo3Timestamp,
+      ft.bpo4Timestamp,
+      ft.bpo5Timestamp
     ).flatten.distinct.sorted
 
     val head = headTimestamp
