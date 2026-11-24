@@ -5143,3 +5143,14 @@ items:
     links:
       spec: 018
     notes: "beacon W1 on B-088 (#PR). Take the restore path when !selectedByWeight && (maybeError.nonEmpty || stateFault.isDefined || !leadsToDesignatedHead). Test: invalid block after a valid prefix with txs."
+  - id: B-506
+    title: settleHead designated-head arm deletes index entries above the tip only up to the old best; sweep upward like canonicalHeadUpdate
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "beacon W2 on B-088: newPayload rows above best survive (no stale lookups; storeBlock writes none). Designated-head arm only; forge to confirm before the ETC weight arm. Also tests: side-block lookups re-pointed on the designated arm; re-presented canonical prefix keeps lookups; heldBlockIndex/reconciliation specs."
