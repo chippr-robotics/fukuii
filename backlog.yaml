@@ -5058,12 +5058,17 @@ items:
   - id: B-497
     title: "Flaky: PendingTransactionsManagerSpec 'should override transactions with the same sender and nonce' failed once locally, passed on rerun"
     priority: P3
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-24
     refs: []
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T11:07:21Z
+      heartbeat: 2026-11-24T11:07:21Z
     notes: Seen 2026-11-24 during B-253 (pool actor unchanged). Find the timing assumption; no Thread.sleep fixes.
   - id: B-498
     title: Test-only head moves (TestService:432, TestingService:207) don't reset the tx pool through TxPoolReset (B-253)
