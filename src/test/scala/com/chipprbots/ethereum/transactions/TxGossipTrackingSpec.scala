@@ -238,3 +238,17 @@ class TxGossipTrackingSpec extends AnyFlatSpec with Matchers:
     ann.schedule(peerB) shouldBe Seq(h(2))
     ann.size shouldBe 1
   }
+
+  it should "keep a peer busy, with nothing left in its request, when its hashes are forgotten before it answers" taggedAs UnitTest in {
+    val clock = new Clock
+    val ann = new PendingAnnouncements(1000, 1.minute, 5.seconds, clock.fn)
+    ann.announce(h(1), 2.toByte, BigInt(100), peerA)
+    ann.schedule(peerA) shouldBe Seq(h(1))
+    clock.now = 61.seconds.toMillis
+    ann.announce(h(2), 2.toByte, BigInt(100), peerA) // sweeps 1 out by age
+    ann.size shouldBe 1
+    ann.schedule(peerA) shouldBe empty // still one request in flight
+    ann.delivered(peerA, Nil) shouldBe Seq(peerA) // its answer frees it, and gives up nothing
+    ann.get(h(2), peerA) should not be empty
+    ann.schedule(peerA) shouldBe Seq(h(2))
+  }
