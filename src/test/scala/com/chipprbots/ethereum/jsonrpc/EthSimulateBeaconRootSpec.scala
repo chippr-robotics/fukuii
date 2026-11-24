@@ -320,3 +320,48 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
       new Node(baseTimestamp = 1000, etcConfig(olympia = 31)).simulate(time = 1012, None, validation = true).head
     block.header.extraFields shouldBe HefEmpty
   }
+
+  // ── ETH London (B-519): the base fee at the fork's activation block ─────────
+
+  /** An ETH chain before Shanghai (no fork timestamps) whose London (`olympiaBlockNumber`) activates at `london`. */
+  private def ethLondonConfig(london: BigInt): BlockchainConfig =
+    preAmsterdamConfig
+      .copy(forkTimestamps = ForkTimestamps())
+      .withUpdatedForkBlocks(_.copy(olympiaBlockNumber = london))
+
+  // EIP-1559: London is a block-number fork, so its activation block carries a base fee although its parent has none.
+  // go-ethereum's simulator (makeHeaders) takes it from eip1559.CalcBaseFee, which gives params.InitialBaseFee (1 gwei)
+  // when the parent is not London; import's validateBaseFee takes it from BaseFeeCalculator.calcBaseFee, the same
+  // value. The simulation took the shape from the parent and the value from an inline copy, which gave zero.
+  "eth_simulateV1 on ETH" should "give the London activation block import's base fee (1 gwei), and the next block the EIP-1559 update" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val config = ethLondonConfig(london = 30)
+    val node = new Node(baseTimestamp = 1000, config)
+    node.baseHeader.baseFee shouldBe None
+    val blocks = node.simulate(time = 1024, None, number = Some(31), validation = true)
+    blocks.map(_.header.number.value) shouldBe Seq(BigInt(30), BigInt(31))
+    val activation = blocks.head.header
+    activation.extraFields shouldBe a[HefPostOlympia]
+    activation.baseFee shouldBe Some(BigInt(1_000_000_000))
+    activation.baseFee shouldBe Some(BaseFeeCalculator.calcBaseFee(node.baseHeader, config))
+    // block 30 used no gas: the base fee falls by 1/8 (ETH's floor is zero)
+    val next = blocks(1).header
+    next.baseFee shouldBe Some(BigInt(1_000_000_000) - BigInt(1_000_000_000) / 8)
+    next.baseFee shouldBe Some(BaseFeeCalculator.calcBaseFee(activation, config))
+  }
+
+  it should "give the London activation block a zero base fee without validation, as go-ethereum's simulator does" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val block = new Node(baseTimestamp = 1000, ethLondonConfig(london = 30)).simulate(time = 1012, None).head
+    block.header.extraFields shouldBe HefPostOlympia(BigInt(0))
+  }
+
+  it should "keep an ETH block before London without a base fee" taggedAs (UnitTest, RPCTest) in {
+    val block =
+      new Node(baseTimestamp = 1000, ethLondonConfig(london = 31)).simulate(time = 1012, None, validation = true).head
+    block.header.extraFields shouldBe HefEmpty
+  }
