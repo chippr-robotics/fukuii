@@ -3920,12 +3920,18 @@ items:
   - id: B-417
     title: "CI: scalafix-cli fetch fails transiently (Failed to fetch scalafix-cli_3.9.0:0.14.9) and fails Test and Build; cache it or retry"
     priority: P3
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-21
     refs: []
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T04:27:45Z
+      heartbeat: 2026-11-24T04:27:45Z
+      branch: fix/b417-ci-fetch-retry
     notes: "Seen on #1948 (2026-11-19) and #1978 (2026-11-21): the artifact exists on Maven Central; the coursier cache miss plus a transient fetch error fail formatCheck before tests. Options: include the scalafix-cli artifacts in the actions/cache key/path, prefetch with a retry step, or set coursier retry env (COURSIER_RETRY / sbt csrConfiguration)."
   - id: B-418
     title: "CVE-2026-114938 (Java4Shell): pin Temurin 25.0.5.1, disable Base64 decode intrinsic, no pre-auth Base64 decode in Engine API JWT / DNS discovery"
