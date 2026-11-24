@@ -432,9 +432,7 @@ trait ConsensusBuilder:
   lazy val chainImporter: ChainImporter =
     new ChainImporter(
       blockchainReader,
-      blockchainWriter,
       blockExecution,
-      blockValidation,
       Some((block: Block, config: BlockchainConfig) =>
         consensusAdapter.evaluateBranchBlock(block)(using IORuntime.global, config)
       )
@@ -1557,14 +1555,20 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
             forkChoiceManagerForSync.foreach(_.clear())
             // the refusals counted so far are of the state that is gone: the count begins again with the sync
             escalationWatch.foreach(_.stateCleared())
-          stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          // B-465: refused, with nothing written, while an adoption holds the records; asked for again after a while.
+          // Looked at before the recoveries are reset, so that a refused clear leaves them as they were (vault)
+          SyncController.StateEscalationPort.notClearedWhenRefused(pathState.recordsHeld, escalationLog.warn(_)) {
+            stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          }
         def escalated(kind: EscalationKind): Unit = StateMetrics.escalated(kind)
         def regularSyncStarted(): Unit = handler.reset()
         def clearRefused(): Unit = handler.clearRefused(System.currentTimeMillis())
         def clearForBranchRetry(): Boolean =
           def clearNow(): Unit =
             val _ = pathState.clearForBranchRetry(blockchainReader.genesisHeader.hash.value, System.currentTimeMillis())
-          stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          SyncController.StateEscalationPort.notClearedWhenRefused(pathState.recordsHeld, escalationLog.warn(_)) {
+            stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          }
     }
 
   /** A sync on the unified layout (spec 018 C5a part 10): the hand-off each SNAP sync ends with, over the rows SNAP
@@ -1614,12 +1618,24 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
       )
     }
 
+  /** The peers the peer manager maintains, kept from the peer event bus for the snap-peer precondition (B-453). */
+  private lazy val maintainedPeerIds: com.chipprbots.ethereum.network.MaintainedPeerIds =
+    val ids = new com.chipprbots.ethereum.network.MaintainedPeerIds
+    classicSystem.spawn(
+      com.chipprbots.ethereum.network.MaintainedPeerIds.behavior(ids, peerEventBus),
+      "maintained-peer-ids"
+    ): Unit
+    ids
+
   /** What the snap-peer precondition at SNAP's start counts against on the unified layout (spec 018 C6): the shipped
     * `min-snap-peers` and `pow-snap-peer-wait`, and the node ids of the peers the operator declared, in
-    * `static-nodes.json` and `sync.snap-sync.snap-server-peers`. A peer added later over admin RPC is not among them.
+    * `static-nodes.json` and `sync.snap-sync.snap-server-peers` (read here, once), and over `admin_addPeer` (the peer
+    * manager's maintained set, read at each count; B-453).
     */
   private def snapPeerPrecondition: com.chipprbots.ethereum.blockchain.sync.PathLiveSync.SnapPeerPrecondition =
     import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
+    // subscribed now, with the port, not at the first count
+    val added = maintainedPeerIds
     val snapConfig = scala.util
       .Try(SNAPSyncConfig.fromConfig(com.chipprbots.ethereum.utils.Config.config.getConfig("sync")))
       .getOrElse(SNAPSyncConfig())
@@ -1636,7 +1652,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
     com.chipprbots.ethereum.blockchain.sync.PathLiveSync.SnapPeerPrecondition(
       snapConfig.minSnapPeers,
       snapConfig.powSnapPeerWait,
-      declared.filter(_.nonEmpty).toSet
+      declared.filter(_.nonEmpty).toSet,
+      added = () => added.current
     )
 
   lazy val syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command] =

@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranchPartiall
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockAccessList
+import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.ledger.BlockData
@@ -534,6 +535,82 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
           imported.map(_.block) shouldBe invalid.take(1)
           failing shouldBe invalid(1).hash.value
           toEnqueue shouldBe Nil
+          Consensus.isLocalStateFault(error) shouldBe false
+        case other => fail(s"expected ExtendedCurrentBestBranchPartially, got $other")
+      }
+    }
+
+  // B-450 (forge on B-336): on the unified layout a trie error is this node's own state's, never the block's, as the
+  // adoption of a branch (`settleOnLayers`) and the commit in place at the cap read it. An extension of the head that
+  // meets one answers it as the fault it is, so that the escalation's feed is told of the blocks not judged at once.
+  // What became the head is the same as on the hash layout: the prefix; and no block is reported invalid.
+  it should "answer a trie error that is not a missing node as a fault of this node's state when extending the head, on the unified layout" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    var reported: List[ByteString] = Nil
+    val reporter: com.chipprbots.ethereum.consensus.engine.InvalidChainReporter =
+      (blockHash: ByteString, _: ByteString) => reported ::= blockHash
+    val stores = storagesInstance.storages
+    // the node's stores, read as the unified layout reads them: only the layout is asked of the reader here
+    val unified: BlockchainReader = new BlockchainReader(
+      stores.blockHeadersStorage,
+      stores.blockBodiesStorage,
+      stores.blockNumberMappingStorage,
+      stores.stateStorage,
+      stores.receiptStorage,
+      stores.appStateStorage,
+      stores.chainWeightStorage,
+      stores.blockAccessListStorage
+    ):
+      override def holdsStateInPlace: Boolean = true
+    val onPositions = new ConsensusImpl(unified, blockchainWriter, blockExecution, Some(reporter), None)
+
+    val partly: List[Block] = BlockHelpers.generateChain(4, initialBestBlock)
+    setFailingBlockWith(partly(1), localStateFault)
+    whenReady(onPositions.evaluateBranch(NonEmptyList.fromListUnsafe(partly)).unsafeToFuture()) {
+      case ConsensusStateFault(fault, imported, toEnqueue) =>
+        fault shouldBe a[com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable]
+        fault.getMessage should include("Invalid Node")
+        imported.map(_.block) shouldBe partly.take(1)
+        toEnqueue shouldBe partly.drop(1)
+      case other => fail(s"expected ConsensusStateFault, got $other")
+    }
+    // (the head is not read here: on the unified layout each block's commit moves it, and this rig's execution is a
+    // stub that moves nothing, so every branch below extends the same head; what is answered is what changed)
+
+    withClue("a fault at the first block hands the whole branch back: ") {
+      val first: List[Block] = BlockHelpers.generateChain(2, initialBestBlock)
+      setFailingBlockWith(first.head, localStateFault)
+      whenReady(onPositions.evaluateBranch(NonEmptyList.fromListUnsafe(first)).unsafeToFuture()) {
+        case ConsensusStateFault(
+              _: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable,
+              imported,
+              toEnqueue
+            ) =>
+          imported shouldBe Nil
+          toEnqueue shouldBe first
+        case other => fail(s"expected ConsensusStateFault, got $other")
+      }
+    }
+
+    withClue("a missing node is still fetched or escalated as the adapter decides (C5a part 10, C5b): ") {
+      val missing: List[Block] = BlockHelpers.generateChain(2, initialBestBlock)
+      setFailingBlockWith(missing.head, MPTError(new MissingNodeException(missing.head.hash.value)))
+      whenReady(onPositions.evaluateBranch(NonEmptyList.fromListUnsafe(missing)).unsafeToFuture()) {
+        case _: ConsensusErrorDueToMissingNode => ()
+        case other                             => fail(s"expected ConsensusErrorDueToMissingNode, got $other")
+      }
+    }
+
+    withClue("no block of this node's faults is reported invalid: ")(reported shouldBe Nil)
+
+    withClue("a block's own error is still the block's: ") {
+      val invalid: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
+      setFailingBlockWith(invalid(1), ValidationAfterExecError("Block has invalid state root"))
+      whenReady(onPositions.evaluateBranch(NonEmptyList.fromListUnsafe(invalid)).unsafeToFuture()) {
+        case ExtendedCurrentBestBranchPartially(_, BranchExecutionFailure(Nil, failing, error)) =>
+          failing shouldBe invalid(1).hash.value
           Consensus.isLocalStateFault(error) shouldBe false
         case other => fail(s"expected ExtendedCurrentBestBranchPartially, got $other")
       }
