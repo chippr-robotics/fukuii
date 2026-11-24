@@ -3942,11 +3942,11 @@ items:
       by: cloud-dc960fdc
       agent: general-b426
       since: 2026-11-23T22:18:01Z
-      heartbeat: 2026-11-23T22:32:47Z
+      heartbeat: 2026-11-24T00:05:27Z
     notes: |-
-      Seen by dev-node in EG-6 (2026-11-22). Find which shutdown step exceeds 15 s; exit 143 is not a clean stop.
       2026-11-23 review: Merge after vault review (write order).
       2026-11-23 review: vault: CHANGES — CAS losers in BaseNode.shutdown must wait for the first stop (see scratchpad b426-vault-fix.md); fix queued for next free clone.
+      2026-11-24 review: vault fix + format pushed (ee45340c5).
   - id: B-427
     title: Audit MetricsContainer holders touched before Metrics.configure (same lazy-val-binds-default-registry bug as B-400/B-425)
     priority: P2
