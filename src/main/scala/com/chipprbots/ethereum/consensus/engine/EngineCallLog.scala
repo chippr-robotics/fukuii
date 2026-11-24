@@ -85,7 +85,10 @@ final class EngineCallLog(clock: () => Long = () => System.currentTimeMillis(), 
   import EngineCallLog.*
 
   private val ring = new AtomicReferenceArray[EngineCallRecord](Capacity)
+  // Places taken in the ring, and calls whose record is in its place: the second is what `total` reports, so that a
+  // reader who sees a call counted finds it kept (B-508).
   private val written = new AtomicLong(0L)
+  private val published = new AtomicLong(0L)
   private val identity = new AtomicReference[ClIdentity](null)
   private val capabilities = new AtomicLong(-1L)
   private val authFailures = new AtomicLongArray(AuthFailure.values.length)
@@ -108,8 +111,8 @@ final class EngineCallLog(clock: () => Long = () => System.currentTimeMillis(), 
         val response = answer.toOption
         val status = response.flatMap(statusOf(name, _)).orElse(Option.when(answer.isFailure)("failed"))
         val block = blockNumberOf(name, request, response)
-        // The CL's identity and capability count are recorded before the call is counted (B-423): a reader that sees
-        // the new total then sees them too. Counted first, a snapshot could show the call without them.
+        // The identity and the capability count are set before the call is counted, and the call is counted after its
+        // record is in place: a reader that sees the new total sees all three (B-423, B-508).
         if response.exists(_.error.isEmpty) then
           if name == "engine_getClientVersionV1" then identityOf(request).foreach(identity.set)
           else if name == "engine_exchangeCapabilities" then
@@ -132,6 +135,9 @@ final class EngineCallLog(clock: () => Long = () => System.currentTimeMillis(), 
     // Each writer takes its own place: two calls ending at once lose neither.
     val at = written.getAndIncrement()
     ring.set((at % Capacity).toInt, record)
+    // Counted only once the record is in its place (`set` is a volatile write): a reader that reads `published`
+    // and then the ring finds the record.
+    published.incrementAndGet()
 
   /** The JWT check refused a request. */
   def authFailed(reason: AuthFailure): Unit =
@@ -157,9 +163,11 @@ final class EngineCallLog(clock: () => Long = () => System.currentTimeMillis(), 
     * or stand where an older one stood; none is ever half-written.
     */
   def snapshot: Snapshot =
-    val total = written.get()
-    val kept = Math.min(total, Capacity.toLong).toInt
-    val calls = Vector.tabulate(kept)(i => ring.get(((total - kept + i) % Capacity).toInt)).filter(_ != null)
+    // `published` first, then the places taken: every call counted in `total` has its record in a place `taken` covers.
+    val total = published.get()
+    val taken = written.get()
+    val kept = Math.min(taken, Capacity.toLong).toInt
+    val calls = Vector.tabulate(kept)(i => ring.get(((taken - kept + i) % Capacity).toInt)).filter(_ != null)
     Snapshot(
       calls = calls.sortBy(_.atMs),
       total = total,
