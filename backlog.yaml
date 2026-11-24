@@ -980,19 +980,14 @@ items:
   - id: B-093
     title: admin_peers shows placeholder names; admin_nodeInfo timed out
     priority: P3
-    status: review
+    status: done
     area: rpc
     size: S
     opened: 2026-11-07
+    closed: 2026-11-24
     refs: [handoff §3]
     links:
       prs: [2078]
-    claim:
-      by: cloud-719c6644
-      agent: conduit
-      since: 2026-11-24T11:48:46Z
-      heartbeat: 2026-11-24T13:09:36Z
-      branch: fix/b025-rpc-error-status-codes
     notes: |-
       Unverified dev-node item (handoff section 3): check it still applies before starting.
       2026-11-24 rescoped: nodeInfo no longer asks an actor (IO.pure); left: admin_peers placeholder names (AdminService ~:373)
