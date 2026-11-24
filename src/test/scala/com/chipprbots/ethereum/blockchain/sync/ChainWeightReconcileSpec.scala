@@ -514,6 +514,160 @@ class ChainWeightReconcileSpec extends AnyFlatSpec with Matchers:
     appState.hasChainWeightInvariant() shouldBe false
     Metrics.waitingPolls shouldBe 0d
 
+  /** Every event of the pass's logger, DEBUG and up, handed to `onEvent` while `body` runs. */
+  private def watching[A](onEvent: ILoggingEvent => Unit)(body: => A): A =
+    val logger: Logger = org.slf4j.LoggerFactory.getLogger(LoggerName).asInstanceOf[Logger]
+    val appender: AppenderBase[ILoggingEvent] =
+      new AppenderBase[ILoggingEvent]:
+        override def append(event: ILoggingEvent): Unit = onEvent(event)
+    appender.start()
+    val level = logger.getLevel
+    logger.setLevel(ch.qos.logback.classic.Level.DEBUG)
+    logger.addAppender(appender)
+    try body
+    finally
+      logger.detachAppender(appender)
+      logger.setLevel(level)
+
+  private def isWarn(event: ILoggingEvent): Boolean = event.getLevel == ch.qos.logback.classic.Level.WARN
+
+  /** Genesis to 120: 0..40 and 81..120 with their number entries, 41..80 by their hashes only; weights off by 5 from
+    * block 50.
+    */
+  private def gapped(c: Chain): (Vector[BlockHeader], Vector[Option[BigInt]]) =
+    val chain = Genesis +: headers(Genesis, 120)
+    val weights = exact(chain).zipWithIndex.map((w, n) => Some(if n >= 50 then w + 5 else w))
+    c.put(chain.take(41), weights.take(41))
+    chain.slice(41, 81).zip(weights.slice(41, 81)).foreach { (h, w) =>
+      c.blockchainWriter.storeBlockHeaderByHashOnly(h).commit()
+      w.foreach(td => c.blockchainWriter.storeChainWeight(h.hash, ChainWeight.totalDifficultyOnly(td)).commit())
+    }
+    c.put(chain.drop(81), weights.drop(81))
+    (chain, weights)
+
+  /** `h` as another block stored under `h`'s hash: same height and parent, another difficulty. */
+  private def misStored(c: Chain, h: BlockHeader): Unit =
+    c.storagesInstance.storages.blockHeadersStorage
+      .put(h.hash.value, h.copy(difficulty = Difficulty(h.difficulty.value + 1000)))
+      .commit()
+
+  it should "wait, and WARN again every warnEveryPolls checks, where the parent links do not lead to its cursor (B-121)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Chain:
+    // the index names A up to 40; the best block is on B, which forks from A at 30 and has no number entries 31..60
+    val a: Vector[BlockHeader] = Genesis +: headers(Genesis, 40)
+    put(a, exact(a).map(Some(_)))
+    val b: Vector[BlockHeader] = headers(a(30), 90, salt = 1)
+    b.take(30).foreach(h => blockchainWriter.storeBlockHeaderByHashOnly(h).commit())
+    put(b.drop(30), b.drop(30).map(_ => Some(BigInt(1))))
+    val warnings = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    val twice = new CountDownLatch(2)
+    val epoch = new Epoch
+    watching { event =>
+      if isWarn(event) then
+        warnings.add(event.getFormattedMessage)
+        twice.countDown()
+    } {
+      val fiber: FiberIO[Outcome] = ChainWeightReconcile
+        .run(engine(Small.copy(warnAfterPolls = 2, warnEveryPolls = 3)), ImportLock(), epoch, epoch.current, appState)
+        .start
+        .unsafeRunSync()
+      try twice.await(20, TimeUnit.SECONDS) shouldBe true
+      finally fiber.cancel.unsafeRunSync()
+    }
+    warnings.toArray(Array.empty[String]).toSeq.take(2).foreach { w =>
+      w should include("waiting at block 41:")
+      w should include("do not lead to it (at 40)")
+    }
+    b.drop(30).map(h => blockchainReader.getChainWeightByHash(h.hash).map(_.totalDifficulty.value)) shouldBe
+      b.drop(30).map(_ => Some(BigInt(1)))
+    appState.hasChainWeightInvariant() shouldBe false
+
+  it should "take no header that does not hash to the key it was read by, write nothing from it, and wait (B-121)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Chain:
+    val (chain, weights) = gapped(this)
+    misStored(this, chain(70))
+    val warned = new CountDownLatch(1)
+    val warning = new AtomicReference[String]("")
+    val epoch = new Epoch
+    watching { event =>
+      if isWarn(event) then
+        warning.compareAndSet("", event.getFormattedMessage)
+        warned.countDown()
+    } {
+      val fiber: FiberIO[Outcome] = ChainWeightReconcile
+        .run(engine(Small.copy(warnAfterPolls = 2)), ImportLock(), epoch, epoch.current, appState)
+        .start
+        .unsafeRunSync()
+      try warned.await(20, TimeUnit.SECONDS) shouldBe true
+      finally fiber.cancel.unsafeRunSync()
+    }
+    warning.get should include("waiting at block 41:")
+    warning.get should include("the hash of block 70")
+    warning.get should include("another block's")
+    // the walk that sums stopped at 70, so the one that writes never ran: every weight as it was
+    stored(chain) shouldBe weights
+    appState.hasChainWeightInvariant() shouldBe false
+
+  it should "wait, not walk again at once, when a header goes bad between its two walks, and write nothing below it (B-121)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Chain:
+    val (chain, weights) = gapped(this)
+    val corrupted = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val restored = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val below = new AtomicReference[Option[BigInt]](None)
+    // after the first chunk the second walk writes (120..111), block 60's header is replaced by another block's
+    val settings: Settings =
+      Small.copy(
+        writeChunk = 10,
+        afterChunk = () => if corrupted.compareAndSet(false, true) then misStored(this, chain(60))
+      )
+    val epoch = new Epoch
+    val outcome: Outcome = watching { event =>
+      val m = event.getFormattedMessage
+      // the wait the break leads to (a hot retry says nothing of the kind): the weight below the bad header is read, and
+      // the header put back, so that the next check finishes
+      if m.contains("waiting at block 41:") && m.contains("broke at block 60") && restored.compareAndSet(false, true)
+      then
+        below.set(blockchainReader.getChainWeightByHash(chain(59).hash).map(_.totalDifficulty.value))
+        blockchainWriter.storeBlockHeaderByHashOnly(chain(60)).commit()
+    } {
+      ChainWeightReconcile
+        .run(engine(settings), ImportLock(), epoch, epoch.current, appState)
+        .timeout(20.seconds)
+        .unsafeRunSync()
+    }
+    outcome shouldBe a[Outcome.Done]
+    restored.get shouldBe true
+    below.get shouldBe weights(59)
+    stored(chain) shouldBe exact(chain).map(Some(_))
+    appState.hasChainWeightInvariant() shouldBe true
+
+  it should "commit each chunk of the walk that writes under the chain insert lock, shared (B-121)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Chain:
+    val (chain, _) = gapped(this)
+    val td: Vector[BigInt] = exact(chain)
+    val committed = new CountDownLatch(1)
+    val e: Engine = engine(Small.copy(writeChunk = 10, afterChunk = () => committed.countDown()))
+    val p: Progress = e.load().copy(cursor = Position(40, chain(40).hash.value, td(40)))
+    val result = new AtomicReference[Option[Descended]](None)
+    val writer = new Thread(() => result.set(Some(e.descendStep(p, Position(120, chain(120).hash.value, td(120))))))
+    val duringHold: Boolean = ChainInsertLock.exclusive {
+      writer.start()
+      // a bounded wait for what must NOT happen: a commit while an operator import holds the lock exclusively
+      committed.await(2, TimeUnit.SECONDS)
+    }
+    writer.join(10000)
+    duringHold shouldBe false
+    committed.getCount shouldBe 0
+    result.get shouldBe a[Some[?]]
+
   "ChainWeightReconcile.Progress" should "survive its encoding" taggedAs (UnitTest, SyncTest) in {
     val base = Position(BigInt(199), ByteString(Array.fill(32)(7.toByte)), BigInt("123456789012345"))
     val p = Progress(

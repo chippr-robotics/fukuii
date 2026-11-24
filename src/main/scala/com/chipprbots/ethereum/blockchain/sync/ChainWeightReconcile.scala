@@ -48,8 +48,11 @@ import com.chipprbots.ethereum.utils.Hex
   * its pivot never gets them. At such a height the pass walks the parent links down from the best block to its cursor
   * ([[Bridge]]): first the difficulties, for the best block's exact weight, then down again, writing each weight that
   * differs. Its cursor is then the best block. Where the walk finds a header not stored (chain download off: none below
-  * the pivot), it waits, and resumes the walk there at the next check. A wait that lasts `warnAfterPolls` checks is
-  * said once, with a WARN, and the `waiting.polls` gauge counts the checks.
+  * the pivot), it waits, and resumes the walk there at the next check. A header read by a hash is taken only if it
+  * hashes to it. A walk that cannot go on (a header not stored, one stored under another block's hash, links that do
+  * not lead to the cursor, a header gone between the two walks) waits as a height with no header does: it sleeps, and
+  * each check counts. A wait that lasts `warnAfterPolls` checks is said with a WARN, again every `warnEveryPolls`
+  * checks after, and the `waiting.polls` gauge counts the checks.
   *
   * '''Repair''', without any lock: each run is re-derived from its base and the headers, bottom-up, one chunk of
   * `writeChunk` weights at a time, paced like the scan. A block's exact weight depends only on its ancestry, so the
@@ -152,13 +155,18 @@ object ChainWeightReconcile:
     /** The walk reached the cursor's height on another block, or a header not at its height. */
     case Unlinked(at: BigInt)
 
+    /** The header stored under the hash of the block at `at` is not that block's: it hashes to something else. */
+    case Mismatched(at: BigInt)
+
   /** What one step of the second walk down, the one that writes, did. */
   enum Descended:
     case More(at: Position, written: Long)
     case Done(written: Long)
 
-    /** A header it read on the first walk is gone, or the walk did not end on the cursor. */
-    case Broken(at: BigInt, written: Long)
+    /** At `at` a header it read on the first walk is gone, or not that block's (`why`), or the walk did not end on the
+      * cursor. Nothing is written from that header or below it.
+      */
+    case Broken(at: BigInt, written: Long, why: String)
 
   /** Why a height cannot be checked: the index names nothing there. */
   val NoIndexEntry: String = "no canonical hash stored at this height"
@@ -224,6 +232,8 @@ object ChainWeightReconcile:
       waitRetry: FiniteDuration = 10.minutes,
       // A wait at one height said with a WARN once it has lasted this many checks (B-121).
       warnAfterPolls: Int = 6,
+      // ...and again every this many checks after (144: a day at the default `waitRetry`).
+      warnEveryPolls: Int = 144,
       // Test seams: just before the import lock is requested; inside both locks, before the tail is checked; after
       // each repair chunk is committed.
       beforeLock: IO[Unit] = IO.unit,
@@ -423,6 +433,7 @@ object ChainWeightReconcile:
         else
           reader.getBlockHeadersByHashesNoFill(Seq(at.next)).headOption.flatten match
             case None                                       => result = Some(Walked.Stuck(at))
+            case Some(h) if h.hash.value != at.next         => result = Some(Walked.Mismatched(at.nextNumber))
             case Some(h) if h.number.value != at.nextNumber => result = Some(Walked.Unlinked(at.nextNumber))
             case Some(h) =>
               at = at.copy(next = h.parentHash.value, nextNumber = at.nextNumber - 1, sum = at.sum + h.difficulty.value)
@@ -430,17 +441,25 @@ object ChainWeightReconcile:
       result.get
 
     /** One step of the second walk down, from `from` (its exact weight known) to the cursor: up to `batchSize` headers,
-      * and the weights there that differ written in one update. With no lock: each value depends only on the block's
-      * ancestry.
+      * and the weights there that differ written in one update. Each value depends only on the block's ancestry; the
+      * update is committed under the chain insert lock (shared), as import writes a weight, so it never lands inside an
+      * operator chain import's block (exclusive).
       */
     def descendStep(p: Progress, from: Position): Descended =
       var at = from
       var pending = Vector.empty[(BlockHash, ChainWeight)]
-      var broken = false
+      var broken: Option[String] = None
       var left = settings.batchSize.max(1)
-      while !broken && at.number > p.cursor.number && left > 0 && pending.size < settings.writeChunk do
+      while broken.isEmpty && at.number > p.cursor.number && left > 0 && pending.size < settings.writeChunk do
         reader.getBlockHeadersByHashesNoFill(Seq(at.hash)).headOption.flatten match
-          case Some(h) if h.number.value == at.number =>
+          case None => broken = Some("its header is no longer stored")
+          // a header is taken only if it hashes to the key it was read by: its parent link and difficulty are what the
+          // weights below are derived from
+          case Some(h) if h.hash.value != at.hash =>
+            broken = Some("the header stored under its hash is another block's")
+          case Some(h) if h.number.value != at.number =>
+            broken = Some(s"the header stored under its hash is at height ${h.number.value}")
+          case Some(h) =>
             if !reader
                 .getChainWeightsByHashesNoFill(Seq(at.hash))
                 .headOption
@@ -450,15 +469,16 @@ object ChainWeightReconcile:
             then pending :+= BlockHash(at.hash) -> ChainWeight.totalDifficultyOnly(at.td)
             at = Position(at.number - 1, h.parentHash.value, at.td - h.difficulty.value)
             left -= 1
-          case _ => broken = true
       if pending.nonEmpty then
-        writer.storeChainWeights(pending).commit()
+        ChainInsertLock.shared(writer.storeChainWeights(pending).commit())
         settings.afterChunk()
       val done = at.number <= p.cursor.number
-      if broken || (done && p.cursor.number >= 0 && (at.hash != p.cursor.hash || at.td != p.cursor.td)) then
-        Descended.Broken(at.number, pending.size.toLong)
-      else if done then Descended.Done(pending.size.toLong)
-      else Descended.More(at, pending.size.toLong)
+      broken match
+        case Some(why) => Descended.Broken(at.number, pending.size.toLong, why)
+        case None if done && p.cursor.number >= 0 && (at.hash != p.cursor.hash || at.td != p.cursor.td) =>
+          Descended.Broken(at.number, pending.size.toLong, "the walk did not end on the cursor")
+        case None if done => Descended.Done(pending.size.toLong)
+        case None         => Descended.More(at, pending.size.toLong)
 
     /** Where the repair of `p` starts, if it has runs. */
     def repairStart(p: Progress): Option[RepairPlace] =
@@ -756,7 +776,7 @@ object ChainWeightReconcile:
                 s"[CW-RECONCILE] blocks ${p.cursor.number + 1}..${top.number}: the index names no block at $at; " +
                   s"checking them along the parent links down from block ${top.number}"
               )
-            ) >> descend(p, top, top, batch, t)
+            ) >> descend(p, top, top, batch, at, reason, t, before)
           case (Walked.Stuck(stuck), _) =>
             val why = s"$reason, and the walk down the parent links from block ${stuck.top.number} stops at block " +
               s"${stuck.nextNumber}, whose header is not stored"
@@ -771,15 +791,39 @@ object ChainWeightReconcile:
               before,
               None
             )
+          case (Walked.Mismatched(n), _) =>
+            waitAt(
+              p,
+              batch,
+              at,
+              s"$reason, and the header stored under the hash of block $n on the walk down the parent links is another " +
+                "block's (it hashes to something else)",
+              t,
+              before,
+              None
+            )
         }
 
-    def descend(p: Progress, top: Position, from: Position, batch: Int, t: Totals): IO[Outcome] =
+    /** The second walk down, from `top` to the cursor; `at`, `reason` and `before` are the wait it began from. */
+    def descend(
+        p: Progress,
+        top: Position,
+        from: Position,
+        batch: Int,
+        at: BigInt,
+        reason: String,
+        t: Totals,
+        before: Option[Wait]
+    ): IO[Outcome] =
       if !isCurrent then IO.pure(Outcome.Superseded)
       else
         timed(engine.descendStep(p, from)).flatMap {
           case (Descended.More(next, written), nanos) =>
-            pace(nanos) >> descend(p, top, next, batch, t.copy(written = t.written + written))
+            pace(nanos) >> descend(p, top, next, batch, at, reason, t.copy(written = t.written + written), before)
           case (Descended.Done(written), _) =>
+            // The cursor goes to `top` across the heights the walk checked. Where the index names a block there, the walk
+            // took the one on the parent links instead, the ancestor of the best block; a stale entry there is not
+            // scanned again, nor needed: the weights of the best block's ancestry are what the pass makes exact.
             val across = p.copy(
               cursor = top,
               scanned = p.scanned + (top.number - p.cursor.number),
@@ -793,18 +837,18 @@ object ChainWeightReconcile:
               t.copy(written = t.written + written),
               None
             )
-          case (Descended.Broken(at, written), _) =>
-            IO(
-              log.warn(s"[CW-RECONCILE] the walk down the parent links broke at block $at (the chain moved under it)")
-            ) >>
-              loop(
-                p,
-                batch,
-                0L,
-                p.cursor.number + s.logEvery,
-                t.copy(written = t.written + written, rewinds = t.rewinds + 1),
-                None
-              )
+          // A wait, not a retry at once: a header that is not what it should be stays so, and a walk of the whole chain
+          // again without a pause would be a hot loop whose checks are never counted (vault)
+          case (Descended.Broken(n, written, why), _) =>
+            waitAt(
+              p,
+              batch,
+              at,
+              s"$reason, and the walk down that writes broke at block $n: $why",
+              t.copy(written = t.written + written, rewinds = t.rewinds + 1),
+              before,
+              None
+            )
         }
 
     def waitAt(
@@ -826,7 +870,7 @@ object ChainWeightReconcile:
                 "backfill fills this)"
             )
           )
-        else if polls == s.warnAfterPolls then
+        else if polls >= s.warnAfterPolls && (polls - s.warnAfterPolls) % s.warnEveryPolls.max(1) == 0 then
           IO(
             log.warn(
               s"[CW-RECONCILE] still waiting at block $at: $reason, after $polls checks. The chain-weight marker stays " +
