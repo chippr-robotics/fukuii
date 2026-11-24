@@ -129,10 +129,11 @@ final class PendingAnnouncements(
   /** Each peer's tracked announcements, in announcement order: the order its requests take them in. */
   private val byPeer = mutable.Map.empty[PeerId, mutable.LinkedHashSet[ByteString]]
 
-  /** Each peer's one request in flight: the hashes it was asked for. A timed-out request stays here, emptied of the
-    * hashes it gave up, until the peer answers or is gone.
+  /** Each peer's one request in flight: its request id and the hashes it was asked for. A timed-out request stays here,
+    * emptied of the hashes it gave up, until the peer answers it or is gone.
     */
-  private val requests = mutable.Map.empty[PeerId, mutable.Set[ByteString]]
+  final private class Request(val id: BigInt, val hashes: mutable.Set[ByteString])
+  private val requests = mutable.Map.empty[PeerId, Request]
 
   /** Hashes with a request in flight, oldest request first. */
   private val inFlight = new JLinkedHashMap[ByteString, Long]()
@@ -176,7 +177,7 @@ final class PendingAnnouncements(
     * reaches the byte cap is included). They are recorded as requested from `peerId` now; the caller must send them.
     * Empty when the peer is busy or has nothing to fetch.
     */
-  def schedule(peerId: PeerId): Seq[ByteString] =
+  def schedule(peerId: PeerId, requestId: BigInt): Seq[ByteString] =
     if requests.contains(peerId) then Seq.empty
     else
       val now = clock()
@@ -198,26 +199,30 @@ final class PendingAnnouncements(
           inFlight.remove(hash)
           inFlight.put(hash, now)
         }
-        requests.update(peerId, mutable.Set.from(picked))
+        requests.update(peerId, new Request(requestId, mutable.Set.from(picked)))
       picked.toSeq
 
-  /** `peerId` answered: its request in flight (if any) is done. The hashes it delivered are forgotten, alternates
-    * included. The hashes it was asked for and left out it does not have: it stops announcing them, and their other
-    * announcers may take them, or they are forgotten when there are none. Returns the peers to [[schedule]], `peerId`
-    * first.
+  /** `peerId` answered request `requestId`. The hashes it delivered are forgotten, alternates included, whatever the
+    * request. When it answers the request it has in flight, that request is done: the hashes it was asked for and left
+    * out it does not have, so it stops announcing them, and their other announcers may take them (or they are forgotten
+    * when there are none). A reply to any other request (a duplicate, or one never asked) ends nothing: it cannot cut
+    * short the request in flight. Returns the peers to [[schedule]], `peerId` first; none for such a reply.
     */
-  def delivered(peerId: PeerId, hashes: Iterable[ByteString]): Seq[PeerId] =
+  def delivered(peerId: PeerId, requestId: BigInt, hashes: Iterable[ByteString]): Seq[PeerId] =
     hashes.foreach(remove)
-    val next = mutable.LinkedHashSet[PeerId](peerId)
-    requests
-      .remove(peerId)
-      .foreach(_.foreach { hash =>
-        val entry = entries.get(hash)
-        if entry != null && entry.requestedFrom.contains(peerId) then
-          inFlight.remove(hash)
-          giveUp(hash, entry, peerId, next)
-      })
-    next.toSeq
+    requests.get(peerId) match
+      case Some(request) if request.id == requestId =>
+        requests -= peerId
+        val next = mutable.LinkedHashSet[PeerId](peerId)
+        request.hashes.foreach { hash =>
+          val entry = entries.get(hash)
+          if entry != null && entry.requestedFrom.contains(peerId) then
+            inFlight.remove(hash)
+            giveUp(hash, entry, peerId, next)
+        }
+        next.toSeq
+      case Some(_) => Seq.empty
+      case None    => Seq(peerId)
 
   /** `peerId` is gone (or dropped for misbehaving): forget its announcements and its request, and give up every hash it
     * was asked for. Returns the peers to [[schedule]].
@@ -266,7 +271,7 @@ final class PendingAnnouncements(
         val entry = entries.get(hash)
         if entry != null then
           entry.requestedFrom.foreach { stale =>
-            requests.get(stale).foreach(_ -= hash)
+            requests.get(stale).foreach(_.hashes -= hash)
             giveUp(hash, entry, stale, next)
           }
     next.toSeq
@@ -298,7 +303,7 @@ final class PendingAnnouncements(
     val entry = entries.remove(hash)
     if entry != null then
       inFlight.remove(hash)
-      entry.requestedFrom.foreach(requester => requests.get(requester).foreach(_ -= hash))
+      entry.requestedFrom.foreach(requester => requests.get(requester).foreach(_.hashes -= hash))
       entry.announcers.keysIterator.foreach(unindex(hash, _))
 
   private def unindex(hash: ByteString, peerId: PeerId): Unit =

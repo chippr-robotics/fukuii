@@ -123,13 +123,13 @@ class TxGossipTrackingSpec extends AnyFlatSpec with Matchers:
   it should "request a hash from one announcer at a time, keeping the others as alternates" taggedAs UnitTest in {
     val ann = new PendingAnnouncements(1000, 1.hour, 5.seconds, new Clock().fn)
     ann.announce(h(1), 3.toByte, BigInt(100), peerA)
-    ann.schedule(peerA) shouldBe Seq(h(1))
+    ann.schedule(peerA, 1) shouldBe Seq(h(1))
     ann.announce(h(1), 3.toByte, BigInt(100), peerB)
-    ann.schedule(peerB) shouldBe empty
+    ann.schedule(peerB, 1) shouldBe empty
     ann.announce(h(1), 3.toByte, BigInt(101), peerC)
-    ann.schedule(peerC) shouldBe empty
+    ann.schedule(peerC, 1) shouldBe empty
     ann.announce(h(1), 3.toByte, BigInt(100), peerA) // a re-announcement is not a second request
-    ann.schedule(peerA) shouldBe empty
+    ann.schedule(peerA, 1) shouldBe empty
     ann.requestedFrom(h(1)) shouldBe Some(peerA)
     ann.get(h(1), peerC).map(_.size) shouldBe Some(BigInt(101)) // each reply is checked against its sender's own
   }
@@ -137,15 +137,15 @@ class TxGossipTrackingSpec extends AnyFlatSpec with Matchers:
   it should "move a dropped requester's hashes to the next announcer, and only those" taggedAs UnitTest in {
     val ann = new PendingAnnouncements(1000, 1.hour, 5.seconds, new Clock().fn)
     ann.announce(h(1), 3.toByte, BigInt(100), peerA)
-    ann.schedule(peerA) shouldBe Seq(h(1))
+    ann.schedule(peerA, 1) shouldBe Seq(h(1))
     ann.announce(h(2), 3.toByte, BigInt(100), peerB)
-    ann.schedule(peerB) shouldBe Seq(h(2)) // B is asked for 2 ...
+    ann.schedule(peerB, 1) shouldBe Seq(h(2)) // B is asked for 2 ...
     ann.announce(h(1), 3.toByte, BigInt(100), peerB) // ... and is A's alternate for 1
     ann.announce(h(1), 3.toByte, BigInt(100), peerC)
     ann.announce(h(2), 3.toByte, BigInt(100), peerA)
     ann.removePeer(peerA) shouldBe Seq(peerB, peerC)
-    ann.schedule(peerB) shouldBe empty // B has a request in flight
-    ann.schedule(peerC) shouldBe Seq(h(1))
+    ann.schedule(peerB, 1) shouldBe empty // B has a request in flight
+    ann.schedule(peerC, 1) shouldBe Seq(h(1))
     ann.removePeer(peerB) shouldBe empty // 2 has no announcer left: forgotten
     ann.size shouldBe 1
     ann.removePeer(peerC) shouldBe empty
@@ -158,26 +158,26 @@ class TxGossipTrackingSpec extends AnyFlatSpec with Matchers:
     ann.announce(h(1), 3.toByte, BigInt(100), peerA)
     ann.announce(h(1), 3.toByte, BigInt(100), peerB)
     ann.announce(h(1), 3.toByte, BigInt(100), peerC)
-    ann.schedule(peerA) shouldBe Seq(h(1))
+    ann.schedule(peerA, 1) shouldBe Seq(h(1))
     clock.now = 5.seconds.toMillis
     ann.timedOut() shouldBe empty
     clock.now = 5.seconds.toMillis + 1
     ann.timedOut() shouldBe Seq(peerB, peerC)
     ann.get(h(1), peerA) shouldBe None // the peer that timed out is not asked again
     ann.busy(peerA) shouldBe true // its request stays in flight until it answers (go-ethereum: "dangling")
-    ann.schedule(peerB) shouldBe Seq(h(1))
-    ann.schedule(peerC) shouldBe empty
+    ann.schedule(peerB, 1) shouldBe Seq(h(1))
+    ann.schedule(peerC, 1) shouldBe empty
     ann.timedOut() shouldBe empty // the new request has its own full timeout
     clock.now = 10.seconds.toMillis + 2
     ann.timedOut() shouldBe Seq(peerC)
-    ann.schedule(peerC) shouldBe Seq(h(1))
+    ann.schedule(peerC, 1) shouldBe Seq(h(1))
     ann.unansweredRequests shouldBe 2
     clock.now = 15.seconds.toMillis + 3
     ann.timedOut() shouldBe empty // nobody left to ask
     ann.size shouldBe 0
     // The last request timed out too, though it moved nowhere: three peers were asked and none answered.
     ann.unansweredRequests shouldBe 3
-    ann.delivered(peerA, Nil) shouldBe Seq(peerA) // a late answer frees the peer
+    ann.delivered(peerA, 1, Nil) shouldBe Seq(peerA) // a late answer frees the peer
     ann.busy(peerA) shouldBe false
   }
 
@@ -186,7 +186,7 @@ class TxGossipTrackingSpec extends AnyFlatSpec with Matchers:
     val ann = new PendingAnnouncements(1000, 1.hour, 5.seconds, clock.fn)
     ann.announce(h(1), 3.toByte, BigInt(100), peerA)
     ann.announce(h(1), 3.toByte, BigInt(100), peerB)
-    ann.schedule(peerA) shouldBe Seq(h(1))
+    ann.schedule(peerA, 1) shouldBe Seq(h(1))
     ann.remove(h(1))
     clock.now = 1.minute.toMillis
     ann.timedOut() shouldBe empty
@@ -199,15 +199,15 @@ class TxGossipTrackingSpec extends AnyFlatSpec with Matchers:
   it should "keep one request in flight per peer until it answers" taggedAs UnitTest in {
     val ann = new PendingAnnouncements(10000, 1.hour, 5.seconds, new Clock().fn)
     (1 to 600).foreach(i => ann.announce(h(i), 2.toByte, BigInt(100), peerA))
-    ann.schedule(peerA) shouldBe (1 to 256).map(h)
+    ann.schedule(peerA, 1) shouldBe (1 to 256).map(h)
     ann.busy(peerA) shouldBe true
-    ann.schedule(peerA) shouldBe empty
-    ann.delivered(peerA, (1 to 256).map(h)) shouldBe Seq(peerA)
-    ann.schedule(peerA) shouldBe (257 to 512).map(h)
-    ann.delivered(peerA, (257 to 512).map(h))
-    ann.schedule(peerA) shouldBe (513 to 600).map(h)
-    ann.delivered(peerA, (513 to 600).map(h))
-    ann.schedule(peerA) shouldBe empty
+    ann.schedule(peerA, 1) shouldBe empty
+    ann.delivered(peerA, 1, (1 to 256).map(h)) shouldBe Seq(peerA)
+    ann.schedule(peerA, 1) shouldBe (257 to 512).map(h)
+    ann.delivered(peerA, 1, (257 to 512).map(h))
+    ann.schedule(peerA, 1) shouldBe (513 to 600).map(h)
+    ann.delivered(peerA, 1, (513 to 600).map(h))
+    ann.schedule(peerA, 1) shouldBe empty
     ann.busy(peerA) shouldBe false
     ann.size shouldBe 0
   }
@@ -216,26 +216,26 @@ class TxGossipTrackingSpec extends AnyFlatSpec with Matchers:
     val ann = new PendingAnnouncements(10000, 1.hour, 5.seconds, new Clock().fn)
     // 40,000 bytes each: the fourth reaches 160,000 >= 131,072, so it is the last one asked for.
     (1 to 6).foreach(i => ann.announce(h(i), 2.toByte, BigInt(40000), peerA))
-    ann.schedule(peerA) shouldBe (1 to 4).map(h)
-    ann.delivered(peerA, (1 to 4).map(h))
-    ann.schedule(peerA) shouldBe (5 to 6).map(h)
+    ann.schedule(peerA, 1) shouldBe (1 to 4).map(h)
+    ann.delivered(peerA, 1, (1 to 4).map(h))
+    ann.schedule(peerA, 1) shouldBe (5 to 6).map(h)
     // One tx larger than the cap is still asked for, on its own.
     ann.announce(h(7), 3.toByte, BigInt(200000), peerB)
     ann.announce(h(8), 3.toByte, BigInt(10), peerB)
-    ann.schedule(peerB) shouldBe Seq(h(7))
+    ann.schedule(peerB, 1) shouldBe Seq(h(7))
   }
 
   it should "give the hashes a peer left out of its answer to their other announcers" taggedAs UnitTest in {
     val ann = new PendingAnnouncements(1000, 1.hour, 5.seconds, new Clock().fn)
     Seq(1, 2, 3).foreach(i => ann.announce(h(i), 2.toByte, BigInt(100), peerA))
     ann.announce(h(2), 2.toByte, BigInt(100), peerB)
-    ann.schedule(peerA) shouldBe Seq(h(1), h(2), h(3))
-    ann.schedule(peerB) shouldBe empty // 2 is being fetched from A
+    ann.schedule(peerA, 1) shouldBe Seq(h(1), h(2), h(3))
+    ann.schedule(peerB, 1) shouldBe empty // 2 is being fetched from A
     // A delivers 1 only: it does not have 2 or 3. 2 goes to B; 3 has nobody else and is forgotten.
-    ann.delivered(peerA, Seq(h(1))) shouldBe Seq(peerA, peerB)
+    ann.delivered(peerA, 1, Seq(h(1))) shouldBe Seq(peerA, peerB)
     ann.get(h(2), peerA) shouldBe None
-    ann.schedule(peerA) shouldBe empty
-    ann.schedule(peerB) shouldBe Seq(h(2))
+    ann.schedule(peerA, 1) shouldBe empty
+    ann.schedule(peerB, 1) shouldBe Seq(h(2))
     ann.size shouldBe 1
   }
 
@@ -243,12 +243,26 @@ class TxGossipTrackingSpec extends AnyFlatSpec with Matchers:
     val clock = new Clock
     val ann = new PendingAnnouncements(1000, 1.minute, 5.seconds, clock.fn)
     ann.announce(h(1), 2.toByte, BigInt(100), peerA)
-    ann.schedule(peerA) shouldBe Seq(h(1))
+    ann.schedule(peerA, 1) shouldBe Seq(h(1))
     clock.now = 61.seconds.toMillis
     ann.announce(h(2), 2.toByte, BigInt(100), peerA) // sweeps 1 out by age
     ann.size shouldBe 1
-    ann.schedule(peerA) shouldBe empty // still one request in flight
-    ann.delivered(peerA, Nil) shouldBe Seq(peerA) // its answer frees it, and gives up nothing
+    ann.schedule(peerA, 1) shouldBe empty // still one request in flight
+    ann.delivered(peerA, 1, Nil) shouldBe Seq(peerA) // its answer frees it, and gives up nothing
     ann.get(h(2), peerA) should not be empty
-    ann.schedule(peerA) shouldBe Seq(h(2))
+    ann.schedule(peerA, 1) shouldBe Seq(h(2))
+  }
+
+  // Copilot, #2086: a reply to another request (a duplicate, or one never asked) must not end the request in flight.
+  it should "end a peer's request only on the reply to that request" taggedAs UnitTest in {
+    val ann = new PendingAnnouncements(1000, 1.hour, 5.seconds, new Clock().fn)
+    Seq(1, 2).foreach(i => ann.announce(h(i), 2.toByte, BigInt(100), peerA))
+    ann.schedule(peerA, 7) shouldBe Seq(h(1), h(2))
+    // A reply to request 6 delivers 1, which is held now, but leaves request 7 in flight: 2 is not given up.
+    ann.delivered(peerA, 6, Seq(h(1))) shouldBe empty
+    ann.busy(peerA) shouldBe true
+    ann.get(h(2), peerA) should not be empty
+    ann.delivered(peerA, 7, Nil) shouldBe Seq(peerA)
+    ann.busy(peerA) shouldBe false
+    ann.get(h(2), peerA) shouldBe None // left out of the answer to its own request: given up
   }

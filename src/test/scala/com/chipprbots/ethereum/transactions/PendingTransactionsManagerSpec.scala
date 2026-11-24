@@ -705,6 +705,51 @@ class PendingTransactionsManagerSpec
     answerEmpty(pendingTransactionsManager, peer1)
     requestedFrom(this) shouldBe ((peer1.id, hashes.slice(4, 8)))
 
+  // Copilot, #2086: a tx admitted by another path (here AddTransactions) while its announcement is still tracked used to
+  // be fetched again: its announcer's empty answer gave it up to the next announcer, which was then asked for it.
+  it should "not fetch again a tx the pool took from elsewhere while it was being fetched" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val stx: SignedTransactionWithSender = newStx()
+    val hash: ByteString = stx.tx.hash.value
+    def announce(peer: Peer): Unit =
+      pendingTransactionsManager ! WrappedPeerEvent(
+        PeerEvent.MessageFromPeer(
+          ETHPackets.NewPooledTransactionHashes(Seq(0.toByte), Seq(BigInt(100)), Seq(hash)),
+          peer.id
+        )
+      )
+    announce(peer1)
+    requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
+    announce(peer2) // an alternate
+    pendingTransactionsManager ! AddTransactions(Set(stx))
+    answerEmpty(pendingTransactionsManager, peer1)
+    etcPeerManager.receiveWhile(500.millis) { case cmd: NetworkPeerManagerActor.SendMessageCmd => cmd }.collect {
+      case cmd if cmd.message.underlyingMsg.isInstanceOf[ETHPackets.GetPooledTransactions] => cmd
+    } shouldBe empty
+
+  // Copilot, #2086: a reply that names another request id (a duplicate, or a reply to nothing asked) does not end the
+  // request in flight, so it neither gives up its hashes nor lets a second request out.
+  it should "take only the reply to its request in flight as the end of that request" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val hashes: Seq[ByteString] =
+      (1 to 300).map(i => ByteString(java.nio.ByteBuffer.allocate(32).putInt(28, i).array()))
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets
+          .NewPooledTransactionHashes(hashes.map(_ => Transaction.Type02), hashes.map(_ => BigInt(100)), hashes),
+        peer1.id
+      )
+    )
+    requestedFrom(this) shouldBe ((peer1.id, hashes.take(256)))
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(ETHPackets.PooledTransactions(lastRequestId + 1000, Seq.empty), peer1.id)
+    )
+    etcPeerManager.expectNoMessage(200.millis) // still one request in flight
+    answerEmpty(pendingTransactionsManager, peer1)
+    requestedFrom(this) shouldBe ((peer1.id, hashes.drop(256)))
+
   // go-ethereum eth/fetcher/tx_fetcher.go (c6e3a0d7): `maxTxAnnounces = 4096`, the most hashes tracked for one peer at
   // once; the excess of an announcement is dropped. Without it an announcement is bounded only by the 16 MiB message
   // size (MessageCodec.MaxDecompressedLength), and every hash it carries was requested.
@@ -775,12 +820,17 @@ class PendingTransactionsManagerSpec
   private def requestedFrom(setup: TestSetup): (PeerId, Seq[ByteString]) =
     val cmd = setup.etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
     cmd.message.underlyingMsg match
-      case ETHPackets.GetPooledTransactions(_, hashes) => (cmd.peerId, hashes)
-      case other                                       => fail(s"Expected GetPooledTransactions, got $other")
+      case ETHPackets.GetPooledTransactions(id, hashes) =>
+        lastRequestId = id
+        (cmd.peerId, hashes)
+      case other => fail(s"Expected GetPooledTransactions, got $other")
 
-  /** `peer` answers its request with no txs: it has none of them. */
+  /** The request id of the last GetPooledTransactions [[requestedFrom]] read. */
+  private var lastRequestId: BigInt = BigInt(-1)
+
+  /** `peer` answers its last request with no txs: it has none of them. */
   private def answerEmpty(ptm: org.apache.pekko.actor.typed.ActorRef[Command], peer: Peer): Unit =
-    ptm ! WrappedPeerEvent(PeerEvent.MessageFromPeer(ETHPackets.PooledTransactions(BigInt(1), Seq.empty), peer.id))
+    ptm ! WrappedPeerEvent(PeerEvent.MessageFromPeer(ETHPackets.PooledTransactions(lastRequestId, Seq.empty), peer.id))
 
   private def announceFrom(
       ptm: org.apache.pekko.actor.typed.ActorRef[Command],
