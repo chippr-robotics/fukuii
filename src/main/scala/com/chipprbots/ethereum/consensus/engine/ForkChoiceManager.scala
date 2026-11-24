@@ -15,7 +15,7 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
-import com.chipprbots.ethereum.ledger.ChainInsertLock
+import com.chipprbots.ethereum.ledger.AdoptedChainWeights
 import com.chipprbots.ethereum.utils.Logger
 
 /** Thread-safe manager for CL-driven fork choice (post-Merge Ethereum).
@@ -257,65 +257,16 @@ class ForkChoiceManager(
       // `BeyondTheFetch` is said by proof-of-work regular sync only, never by a move of the head: not met here
       case refused: ReorgTooDeep => notMoved(refused.getMessage)
 
-  /** `head` and its ancestors down to the highest block the index names, by their hashes, highest first: what a move of
-    * the head to `head` makes canonical. Stops where a header is not stored, and after
-    * [[ForkChoiceManager.MaxAdoptedWalk]] blocks: a branch that long, or one whose base the index does not name (a
-    * datadir with no index below its pivot), is not walked to the end on the fork choice's path, and none of it is
-    * returned: its weights are left as `newPayload` wrote them.
-    */
+  /** The blocks a move of the head to `head` makes canonical ([[AdoptedChainWeights.notCanonicalBelow]]). */
   private def notCanonicalBelow(head: BlockHeader): Seq[BlockHash] =
-    @scala.annotation.tailrec
-    def down(at: BlockHeader, acc: List[BlockHash], left: Int): List[BlockHash] =
-      if blockchainReader.getCanonicalHashByNumber(at.number.value).contains(at.hash) then acc
-      else if at.number.value == 0 || left <= 1 then at.hash :: acc
-      else
-        blockchainReader.getBlockHeaderByHash(at.parentHash) match
-          case Some(parent) => down(parent, at.hash :: acc, left - 1)
-          case None         => at.hash :: acc
-    val branch = down(head, Nil, ForkChoiceManager.MaxAdoptedWalk)
-    if branch.size >= ForkChoiceManager.MaxAdoptedWalk then Nil else branch
+    AdoptedChainWeights.notCanonicalBelow(head, blockchainReader)
 
-  /** '''Re-derives the weights of the blocks a fork choice made canonical''' (B-126): each its parent's weight plus its
-    * difficulty, from the weight of the block below the lowest, the value import writes.
-    *
-    * A payload stored by its hash only keeps the weight `newPayload` derived from its parent's then
-    * (`EngineApiService.storeChainWeightFor`). `ChainWeightReconcile` repairs the weights of canonical blocks only: its
-    * final step checks the heights the index names. So a payload stored while it repaired, whose parent's weight it
-    * then rewrote, would come out of a later fork choice canonical with the parent's old weight, under the marker that
-    * says every canonical weight follows from genesis. On the unified layout every payload is stored so. On a PoS chain
-    * only the total difficulty this node advertises reads it; fork choice follows the consensus layer.
-    *
-    * Under the chain insert lock (shared), as `storeChainWeightFor` reads and writes: the repair's final step holds it
-    * exclusively, so the base's weight is never read before it rewrites it, nor the branch written between its check
-    * and its marker. A block's exact weight depends only on its ancestry, so the value is right whether or not the
-    * block stays canonical. Nothing is written for a branch whose base has no weight: one is not invented (as
-    * `storeChainWeightFor`), nor below a link that is not stored.
-    *
-    * @param adopted
-    *   the blocks made canonical, in any order of height; one branch
+  /** '''Re-derives the weights of the blocks a fork choice made canonical''' (B-126; [[AdoptedChainWeights.rederive]]).
+    * On the unified layout every payload is stored by its hash only, with the weight `newPayload` derived from its
+    * parent's then; a side payload is so on the hash layout too.
     */
   private def rederiveWeights(adopted: Seq[BlockHash]): Unit =
-    if adopted.nonEmpty then
-      ChainInsertLock.shared {
-        val branch = adopted.flatMap(blockchainReader.getBlockHeaderByHash).sortBy(_.number.value)
-        branch.headOption.flatMap(lowest => blockchainReader.getChainWeightByHash(lowest.parentHash)).foreach { base =>
-          // each block on the one below it; a branch that does not link is taken up to the break
-          val linked = branch
-            .zip(branch.head.parentHash +: branch.map(_.hash))
-            .takeWhile((header, below) => header.parentHash == below)
-            .map(_._1)
-          val writes = linked
-            .scanLeft((Option.empty[BlockHeader], base))((acc, header) => (Some(header), acc._2.increase(header)))
-            .collect { case (Some(header), weight) => header -> weight }
-            .filterNot((header, weight) => blockchainReader.getChainWeightByHash(header.hash).contains(weight))
-          if writes.nonEmpty then
-            blockchainWriter.storeChainWeights(writes.map((header, weight) => header.hash -> weight)).commit()
-            log.info(
-              s"Fork choice re-derived the weight of ${writes.size} block(s) it made canonical, " +
-                s"#${writes.head._1.number.value} to #${writes.last._1.number.value}, from their parents' (B-126)"
-            )
-        }
-      }
+    AdoptedChainWeights.rederive(adopted, blockchainReader, blockchainWriter, "Fork choice (B-126)")
 
   /** Publish the CL head to the registered listener and record it as the requested head — **nothing else**.
     *
@@ -371,9 +322,6 @@ class ForkChoiceManager(
     }
 
 object ForkChoiceManager:
-
-  /** How far below a head the unified layout's fork choice looks for the blocks a move makes canonical (B-126). */
-  val MaxAdoptedWalk: Int = 8192
 
   /** Why [[ForkChoiceManager.applyForkChoiceState]] did not follow a head (B-005). Typed, so the Engine API matches on
     * the case and not on the start of a message: these were string prefixes ("LOCAL FAULT: ", "NOT HELD: ", ...) until
