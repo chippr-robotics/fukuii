@@ -5226,3 +5226,14 @@ items:
     links:
       spec: 018
     notes: "vault review of B-490. adopt: rederiveWeights after try/finally; catchUp: after commitEach. Note B-491 too: closing fix is same-batch weight write or a pass on restart."
+  - id: B-511
+    title: "B-505 follow-ups: hash arm checks the named head once before the index write (re-check at the write); pruned prefix retry may hit MissingNode"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: beacon, B-505. Both predate B-505.
