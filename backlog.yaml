@@ -2672,21 +2672,17 @@ items:
   - id: B-316
     title: The consensus layer's branch that forks below what a view reaches is adopted by no one (archive)
     priority: P2
-    status: review
+    status: done
     area: consensus
     opened: 2026-11-16
+    closed: 2026-11-24
     refs: [B-297]
     links:
       prs: [2042]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T04:08:42Z
-      heartbeat: 2026-11-24T05:17:22Z
     notes: |-
-      2026-11-24 in-progress: branch pushed; beacon review running
       2026-11-24 in-progress: beacon: main code approved; CHANGES test-only: fold B-480 guard test (fork choice whose head chain is indexed above the anchor with no view must still catch up, not viewless-adopt; also above.nonEmpty). Queued for next free clone.
       2026-11-24 in-progress: B-480 tests + walk change pushed f307860c22; beacon re-review
+      2026-11-24 done: merged 7683f4ea7
   - id: B-317
     title: A head refused -38002 is still published to SNAP as a pivot hint (publishBeaconHead)
     priority: P2
