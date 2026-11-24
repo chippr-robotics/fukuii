@@ -5300,23 +5300,19 @@ items:
   - id: B-506
     title: settleHead designated-head arm deletes index entries above the tip only up to the old best; sweep upward like canonicalHeadUpdate
     priority: P3
-    status: review
+    status: done
     area: consensus
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2095]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T11:30:35Z
-      heartbeat: 2026-11-24T15:14:34Z
     notes: |-
-      2026-11-24 in-progress: one PR with B-506+B-511 (settleHead designated arm), clone-d
       2026-11-24 in-progress: pushed 31a4bfc91e (index sweep above head; CanonicalHeadLock on hash layout incl. FCU/newPayload; prefix pruning pinned); covering importToTop/setCanonicalChainHead next, then beacon+vault review
       2026-11-24 in-progress: pushed 0a63232ba7 (all hash-layout head writers under CanonicalHeadLock, 2 s wait WARN); beacon+vault review
+      2026-11-24 done: merged 03e8ba9f51; hive engine 210/210, path-live 83/83, sync 18/18
   - id: B-507
     title: test_getLogHash and the MCP GetTransactionTool / McpResources tx readers follow a lookup with no canonical check (B-495 leftovers)
     priority: P3
