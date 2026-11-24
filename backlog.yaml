@@ -4783,3 +4783,14 @@ items:
     links:
       spec: 018
     notes: B-316's viewless stop requires the block to be canonical AND below the anchor; removing the below-anchor half breaks no test (HeadMoveOnTheChainSpec, ReorgBlockhashParitySpec, EscalationWatch). Stage an index that runs ahead of the anchor (post-SNAP hand-off) and assert the catch-up still walks to the anchor.
+  - id: B-481
+    title: "StateRecovery move back: also refuse when requestedHead equals the plan's anchor (fork choice naming exactly the block the adoption left the head on)"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "beacon review of B-464: no-op AlreadyThere move leaves anchor == leftOn; if the move back read followedHead first, head ends on the old head while the CL was told VALID at leftOn; next FCU corrects. Fix in stillLeftOn (StateRecovery ~:743) under the same lock."
