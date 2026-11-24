@@ -2297,7 +2297,7 @@ items:
   - id: B-253
     title: A move of the head drops only the head block's transactions from the pool and puts back none of a reversed block's
     priority: P3
-    status: claimed
+    status: in-progress
     area: rpc
     size: M
     opened: 2026-11-14
@@ -2307,8 +2307,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T07:27:46Z
-      heartbeat: 2026-11-24T07:27:46Z
-    notes: beacon, C4d part 2b's read; pre-existing on both layouts (promoteToCanonicalHead too). go-ethereum's txpool reset purges every block moved onto and re-injects the reversed blocks' transactions. Builds stay correct (executableAtParent filters stale ones).
+      heartbeat: 2026-11-24T07:28:09Z
+    notes: |-
+      beacon, C4d part 2b's read; pre-existing on both layouts (promoteToCanonicalHead too). go-ethereum's txpool reset purges every block moved onto and re-injects the reversed blocks' transactions. Builds stay correct (executableAtParent filters stale ones).
+      2026-11-24 in-progress: agent in clone-e, fix/b253-pool-reset-on-head-move
   - id: B-255
     title: "Spec 018 T156: child-JVM kill -9 between newPayload and forkchoiceUpdated on RocksDB, restart with no peers, real consensus client reaches VALID"
     priority: P2
