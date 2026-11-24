@@ -117,7 +117,7 @@ object ConfigValidator extends Logger:
       ).flatten
 
   /** One warning for each removed fast-sync key that `config` (a `fukuii` block) still sets, and one for
-    * [[LegacyRecoveryScanKey]] set false.
+    * [[LegacyRecoveryScanKey]] set to any value.
     */
   def removedKeyWarnings(config: TypesafeConfig): List[String] =
     RemovedFastSyncKeys.filter(key => config.hasPath(s"sync.$key")).map {
@@ -127,17 +127,15 @@ object ConfigValidator extends Logger:
 
   /** `false` asked for the two legacy per-phase recovery scans. They were retired (B-217): they stopped at the first
     * absent node and settled the recovery flags on that partial walk, where the combined scan counts the hole and walks
-    * the rest. No code reads the key. The shipped `sync.conf` still sets it `true`, so only `false` is reported.
+    * the rest. No code reads the key, and the shipped `sync.conf` no longer sets it (B-493), so any value is reported:
+    * `true` is as dead as `false`.
     */
   val LegacyRecoveryScanKey: String = "sync.snap-sync.parallel-recovery-scan"
 
   private def legacyRecoveryScanWarning(config: TypesafeConfig): Option[String] =
-    val askedForLegacy =
-      config.hasPath(LegacyRecoveryScanKey) &&
-        scala.util.Try(config.getBoolean(LegacyRecoveryScanKey)).toOption.contains(false)
-    Option.when(askedForLegacy)(
-      s"fukuii.$LegacyRecoveryScanKey = false is ignored: the legacy per-phase recovery scans were retired, and the " +
-        "combined recovery scan always runs. Remove the key."
+    Option.when(config.hasPath(LegacyRecoveryScanKey))(
+      s"fukuii.$LegacyRecoveryScanKey is ignored: it was retired by B-217 with the legacy per-phase recovery scans, " +
+        "and the combined recovery scan always runs. Remove the key."
     )
 
   /** `do-fast-sync = false` was the way to ask for a sync from genesis (archive nodes, for one). With SNAP on, that
