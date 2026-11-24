@@ -4301,7 +4301,7 @@ items:
   - id: B-454
     title: Block import writes a block's deployed code in its own write just before the state batch (B-230); move it into the commitWith batch, vault to review
     priority: P3
-    status: claimed
+    status: in-progress
     area: storage
     size: S
     opened: 2026-11-24
@@ -4312,7 +4312,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T02:41:58Z
-      heartbeat: 2026-11-24T02:41:58Z
+      heartbeat: 2026-11-24T02:42:02Z
     notes: Kill-safe as is (one RocksDB, one WAL, code first). Same-batch needs the code carried to commitWith/commitApart past the executeAndValidateStaged seam.
   - id: B-455
     title: ChainImporter's hash-store lenient import (executeBlockNoValidation) writes a block's code and trie nodes before it validates the block
