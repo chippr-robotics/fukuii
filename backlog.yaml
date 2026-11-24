@@ -5278,13 +5278,18 @@ items:
   - id: B-511
     title: "B-505 follow-ups: hash arm checks the named head once before the index write (re-check at the write); pruned prefix retry may hit MissingNode"
     priority: P3
-    status: open
+    status: claimed
     area: consensus
     size: S
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T11:30:43Z
+      heartbeat: 2026-11-24T11:30:43Z
     notes: beacon, B-505. Both predate B-505.
   - id: B-512
     title: "AddUncheckedTransactions has no sender in main code after B-460: dead-code review"
