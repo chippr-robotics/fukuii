@@ -290,7 +290,8 @@ object TuiActions:
         detection = detection,
         inbound = connected.count(_.inbound),
         connected = connected.size,
-        peersUnread = peersRead.left.toOption
+        peersUnread = peersRead.left.toOption,
+        upnp = com.chipprbots.ethereum.network.PortMappingState.describe(node.portMappingState.get)
       )
 
     // ---- the endpoints the endpoint test calls --------------------------------------------------------------------

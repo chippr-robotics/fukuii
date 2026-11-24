@@ -20,7 +20,7 @@ final class NetworkAddressInfo:
 object NetworkAddressInfo:
 
   /** The last detection run: with which mode, what it found (None: nothing) and when (epoch milliseconds). The UPnP
-    * port-mapping state is not reported (it is only logged by [[PortForwarder]]).
+    * port mapping's outcome is [[PortMappingState]].
     */
   final case class Snapshot(mode: Option[DetectionMode], found: Option[DetectedAddress], atMillis: Option[Long])
 

@@ -1723,10 +1723,15 @@ trait PortForwardingBuilder:
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
   // protected for testing purposes - allows test fixtures to override with mock implementation
+  /** What became of the UPnP port mapping, for the TUI's `net` report (B-287). */
+  lazy val portMappingState: com.chipprbots.ethereum.network.PortMappingState =
+    new com.chipprbots.ethereum.network.PortMappingState
+
   protected lazy val portForwarding: IO[IO[Unit]] = PortForwarder
     .openPorts(
       Seq(instanceConfig.Network.Server.port),
-      Seq(discoveryConfig.port).filter(_ => discoveryConfig.discoveryEnabled)
+      Seq(discoveryConfig.port).filter(_ => discoveryConfig.discoveryEnabled),
+      portMappingState
     )
     .whenA(instanceConfig.Network.automaticPortForwarding)
     .allocated
