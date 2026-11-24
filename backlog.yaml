@@ -4850,3 +4850,13 @@ items:
     links:
       spec: 018
     notes: Found in B-210 (which aligned the by-number answer to -32000 'header not found'). ResolveBlock.getHeaderByHash and EthProofService.resolveHeader. Decide with conduit; hive rpc-compat has no vector for it.
+  - id: B-486
+    title: "JsonRpcError.StateBusy text says 'too many reads behind the head': wrong for a write refused while another adoption holds the head (B-462)"
+    priority: P3
+    status: open
+    area: rpc
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "B-462 maps StateBusy (adoption holds the head) to JsonRpcError.StateBusy (-32005), whose message names reads in flight. Same code, ask-again semantics; only the text misleads. Changing client-visible text: decide whether to split into a second -32005 error or generalise the message (StateReadRetrySpec, RpcReadersBehindHeadSpec pin it)."
