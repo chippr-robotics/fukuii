@@ -2004,7 +2004,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b230
       since: 2026-11-24T00:17:11Z
-      heartbeat: 2026-11-24T00:22:36Z
+      heartbeat: 2026-11-24T00:42:49Z
     notes: Found by beacon in the spec 018 C4a part 4b consult. Content-addressed, so not wrong, but unbounded growth by RPC.
   - id: B-236
     title: "028 S5: live checks (24 h follow, 166 reset under a supervisor, Hoodi peers) and closure"
