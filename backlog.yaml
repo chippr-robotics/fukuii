@@ -4431,7 +4431,7 @@ items:
   - id: B-455
     title: ChainImporter's hash-store lenient import (executeBlockNoValidation) writes a block's code and trie nodes before it validates the block
     priority: P3
-    status: claimed
+    status: in-progress
     area: storage
     size: S
     opened: 2026-11-24
@@ -4441,8 +4441,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:45:47Z
-      heartbeat: 2026-11-24T03:45:47Z
-    notes: Unchanged by B-230 (operator file import, not RPC-reachable). An invalid block in a chain file leaves its code and nodes behind.
+      heartbeat: 2026-11-24T03:45:51Z
+    notes: |-
+      Unchanged by B-230 (operator file import, not RPC-reachable). An invalid block in a chain file leaves its code and nodes behind.
+      2026-11-24 in-progress: clone-e lane batch 2
   - id: B-456
     title: "hive adapter: map HIVE_BPO3..5_TIMESTAMP and HIVE_BPO3..5_BLOB_* (hive mapper.jq exports them) in fukuii.sh"
     priority: P3
