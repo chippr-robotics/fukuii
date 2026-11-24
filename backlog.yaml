@@ -5308,10 +5308,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:30:43Z
-      heartbeat: 2026-11-24T11:30:47Z
+      heartbeat: 2026-11-24T12:18:20Z
     notes: |-
       beacon, B-505. Both predate B-505.
       2026-11-24 in-progress: one PR with B-506+B-511 (settleHead designated arm), clone-d
+      2026-11-24 in-progress: pushed 31a4bfc91e (index sweep above head; CanonicalHeadLock on hash layout incl. FCU/newPayload; prefix pruning pinned); covering importToTop/setCanonicalChainHead next, then beacon+vault review
   - id: B-512
     title: "AddUncheckedTransactions has no sender in main code after B-460: dead-code review"
     priority: P3
