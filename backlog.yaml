@@ -5046,3 +5046,14 @@ items:
     refs: []
     links: {}
     notes: Seen 2026-11-24 during B-253 (pool actor unchanged). Find the timing assumption; no Thread.sleep fixes.
+  - id: B-498
+    title: Test-only head moves (TestService:432, TestingService:207) don't reset the tx pool through TxPoolReset (B-253)
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: Found during B-253; low priority, test endpoints only.
