@@ -4850,13 +4850,18 @@ items:
   - id: B-482
     title: Commit in place onto a branch leaves index entries above the new head when the index ran ahead of the anchor (post-hand-off)
     priority: P3
-    status: open
+    status: claimed
     area: storage
     size: S
     opened: 2026-11-24
     refs: [B-316]
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T06:59:16Z
+      heartbeat: 2026-11-24T06:59:16Z
     notes: "Seen writing B-480's test (HeadMoveOnTheChainSpec 'index runs ahead'): after a hand-off with the index naming 21-44 and a catch-up to a branch 31'-35' leaving it at 30, the index still names the old 36-44 above head 35' (anchor/best/state correct). I6 says the index is the anchor's chain; canonicalHeadUpdate's clear above the head apparently stops at the old best block (20). Check whether a real hand-off can leave the index ahead of a head on another branch, and clear it."
   - id: B-483
     title: A fork choice to a canonical ancestor of the head ends TooLong after a maxCatchUp walk; geth ignores it ('Ignoring beacon update to old head', VALID)
