@@ -180,11 +180,12 @@ object BytecodeRecoveryActor:
           RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
           finishRecovery()
 
-        case ByteCodeDownloadProgress(_) =>
-          downloadedCount += 1
+        // n is a delta: the codes one response carried, or the ones already present (ByteCodeResponseHandling,
+        // ByteCodeCoordinator). Counting the message instead, twice, ran the log and the gauge at 2x (B-494).
+        case ByteCodeDownloadProgress(n) =>
+          downloadedCount += n
           RecoveryMetrics.setBytecodeDownloaded(downloadedCount)
           recordProgress()
-          downloadedCount += 1
           val (newM, crossed) =
             ProgressMilestones.crossed(downloadedCount, expectedCount.toLong, lastBytecodeRecoveryMilestone)
           lastBytecodeRecoveryMilestone = newM
