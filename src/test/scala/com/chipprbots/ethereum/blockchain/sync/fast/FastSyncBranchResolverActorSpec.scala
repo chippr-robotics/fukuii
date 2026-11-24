@@ -36,6 +36,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.DeepForkWeight
 import com.chipprbots.ethereum.consensus.PowForkChoice
 import com.chipprbots.ethereum.consensus.PowForkChoiceSpec
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.Difficulty
@@ -344,7 +345,7 @@ class FastSyncBranchResolverActorSpec
         val theirs: List[Block] = common :++ BlockHelpers.generateChain(4, common.last)
         saveBlocks(ours)
 
-        val theirHashes = theirs.map(_.hash).toSet
+        val theirHashes: Set[BlockHash] = theirs.map(_.hash).toSet
         val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
           start(Map(onePeer -> theirs), guard(deepestCommonBlock = 10, preserve = h => theirHashes(h.hash)))
         val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout) {
