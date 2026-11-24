@@ -2,16 +2,18 @@ name: Autofix (scalafmt)
 
 # Auto-applies `sbt scalafmtAll` and commits the result, so formatting never has to
 # be fixed by hand and never blocks a release. Runs on same-repo PRs (pushes the fix
-# to the PR's source branch) and on pushes to the integration branches (self-heals a
+# to the PR's source branch only with CI_PAT, see below) and on pushes to the integration branches (self-heals a
 # squash-merge that landed unformatted code — the exact gap that broke the 0.6.0
 # release prep). `ci.yml` keeps `formatCheck` as the backstop for fork PRs, which
 # GITHUB_TOKEN cannot push to, and for scalafix findings, which this job does not rewrite.
 #
 # NOTE: commits pushed with the default GITHUB_TOKEN do NOT re-trigger other workflows
-# (GitHub's loop-prevention). On unprotected integration branches (develop/staging) that
-# is fine — there are no required checks to re-run, and scalafmt is idempotent so there
-# is no commit loop. If you later want the auto-commit to re-trigger required checks on a
-# protected branch, add a PAT secret and set `token: ${{ secrets.CI_PAT }}` on checkout.
+# (GitHub's loop-prevention). On the integration branches (develop/staging) that is fine:
+# there are no required checks to re-run, and scalafmt is idempotent so there is no commit
+# loop. On a PR it is not (B-353): the pushed "style: apply scalafmt" commit became the PR's
+# head with no checks at all, and someone had to push again to get CI. So on a PR the fix is
+# pushed only with a `CI_PAT` secret (a push with it does start CI); without one the job
+# fails, names the unformatted files and says to run `sbt formatAll`, and pushes nothing.
 
 on:
   push:
@@ -50,12 +52,17 @@ jobs:
       (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: bump version to'))
       || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
+    env:
+      # Read by the steps' `if`s, which see job-level env only (a step's own env is not set yet there).
+      HAS_CI_PAT: ${{ secrets.CI_PAT != '' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
+          # With CI_PAT, the fix commit's push starts CI on a PR; without it, GITHUB_TOKEN.
+          token: ${{ secrets.CI_PAT || github.token }}
 
       - name: Set up JDK 25
         uses: actions/setup-java@v5
@@ -89,7 +96,20 @@ jobs:
         env:
           FUKUII_DEV: true
 
+      - name: Fail on an unformatted PR that cannot be fixed with a push that starts CI
+        # B-353: a GITHUB_TOKEN push to a PR starts no workflow, which left the PR's head unchecked.
+        if: github.event_name == 'pull_request' && env.HAS_CI_PAT != 'true'
+        run: |
+          if git diff --quiet; then
+            echo "Formatted: nothing to fix."
+            exit 0
+          fi
+          echo "::error::These files are not formatted. Run 'sbt formatAll' and push (no fix is pushed from here: a push with GITHUB_TOKEN would start no CI on this PR, B-353)."
+          git diff --name-only | sed 's/^/  /'
+          exit 1
+
       - name: Commit formatting if changed
+        if: github.event_name == 'push' || env.HAS_CI_PAT == 'true'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "style: apply scalafmt"
