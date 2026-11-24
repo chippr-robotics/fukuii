@@ -4164,12 +4164,17 @@ items:
   - id: B-442
     title: GraphQL sendRawTransaction answers a missing trie node as the start nonce (GraphQLSchema.scala currentNonce)
     priority: P3
-    status: open
+    status: claimed
     area: rpc
     opened: 2026-11-23
     refs: []
     links:
       spec: specs/018-storage-engine-consolidation
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T03:17:58Z
+      heartbeat: 2026-11-24T03:17:58Z
     notes: "Same shape as B-228: catch MissingNodeException => accountStartNonce at the nonce-too-low check; a state fault should be an error, as JSON-RPC does."
   - id: B-443
     title: "BPO3/BPO4 blob-parameter forks: fukuii refuses them, so 96 EEST v21 BPO2ToBPO3/BPO3ToBPO4 fixtures cannot replay (decide: support or record as not modelled)"
