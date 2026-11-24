@@ -4426,7 +4426,7 @@ items:
   - id: B-461
     title: whereTheHeadIsLeft calls a head left on a reorg's lost side parents 'on the chain it left' and tells none of them as imported
     priority: P3
-    status: claimed
+    status: in-progress
     area: consensus
     opened: 2026-11-24
     refs: []
@@ -4436,8 +4436,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:21:30Z
-      heartbeat: 2026-11-24T03:21:30Z
-    notes: "forge B-343: commitInPlaceAtTheCap, fault at a side parent then a move back that fails before it wrote leaves the head on the committed side parents (e.g. a6); the answer labels it the old chain and imported=Nil (only branch blocks are checked). Pinned by ReorgBlockhashParitySpec 'middle chunk meets a fault'. Decide wording and whether those side parents are told as the head."
+      heartbeat: 2026-11-24T03:27:38Z
+    notes: |-
+      forge B-343: commitInPlaceAtTheCap, fault at a side parent then a move back that fails before it wrote leaves the head on the committed side parents (e.g. a6); the answer labels it the old chain and imported=Nil (only branch blocks are checked). Pinned by ReorgBlockhashParitySpec 'middle chunk meets a fault'. Decide wording and whether those side parents are told as the head.
+      2026-11-24 in-progress: clone-d consensus lane, branch fix/b461-head-on-lost-side-parents
   - id: B-462
     title: "Ask-again refusals during an adoption (B-294): typed answers on the layers move, ChainImporter, testing_commitBlockV1; keep them out of the escalation count"
     priority: P3
