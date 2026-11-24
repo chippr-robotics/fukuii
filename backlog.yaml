@@ -5057,3 +5057,13 @@ items:
     links:
       spec: 018
     notes: Found during B-253; low priority, test endpoints only.
+  - id: B-499
+    title: "OmmersPool.AddOmmers trims before it de-duplicates: re-adding a header already in the pool evicts a real candidate"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links: {}
+    notes: forge, found during B-299.
