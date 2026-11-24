@@ -250,25 +250,29 @@ private[actors] trait AccountTrieAssembly:
       else
         // Mark task done / re-enqueue BEFORE potentially spawning async flush — so the
         // task tracking is up to date by the time we re-enter `receive` after flushing.
-        storingTasks.remove(task.last)
         if isTaskRangeComplete then
-          completedTasks += task.copy(done = true)
           // On the StackTrie path, the task's per-range StackTrie has accumulated all of
           // this range's accounts; commit it to finalise the right boundary and flush the
           // remaining pending batch to RocksDB. The fragment root is logged for diagnostics
           // — it does NOT match the pivot's claimed root (each task produces only a
           // partial trie); healing reconciles fragments against the pivot root.
-          taskStackTries.remove(task.last).foreach { trie =>
-            val fragmentRoot = trie.commit()
+          // The commit comes first, and the trie stays registered until it returns: a range whose final flush fails is
+          // not marked complete, and the catch below can still reset its trie (B-190).
+          val fragmentRoot = taskStackTries.get(task.last).map(_.commit())
+          taskStackTries.remove(task.last)
+          storingTasks.remove(task.last)
+          completedTasks += task.copy(done = true)
+          fragmentRoot.foreach { root =>
             log.info(
               s"Account range COMPLETE: ${task.rangeString} " +
                 s"(${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total, " +
-                s"fragment root ${fragmentRoot.take(4).toArray.map("%02x".format(_)).mkString})"
+                s"fragment root ${root.take(4).toArray.map("%02x".format(_)).mkString})"
             )
           }
           // Durable checkpoint: a completed range is the most valuable progress to keep.
           sendProgressSnapshot(durableRequested = true)
         else
+          storingTasks.remove(task.last)
           // Need more requests for the same interval; re-queue with updated `next`. Re-tag with the CURRENT root: a
           // pivot refresh while this response was being stored re-tagged pendingTasks only, not this task.
           pendingTasks.enqueue(task.copy(rootHash = stateRoot))
