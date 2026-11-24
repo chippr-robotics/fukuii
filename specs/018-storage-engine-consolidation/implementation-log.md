@@ -39,6 +39,7 @@ and notes marked *Editor's note (2026-11-21)*. Code comments and other documents
   - [C3c part 3: the linear subset now (user, 2026-11-12), and the lenient import record](#c3c-part-3-the-linear-subset-now-user-2026-11-12-and-the-lenient-import-record)
   - [C3c part 3b: the fixture replays from a genesis commit, and the harness canary](#c3c-part-3b-the-fixture-replays-from-a-genesis-commit-and-the-harness-canary)
   - [C3c part 3c: test mode on the unified layout (2026-11-12)](#c3c-part-3c-test-mode-on-the-unified-layout-2026-11-12)
+  - [C3c's leftovers after C4: side blocks in the lenient import, test mode's ranges, the ethtest runner (B-220, 2026-11-24)](#c3cs-leftovers-after-c4-side-blocks-in-the-lenient-import-test-modes-ranges-the-ethtest-runner-b-220-2026-11-24)
 - [C4a](#c4a)
   - [C4a part 1: forward layers (2026-11-12)](#c4a-part-1-forward-layers-2026-11-12)
   - [C4a part 2: the reverse index (2026-11-12)](#c4a-part-2-the-reverse-index-2026-11-12)
@@ -1327,6 +1328,63 @@ taken for the one to rewind to.
 Left as they are, and said: an invalid branch that outweighs the head is answered with the layout's refusal and not
 with "block validation failed" (the refusal comes before validation); the service's fields are plain variables, as
 they were (retesteth calls in sequence); the queue is kept across a rewind to the genesis, as on the hash store.
+
+### C3c's leftovers after C4: side blocks in the lenient import, test mode's ranges, the ethtest runner (B-220, 2026-11-24)
+
+What the decision of 2026-11-12 left of C3c for after the overlay and the head move, taken stock of on `staging` at
+03e8ba9f51 and finished here. Inventory, before this change:
+
+| Sub-item | Before | Pinned by |
+|---|---|---|
+| `engine_newPayload` adopts nothing on the guard | done (C4d part 2a): an executed payload is a forward layer, stored by its hash only, the index and the head untouched; the fork choice moves to it (C4d part 2b) | `HeadMoveOnTheChainSpec`, "A payload on the unified layout" |
+| `test_rewindToBlock` to any block, through the head move | done (C4b part 3b): to the head or above, nothing; to a block of the head's chain, a move back; to the genesis, the chain set again | `TestServiceOnPositionsSpec`, "rewind to its head, to a block of its chain by moving its head back, and to its genesis" |
+| Test mode reorganises to a heavier branch | done (C4e) | `TestServiceOnPositionsSpec`, "keep a side block beside the head, and reorganise to the branch that outweighs it" |
+| `ForkChoiceBlockchainTestsSpec` with the guard on | done (C5a part 9a, B-432): both layouts, `basic` and `archive`, 24 of 24 categories green | that spec |
+| Side blocks in `ChainImporter`'s lenient import | open: `importInPlace` refused every block not built on the head | `ChainExportImportSpec`, "refuse a side block" (the refusal) |
+| `debug_storageRangeAt`, `debug_accountRange` behind the head in test mode | open: refused, `HeadStateOnly` | `TestServiceOnPositionsSpec` (the refusal) |
+| `EthereumTestHelper`, `EthereumTestExecutor` with the guard on | open: the sequential runner ran on its own hash store, with the position mirror in front of it | none |
+
+**The lenient import** (`ChainImporter.importLenient`, the chain file at start, hive's consensus simulator):
+
+- A block before the merge that is not built on the head goes to the node's fork choice on both layouts
+  (`ConsensusAdapter.evaluateBranchBlock`): queued, executed on layers and moved to once its branch outweighs the
+  head (`ConsensusImpl.reorganiseOnLayers`, C4e). That is core-geth's `InsertChain`, which writes a side chain and
+  moves the head only when `ReorgNeeded`. A block whose parent is not here has no weight to place it either side of
+  the merge, so it goes the same way and is answered as an unknown parent, as on the hash layout.
+- A block after the merge built on a block this node has, and not on the head, is adopted, as on the hash layout and
+  in core-geth (`ForkChoice.ReorgNeeded` is true for every block at or past the terminal total difficulty):
+  `ChainImporter.adoptingOnLayers`, a `ConsensusImpl` with the block itself as the head to lead to, the consensus
+  layer's arm of C4e part 5. The block is executed on its parent's state, kept as a forward layer, and made the head by
+  one move; an invalid block leaves the head exactly where it was; a fork deeper than the changeset records reach is
+  refused before anything is executed, and counted as failed, as the hash layout fails a parent whose state was pruned.
+  The post-merge test is the one the hash layout's arm makes (the parent's weight against the terminal total
+  difficulty): no fork is dispatched here, and an ETC chain, which sets no terminal total difficulty, never reaches it.
+- What was refused for the layout is refused now only by an importer built with no fork choice (direct construction
+  in a test).
+
+**Test mode's ranges.** `debug_storageRangeAt` and `debug_accountRange` read a block behind the head as the JSON-RPC
+reads one (`StateRead.attemptingOrThrow`): in a scope of reads, from the changeset records, and again on a fresh view
+when the state moved. A block deeper than the records is refused as before (`HeadStateOnly`, reworded: the state it
+needs is not held). Every read is made before the method returns its value, inside the scope.
+
+**The sequential ethereum/tests runner** (`it/ethtest/EthereumTestHelper`, `EthereumTestExecutor`) runs on the unified
+layout when `FUKUII_ETHTEST_LAYOUT=unified`, or when a caller asks (`executeTest(..., unified = true)`): the pre-state
+committed as rows by the node's own genesis loader, under the fixture's genesis header; each block, in file order,
+committed in place when built on the head and adopted on layers otherwise, as the hash runner executes each on its
+parent; the post-state read from the head's state. The position mirror is for the hash run and is off on this one.
+`BlockchainTestsSpec` runs its resource fixtures on both layouts and asks for the same blocks and state root. Over
+twelve categories of ethereum/tests `ValidBlocks` (987 cases, every network, `BlockchainTestBench`), each case has the
+same verdict on both layouts: 973 pass on each, and the 14 that fail on the hash store fail on the unified layout
+too (2 of bcStateTests, and the multi-chain vectors whose last block in the file is not the head, which the sequential
+runner cannot judge and `ForkChoiceBlockchainTestsSpec` does). The nightly job runs `ComprehensiveBlockchainTestsSpec`
+again with the guard on.
+`ForkChoiceBlockchainTestsSpec` gains two variants, both layouts under `basic`, whose blocks are given as one chain
+file to the node's `ChainImporter`: the bcMultiChainTest, uncle-race and lotsOfLeafs vectors through the importer
+hive's consensus simulator uses.
+
+**Reviews.** forge (the ETC side: the fork choice arm is the hash layout's, and the post-merge arm is unreachable
+without a terminal total difficulty) and beacon (the post-merge adoption, the ranges) were not consulted in the
+session that wrote this; their reads are owed before the change merges.
 
 ---
 
