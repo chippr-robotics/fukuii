@@ -5103,7 +5103,7 @@ items:
   - id: B-502
     title: StorageRecoveryActor StorageSlotProgress(_) ignores n and adds 1 per message to the downloaded gauge (same shape as B-494)
     priority: P3
-    status: claimed
+    status: in-progress
     area: sync
     size: S
     opened: 2026-11-24
@@ -5114,8 +5114,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T08:56:39Z
-      heartbeat: 2026-11-24T08:56:39Z
-    notes: Found during B-494; check what n means at the sender before fixing.
+      heartbeat: 2026-11-24T08:56:43Z
+    notes: |-
+      Found during B-494; check what n means at the sender before fixing.
+      2026-11-24 in-progress: agent clone-e
   - id: B-503
     title: A branch re-queued after a state fault and later adopted stays in blockQueue; the next child re-executes it as a spurious ChainReorganised
     priority: P3
