@@ -30,6 +30,7 @@ head-writer 6 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala DEF
 
 # A block's own commit, and the genesis: the head moves with the state.
 block-store 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala MOVE saveBatch in the block's commit: in the state's batch, under the state lock, with the check that the best block is the anchor
+head-writer 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala MOVE canonicalHeadUpdate's rows in the block's own commit, where the block leaves the index a sync left ahead of the head, at its height or above a gap there (B-482, B-492): in the state's batch, under the state lock, as a move's rows
 block-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala MOVE the genesis block with the genesis commit, which gives the datadir its anchor
 
 # The fork choice and the reorganisation: the fork choice confirms the head through a move (C4b part 3b); C4d and C4e
@@ -37,7 +38,7 @@ block-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisData
 head-writer 2 src/main/scala/com/chipprbots/ethereum/consensus/engine/ForkChoiceManager.scala HASH promoteToCanonicalHead on the hash layout's arm; MOVE moveHeadInPlace on the unified layout: the head moved with the state, up and across (C4d part 2b), never down to an ancestor
 block-store 1 src/main/scala/com/chipprbots/ethereum/consensus/engine/EngineApiService.scala HASH newPayload's storeBlock on the hash layout's arm; the unified layout stores an executed payload by hash only (C4d part 2a)
 head-writer 7 src/main/scala/com/chipprbots/ethereum/consensus/ConsensusImpl.scala HASH saveBestKnownBlocks and rewriteCanonicalIndex, in settleHead and saveLastBlock, on the hash layout's arm only (reorganiseOnTheHashLayout; saveLastBlock writes nothing on the unified layout); MOVE moveHeadInPlace, the settle of a branch executed on layers (reorganiseOnLayers, C4e); and at the pinned cap, the move to the branch and the move back to the old head (commitInPlaceAtTheCap, C4e part 3)
-block-store 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestingService.scala HASH storeBlock on the hash layout's arm; the unified layout commits in place
+block-store 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/TestingService.scala HASH storeBlock on the hash layout's arm; the unified layout commits in place (importInPlace is given exactly when holdsStateInPlace, NodeBuilder, and its arm imports the block through BlockExecution's commit)
 
 # Sync: not started on the unified layout (StdNode), SNAP refused (ConfigValidator).
 head-writer 1 src/main/scala/com/chipprbots/ethereum/blockchain/sync/regular/BlockImporter.scala HASH setCanonicalChainHead (SYNC-FORK rewind): the hash layout only; on the unified layout fork recovery moves nothing and the branch is judged by weight (fetchFromTheCommonBlock, C4e part 6)
