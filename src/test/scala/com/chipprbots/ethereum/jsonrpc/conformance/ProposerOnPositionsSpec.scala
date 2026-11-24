@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.jsonrpc.conformance
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
@@ -22,6 +23,7 @@ import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.ChangesetStorage
@@ -31,14 +33,17 @@ import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.SignedTransaction
+import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.jsonrpc.TestingService
 import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.BlockResult
 import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.ledger.HeaderTrustingBlockExecution
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** Spec 018 Track C, C3c (T102, T106, T111, T114): a block is BUILT on the unified state layout from its parent's state
@@ -100,23 +105,70 @@ class ProposerOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
   /** A node on the unified layout that holds the first `held` blocks of the chain, the last of them as its state. */
   final private class Rig(held: Int):
     val source: EphemDataSource = EphemDataSource()
+
+    /** How many of the views of a parent's state the proposer's door hands out next are stale as they are read: the
+      * disk moved on past what the log of moves reaches (B-451). Taken by the pool's filter and the build alike.
+      */
+    @volatile var staleViews = 0
+    val viewsTaken = new java.util.concurrent.atomic.AtomicInteger
+
+    /** What the pool answers a build with. */
+    val poolContents = new java.util.concurrent.atomic.AtomicReference[Seq[SignedTransaction]](Nil)
+
     val node: RpcCompatNode = new RpcCompatNode:
       override lazy val storagesInstance
           : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
         new Shared(source) with LocalPruningConfigBuilder with Storages.DefaultStorages with TestInstanceConfigProvider:
           override protected def statePathLive: Boolean = true
+      override lazy val blockchainReader: BlockchainReader =
+        val s = storagesInstance.storages
+        new BlockchainReader(
+          s.blockHeadersStorage,
+          s.blockBodiesStorage,
+          s.blockNumberMappingStorage,
+          s.stateStorage,
+          s.receiptStorage,
+          s.appStateStorage,
+          s.chainWeightStorage,
+          s.blockAccessListStorage,
+          s.pathStateStorage
+        ):
+          override def proposerStateOn(parent: BlockHeader): Option[MptStorage] =
+            val view = super.proposerStateOn(parent)
+            viewsTaken.incrementAndGet()
+            if staleViews > 0 then
+              staleViews -= 1
+              throw new StaleStateViewException(
+                BlockRef(parent.hash.value, parent.number.value, parent.stateRoot.value),
+                2L,
+                40L,
+                "the log of state moves no longer reaches back to it"
+              )
+            view
     given BlockchainConfig = node.blockchainConfig
     GenesisDataLoader
       .over(node.blockchainReader, node.blockchainWriter, node.storagesInstance.storages)
       .loadGenesisData()
     val execution = new Watched(node)
     def pathState = node.storagesInstance.storages.pathStateStorage.get
+    private val pool = testKit.spawn(
+      Behaviors.receiveMessage[PendingTransactionsManager.Command] {
+        case PendingTransactionsManager.GetPendingTransactionsReq(replyTo) =>
+          replyTo ! PendingTransactionsManager.PendingTransactionsResponse(
+            SignedTransactionWithSender
+              .getSignedTransactions(poolContents.get(), com.chipprbots.ethereum.domain.Timestamp.Zero)
+              .map(PendingTransactionsManager.PendingTransaction(_, 0L))
+          )
+          Behaviors.same
+        case _ => Behaviors.same
+      }
+    )
     val engine = new EngineApiService(
       node.blockchainReader,
       node.blockchainWriter,
       execution,
       node.forkChoiceManager,
-      None,
+      Some(pool),
       stateHeldInPlace = Some(() => pathState.anchor.map(_.hash))
     )
 
@@ -378,6 +430,63 @@ class ProposerOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
       val before = rig.allButCode
       rig.build(block, filtered, strict = false).map(_.block.header.hash) shouldBe Right(block.header.hash)
       rig.allButCode shouldBe before
+    }
+
+  // B-451: a view of the parent that goes stale under the pool's filter is made again on a fresh one, as the build's is
+  // (three times at most), and not answered as a state that is not held
+  it should "be held to the parent's state on a fresh view when the view went stale under the filter, as the build is" taggedAs
+    UnitTest in {
+      val index = chain.lastIndexWhere(block => proofOfStake(block) && block.body.transactionList.nonEmpty)
+      val rig = new Rig(held = index)
+      val block = chain(index)
+      val included = chain.take(index).flatMap(_.body.transactionList).last
+      val offered = block.body.transactionList :+ included
+      // one view stale, then three: made again on a fresh view each time
+      for stale <- Seq(1, 3) do
+        withClue(s"$stale stale view(s): ") {
+          rig.viewsTaken.set(0)
+          rig.staleViews = stale
+          rig.engine.executableAtParent(rig.head, offered) shouldBe block.body.transactionList
+          rig.viewsTaken.get shouldBe stale + 1
+        }
+      // stale beyond the bound: the fault of the state, thrown as the build throws it, and never the pool unfiltered
+      rig.viewsTaken.set(0)
+      rig.staleViews = 20
+      a[StaleStateViewException] should be thrownBy rig.engine.executableAtParent(rig.head, offered)
+      rig.viewsTaken.get shouldBe 4
+    }
+
+  it should "leave forkchoiceUpdated a payload when the filter's view of the parent went stale, and none past the bound" taggedAs
+    UnitTest in {
+      val index = chain.lastIndexWhere(block => proofOfStake(block) && block.body.transactionList.nonEmpty)
+      val rig = new Rig(held = index)
+      val block = chain(index)
+      val head = rig.head
+      rig.poolContents.set(block.body.transactionList)
+      val ask = () =>
+        rig.engine
+          .forkchoiceUpdated(ForkChoiceState(head.hash.value, zero, zero), Some(rig.attributesOf(block)))
+          .unsafeRunSync()
+      // the filter's first view went stale: made again, and the payload carries the block's transactions (those its
+      // own gas limit takes, from the first)
+      rig.staleViews = 1
+      val built = ask()
+      built.map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Valid)
+      rig.execution.proposerCalls shouldBe 1
+      val payload = rig.engine.getPayload(built.toOption.flatMap(_.payloadId).get).unsafeRunSync().toOption.get
+      payload.body.transactionList should not be empty
+      block.body.transactionList.take(payload.body.transactionList.size) shouldBe payload.body.transactionList
+      // stale past the bound: no payload, and no build was made
+      rig.staleViews = 20
+      val unbuilt = rig.engine
+        .forkchoiceUpdated(
+          ForkChoiceState(head.hash.value, zero, zero),
+          Some(rig.attributesOf(block).copy(timestamp = block.header.unixTimestamp.toLong + 1))
+        )
+        .unsafeRunSync()
+      unbuilt.left.map(_.take(5)) shouldBe Left("ATTR:")
+      rig.execution.proposerCalls shouldBe 1
+      rig.head.hash shouldBe head.hash
     }
 
   // ─── T114: testing_commitBlockV1 commits by importing ──────────────────────────────────────────────────────────────
