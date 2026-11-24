@@ -2480,17 +2480,18 @@ items:
   - id: B-279
     title: "Miner control has real state: error when no coordinator exists, respawn after miner_stop, track whether the internal miner runs"
     priority: P2
-    status: claimed
+    status: review
     area: rpc
     size: M
     opened: 2026-11-14
     refs: [B-278]
-    links: {}
+    links:
+      prs: [2083]
     claim:
       by: cloud-719c6644
       agent: forge
       since: 2026-11-24T12:18:36Z
-      heartbeat: 2026-11-24T12:18:40Z
+      heartbeat: 2026-11-24T13:09:32Z
       branch: fix/b279-miner-control
     notes: |-
       forge, spec 029 slice 7 analysis. PoWMiningCoordinator StopMining returns Behaviors.stopped (PoWMiningCoordinator.scala:103-105); PoWMining.minerCoordinatorRef is never cleared and startMiningProcess runs once at boot (PoWMining.scala:71,107), so a later StartMining/SetMiningMode is dropped. Also nothing records whether the internal miner runs: EthMiningService.isMining is 'someone reported a hashrate recently' and lags both ways. Related: B-278. The TUI will refuse 'mining start' and say why, and treat 'mining stop' as lasting until restart.
