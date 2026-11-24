@@ -484,14 +484,18 @@ class TypedCallPathSpec
     CallErrors.vmErrorMessage(com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)) shouldBe "invalid opcode: INVALID"
     est(spin).left.value shouldBe StxLedger.CallEstimateFailure.PreCheck("gas required exceeds allowance (100000)")
 
-  it should "keep go-ethereum's floor-data-gas message, and map only intrinsic gas to the allowance message" taggedAs (
+  it should "wrap the floor-data-gas refusal as go-ethereum's run does, and map only intrinsic gas to the allowance message" taggedAs (
     UnitTest,
     RPCTest
   ) in new Node:
     // Osaka, 1,000 non-zero bytes: intrinsic 37,000, EIP-7623 floor 61,000
     val heavy: TxArgs = args(Probe, _.copy(data = Some(ByteString(Array.fill[Byte](1000)(1)))))
+    // go-ethereum v1.17.9 eth/gasestimator `run`: fmt.Errorf("failed with %d gas: %w", call.GasLimit, err); `execute`
+    // special-cases ErrIntrinsicGas and ErrGasLimitTooHigh only.
     estimate(heavy, gas = 50000).left.value shouldBe
-      StxLedger.CallEstimateFailure.PreCheck("insufficient gas for floor data gas cost: have 50000, want 61000")
+      StxLedger.CallEstimateFailure.PreCheck(
+        "failed with 50000 gas: insufficient gas for floor data gas cost: have 50000, want 61000"
+      )
     estimate(heavy, gas = 30000).left.value shouldBe
       StxLedger.CallEstimateFailure.PreCheck("gas required exceeds allowance (30000)")
 

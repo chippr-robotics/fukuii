@@ -39,7 +39,7 @@
       "gasCost":44299,
       "depth":1,
       "stack":["0xc001","0x0","0x0"],
-      "error":"InitCodeSizeLimit"
+      "error":"max initcode size exceeded"
     }]
   },
   "structLogWithMemory":{
@@ -78,7 +78,7 @@
       "depth":1,
       "stack":["0xc001","0x0","0x0"],
       "memory":[],
-      "error":"InitCodeSizeLimit"
+      "error":"max initcode size exceeded"
     }]
   },
   "callTracer":{

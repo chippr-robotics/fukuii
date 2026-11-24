@@ -138,7 +138,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
             _.onCallExit(
               context.startGas - exitResult.gasRemaining,
               exitResult.returnData,
-              exitResult.error.map(ProgramErrorText.vmErrorMessage)
+              exitResult.error.map(exitErrorText(context, _, isCreate = false))
             )
           )
     result
@@ -288,7 +288,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
             _.onCallExit(
               context.startGas - exitResult.gasRemaining,
               exitResult.returnData,
-              exitResult.error.map(ProgramErrorText.vmErrorMessage)
+              exitResult.error.map(exitErrorText(context, _, isCreate = true))
             )
           )
     (result, newAddress)
@@ -298,6 +298,8 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     val byte = state.program.getByte(state.pc)
     state.config.opCodeFor(byte) match
       case Some(opCode) =>
+        tracer.foreach(_.onStepStart(opCode, state))
+        state.env.tracer.foreach(_.onStepStart(opCode, state))
         val newState = opCode.execute(state)
         // Per-opcode hook. VM-level `tracer` and the tracer carried in state.env.tracer
         // may both be set (VM ctor vs. per-context wiring); fire both so consumers wired
@@ -348,6 +350,19 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     * up as a bumped nonce above 2^64 - 1. At tx level it cannot: StdSignedTransactionValidator rejects tx nonces >=
     * 2^64 - 1, so the bumped sender nonce is at most 2^64 - 1.
     */
+  /** A sub-call's error as go-ethereum's tracers report it (`err.Error()`, B-026). `InvalidCall` is one result for the
+    * refusals before a frame starts, which go-ethereum names apart: "max call depth exceeded" (ErrDepth), "insufficient
+    * balance for transfer" (ErrInsufficientBalance) and, for a creation, "nonce uint64 overflow"
+    * (ErrNonceUintOverflow), checked in core/vm/evm.go's order. Read-only and run only for a tracer, so execution does
+    * not change.
+    */
+  private def exitErrorText(context: PC, error: ProgramError, isCreate: Boolean): String =
+    if error != InvalidCall then ProgramErrorText.vmErrorMessage(error)
+    else if context.callDepth > EvmConfig.MaxCallDepth then "max call depth exceeded"
+    else if context.endowment > context.world.getBalance(context.callerAddr) then "insufficient balance for transfer"
+    else if isCreate && creatorNonceOverflowed(context) then "nonce uint64 overflow"
+    else ProgramErrorText.vmErrorMessage(error)
+
   private def creatorNonceOverflowed(context: PC): Boolean =
     context.world.getAccount(context.callerAddr).exists(_.nonce.toBigInt > CreateOp.MaxNonce)
 

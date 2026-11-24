@@ -28,9 +28,9 @@ import com.chipprbots.ethereum.transactions.TxTypeGate
 import com.chipprbots.ethereum.vm.CodeStoreOutOfGas
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ExecutionTracer
-import com.chipprbots.ethereum.vm.ProgramErrorText
 import com.chipprbots.ethereum.vm.OutOfGas
 import com.chipprbots.ethereum.vm.ProgramError
+import com.chipprbots.ethereum.vm.ProgramErrorText
 import com.chipprbots.ethereum.vm.RevertOccurs
 
 class StxLedger(
@@ -325,12 +325,12 @@ class StxLedger(
       hi <- affordableCeiling(stx, world1)
       stxHi = withGas(stx, hi)
       _ <- callPreCheck(stxHi, blockHeader, world1, options).left.map { e =>
-        // the refusal of a type the block does not admit comes back as "failed with %d gas: %w" (execution-apis
-        // estimate-fork-inactive-access-list); the other refusals keep geth's bare message
+        // go-ethereum v1.17.9 eth/gasestimator: `run` wraps every core.ApplyMessage refusal as
+        // "failed with %d gas: %w" (call.GasLimit, here the ceiling), and `execute` turns only ErrIntrinsicGas (and
+        // ErrGasLimitTooHigh) into a failure that Estimate answers "gas required exceeds allowance (%d)". The EIP-7623
+        // floor (ErrFloorDataGas) is not special-cased there, so it is wrapped too (B-026, from B-172).
         if e.gasShortfall then PreCheck(s"gas required exceeds allowance ($hi)")
-        else if e.message.startsWith(StxLedger.TypeNotSupportedPrefix) then
-          PreCheck(s"failed with $hi gas: ${e.message}")
-        else PreCheck(e.message)
+        else PreCheck(s"failed with $hi gas: ${e.message}")
       }
       atHi = runCallFrame(stxHi, blockHeader, world1, options, tracer = None)._1
       // gasestimator.Estimate (gasestimator.go:139-143): a failure at the ceiling that is not out-of-gas is the answer

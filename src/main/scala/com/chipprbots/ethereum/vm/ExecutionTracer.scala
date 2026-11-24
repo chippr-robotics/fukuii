@@ -28,6 +28,11 @@ import com.chipprbots.ethereum.domain.Address
   */
 trait ExecutionTracer:
 
+  /** Called before each opcode executes, with the state it runs on: where go-ethereum's tracers see an opcode
+    * (`OnOpcode`), before any frame it opens. A structLog step is ordered from here (B-026).
+    */
+  def onStepStart[W <: WorldStateProxy[W, S], S <: Storage[S]](opCode: OpCode, state: ProgramState[W, S]): Unit = ()
+
   /** Called after each opcode execution in the VM exec loop. Corresponds to Besu's tracePostExecution. prevState gives
     * the pre-execution view.
     */

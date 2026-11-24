@@ -61,6 +61,13 @@
       "depth":1,
       "stack":["0x20","0x0","0x0","0x0","0x0","0xc003"]
     },{
+      "pc":34,
+      "op":"CALL",
+      "gas":199979,
+      "gasCost":68138,
+      "depth":1,
+      "stack":["0x20","0x0","0x0","0x0","0x0","0xc003","0xffff"]
+    },{
       "pc":0,
       "op":"PUSH32",
       "gas":65535,
@@ -103,13 +110,6 @@
       "depth":2,
       "stack":["0x20","0x0"]
     },{
-      "pc":34,
-      "op":"CALL",
-      "gas":199979,
-      "gasCost":2621,
-      "depth":1,
-      "stack":["0x20","0x0","0x0","0x0","0x0","0xc003","0xffff"]
-    },{
       "pc":35,
       "op":"POP",
       "gas":197358,
@@ -144,7 +144,7 @@
       "gasCost":6,
       "depth":1,
       "stack":["0x1","0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","0x0"],
-      "error":"ReturnDataOverflow"
+      "error":"return data out of bounds"
     }]
   },
   "structLogWithMemory":{
@@ -208,6 +208,14 @@
       "stack":["0x20","0x0","0x0","0x0","0x0","0xc003"],
       "memory":[]
     },{
+      "pc":34,
+      "op":"CALL",
+      "gas":199979,
+      "gasCost":68138,
+      "depth":1,
+      "stack":["0x20","0x0","0x0","0x0","0x0","0xc003","0xffff"],
+      "memory":[]
+    },{
       "pc":0,
       "op":"PUSH32",
       "gas":65535,
@@ -256,14 +264,6 @@
       "stack":["0x20","0x0"],
       "memory":["0x800000000000000000000000000000000000000000000000000000000000beef"]
     },{
-      "pc":34,
-      "op":"CALL",
-      "gas":199979,
-      "gasCost":2621,
-      "depth":1,
-      "stack":["0x20","0x0","0x0","0x0","0x0","0xc003","0xffff"],
-      "memory":[]
-    },{
       "pc":35,
       "op":"POP",
       "gas":197358,
@@ -303,7 +303,7 @@
       "depth":1,
       "stack":["0x1","0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","0x0"],
       "memory":["0x800000000000000000000000000000000000000000000000000000000000beef"],
-      "error":"ReturnDataOverflow"
+      "error":"return data out of bounds"
     }]
   },
   "callTracer":{
