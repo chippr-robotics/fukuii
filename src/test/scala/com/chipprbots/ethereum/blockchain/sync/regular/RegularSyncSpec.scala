@@ -353,6 +353,9 @@ class RegularSyncSpec
   ) extends Fixture:
     val answer: java.util.concurrent.atomic.AtomicReference[BlockImportResult] =
       new java.util.concurrent.atomic.AtomicReference(BlockEnqueued)
+    // the head the pool was last reset to, as the node shares it with the fork choice (B-515)
+    val txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead =
+      new com.chipprbots.ethereum.transactions.TxPoolHead
     // what the importer reported to the consensus layer as invalid, with each block's latest valid hash
     val reportedInvalid: java.util.concurrent.ConcurrentLinkedQueue[(ByteString, ByteString)] =
       new java.util.concurrent.ConcurrentLinkedQueue()
@@ -416,7 +419,8 @@ class RegularSyncSpec
         blacklist,
         this,
         exhausts = exhausts,
-        importLock = importLock
+        importLock = importLock,
+        txPoolHead = txPoolHead
       ),
       s"$name-importer"
     )
@@ -4177,6 +4181,49 @@ class RegularSyncSpec
           takenBackByThePool() shouldBe List(movedOff.body.transactionList)
           handedBackAheadOfAReset() shouldBe false
           resetsOfThePool() shouldBe 1
+      )
+
+      // B-514 (beacon W4): a move back that failed left the head on side blocks the branch stands on, off the chain it
+      // left. The pool is reset onto them, as a move onto them would reset it: their txs leave it, those of the chain
+      // left come back, in one reset; none of them is counted as imported or told to new-head subscribers
+      "reset the pool onto the side blocks a move back that failed left the head on" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b514-side-blocks"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val side: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          answer.set(
+            new StateFaultAfterAMove(
+              new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the move back failed"),
+              Nil,
+              List(movedOff),
+              List(side)
+            )
+          )
+
+          importBatch(testBlocks.take(3))
+
+          removedFromThePool() shouldBe List(side.body.transactionList)
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+          resetsOfThePool() shouldBe 1
+          withClue("the head the pool was reset to, for the fork choice's next reset (B-515): ") {
+            txPoolHead.current shouldBe Some(side.header)
+          }
+          noneTold()
+      )
+
+      // B-515 (beacon W1): the head the importer's move left is recorded as the pool's, in the record the fork choice
+      // resets from, so that a forkchoiceUpdated after it resets the pool from there
+      "record the head a batch moved to as the one the pool was reset to" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("b515-pool-head"):
+          val batch: List[Block] = testBlocks.take(2)
+          answer.set(BlockImportedToTop(batch.map(weighed)))
+
+          importBatch(batch)
+
+          resetsOfThePool() shouldBe 1
+          txPoolHead.current shouldBe Some(batch.last.header)
       )
 
       // Spec 018 C4b: the same for a state fault, which carries the adopted prefix itself

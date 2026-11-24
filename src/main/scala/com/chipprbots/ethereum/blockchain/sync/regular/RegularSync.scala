@@ -114,7 +114,9 @@ object RegularSync:
       // The importer's count of exhausted state-node fetches towards a re-SNAP. One per regular-sync session: every
       // importer this session spawns is handed it, so a pipeline started again keeps the count (#1705).
       exhausts: BlockImporter.ExhaustCount = new BlockImporter.ExhaustCount,
-      pipelineBackoff: PipelineBackoff = PipelineBackoff.default
+      pipelineBackoff: PipelineBackoff = PipelineBackoff.default,
+      // the head the pool was last reset to, the node's one, handed to every importer this session spawns (B-515)
+      txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead = new com.chipprbots.ethereum.transactions.TxPoolHead
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -176,7 +178,8 @@ object RegularSync:
               Some(peersClient),
               reorgState,
               exhausts = exhausts,
-              importLock = importLock
+              importLock = importLock,
+              txPoolHead = txPoolHead
             ),
             s"block-importer-$epoch"
           )

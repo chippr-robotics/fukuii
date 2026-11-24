@@ -1334,6 +1334,10 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
             (seen.result should not).include("on the chain it left")
             seen.head shouldBe aChain(5).hash
             seen.headOn shouldBe aChain.slice(2, 6).map(_.hash)
+            // B-460 N3, B-514: the answer names the chain the head left, b3..b7, and the side blocks it was left on,
+            // so that the pool is reset onto a6 off b7
+            seen.movedOff shouldBe bChain.map(_.hash)
+            seen.movedOnto shouldBe aChain.slice(2, 6).map(_.hash)
         )
       )
       for (what, fault, expected) <- faults do
@@ -1437,7 +1441,11 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         weights: Seq[Option[ChainWeight]],
         rows: (Map[ByteString, ByteString], Map[ByteString, ByteString]),
         // the side blocks the answer tells as the head when a move back left it on them (B-461), oldest first
-        headOn: List[BlockHash] = Nil
+        headOn: List[BlockHash] = Nil,
+        // what the adapter's answer names as the blocks the head left and the side blocks it was left on, which the
+        // pool is reset by (B-460, B-514)
+        movedOff: List[BlockHash] = Nil,
+        movedOnto: List[BlockHash] = Nil
     )
 
     def evaluated(
@@ -1481,6 +1489,23 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         import node.runtime
         scala.util.Try(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(aMore)).unsafeRunSync()).toEither
       val all = aChain ++ bChain ++ aMore
+      // the answer as the importer is given it: the result through an adapter, which names the blocks the head left
+      val answered: Option[BlockImportResult] = result.toOption.map { evaluatedResult =>
+        val answering = new Consensus:
+          override def evaluateBranch(branch: NonEmptyList[Block])(implicit
+              blockExecutionScheduler: IORuntime,
+              blockchainConfig: BlockchainConfig
+          ): cats.effect.IO[ConsensusResult] = cats.effect.IO.pure(evaluatedResult)
+        import node.blockchainConfig
+        import node.runtime
+        new ConsensusAdapter(
+          answering,
+          node.blockchainReader,
+          new com.chipprbots.ethereum.ledger.BlockQueue(node.blockchainReader, 100, 100),
+          null,
+          node.runtime
+        ).evaluateBranch(NonEmptyList.fromListUnsafe(aMore)).unsafeRunSync()
+      }
       val (toldNew, toldOld) = result match
         case Right(SelectedNewBestBranch(oldBranch, newBranch, weights, _)) =>
           weights shouldBe newBranch.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
@@ -1495,7 +1520,9 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         (1 to all.map(_.number.value.toInt).max).map(node.indexed),
         all.map(block => node.blockchainReader.getChainWeightByHash(block.hash)),
         PathStateTestKit.allRows(new PathNodeStorage(datadir)),
-        result.toOption.toList.flatMap(Consensus.headLeftOn).map(_.block.hash)
+        result.toOption.toList.flatMap(Consensus.headLeftOn).map(_.block.hash),
+        answered.toList.flatMap(com.chipprbots.ethereum.blockchain.sync.regular.MovedOff.by).map(_.hash),
+        answered.toList.flatMap(com.chipprbots.ethereum.blockchain.sync.regular.MovedOff.onto).map(_.hash)
       )
 
   "A branch of the head's own weight on a proof-of-work chain (the unified layout)" should

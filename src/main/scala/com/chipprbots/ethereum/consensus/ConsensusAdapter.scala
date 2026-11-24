@@ -372,9 +372,11 @@ class ConsensusAdapter(
             toldTheFeed("a branch that was not judged")(
               _.notJudged(newBranch.toList.drop(imported.size), fault, blockValidation.firstInvalidHeaderNotJudged)
             )
-          leftBy(newBranch, blocksToEnqueue) match
-            case Nil      => BlockImportStateFault(fault, imported)
-            case movedOff => new StateFaultAfterAMove(fault, imported, movedOff)
+          // the pool is reset onto where the head stands, the side blocks a move back that failed left it on included
+          // (B-514), off the blocks it left (B-460)
+          (leftBy(newBranch, blocksToEnqueue), Consensus.headLeftOn(result).map(_.block)) match
+            case (Nil, Nil)            => BlockImportStateFault(fault, imported)
+            case (movedOff, movedOnto) => new StateFaultAfterAMove(fault, imported, movedOff, movedOnto)
       }
 
   private def evaluated(

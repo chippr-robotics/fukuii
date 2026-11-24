@@ -219,15 +219,22 @@ class ConsensusAdapterPartialImportSpec extends AnyFlatSpec with Matchers with M
   ) in (new Reorganised:
     queue.enqueueBlock(side)
     queued(side) shouldBe true
-    imported(
+    // ConsensusImpl queues again the chain the head left, oldHead, with the branch, which was not judged
+    val answer: Any = imported(
       new HeadLeftOnSideBlocks(
         new StateUnavailable("the move back failed"),
-        branch,
+        oldHead :: branch,
         List(BlockData(side, Nil, weights.head))
       )
-    ) shouldBe a[BlockImportStateFault]
+    )
+    answer shouldBe a[BlockImportStateFault]
     queued(side) shouldBe false
-    branch.foreach(block => queued(block) shouldBe true)
+    (oldHead :: branch).foreach(block => queued(block) shouldBe true)
+    // B-514: the pool is reset onto the side blocks the head was left on, off the chain it left
+    withClue("the answer names where the head was left, and what it left: ") {
+      MovedOff.onto(answer.asInstanceOf[BlockImportResult]) shouldBe List(side)
+      MovedOff.by(answer.asInstanceOf[BlockImportResult]) shouldBe List(oldHead)
+    }
   )
 
   // B-460: a fault of this node's state after a reorganisation's prefix became the head. ConsensusImpl queues the blocks

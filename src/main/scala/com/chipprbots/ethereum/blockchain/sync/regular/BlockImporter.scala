@@ -71,6 +71,7 @@ import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
+import com.chipprbots.ethereum.transactions.TxPoolHead
 import com.chipprbots.ethereum.transactions.TxPoolReset
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -366,7 +367,9 @@ object BlockImporter:
       peersClient: Option[TypedActorRef[PeersClient.Command]] = None,
       reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
       exhausts: ExhaustCount,
-      importLock: ImportLock
+      importLock: ImportLock,
+      // the head the pool was last reset to, the node's one, shared with the fork choice's resets (B-515)
+      txPoolHead: TxPoolHead = new TxPoolHead
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -394,7 +397,8 @@ object BlockImporter:
           peersClient.map(pc => new BlockAccessListFetcher(pc)(using ctx.system.scheduler)),
           reorgState,
           exhausts,
-          importLock
+          importLock,
+          txPoolHead
         )
         // Started as it is spawned: a separate start message was what a re-spawned importer never got (#1705).
         logic.starting()
@@ -546,7 +550,8 @@ final private class BlockImporterLogic(
     balFetcher: Option[BlockAccessListFetcher],
     reorgState: ReorgStateHandler,
     exhausts: BlockImporter.ExhaustCount,
-    importLock: ImportLock
+    importLock: ImportLock,
+    txPoolHead: TxPoolHead
 ):
   import BlockImporter.*
   import configBuilder.*
@@ -1677,25 +1682,23 @@ final private class BlockImporterLogic(
               if syncConfig.redownloadMissingStateNodes =>
             // The validated prefix before the failing block is already adopted. Count it, so the retry starts at the
             // failing block and does not re-apply what is already in the database.
-            IO.pure((adoptedPrefix(adopted, importedBlocks, MovedOff.by(missing)), Some(missingNodeException)))
+            IO.pure((adoptedPrefix(adopted, importedBlocks, missing), Some(missingNodeException)))
 
           case missing @ BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
-            IO(adoptedPrefix(adopted, importedBlocks, MovedOff.by(missing))).flatMap(_ =>
-              IO.raiseError(missingNodeException)
-            )
+            IO(adoptedPrefix(adopted, importedBlocks, missing)).flatMap(_ => IO.raiseError(missingNodeException))
 
           // This node's own state could not take a block of the batch (spec 018 Track C, C4b). The prefix that was
           // adopted before it is counted, as above. No strike: the block was not judged, so the peer that sent it is
           // not evicted and no fork is detected.
           case stateFault @ BlockImportStateFault(_, adopted) =>
-            IO.pure((adoptedPrefix(adopted, importedBlocks, MovedOff.by(stateFault)), Some(stateFault)))
+            IO.pure((adoptedPrefix(adopted, importedBlocks, stateFault), Some(stateFault)))
 
           // This node's own state failed, not the block: no strike, so the peer that sent it is not evicted and no fork
           // is detected (spec 022 T062). The caller backs off and escalates instead. A prefix of the batch that became
           // the head before the fault is counted as above, so that the escalation starts at the failing block (B-336).
           case err @ BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
             IO.pure(
-              (adoptedPrefix(BlockImportFailedAt.importedBefore(err), importedBlocks, MovedOff.by(err)), Some(err))
+              (adoptedPrefix(BlockImportFailedAt.importedBefore(err), importedBlocks, err), Some(err))
             )
 
           case err @ (UnknownParent | BlockImportFailed(_)) =>
@@ -1874,19 +1877,20 @@ final private class BlockImporterLogic(
   /** Accounting for the validated prefix of a batch whose later block hit a missing node: those blocks are adopted, so
     * they are imported like any other (strikes cleared, the pool and new-head subscribers told, progress reported) and
     * prepended to `importedBlocks` (newest first), which is what makes the caller's `blocks.drop(importedBlocks.size)`
-    * start at the failing block. `movedOff` are the blocks the head left when the prefix replaced them ([[MovedOff]]):
-    * the pool takes their transactions back in the same reset, as for a reorganisation that went through (B-460).
+    * start at the failing block. The blocks `result` says the head left ([[MovedOff]]) go back to the pool in the same
+    * reset, as for a reorganisation that went through (B-460), and the side blocks it says the head was left on, of no
+    * batch, leave it with the prefix (B-514); neither is counted, nor told to new-head subscribers.
     */
   private def adoptedPrefix(
       adopted: List[BlockData],
       importedBlocks: List[Block],
-      movedOff: List[Block]
+      result: BlockImportResult
   ): List[Block] =
     val adoptedBlocks = adopted.map(_.block)
     adoptedBlocks.foreach(b => unknownParentStrikes -= b.hash.value)
     adoptedBlocks.foreach(b => forkRecoveredFor -= b.hash.value)
     // the prefix only: the failing block and those after it are not on the chain (B-336, B-337)
-    tellBatchImported(adoptedBlocks, movedOff, adoptedBlocks)
+    tellBatchImported(MovedOff.onto(result) ++ adoptedBlocks, MovedOff.by(result), adoptedBlocks)
     val imported = adoptedBlocks.reverse ::: importedBlocks
     if adoptedBlocks.nonEmpty then
       imported.headOption
@@ -1976,11 +1980,11 @@ final private class BlockImporterLogic(
               else fetcher ! BlockFetcher.InvalidateBlocksFrom(failingNumber, error, shouldBlacklist = false)
           case missing @ BlockImportFailedDueToMissingNode(missingNodeException, adopted)
               if syncConfig.redownloadMissingStateNodes =>
-            announceAdopted(adopted, internally, MovedOff.by(missing))
+            announceAdopted(adopted, internally, missing)
             // state node re-download will be handled when downloading headers
             doLog(importMessages.missingStateNode(missingNodeException))
           case missing @ BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
-            announceAdopted(adopted, internally, MovedOff.by(missing))
+            announceAdopted(adopted, internally, missing)
             IO.raiseError(missingNodeException)
           case BlockImportFailed(error) if informFetcherOnFail && !Consensus.isLocalStateFault(error) =>
             // following a consensus layer the peer that served it is not blamed (B-513)
@@ -1990,12 +1994,12 @@ final private class BlockImporterLogic(
           // a fault of this node's own state after a prefix became the head (B-336): nothing is said of the failing
           // block, and the prefix is announced as any imported blocks are
           case failed @ BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
-            announceAdopted(BlockImportFailedAt.importedBefore(failed), internally, MovedOff.by(failed))
+            announceAdopted(BlockImportFailedAt.importedBefore(failed), internally, failed)
           case UnknownParent => announcedBy.foreach(handleOrphanAnnounce(block, _))
           // Not judged, so nothing is said of it to the fetcher or of the peer that announced it; what was adopted
           // before the fault is announced as any imported blocks are.
           case stateFault @ BlockImportStateFault(fault, adopted) =>
-            announceAdopted(adopted, internally, MovedOff.by(stateFault))
+            announceAdopted(adopted, internally, stateFault)
             wantAncestorBodiesOn(fault, block)
           case BlockEnqueued | DuplicateBlock | BlockImportFailed(_) => ()
         }
@@ -2068,12 +2072,13 @@ final private class BlockImporterLogic(
       )
 
   /** The validated prefix of a branch whose later block hit a missing node is adopted exactly as if the shorter branch
-    * had imported: announced to peers, taken out of the tx pool, published, and reported as progress. The blocks the
-    * head left (`movedOff`, [[MovedOff]]) go back to the pool in the same reset (B-460).
+    * had imported: announced to peers, taken out of the tx pool, published, and reported as progress. The blocks
+    * `result` says the head left ([[MovedOff]]) go back to the pool in the same reset (B-460), and the side blocks it
+    * says the head was left on leave the pool with the prefix (B-514), told to no one else.
     */
-  private def announceAdopted(adopted: List[BlockData], internally: Boolean, movedOff: List[Block]): Unit =
+  private def announceAdopted(adopted: List[BlockData], internally: Boolean, result: BlockImportResult): Unit =
     val (blocks, weights) = adopted.map(data => (data.block, data.weight)).unzip
-    updateTxPool(blocks, movedOff)
+    updateTxPool(MovedOff.onto(result) ++ blocks, MovedOff.by(result))
     if adopted.nonEmpty then
       broadcastBlocks(blocks, weights)
       blocks.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
@@ -2087,9 +2092,28 @@ final private class BlockImporterLogic(
     broadcaster ! BroadcastBlocks(newBlocks)
 
   // go-ethereum's pool reset (B-253): the blocks moved onto leave the pool, and the transactions of those moved off
-  // that the new chain does not include go back, unless the heads are more than 64 blocks apart (TxPoolReset)
+  // that the new chain does not include go back, unless the heads are more than 64 blocks apart (TxPoolReset). The head
+  // the move left is recorded as the pool's in the node's one record of it, which the fork choice's resets read too
+  // (B-515): a fork choice after this move resets the pool from here.
   private def updateTxPool(blocksAdded: Seq[Block], blocksRemoved: Seq[Block]): Unit =
-    TxPoolReset.tell(pendingTransactionsManager, TxPoolReset.ofBranches(blocksAdded, blocksRemoved))
+    txPoolHead.told(
+      headTheMoveLeft(blocksAdded, blocksRemoved),
+      pendingTransactionsManager,
+      TxPoolReset.ofBranches(blocksAdded, blocksRemoved)
+    )
+
+  /** The head a move onto `added` off `removed` left, as [[TxPoolReset.ofBranches]] reads it: the highest block added,
+    * or with none added the parent of the lowest removed. None for no move, or a parent that is not stored.
+    */
+  private def headTheMoveLeft(added: Seq[Block], removed: Seq[Block]): Option[BlockHeader] =
+    added
+      .maxByOption(_.header.number.value)
+      .map(_.header)
+      .orElse(
+        removed
+          .minByOption(_.header.number.value)
+          .flatMap(lowest => blockchainReader.getBlockHeaderByHash(lowest.header.parentHash))
+      )
 
   private def importWith(importTask: IO[NewBehavior], blockImportType: BlockImportType)(
       state: ImporterState

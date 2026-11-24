@@ -17,6 +17,7 @@ import com.chipprbots.ethereum.testing.Tags.UnitTest
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset
+import com.chipprbots.ethereum.transactions.TxPoolHead
 import com.chipprbots.ethereum.transactions.TxPoolReset
 
 /** B-253: a forkchoiceUpdated that moves the head resets the pool from the head it was last told of, as go-ethereum's
@@ -33,12 +34,15 @@ class EngineApiPoolResetSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     lazy val forkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter)
     // a reset that throws, when set: the fork choice is answered all the same
     @volatile var resetFails = false
+    // the node's one record of the head the pool was last reset to, which regular sync's importer writes too (B-515)
+    val txPoolHead: TxPoolHead = new TxPoolHead
     lazy val engineApi: EngineApiService = new EngineApiService(
       blockchainReader,
       blockchainWriter,
       mkBlockExecution(validators), // never executes here: every block is stored with its receipts
       forkChoiceManager,
-      Some(pool.ref)
+      Some(pool.ref),
+      txPoolHead = txPoolHead
     )(using blockchainConfig, testKit.scheduler):
       override protected def poolReset(from: Option[BlockHeader], to: BlockHeader): TxPoolReset.Reset =
         if resetFails then throw new RuntimeException("a body read failed") else super.poolReset(from, to)
@@ -109,6 +113,17 @@ class EngineApiPoolResetSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     resetFails = false
     headTo(old.last)
     removed(old(1), old(2))
+    pool.expectNoMessage(200.millis)
+
+  // B-515 (beacon W1): regular sync's importer moved the head and reset the pool, then a fork choice moves it on. The
+  // fork choice resets the pool from the head the importer left, not from the one it last set itself (here none)
+  it should "reset from the head regular sync's importer last reset the pool to" taggedAs UnitTest in new Setup:
+    // the importer's move onto old1..old3, as BlockImporter tells the pool of it
+    txPoolHead.told(Some(old.last.header), pool.ref, TxPoolReset.ofBranches(old, Nil))
+    removed(old*)
+    headTo(newChain.last)
+    told(newChain, old.flatMap(_.body.transactionList).filterNot(_ == shared))
+    txPoolHead.current shouldBe Some(newChain.last.header)
     pool.expectNoMessage(200.millis)
 
   it should "tell the pool nothing for a fork choice that names the head it already has" taggedAs UnitTest in new Setup:

@@ -1,7 +1,6 @@
 package com.chipprbots.ethereum.consensus.engine
 
 import java.security.MessageDigest
-import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.util.ByteString
 
@@ -65,7 +64,10 @@ class EngineApiService(
     stateRecovery: Option[com.chipprbots.ethereum.ledger.StateRecovery] = None,
     // What is made of each recovery a fork choice asked for (spec 018 C5a part 6): when the node cannot follow the
     // head it is named, it says that its state is to be given up for a sync from scratch. It says only, for now.
-    escalationWatch: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None
+    escalationWatch: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None,
+    // The head the tx pool was last reset to (B-253, B-515): the node's one, shared with regular sync's importer, which
+    // resets the pool on the moves it makes. A fork choice after one of them resets the pool from the head it left.
+    txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead = new com.chipprbots.ethereum.transactions.TxPoolHead
 )(implicit blockchainConfig: BlockchainConfig, typedScheduler: org.apache.pekko.actor.typed.Scheduler)
     extends Logger:
 
@@ -82,12 +84,6 @@ class EngineApiService(
   import scala.concurrent.duration.*
   implicit private val askTimeout: Timeout = Timeout(3.seconds)
 
-  // The head the tx pool was last reset to by a fork choice (B-253, TxPoolReset.between): None until the first. Read
-  // and written under `poolResetLock` only, which orders the resets of two fork choices made at once, so that the pool
-  // is never told a move from B back to A while the head is at B; a lock of its own, held for the reset alone.
-  private val poolHead = new AtomicReference[Option[BlockHeader]](None)
-  private val poolResetLock = new Object
-
   /** Reset the tx pool from the head it was last reset to onto `head`, which a fork choice has just set (B-253). Pool
     * hygiene only: a reset that fails is logged and the fork choice is answered as it would have been, its head set.
     * Run inline, before the payload build that follows, which then reads the pool as reset: its reads are bounded (a
@@ -97,13 +93,12 @@ class EngineApiService(
       pool: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command],
       head: ByteString
   ): Unit =
+    // From the head the pool was last reset to, by a fork choice or by regular sync's importer (`txPoolHead`, B-515),
+    // under its lock, which orders the resets of two writers at once: the pool is never told a move from B back to A
+    // while the head is at B. A reset that throws records nothing, and the next one starts from the head before it.
     try
-      poolResetLock.synchronized {
-        blockchainReader.getBlockHeaderByHash(BlockHash(head)).foreach { newHead =>
-          val reset = poolReset(poolHead.get(), newHead)
-          poolHead.set(Some(newHead))
-          TxPoolReset.tell(pool, reset)
-        }
+      blockchainReader.getBlockHeaderByHash(BlockHash(head)).foreach { newHead =>
+        txPoolHead.resetOnto(newHead, pool)(from => poolReset(from, newHead))
       }
     catch
       case NonFatal(e) =>

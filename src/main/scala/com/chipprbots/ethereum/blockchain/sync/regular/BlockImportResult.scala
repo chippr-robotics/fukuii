@@ -110,10 +110,20 @@ object BlockImportFailedAt:
 trait MovedOff:
   def movedOff: List[Block]
 
+  /** The side blocks the branch stands on, of no batch, that a move back that failed left the head on (B-461), oldest
+    * first: the pool drops their transactions as a move onto them does (B-514). Empty otherwise.
+    */
+  def movedOnto: List[Block] = Nil
+
 object MovedOff:
   /** The blocks `result` says the head moved off, or none. */
   def by(result: BlockImportResult): List[Block] = result match
     case moved: MovedOff => moved.movedOff
+    case _               => Nil
+
+  /** The side blocks `result` says the head was left on ([[MovedOff.movedOnto]]), or none. */
+  def onto(result: BlockImportResult): List[Block] = result match
+    case moved: MovedOff => moved.movedOnto
     case _               => Nil
 
 /** `imported` is the validated prefix of the batch that was adopted before the missing node was hit; it is announced
@@ -140,10 +150,15 @@ final class MissingNodeAfterAMove(reason: MissingNodeException, imported: List[B
 case class BlockImportStateFault(fault: StateFault, imported: List[BlockData] = Nil) extends BlockImportResult
 
 /** A [[BlockImportStateFault]] after which the head stands on blocks it moved onto from `movedOff` (B-337, B-461,
-  * B-460). Equal to, and matched exactly like, the result it extends: only [[MovedOff.by]] reads `movedOff`.
+  * B-460): the prefix `imported`, or the side blocks `movedOnto` a move back that failed left it on (B-514). Equal to,
+  * and matched exactly like, the result it extends: only [[MovedOff.by]] and [[MovedOff.onto]] read the two.
   */
-final class StateFaultAfterAMove(fault: StateFault, imported: List[BlockData], val movedOff: List[Block])
-    extends BlockImportStateFault(fault, imported)
+final class StateFaultAfterAMove(
+    fault: StateFault,
+    imported: List[BlockData],
+    val movedOff: List[Block],
+    override val movedOnto: List[Block] = Nil
+) extends BlockImportStateFault(fault, imported)
     with MovedOff
 
 case object UnknownParent extends BlockImportResult
