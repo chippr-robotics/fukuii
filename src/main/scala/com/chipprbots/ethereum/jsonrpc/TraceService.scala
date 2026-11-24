@@ -11,10 +11,8 @@ import org.json4s.jvalue2monadic
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
-import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -130,13 +128,9 @@ class TraceService(
     StateRead
       .reading {
         for
-          location <- transactionMappingStorage
-            .get(req.txHash)
+          found <- CanonicalTxLookup(transactionMappingStorage, blockchainReader, req.txHash)
             .toRight(JsonRpcError.InvalidParams("Transaction not found"))
-          TransactionLocation(blockHash, txIndex) = location
-          block <- blockchainReader
-            .getBlockByHash(BlockHash(blockHash))
-            .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${blockHash.toHex}"))
+          CanonicalTxLookup.Found(block, txIndex) = found
           parentHeader <- blockchainReader
             .getBlockHeaderByHash(block.header.parentHash)
             .toRight(JsonRpcError.InvalidParams("Parent block not found"))
@@ -197,13 +191,9 @@ class TraceService(
     StateRead
       .reading {
         for
-          location <- transactionMappingStorage
-            .get(req.txHash)
+          found <- CanonicalTxLookup(transactionMappingStorage, blockchainReader, req.txHash)
             .toRight(JsonRpcError.InvalidParams("Transaction not found"))
-          TransactionLocation(blockHash, txIndex) = location
-          block <- blockchainReader
-            .getBlockByHash(BlockHash(blockHash))
-            .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${blockHash.toHex}"))
+          CanonicalTxLookup.Found(block, txIndex) = found
           parentHeader <- blockchainReader
             .getBlockHeaderByHash(block.header.parentHash)
             .toRight(JsonRpcError.InvalidParams("Parent block not found"))

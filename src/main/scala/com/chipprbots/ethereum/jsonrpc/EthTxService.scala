@@ -16,7 +16,6 @@ import scala.util.Try
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.crypto.KzgCellProofs
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
-import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
@@ -134,26 +133,30 @@ class EthTxService(
     val eventualMaybeData = getTransactionDataByHash(req.txHash)
     eventualMaybeData.map(txResponse => Right(GetTransactionByHashResponse(txResponse.map(TransactionResponse(_)))))
 
+  /** Chain first, then the pool, as go-ethereum's `GetTransaction` then `GetPoolTransaction` do (internal/ethapi
+    * GetTransactionByHash). The chain answer needs the lookup's block to be canonical at its number
+    * ([[CanonicalTxLookup]]): a stale lookup left by a reorg falls through to the pool, and to null if the pool lacks
+    * it.
+    */
   private def getTransactionDataByHash(txHash: ByteString): IO[Option[TransactionData]] =
-    val maybeTxPendingResponse: IO[Option[TransactionData]] = getTransactionsFromPool.map {
-      _.pendingTransactions.map(_.stx.tx).find(_.hash.value == txHash).map(TransactionData(_))
-    }
-
-    maybeTxPendingResponse.map { txPending =>
-      txPending.orElse {
-        for
-          TransactionLocation(blockHash, txIndex) <- transactionMappingStorage.get(txHash)
-          Block(header, body) <- blockchainReader.getBlockByHash(BlockHash(blockHash))
-          stx <- body.transactionList.lift(txIndex)
-        yield TransactionData(stx, Some(header), Some(txIndex))
-      }
+    IO(CanonicalTxLookup(transactionMappingStorage, blockchainReader, txHash)).flatMap {
+      case Some(CanonicalTxLookup.Found(Block(header, body), txIndex)) =>
+        IO.pure(Some(TransactionData(body.transactionList(txIndex), Some(header), Some(txIndex))))
+      case None =>
+        getTransactionsFromPool.map {
+          _.pendingTransactions.map(_.stx.tx).find(_.hash.value == txHash).map(TransactionData(_))
+        }
     }
 
   def getTransactionReceipt(req: GetTransactionReceiptRequest): ServiceResponse[GetTransactionReceiptResponse] =
     IO {
       val result: Option[TransactionReceiptResponse] = for
-        TransactionLocation(blockHash, txIndex) <- transactionMappingStorage.get(req.txHash)
-        Block(header, body) <- blockchainReader.getBlockByHash(BlockHash(blockHash))
+        CanonicalTxLookup.Found(Block(header, body), txIndex) <- CanonicalTxLookup(
+          transactionMappingStorage,
+          blockchainReader,
+          req.txHash
+        )
+        blockHash = header.hash.value
         // Only surface receipts for CANONICAL transactions. Under engine-API, a block
         // may be stored (with receipts + tx-location mapping) immediately after newPayload
         // but not promoted to canonical until a subsequent forkchoiceUpdated — hive's
@@ -162,7 +165,6 @@ class EthTxService(
         // index, AND (b) its number is <= the client's best-block pointer (i.e. FCU has
         // advanced past it). (a) alone is true right after newPayload's storeBlock but
         // (b) flips only when the subsequent FCU updates saveBestKnownBlocks.
-        _ <- blockchainReader.getBlockHeaderByNumber(header.number.value).filter(_.hash.value == blockHash)
         bestNum = blockchainReader.getBestBlockNumber if header.number.value <= bestNum
         stx <- body.transactionList.lift(txIndex)
         receipts <- blockchainReader.getReceiptsByHash(BlockHash(blockHash))
