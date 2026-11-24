@@ -942,7 +942,7 @@ item that carries the decision; "Source" is where it was recorded. The design no
 | 2026-11-16 | The pivot is held to the refused branch. | C5a | plan / implementation log |
 | 2026-11-16 | A fork deeper than the fetcher holds is refused and escalated. | C5a | plan / implementation log |
 | 2026-11-16 | Cut v0.12.0 after C5a part 10. | B-312 | backlog |
-| 2026-11-17 | C5a part 10 decisions 1 to 3: a hand-off with excluded accounts heals first; SNAP is advertised on the guard; regular sync from genesis is refused on the guard (PoW exempted on 2026-11-18). | C5a part 10, #1880 | plan "C5a part 10" |
+| 2026-11-17 | C5a part 10 decisions 1 to 3: a hand-off with excluded accounts heals first; SNAP is advertised on the guard; regular sync from genesis is refused on the guard (PoW exempted on 2026-11-18; ended on 2026-11-24). | C5a part 10, #1880 | plan "C5a part 10" |
 | 2026-11-17 | A failed-closed state is persisted synced (`state.fault`) and opens closed until a clear. | B-252 | plan "C4d part 0" |
 | 2026-11-17 | The oracle jar is v0.12.1 (0.11.0's digest as the fallback); the keeper and the NFS path are still to be named. | T002, B-053 | `baselines/pinned-jar.md` |
 | 2026-11-18 | Checkpoint v2 decisions 1 to 4: the window follows the header; an estimated TD is accepted with a WARN; PoS archives are headers-only and finalized-only; a failed import is cleared and not retried. | C5c, dm E.1, T290, T291, T292 | dm E.1 |
@@ -961,3 +961,4 @@ item that carries the decision; "Source" is where it was recorded. The design no
 | 2026-11-20 | The private Olympia PoW net is skipped (no Olympia core-geth on the host): the T244 run, the private-net half of T258 and of T240. | T240, T244, T258 | `baselines/c7-gate-report.md` |
 | 2026-11-21 | State RPCs resolve the block by its header, for geth parity. | B-411 | #1976 |
 | 2026-11-21 | The Ethash DAG is memory-mapped off-heap (not linked to spec 018). | B-413 | #1977 |
+| 2026-11-24 | Regular sync from genesis is taken on the guard on every chain, a chain with a TTD included (ends the 2026-11-17 refusal); a node with no state at all is still refused. | B-314 | plan "Decision log" |

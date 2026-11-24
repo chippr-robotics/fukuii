@@ -136,6 +136,14 @@ turns it on:
 The client log shows the guard was on. `fukuii.sh` prints
 `fukuii.sh: FUKUII_PATH_LIVE set: -Dfukuii.state.path-live=true` to stderr at start.
 
+Each engine test starts its client from a bare genesis with `sync.do-snap-sync = false`
+(`conf/hive.conf`), and the consensus side builds the chain from block 1. With the guard on, that
+is regular sync from the genesis state on a chain with a terminal total difficulty. Until
+2026-11-24 the node refused it at start, so no path-live engine test ran: hive reported each one as
+`can't launch node (type fukuii_pathlive): client did not start: terminated unexpectedly` (B-314).
+The CI summary and gate (`_hive-sim.yml`) now count tests whose client never started apart from the
+other failures (`scripts/ci/hive_launch_failures.py`). They still fail the gate.
+
 ### The engine re-org suites with the guard on (B-314)
 
 On a host with a hive checkout (see above), from the fukuii checkout under test:
