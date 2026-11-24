@@ -1963,6 +1963,8 @@ object SyncController:
           log.info(
             "Received Done from SNAP sync during pivot header bootstrap. Stopping bootstrap and transitioning to regular sync."
           )
+          // a hand-off, as at SnapSyncFinalized and as the legacy Done in runningSnapSync (B-329)
+          pathLiveSync.foreach(_.handedOff())
           ctx.stop(headerBootstrap)
           ctx.stop(peersClient)
           ctx.stop(originalSnapSyncRef)

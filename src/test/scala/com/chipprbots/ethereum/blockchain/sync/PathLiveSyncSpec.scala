@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.CanonicalChainOnPositions
+import com.chipprbots.ethereum.db.storage.pathstate.StateResetPending
 import com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
@@ -127,6 +128,17 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
     node.port.beforeSnap() shouldBe a[SnapStartOnGuard.Refused]
   }
 
+  // B-329 (mutation pass): the clear is stamped with the time it began, which a kill leaves in the mark
+  it should "stamp the mark of the clear with the time it began, which a clear killed after its first batch leaves" taggedAs UnitTest in {
+    val node = new Node
+    node.source.failing = true
+    an[IllegalStateException] should be thrownBy node.port.beforeSnap()
+    node.source.failing = false
+
+    node.chain.appState.isStateResetPending() shouldBe true
+    node.chain.appState.get(StateResetPending.Key) shouldBe Some(StateResetPending.encode(7L))
+  }
+
   it should "wait, and clear nothing, while a recovery of the state executes a block" taggedAs UnitTest in {
     val node = new Node(recoveryExecuting = true)
 
@@ -198,6 +210,12 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
     val followed = new Node
     followed.followed()
     withClue("a block above the genesis: ")(followed.port.holdsOnlyGenesis() shouldBe false)
+
+    // a clear began and did not end, and the genesis anchor is still there
+    val pending = new Node
+    pending.chain.appState.put(StateResetPending.Key, StateResetPending.encode(7L)).commit()
+    pending.chain.state.anchor shouldBe Some(pending.genesis)
+    withClue("the mark of a clear that has not ended: ")(pending.port.holdsOnlyGenesis() shouldBe false)
   }
 
   // spec 018 C6 (T241/T242), the user's decisions of 2026-11-18
@@ -240,6 +258,52 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
     verdict(count(1), over = true) shouldBe Begin
     verdict(count(0), over = true) shouldBe RegularSyncFromGenesis
     withClue("no count ever came: SNAP's own wait is what is left: ")(verdict(None, over = true) shouldBe Begin)
+  }
+
+  // B-329: a minimum of 0 still waits for a peer: with none it is no SNAP sync, and the node's own wait is what ends it
+  it should "never take a minimum of no snap peer as met by none" taggedAs UnitTest in {
+    import PathLiveSync.SnapPeerVerdict.*
+    val none = Some(PathLiveSync.SnapPeerCount(connected = 4, snapCapable = 0, declaredSnapCapable = 0))
+    PathLiveSync.snapPeerVerdict(
+      none,
+      proofOfWork = true,
+      holdsOnlyGenesis = true,
+      minSnapPeers = 0,
+      waitOver = false
+    ) shouldBe
+      Wait
+    PathLiveSync.snapPeerVerdict(
+      none,
+      proofOfWork = true,
+      holdsOnlyGenesis = true,
+      minSnapPeers = 0,
+      waitOver = true
+    ) shouldBe
+      RegularSyncFromGenesis
+  }
+
+  it should "ship 2 snap peers and a wait of 10 minutes, with none declared" taggedAs UnitTest in {
+    import scala.concurrent.duration.*
+    val shipped = PathLiveSync.SnapPeerPrecondition.Default
+    (shipped.minSnapPeers, shipped.powWait, shipped.declared) shouldBe (2, 10.minutes, Set.empty)
+    shipped.declaredNow shouldBe empty
+  }
+
+  it should "count a peer added since the start as declared, with the ones the files declared" taggedAs UnitTest in {
+    def id(i: Int) = org.apache.pekko.util.ByteString(Array.fill[Byte](64)(i.toByte))
+    import scala.concurrent.duration.*
+    var added = Set.empty[org.apache.pekko.util.ByteString]
+    val precondition = PathLiveSync.SnapPeerPrecondition(2, 1.minute, Set(id(1)), () => added)
+    precondition.declaredNow shouldBe Set(id(1))
+    added = Set(id(2))
+    precondition.declaredNow shouldBe Set(id(1), id(2))
+  }
+
+  it should "say the count of snap-capable peers, how many were declared, and how many are connected" taggedAs UnitTest in {
+    PathLiveSync.SnapPeerCount(connected = 7, snapCapable = 3, declaredSnapCapable = 2).describe should
+      startWith("3 snap-capable peer(s) on this chain (2 of them declared by the operator")
+    PathLiveSync.SnapPeerCount(connected = 7, snapCapable = 3, declaredSnapCapable = 2).describe should
+      endWith("of 7 connected")
   }
 
   it should "never wait nor regular-sync from the genesis on a chain with a terminal total difficulty" taggedAs UnitTest in {
