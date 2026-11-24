@@ -18,7 +18,7 @@
    Adjust   loglevel      a logger's level, until the node restarts             
    Adjust   maxpeers      the limit on outgoing peers, until restart            
    Adjust   peer trust    a peer is trusted: exempt from pruning                
- … 16 more actions on other pages (1 to 10 of 26 shown)                         
+ .. 16 more actions on other pages (1 to 10 of 26 shown)                        
 --------------------------------------------------------------------------------
  Last    no action has been attempted in this session                           
  1-9 view  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit      

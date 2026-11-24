@@ -36,5 +36,5 @@
                   |   Halt     quit          the node process ends                                                      
                   |-----------------------------------------------------------------------------------------------------
                   | Last    4 attempts in this session, the newest first                                                
-                  |   … 4 older attempts not shown at this height                                                       
+                  |   .. 4 older attempts not shown at this height                                                      
  1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        
