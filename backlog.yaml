@@ -4101,7 +4101,7 @@ items:
   - id: B-429
     title: "CI never runs LegacyPreByzantiumBlockchainTestsSpec: no ethereum/legacytests checkout, FUKUII_LEGACY_TESTS_DIRS unset"
     priority: P3
-    status: claimed
+    status: in-progress
     area: ci
     size: S
     opened: 2026-11-22
@@ -4112,8 +4112,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T05:14:41Z
-      heartbeat: 2026-11-24T05:14:41Z
-    notes: Found in B-207 (#1987). Add a sparse legacytests checkout to the nightly ethtest job, or document the gap.
+      heartbeat: 2026-11-24T05:14:45Z
+    notes: |-
+      Found in B-207 (#1987). Add a sparse legacytests checkout to the nightly ethtest job, or document the gap.
+      2026-11-24 in-progress: clone-e lane batch 3
   - id: B-430
     title: Recovery scans don't detect a lost node below a storage-trie root (only the root's presence is checked); same in v0.12.1
     priority: P3
