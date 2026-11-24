@@ -1537,8 +1537,11 @@ class ConsensusImpl(
     * Nothing executed: nothing was written, nothing changes.
     *
     * Branch chosen by the designated head alone (`selectedByWeight` false — the post-merge PoS arm, never taken on a
-    * PoW chain): best moves to the last executed block, exactly as before this method existed. That arm belongs to the
-    * ETH fork choice and is deliberately left as it was.
+    * PoW chain): the last executed block becomes the head, written as the weight arm below writes an adoption (B-088).
+    * It used to move only the best block, as before this method existed.
+    *
+    * Every arm that writes the index deletes, in the same batch, the lookups of the transactions that only the blocks
+    * leaving the chain include (core-geth `reorg`: `types.HashDifference(deletedTxs, addedTxs)`; B-088).
     *
     * Branch chosen by weight (every ETC reorg):
     *   - the executed blocks outweigh the old head (always, when the whole branch executed): they become the head.
@@ -1583,13 +1586,39 @@ class ConsensusImpl(
         reExecuted.size,
         selectedByWeight
       )
+      // The executed blocks become the head: the index is made the tip's ancestry (the side blocks the branch stands on
+      // put back, every entry above the tip deleted), the best block is the tip, and the transactions only the blocks
+      // the head left include lose their lookups, all in one batch (B-088). The executed blocks wrote their own entries
+      // and lookups as they were committed, over the old chain's at the heights the two share, so which blocks left is
+      // `displaced`, captured before execution, not what the index names now.
+      def adoptTip(): Unit =
+        val droppedTxLookups = blockchainWriter.rewriteCanonicalIndex(
+          put = fork.parentSideChain,
+          remove = ((tip.number.value + 1) to oldBestNumber).toList,
+          newBest = Some((tip.hash, tip.number.value)),
+          left = displaced.map(_._2),
+          chain = fork.parentSideChain.map(_._2) ++ executedBlocks.map(_.block.hash),
+          reader = blockchainReader
+        )
+        if droppedTxLookups > 0 then
+          log.info(
+            "REORG-SETTLE: head=#{} {}: {} transaction lookup(s) of the {} block(s) it left dropped",
+            tip.number,
+            tip.hash.toHexString,
+            droppedTxLookups,
+            displaced.size
+          )
       if !selectedByWeight then
         adopted = true
-        blockchainWriter.saveBestKnownBlocks(tip.hash, tip.number.value)
+        // The post-merge arm writes what the weight arm writes when it adopts (B-088): it used to move only the best
+        // block, leaving the old chain's entries above the tip and below it at the side blocks' heights, and the
+        // lookups of the transactions only the old chain held. A forkchoiceUpdated to the tip then found the index
+        // naming the tip and rewrote nothing below it.
+        adoptTip()
         // The head moved to the new branch, so the old head's blocks above the fork point left the canonical chain with
         // their reference-count changes applied: take them back out, and put back an already-executed side parent the
-        // branch builds on (undone when it was executed as a side payload or dropped). Counts only; the index is
-        // deliberately left as this arm always left it. Idempotent through the record's applied flag.
+        // branch builds on (undone when it was executed as a side payload or dropped). Idempotent through the record's
+        // applied flag.
         reorgState.abandonBlockStates(displaced.map { case (n, h) => (n, h.value) })
         reorgState.readoptBlockStates(fork.parentSideChain.map { case (n, h) => (n, h.value) })
       else
@@ -1598,12 +1627,7 @@ class ConsensusImpl(
         val executedWeight = executedBlocks.foldLeft(parentWeight)((w, b) => w.increase(b.block.header))
         if executedWeight > oldBestWeight then
           adopted = true
-          blockchainWriter.rewriteCanonicalIndex(
-            put = fork.parentSideChain,
-            remove = ((tip.number.value + 1) to oldBestNumber).toList,
-            newBest = Some((tip.hash, tip.number.value)),
-            reader = blockchainReader
-          )
+          adoptTip()
           // The old head's blocks left the canonical chain with their state changes applied: take them back out, or a
           // node only they replaced stays at zero references while the new chain uses it, and is pruned. The side
           // blocks the new branch builds on are canonical again (their changes were taken out when they were dropped).
@@ -1619,18 +1643,22 @@ class ConsensusImpl(
             executedHeights.last,
             oldBestNumber
           )
+          // The executed side blocks are committed but not canonical. A re-presented canonical block among them is put
+          // back in the index below, so it stays applied.
+          val sideBlocks =
+            executedBlocks.map(b => (b.block.number.value, b.block.hash)).filterNot(id => oldCanonical.contains(id))
           // All of the captured segment, not only the executed heights: that also re-points the transaction
-          // locations of every old block, which a side block carrying the same transaction may have overwritten.
+          // locations of every old block, which a side block carrying the same transaction may have overwritten. The
+          // transactions only the side blocks (and the side blocks the branch stands on) include lose the lookups
+          // their commits wrote (B-088): none of those blocks is canonical.
           blockchainWriter.rewriteCanonicalIndex(
             put = oldCanonical,
             remove = executedHeights.filterNot(old.contains),
             newBest = None,
+            left = (fork.parentSideChain ++ sideBlocks).map(_._2),
+            chain = oldCanonical.map(_._2),
             reader = blockchainReader
           )
-          // The executed side blocks are committed but not canonical. A re-presented canonical block among them is put
-          // back in the index just above, so it stays applied.
-          val sideBlocks =
-            executedBlocks.map(b => (b.block.number.value, b.block.hash)).filterNot(id => oldCanonical.contains(id))
           reorgState.abandonBlockStates(sideBlocks.map { case (n, h) => (n, h.value) })
     }
     adopted
