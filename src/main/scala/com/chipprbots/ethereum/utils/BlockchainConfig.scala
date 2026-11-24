@@ -66,7 +66,6 @@ case class BlockchainConfig(
     chainId: ChainId,
     networkId: Long,
     monetaryPolicyConfig: MonetaryPolicyConfig,
-    gasTieBreaker: Boolean,
     ethCompatibleStorage: Boolean,
     bootstrapNodes: Set[String],
     dnsDiscoveryDomains: Seq[String] = Seq.empty,
@@ -323,8 +322,6 @@ object BlockchainConfig:
 
     val monetaryPolicyConfig = MonetaryPolicyConfig(blockchainConfig.getConfig("monetary-policy"))
 
-    val gasTieBreaker: Boolean = blockchainConfig.getBoolean("gas-tie-breaker")
-
     val ethCompatibleStorage: Boolean = blockchainConfig.getBoolean("eth-compatible-storage")
 
     val bootstrapNodes: Set[String] = blockchainConfig.getStringList("bootstrap-nodes").asScala.toSet
@@ -467,7 +464,6 @@ object BlockchainConfig:
       chainId = chainId,
       networkId = networkId,
       monetaryPolicyConfig = monetaryPolicyConfig,
-      gasTieBreaker = gasTieBreaker,
       ethCompatibleStorage = ethCompatibleStorage,
       bootstrapNodes = bootstrapNodes,
       dnsDiscoveryDomains = dnsDiscoveryDomains,

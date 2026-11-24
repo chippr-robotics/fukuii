@@ -69,7 +69,6 @@ class PoWBlockGeneratorOmmersSpec extends AnyFlatSpec with Matchers:
       accountStartNonce = UInt256.Zero,
       daoForkConfig = None,
       bootstrapNodes = Set(),
-      gasTieBreaker = false,
       ethCompatibleStorage = true
     )
     private val source = EphemDataSource()

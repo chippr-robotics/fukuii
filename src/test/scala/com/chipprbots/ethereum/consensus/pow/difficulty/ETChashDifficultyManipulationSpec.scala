@@ -82,7 +82,6 @@ class ETChashDifficultyManipulationSpec extends AnyFlatSpec with Matchers with S
     monetaryPolicyConfig = com.chipprbots.ethereum.utils.MonetaryPolicyConfig(
       5000000, 0.2, 5000000000000000000L, 3000000000000000000L, 2000000000000000000L
     ),
-    gasTieBreaker = false,
     ethCompatibleStorage = true,
     bootstrapNodes = Set.empty
   )

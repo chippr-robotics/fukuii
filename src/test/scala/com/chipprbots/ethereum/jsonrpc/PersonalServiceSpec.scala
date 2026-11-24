@@ -577,7 +577,6 @@ class PersonalServiceSpec
             monetaryPolicyConfig = MonetaryPolicyConfig(0, 0, 0, 0),
             daoForkConfig = None,
             bootstrapNodes = Set(),
-            gasTieBreaker = false,
             ethCompatibleStorage = true
           )
         ,

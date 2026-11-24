@@ -465,7 +465,6 @@ trait ScenarioSetup extends EphemBlockchainTestSetup:
     accountStartNonce = UInt256.Zero,
     monetaryPolicyConfig = MonetaryPolicyConfig(5, 0, 0, 0),
     daoForkConfig = None,
-    gasTieBreaker = false,
     ethCompatibleStorage = true,
     bootstrapNodes = Set()
   )
@@ -574,7 +573,6 @@ trait HiveGraphQLScenarioSetup extends ScenarioSetup:
     accountStartNonce = UInt256.Zero,
     monetaryPolicyConfig = MonetaryPolicyConfig(5, 0, 0, 0),
     daoForkConfig = None,
-    gasTieBreaker = false,
     ethCompatibleStorage = true,
     bootstrapNodes = Set()
   )

@@ -70,8 +70,7 @@ class ECIP1017OnPositionsTest extends AnyFlatSpec with Matchers:
     daoForkConfig = None,
     bootstrapNodes = Set(),
     accountStartNonce = UInt256.Zero,
-    ethCompatibleStorage = true,
-    gasTieBreaker = false
+    ethCompatibleStorage = true
   )
 
   final private class Node(val source: EphemDataSource, guard: Boolean) extends EphemBlockchainTestSetup:

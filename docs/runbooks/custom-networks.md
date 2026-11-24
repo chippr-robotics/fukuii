@@ -105,9 +105,6 @@ Create a file named `<network-name>-chain.conf` in your chains directory. For ex
     reward-reduction-rate = 0.2
   }
   
-  # Gas tie breaker (usually false)
-  gas-tie-breaker = false
-  
   # Storage format
   eth-compatible-storage = true
   
@@ -118,6 +115,10 @@ Create a file named `<network-name>-chain.conf` in your chains directory. For ex
   ]
 }
 ```
+
+`gas-tie-breaker` is no longer a chain key. No fork choice has read it since 2020: branches of equal total difficulty
+are decided by core-geth's rule (the lower block first; at the same height this node's miner's block, else a coin).
+A chain file that still sets it loads as before, and the key is ignored.
 
 ### Step 3: Create Genesis File (Optional)
 
@@ -316,7 +317,6 @@ For a simple private network, this minimal configuration is sufficient:
     reward-reduction-rate = 0
   }
   
-  gas-tie-breaker = false
   eth-compatible-storage = true
   bootstrap-nodes = []
 }
@@ -580,7 +580,6 @@ Perfect for local testing with all modern features enabled:
     reward-reduction-rate = 0
   }
   
-  gas-tie-breaker = false
   eth-compatible-storage = true
   
   # Single local node for development
@@ -652,7 +651,6 @@ Configuration for a permissioned consortium network:
     reward-reduction-rate = 0
   }
   
-  gas-tie-breaker = false
   eth-compatible-storage = true
   
   # Bootstrap nodes for consortium members
@@ -736,7 +734,6 @@ Configuration for a test network with planned fork activations:
     reward-reduction-rate = 0.2
   }
   
-  gas-tie-breaker = false
   eth-compatible-storage = true
   
   bootstrap-nodes = [

@@ -144,7 +144,6 @@ ${blobSchedule(p)}  }
     reward-reduction-rate = 0
   }
 
-  gas-tie-breaker = false
   eth-compatible-storage = true
 
   bootstrap-nodes = [

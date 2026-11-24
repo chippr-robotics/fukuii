@@ -115,7 +115,6 @@ cat > /opt/fukuii/chains/myenterprise-chain.conf << 'EOF'
     reward-reduction-rate = 0
   }
   
-  gas-tie-breaker = false
   eth-compatible-storage = true
   
   bootstrap-nodes = [
