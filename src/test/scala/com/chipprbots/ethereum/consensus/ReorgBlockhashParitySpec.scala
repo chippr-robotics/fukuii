@@ -384,6 +384,42 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     adoptedAgain()
   )
 
+  // B-440: what regular sync is answered for the same failure. The import's adapter answers it as a fault of this node,
+  // with the branch queued again, so that the importer fetches it again and blames no peer, and the escalation's feed
+  // is told; thrown, the importer dropped the batch with an error line.
+  it should "be answered to regular sync as a fault of this node, with the branch queued again, when a write of a commit fails" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new FaultedReorg:
+    datadir.failAt(branch(3), new java.io.IOException("injected: the disk refused the commit of block 7"))
+    // the import's adapter over the consensus this rig commits at the cap with, and the node's queue
+    val adapter = new ConsensusAdapter(
+      consensus,
+      node.blockchainReader,
+      node.blockQueue,
+      new com.chipprbots.ethereum.ledger.BlockValidation(node.mining, node.blockchainReader, node.blockQueue),
+      node.runtime
+    )
+    val answered: BlockImportResult =
+      import node.blockchainConfig
+      import node.runtime
+      adapter.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
+    answered match
+      case BlockImportStateFault(fault, imported) =>
+        fault.getMessage should include("the disk refused the commit of block 7")
+        imported shouldBe Nil
+      case other => fail(s"not a fault of this node: $other")
+    branch.foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
+    settledOn(oldChain.last)
+    // offered again with nothing failing, the branch is adopted. The next block is taken with the branch's blocks still
+    // in the queue (a fault's re-queue leaves them there, as B-336's does), so its answer may be the reorganisation onto
+    // them; the head is the next block either way
+    offer(node, branch)
+    validHead(node, datadir).hash shouldBe branch.last.hash
+    node.importOne(next) should (be(a[BlockImportedToTop]).or(be(a[ChainReorganised])))
+    validHead(node, datadir).hash shouldBe next.hash
+  )
+
   // B-439: what was thrown is not the answer when the move back after it fails: the answer says where the head is
   it should "say where the head is when a write of a commit fails and the move back fails before it wrote" taggedAs (
     UnitTest,

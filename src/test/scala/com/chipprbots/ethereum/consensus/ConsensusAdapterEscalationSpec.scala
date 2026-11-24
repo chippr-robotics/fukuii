@@ -65,7 +65,8 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
 
   private class Rig(
       result: NonEmptyList[Block] => ConsensusResult,
-      reader: com.chipprbots.ethereum.domain.BlockchainReader = null
+      reader: com.chipprbots.ethereum.domain.BlockchainReader = null,
+      queue: com.chipprbots.ethereum.ledger.BlockQueue = null
   ):
     val escalated: mutable.ArrayBuffer[EscalationKind] = mutable.ArrayBuffer.empty
     val validated: mutable.ArrayBuffer[List[BigInt]] = mutable.ArrayBuffer.empty
@@ -81,7 +82,8 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
       override def evaluateBranch(
           block: NonEmptyList[Block]
       )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult] =
-        IO.pure(result(block))
+        // as the import runs it: what is thrown is raised in the IO
+        IO.delay(result(block))
     private val validation = new BlockValidation(null, null, null):
       override def firstInvalidHeaderNotJudged(
           branch: List[Block]
@@ -93,7 +95,7 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
       )(implicit blockchainConfig: BlockchainConfig): Option[(BlockHeader, String)] =
         validated += headers.map(_.number.value)
         None
-    val adapter = new ConsensusAdapter(consensus, reader, null, validation, IORuntime.global, None, Some(feed))
+    val adapter = new ConsensusAdapter(consensus, reader, queue, validation, IORuntime.global, None, Some(feed))
     def imported(blocks: NonEmptyList[Block]): Any = adapter.evaluateBranch(blocks).unsafeRunSync()
 
   private def data(block: Block): BlockData = BlockData(block, Nil, ChainWeight.totalDifficultyOnly(0))
@@ -211,6 +213,55 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
       case other => fail(s"not a fault of this node's state: $other")
     withClue("the feed is told of the two blocks above the head, as a branch that was not judged: ") {
       rig.validated.toList shouldBe List(List(BigInt(6), BigInt(7)))
+    }
+  }
+
+  // B-440: a write of this node's store that fails during the import, thrown out of it (`ConsensusImpl` throws it once
+  // the head is back, as #2001 pins), judged no block. It is answered as a fault of this node: the blocks wait in the
+  // queue, the feed is told of them, and the importer fetches them again without blaming the peer that sent them.
+  it should "answer a write of this node's store that failed during the import as a fault of this node" taggedAs UnitTest in {
+    val host = new com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup {}
+    val thrown = Seq[Throwable](
+      new java.io.IOException("injected: the disk refused the commit"),
+      com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
+        .RocksDbDataSourceException("DataSource not updated", new org.rocksdb.RocksDBException("No space left"))
+    )
+    thrown.foreach { failure =>
+      withClue(s"${failure.getClass.getSimpleName}: ") {
+        val queue = com.chipprbots.ethereum.ledger.BlockQueue(
+          host.blockchainReader,
+          com.chipprbots.ethereum.utils.Config.SyncConfig(Config.config)
+        )
+        val rig = new Rig(_ => throw failure, host.blockchainReader, queue)
+        val blocks = branch(5, 3)
+        rig.imported(blocks) match
+          case BlockImportStateFault(fault, imported) =>
+            fault.getMessage should include(failure.getMessage)
+            imported shouldBe Nil
+          case other => fail(s"not a fault of this node's state: $other")
+        blocks.toList.foreach(block => queue.isQueued(block.hash) shouldBe true)
+        rig.validated.toList shouldBe List(List(BigInt(5), BigInt(6), BigInt(7)))
+        rig.feed.refusedWeight shouldBe Some(ChainWeight.totalDifficultyOnly(1300))
+      }
+    }
+  }
+
+  // B-440: only a failure of the store is a fault of this node; anything else thrown is no answer, and fails loudly as
+  // before (and a store closed under the import is the node stopping, not a fault to try again or escalate)
+  it should "leave anything else thrown out of the import thrown" taggedAs UnitTest in {
+    val host = new com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup {}
+    Seq[Throwable](
+      new IllegalStateException("a defect"),
+      com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.RocksDbDataSourceClosedException("closed"),
+      com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.RocksDbDataSourceException(
+        "DataSource not updated",
+        com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.RocksDbDataSourceClosedException("closed")
+      )
+    ).foreach { failure =>
+      val rig = new Rig(_ => throw failure, host.blockchainReader)
+      (the[Throwable] thrownBy rig.imported(branch(5, 3)) should be).theSameInstanceAs(failure)
+      rig.validated shouldBe empty
+      rig.feed.refusedWeight shouldBe None
     }
   }
 

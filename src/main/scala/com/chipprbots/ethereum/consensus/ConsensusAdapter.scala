@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusError
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusErrorDueToMissingNode
+import com.chipprbots.ethereum.consensus.Consensus.ConsensusResult
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusStateFault
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
@@ -30,6 +31,8 @@ import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranchPartially
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
+import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.RocksDbDataSourceClosedException
+import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.RocksDbDataSourceException
 import com.chipprbots.ethereum.db.storage.pathstate.HeldStateIncomplete
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
@@ -174,7 +177,7 @@ class ConsensusAdapter(
       blockExecutionScheduler: IORuntime,
       blockchainConfig: BlockchainConfig
   ): IO[BlockImportResult] =
-    forwardAndTranslateConsensusResult(blocks)
+    forwardAndTranslateConsensusResult(blocks, storeFailureIsAFault = true)
 
   /** [[evaluateBranch]] for a batch that arrived with peer-supplied EIP-7928 lists (prefetch hints only). */
   def evaluateBranchWithAccessLists(
@@ -184,14 +187,19 @@ class ConsensusAdapter(
       blockExecutionScheduler: IORuntime,
       blockchainConfig: BlockchainConfig
   ): IO[BlockImportResult] =
-    forwardAndTranslateConsensusResult(blocks, accessLists)
+    forwardAndTranslateConsensusResult(blocks, accessLists, storeFailureIsAFault = true)
 
+  /** @param storeFailureIsAFault
+    *   a failure of this node's store thrown out of the evaluation is answered as a fault of this node's state
+    *   ([[thrownByTheStore]], B-440). Regular sync's batches only: the other callers of [[evaluateBranchBlock]] (test
+    *   mode, the chain-file import) answer what is thrown as they always did.
+    */
   private def forwardAndTranslateConsensusResult(
       newBranch: NonEmptyList[Block],
-      accessLists: Map[ByteString, BlockAccessList] = Map.empty
+      accessLists: Map[ByteString, BlockAccessList] = Map.empty,
+      storeFailureIsAFault: Boolean = false
   )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[BlockImportResult] =
-    (if accessLists.isEmpty then consensus.evaluateBranch(newBranch)
-     else consensus.evaluateBranchWithAccessLists(newBranch, accessLists))
+    evaluated(newBranch, accessLists, storeFailureIsAFault)
       .map {
         // On the unified layout a node missing from the held state with no position to say is a fault of this node, not
         // a hole to fetch: the fetch writes the hash-keyed store, which this layout never reads, and the same block
@@ -313,6 +321,19 @@ class ConsensusAdapter(
           BlockImportStateFault(fault, imported)
       }
 
+  private def evaluated(
+      newBranch: NonEmptyList[Block],
+      accessLists: Map[ByteString, BlockAccessList],
+      storeFailureIsAFault: Boolean
+  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult] =
+    IO.defer(
+      if accessLists.isEmpty then consensus.evaluateBranch(newBranch)
+      else consensus.evaluateBranchWithAccessLists(newBranch, accessLists)
+    ).recover {
+      case thrown if storeFailureIsAFault && ConsensusAdapter.isAFailureOfTheStore(thrown) =>
+        thrownByTheStore(newBranch, thrown)
+    }
+
   /** A proof-of-work branch, known by its `headers` from the block above the one it leaves the chain at, that regular
     * sync refused before any of its blocks was fetched (B-300 g): it reaches further above that block than the fetcher
     * holds, or the head cannot be moved back there. Told to the escalation's feed, as a branch this node's state could
@@ -411,6 +432,47 @@ class ConsensusAdapter(
           false
     }
 
+  /** A failure of this node's store thrown out of the evaluation of `newBranch` (B-440): a write the disk refused, or a
+    * read of it that failed. It is no verdict on any block. `ConsensusImpl` throws it (a commit in place at the cap
+    * throws it once the head is back at the old head, as #2001 pins), and answered by the throw the batch was dropped
+    * by the importer with an error line: not queued again, no peer spared the strike of its orphans, and the
+    * escalation's feed not told. It is answered here as a fault of this node's state is: the blocks of the batch the
+    * head stands on now (read from the store, by ancestry: what threw kept no account of them) are imported, and the
+    * others wait in the queue, are fetched again without blame, and are told to the feed as a branch not judged.
+    */
+  private def thrownByTheStore(newBranch: NonEmptyList[Block], thrown: Throwable): ConsensusResult =
+    val first = newBranch.head.number.value
+    val onTheHeadsChain: Set[BlockHash] =
+      Iterator
+        .iterate(blockchainReader.getBestBlockHeader)(
+          _.flatMap(h => blockchainReader.getBlockHeaderByHash(h.parentHash))
+        )
+        .takeWhile(_.exists(_.number.value >= first))
+        .flatten
+        .map(_.hash)
+        .toSet
+    val imported = newBranch.toList.iterator
+      .takeWhile(block => onTheHeadsChain(block.header.hash))
+      .map(block =>
+        blockchainReader
+          .getChainWeightByHash(block.header.hash)
+          .map(BlockData(block, blockchainReader.getReceiptsByHash(block.header.hash).getOrElse(Nil), _))
+      )
+      .takeWhile(_.isDefined)
+      .flatten
+      .toList
+    log.error(
+      s"[STATE-FAULT] The import of blocks [${newBranch.head.number}-${newBranch.last.number}] met a failure of this " +
+        s"node's store, after ${imported.size} block(s) of it became the head: no block was judged, the others are " +
+        "queued again and no peer is blamed",
+      thrown
+    )
+    ConsensusStateFault(
+      new StateUnavailable(s"a failure of this node's store was thrown during the import: $thrown"),
+      imported,
+      newBranch.toList.drop(imported.size)
+    )
+
   /** Blocks a fault of this node's own state left unjudged, queued again against the head as it is now (B-336). */
   private def queuedAgain(blocks: List[Block]): Unit =
     if blocks.nonEmpty then
@@ -459,3 +521,22 @@ class ConsensusAdapter(
       .enqueueBlock(block, bestBlockNumber)
       .map(topBlock => blockQueue.getBranch(BlockHash(topBlock.hash), dequeue = true))
       .flatMap(NonEmptyList.fromList)
+
+object ConsensusAdapter:
+
+  /** Whether `thrown` is a failure of this node's store (B-440): a write or a read of the datadir that failed, or a
+    * fault of its state that was thrown rather than answered. Not a store closed under the import, which is the node
+    * stopping, and not anything else, which is a defect and fails loudly as before.
+    */
+  private[consensus] def isAFailureOfTheStore(thrown: Throwable): Boolean =
+    def closed(t: Throwable): Boolean =
+      Iterator
+        .iterate(t)(_.getCause)
+        .takeWhile(_ != null)
+        .take(16)
+        .exists(_.isInstanceOf[RocksDbDataSourceClosedException])
+    !closed(thrown) && (thrown match
+      case _: StateFault | _: java.io.IOException | _: RocksDbDataSourceException | _: org.rocksdb.RocksDBException =>
+        true
+      case _ => false
+    )
