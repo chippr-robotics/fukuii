@@ -329,7 +329,7 @@ items:
       by: cloud-719c6644
       agent: herald
       since: 2026-11-24T06:31:16Z
-      heartbeat: 2026-11-24T06:31:34Z
+      heartbeat: 2026-11-24T06:41:32Z
       branch: fix/b030-udp-send-failure-log
     notes: herald. Pollutes the gate's ERROR tally.
   - id: B-031
@@ -1597,7 +1597,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T04:27:49Z
-      heartbeat: 2026-11-24T06:21:54Z
+      heartbeat: 2026-11-24T06:41:32Z
       branch: fix/b417-ci-fetch-retry
     notes: |-
       #1777 run 42570595438, 2026-11-09: curl sbt-1.13.0.tgz from github releases got 504 on all 6 tries within 25 s (retry-delay 5), so hive never ran. Use actions/cache for /tmp/sbt.tgz or setup-sbt, and exponential backoff.
@@ -1738,7 +1738,7 @@ items:
       by: cloud-719c6644
       agent: vault
       since: 2026-11-24T04:39:01Z
-      heartbeat: 2026-11-24T06:21:54Z
+      heartbeat: 2026-11-24T06:41:32Z
       branch: fix/b190-account-store-fault
     notes: AccountTrieAssembly.scala:287-291 catch branch in handleStoreAccountChunk. If next was advanced before the store failed, the unstored tail may be skipped until healing. Unverified; vault/forge to confirm (trie assembly).
   - id: B-191
@@ -1808,7 +1808,7 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T04:25:46Z
-      heartbeat: 2026-11-24T06:21:54Z
+      heartbeat: 2026-11-24T06:41:32Z
       branch: fix/b198-getblobsv2-null
     notes: "Sepolia gate 2026-11-10, Lighthouse v8.3.2: ERROR Error fetching or processing blobs from EL: invalid type: null, expected struct BlobAndProofV2. execution-apis Osaka getBlobsV2: all-or-nothing (null response if any blob is missing); per-element nulls are V1 (and V3) semantics. Lighthouse falls back to gossip, so not fatal. beacon/conduit."
   - id: B-199
@@ -2146,7 +2146,7 @@ items:
       by: cloud-719c6644
       agent: herald
       since: 2026-11-24T06:36:47Z
-      heartbeat: 2026-11-24T06:37:07Z
+      heartbeat: 2026-11-24T06:41:32Z
       branch: fix/b237-tcp-port-zero
     notes: "Found in spec 028 S1 (HoodiBootnodeSpec): NodeParser accepts tcp 0; PeerDiscoveryManager hands bootstrap nodes to PeerManagerActor which ConnectToPeerCmd's :0. DnsDiscovery.scala:515 already skips tcp-0 ENRs. Hoodi ships only :30303 enodes meanwhile."
   - id: B-238
@@ -2830,7 +2830,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T06:40:24Z
-      heartbeat: 2026-11-24T06:41:28Z
+      heartbeat: 2026-11-24T06:41:32Z
       branch: fix/b331-ops-ascii-ellipsis
     notes: "Copilot on #1883; cosmetic"
   - id: B-332
@@ -2943,7 +2943,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T06:29:49Z
-      heartbeat: 2026-11-24T06:30:08Z
+      heartbeat: 2026-11-24T06:41:32Z
       branch: fix/b339-securerandom-instance-config
     notes: "Found in B-148: SecureRandomBuilder.rawFukuiiConfig is global; same multi-instance shape as the SSL config fix."
   - id: B-340
@@ -3102,7 +3102,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T06:24:39Z
-      heartbeat: 2026-11-24T06:25:47Z
+      heartbeat: 2026-11-24T06:41:32Z
       branch: fix/b352-save-fetched-node-wait
     notes: |-
       Seen on B-349 (#1912): 5 full runs, 2 with one failure each, a different test each time; 'save fetched node' also fails on plain staging. Fixed waits (fishForSpecificMessage 5 s, a 1 ms deadline) race a loaded machine. Find each wait and synchronise on the event instead; never skip.
@@ -3760,7 +3760,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T04:42:39Z
-      heartbeat: 2026-11-24T06:21:54Z
+      heartbeat: 2026-11-24T06:41:32Z
       branch: fix/b399-shutdown-unset-tui
     notes: Seen on every 'Refusing to start' during spec 030 S11 T099; shutdown should skip unset parts.
   - id: B-400
@@ -4013,7 +4013,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T04:27:45Z
-      heartbeat: 2026-11-24T06:21:54Z
+      heartbeat: 2026-11-24T06:41:32Z
       branch: fix/b417-ci-fetch-retry
     notes: "Seen on #1948 (2026-11-19) and #1978 (2026-11-21): the artifact exists on Maven Central; the coursier cache miss plus a transient fetch error fail formatCheck before tests. Options: include the scalafix-cli artifacts in the actions/cache key/path, prefetch with a retry step, or set coursier retry env (COURSIER_RETRY / sbt csrConfiguration)."
   - id: B-418
