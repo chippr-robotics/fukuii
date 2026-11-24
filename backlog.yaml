@@ -173,7 +173,7 @@ items:
       by: cloud-dc960fdc
       agent: vault-b014
       since: 2026-11-23T21:24:00Z
-      heartbeat: 2026-11-24T01:04:29Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: |-
       beacon + vault. Liveness, not loss. Check first whether Track C C8a makes it moot.
       2026-11-17 priority P3: liveness, not loss; C8a likely moots it
@@ -490,7 +490,7 @@ items:
       by: cloud-dc960fdc
       agent: dev-node
       since: 2026-11-22T19:33:05Z
-      heartbeat: 2026-11-24T01:04:29Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: |-
       Then T003 ranges (user, beacon, forge), T004-T007 runs on the jar (live host), T011, T017 (user).
       Gates B-203, B-207, B-212 and C7's exit (Track C).
@@ -650,7 +650,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-15T17:59:02Z
-      heartbeat: 2026-11-24T01:04:29Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: |-
       cloud-dc960fdc: heartbeat or release by 11-17 17:06 UTC; C5a code merged (#1855-#1880), T209 + Sepolia fresh sync + 24 h remain.
       2026-11-18 blocked: C5a code merged (#1855-#1880 and follow-ups). Remaining gates need a live host: T209, a fresh Sepolia sync and 24 h following the head. Not doable in the cloud container.
@@ -2219,7 +2219,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T02:53:01Z
-      heartbeat: 2026-11-24T02:53:05Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: |-
       2026-11-20 #1957 merged to main (6ea4ffd): barriers + 25-line diagnostics landed; root cause still open. Not on staging yet (cherry-pick 3cb05e4); next failure's message will show what the controller logged.
       2026-11-20 #1958 merged: the #1957 fixture changes are on staging too, so a promotion keeps them.
@@ -2476,7 +2476,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-23T21:03:09Z
-      heartbeat: 2026-11-24T02:52:57Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: |-
       forge, C4e part 4 pre-code: refuse with ask-again, not wait (BlockImportGate deadlock); needs beacon; C4e part 5 or C5a
       2026-11-24 in-progress: agent in clone-e
@@ -2567,7 +2567,7 @@ items:
       by: cloud-dc960fdc
       agent: hive-b314
       since: 2026-11-18T00:57:40Z
-      heartbeat: 2026-11-24T01:04:29Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: |-
       hive client has no switch for fukuii.state.path-live; needs one, and a host
       2026-11-18 blocked: The hive client switch for path-live landed (#1910). Remaining: the gate run itself, which needs a hive host or a dispatch: gh workflow run hive-engine.yml --ref staging -f path_live=true -f sim_limit='/re-?org' (or scripts/hive/local.sh ethereum/engine --limit '/re-?org' --path-live).
@@ -2845,7 +2845,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b343
       since: 2026-11-23T21:03:14Z
-      heartbeat: 2026-11-24T02:41:41Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: "B-296 follow-up (forge): ConsensusImpl.reorganiseOnLayers loads every side parent whose state is not held (all of them after a restart) and commitInPlaceAtTheCap runs them with the branch as one List[Block]; load lazily and execute in chunks carrying the weight"
   - id: B-344
     title: "Bound the side parents a reorg tells as of its new branch: a deep side chain is broadcast, published and sent to the pool block by block"
@@ -3244,7 +3244,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-18T16:08:42Z
-      heartbeat: 2026-11-24T01:04:29Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: |-
       Seen 2026-11-18 on #1916 (LookupsSpec) and #1921 (both), unrelated diffs; both pass locally 2/2 on the same heads. LookupsSpec uses PatienceConfig(5 s) eventually throughout. Synchronise on the event instead of a timeout; never skip.
       2026-11-18 in-progress: LookupsSpec race fixed in #1927 (waited on a count true part-way). Left: EngineApiHttpServerObservationSpec and JsonRpcHttpServerLifecycleSpec each failed once on CI 2026-11-18 (#1921); capture their failure text from the full job log (logs_url, not the 5000-line tail) when they recur.
@@ -4061,7 +4061,7 @@ items:
       by: cloud-dc960fdc
       agent: herald-b434b
       since: 2026-11-23T00:30:45Z
-      heartbeat: 2026-11-24T01:04:29Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: |-
       2026-11-23 in-progress: Round 2 (branch head 107ea73d19): blacklist/selection paths hold in code+tests; 60s-vs-90s theory wrong, reverted. Remaining hypotheses: PeerDisconnected clears blacklist on a live peer; ask timeout (92s) beats request failure so no BlacklistPeer. Waiting on dev-node greps (B-437).
       2026-11-23 blocked: dev-node greps: blacklist lines are DEBUG (not in INFO log). Two of the 7 requests left 2.4 s / 19.9 s after a failure (new fetches, not retries) and still chose e514276e with 13 peers up. DEBUG repro run requested on dev-node.
@@ -4243,7 +4243,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b448
       since: 2026-11-24T01:54:16Z
-      heartbeat: 2026-11-24T02:13:39Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: "forge-b344: BlockImporter.tryImportBlocks handles ChainReorganised/BlockImportedToTop with progress and strikes only; only importBlock (NewBlock/mined path) and announceAdopted publish NewBlockImported, update the pool and broadcast. Check against B-245 (Engine API newHeads); core-geth insertChain posts ChainEvent per canonical block."
   - id: B-449
     title: RegularSyncSpec 'ask again for ancestor bodies ... within the deadline' fails in testOnly *RegularSync* once a test is added before it (timing)
@@ -4295,7 +4295,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:00:55Z
-      heartbeat: 2026-11-24T03:00:59Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: "vault re-review of #2012 (B-426). Pre-existing, not a regression."
   - id: B-453
     title: "SNAP-peer precondition counts admin_addPeer peers: declared set is read at start only (split from B-386)"
@@ -4322,7 +4322,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T02:41:58Z
-      heartbeat: 2026-11-24T03:00:45Z
+      heartbeat: 2026-11-24T03:12:29Z
     notes: Kill-safe as is (one RocksDB, one WAL, code first). Same-batch needs the code carried to commitWith/commitApart past the executeAndValidateStaged seam.
   - id: B-455
     title: ChainImporter's hash-store lenient import (executeBlockNoValidation) writes a block's code and trie nodes before it validates the block
