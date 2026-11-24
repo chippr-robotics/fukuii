@@ -47,7 +47,11 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
           number = BlockNumber(29),
           difficulty = Difficulty(0),
           beneficiary = baseMiner,
-          stateRoot = TrieRoot(emptyRoot),
+          // the request contracts a real Osaka chain has: the simulated blocks call them (B-163)
+          stateRoot = TrieRoot(
+            RequestContractStubs
+              .deployedRoot(storagesInstance.storages.evmCodeStorage, blockchain.getBackingMptStorage(0))
+          ),
           gasLimit = GasAmount(30_000_000),
           gasUsed = GasAmount.Zero,
           unixTimestamp = Timestamp(300),

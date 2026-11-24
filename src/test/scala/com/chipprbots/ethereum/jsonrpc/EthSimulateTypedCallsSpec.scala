@@ -78,7 +78,14 @@ class EthSimulateTypedCallsSpec extends AnyFlatSpec with Matchers with Amsterdam
         Fixtures.Blocks.ValidBlock.header.copy(
           number = BlockNumber(29),
           difficulty = if baseExtraFields == HefEmpty then Difficulty(1000) else Difficulty(0),
-          stateRoot = TrieRoot(emptyRoot),
+          // an ETH chain has the request contracts its simulated Prague blocks call (B-163); ETC has none
+          stateRoot =
+            if config.forkTimestamps.pragueTimestamp.isDefined then
+              TrieRoot(
+                RequestContractStubs
+                  .deployedRoot(storagesInstance.storages.evmCodeStorage, blockchain.getBackingMptStorage(0))
+              )
+            else TrieRoot(emptyRoot),
           gasLimit = GasAmount(30_000_000),
           gasUsed = GasAmount.Zero,
           unixTimestamp = Timestamp(baseTimestamp),

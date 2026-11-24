@@ -48,7 +48,11 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
         Fixtures.Blocks.ValidBlock.header.copy(
           number = BlockNumber(29),
           difficulty = Difficulty(0),
-          stateRoot = TrieRoot(emptyRoot),
+          // the request contracts a real chain has: every Prague or later block calls them, a gap block too (B-163)
+          stateRoot = TrieRoot(
+            RequestContractStubs
+              .deployedRoot(storagesInstance.storages.evmCodeStorage, blockchain.getBackingMptStorage(0))
+          ),
           gasLimit = GasAmount(30_000_000),
           gasUsed = GasAmount.Zero,
           unixTimestamp = ts,
@@ -85,12 +89,9 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
         calls: Seq[TxArgs] = Nil
     ): Seq[SimulateBlockResult] =
       val overrides = BlockOverrides(time = Some(BigInt(time)), beaconRoot = beaconRoot, number = number.map(BigInt(_)))
-      // an Amsterdam block gets the four request contracts a real chain has (see RequestContractStubs)
-      val requestContracts =
-        if amsterdamConfig.isAmsterdamTimestamp(Timestamp(time)) then RequestContractStubs.overrides else Map.empty
       val preambleContracts =
         if systemContracts then SystemContracts else Map.empty[Address, StateOverride]
-      val stateOverrides = requestContracts ++ preambleContracts ++ extra
+      val stateOverrides = preambleContracts ++ extra
       service
         .ethSimulate(
           EthSimulateRequest(

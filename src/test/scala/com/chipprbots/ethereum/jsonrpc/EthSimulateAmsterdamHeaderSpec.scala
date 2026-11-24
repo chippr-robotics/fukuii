@@ -84,12 +84,12 @@ class EthSimulateAmsterdamHeaderSpec extends AnyFlatSpec with Matchers with Amst
       config
     )
 
-    /** One simulated block, at `timestamp` when given (the base block's + 12 otherwise), with no calls. An Amsterdam
-      * block gets the four request contracts a real chain has ([[RequestContractStubs]]).
+    /** One simulated block, at `timestamp` when given (the base block's + 12 otherwise), with no calls. A Prague or
+      * later block gets the request contracts a real chain has ([[RequestContractStubs]]).
       */
     def simulate(timestamp: Option[Long] = None): EthSimulateResponse =
       val at = timestamp.getOrElse(baseTimestamp + 12)
-      val requestContracts = Option.when(config.isAmsterdamTimestamp(Timestamp(at)))(RequestContractStubs.overrides)
+      val requestContracts = Option.when(config.isPragueTimestamp(Timestamp(at)))(RequestContractStubs.overrides)
       val request = EthSimulateRequest(
         Seq(
           BlockStateCall(

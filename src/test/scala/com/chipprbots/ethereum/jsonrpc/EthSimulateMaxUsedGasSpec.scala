@@ -54,7 +54,11 @@ class EthSimulateMaxUsedGasSpec extends AnyFlatSpec with Matchers with Amsterdam
           number = BlockNumber(29),
           difficulty = Difficulty(0),
           beneficiary = ByteString(new Array[Byte](20)),
-          stateRoot = TrieRoot(emptyRoot),
+          // the request contracts a real chain has: a simulated Prague or later block calls them (B-163)
+          stateRoot = TrieRoot(
+            RequestContractStubs
+              .deployedRoot(storagesInstance.storages.evmCodeStorage, blockchain.getBackingMptStorage(0))
+          ),
           gasLimit = GasAmount(30_000_000),
           gasUsed = GasAmount.Zero,
           unixTimestamp = Timestamp(baseTimestamp),

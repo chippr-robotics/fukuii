@@ -595,27 +595,34 @@ class EthSimulateService(
     val postExecutionReads = new BlockAccessRecorder
     world = creditWithdrawals(world, withdrawals, Option.when(amsterdam)(postExecutionReads))
 
-    // Amsterdam: the post-execution phase of a real block, at block access index n + 1 — the withdrawals and then the
-    // EIP-7002 / EIP-7251 / EIP-8282 request system calls — and the requestsHash computed from what they and the
-    // EIP-6110 deposit logs return. As in go-ethereum's PostExecution (simulate.go:499-502 returns its error as it is), a
-    // request contract with no code ends the whole simulation with -32000 `failed to process <queue>: empty system
-    // contract: no code at <address>`, which a state override that clears its code causes; and the calls run on this
-    // block's precompiles, so a move or a deletion reaches them as it reaches a call.
-    val amsterdamRequestsHash: Option[ByteString] =
-      if !amsterdam then None
+    // From Prague: the EIP-7685 request phase of a real block, and the requestsHash computed from it. go-ethereum's
+    // processBlock runs it for every Prague block (simulate.go:499-502, PostExecution): the EIP-6110 deposit logs are
+    // parsed, then the EIP-7002 / EIP-7251 queues (and from Amsterdam the EIP-8282 builder queues) are called. It used
+    // to run for Amsterdam blocks only, so a simulated Prague or Osaka block kept the queues' per-block slots and
+    // carried the empty requestsHash whatever it held (B-163).
+    //
+    // As in PostExecution, whose error simulate.go returns as it is, a request contract with no code ends the whole
+    // simulation with -32000 `failed to process <queue>: empty system contract: no code at <address>` (a chain that
+    // has not deployed them, or a state override that clears one); and the calls run on this block's precompiles, so a
+    // move or a deletion reaches them as it reaches a call. On Amsterdam the phase, the withdrawals included, records
+    // at block access index n + 1. ETC never reaches it: no ETC chain declares a Prague timestamp.
+    val requestsHash: Option[ByteString] =
+      if !blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp) then None
       else
         SimulatedBlockSystemCalls.requests(
           simHeader,
           world,
           receipts,
-          Some(postExecutionReads),
+          Option.when(amsterdam)(postExecutionReads),
           precompileRelocations
         ) match
           case Left(err) => break(Left(JsonRpcError.LogicError(err)))
           case Right((afterRequests, requests)) =>
-            val persisted = InMemoryWorldStateProxy.persistState(afterRequests)
-            accessList.foreach(_.addIndex(calls.size + 1L, postExecutionReads, worldAfterCalls, persisted))
-            world = persisted
+            if amsterdam then
+              val persisted = InMemoryWorldStateProxy.persistState(afterRequests)
+              accessList.foreach(_.addIndex(calls.size + 1L, postExecutionReads, worldAfterCalls, persisted))
+              world = persisted
+            else world = afterRequests
             Some(BlockExecution.computeRequestsHash(requests))
 
     // EIP-8037: an Amsterdam header's gasUsed is the larger of the block's execution gas and state gas, not the receipts'
@@ -653,14 +660,20 @@ class EthSimulateService(
     val finalExtraFields = simHeader.extraFields match
       case s: HefPostShanghai => s.copy(withdrawalsRoot = withdrawalsRoot)
       case c: HefPostCancun   => c.copy(withdrawalsRoot = withdrawalsRoot)
-      case p: HefPostPrague   => p.copy(withdrawalsRoot = withdrawalsRoot, blobGasUsed = blobGasUsed)
+      // Prague and Osaka: the block's own blobGasUsed and EIP-7685 requestsHash.
+      case p: HefPostPrague =>
+        p.copy(
+          withdrawalsRoot = withdrawalsRoot,
+          blobGasUsed = blobGasUsed,
+          requestsHash = requestsHash.getOrElse(p.requestsHash)
+        )
       // Amsterdam: the simulated block's own blobGasUsed, its EIP-7928 access list hash and its EIP-7685 requestsHash.
       case a: BlockHeader.HeaderExtraFields.HefPostAmsterdam =>
         a.copy(
           withdrawalsRoot = withdrawalsRoot,
           blobGasUsed = blobGasUsed,
           blockAccessListHash = accessList.fold(a.blockAccessListHash)(_.build.hash),
-          requestsHash = amsterdamRequestsHash.getOrElse(a.requestsHash)
+          requestsHash = requestsHash.getOrElse(a.requestsHash)
         )
       case other => other
     val finalHeader = simHeader.copy(

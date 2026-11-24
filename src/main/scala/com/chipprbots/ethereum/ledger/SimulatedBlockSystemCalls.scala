@@ -62,9 +62,13 @@ object SimulatedBlockSystemCalls:
     *
     * A request contract with no code is a Left too, with go-ethereum's text, for example `failed to process withdrawal
     * queue: empty system contract: no code at 0x00000961Ef480Eb55e80D19ad83579A64c007002` (state_processor.go:469-472
-    * under `PostExecution`'s wrapper, :211-226). The caller answers it -32000, as go-ethereum's plain error is. The
-    * contracts are checked in go-ethereum's order, each on the world the one before it left: withdrawals,
-    * consolidations, then the builder deposit and exit queues.
+    * under `PostExecution`'s wrapper, :211-226). The caller answers it -32000, as go-ethereum's plain error is.
+    *
+    * go-ethereum's order (`PostExecution`, state_processor.go:207-226): the deposit logs are parsed FIRST, so a
+    * malformed deposit event is the error even where a queue would fail too; then the contracts, each on the world the
+    * one before it left: withdrawals, consolidations, then the builder deposit and exit queues. Block execution parses
+    * the deposits after the calls; for a valid block the two orders give the same requests, since parsing reads only
+    * the receipts.
     */
   def requests(
       header: BlockHeader,
@@ -74,6 +78,7 @@ object SimulatedBlockSystemCalls:
       precompileRelocations: Map[Address, Address]
   )(implicit blockchainConfig: BlockchainConfig): Either[String, (InMemoryWorldStateProxy, Seq[ByteString])] =
     for
+      deposits <- BlockExecution.depositRequests(receipts)
       (afterCalls, systemRequests) <- BlockExecution.requestSystemCalls(
         header,
         world,
@@ -81,5 +86,4 @@ object SimulatedBlockSystemCalls:
         precompileRelocations,
         BlockExecution.EmptyRequestContract.Fail
       )
-      deposits <- BlockExecution.depositRequests(receipts)
     yield (afterCalls, deposits.toSeq ++ systemRequests)
