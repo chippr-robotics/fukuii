@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.jsonrpc.mcp
 
 import org.apache.pekko.actor.typed
+import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
@@ -13,6 +14,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps
+import com.chipprbots.ethereum.jsonrpc.CanonicalTxLookup
 import com.chipprbots.ethereum.jsonrpc.McpDependencies
 import com.chipprbots.ethereum.jsonrpc.StateRead
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
@@ -286,12 +288,12 @@ object TransactionByHashResource:
       Try(org.bouncycastle.util.encoders.Hex.decode(hashStr.stripPrefix("0x"))).getOrElse(Array.empty[Byte])
     if hashBytes.length != 32 then s"""{"error": "Invalid transaction hash: $hashStr"}"""
     else
-      deps.transactionMappingStorage.get(hashBytes.toIndexedSeq) match
-        case Some(loc) =>
+      CanonicalTxLookup(deps.transactionMappingStorage, deps.blockchainReader, ByteString(hashBytes)) match
+        case Some(found) =>
           s"""{
             |  "hash": "$hashStr",
-            |  "blockHash": "${ByteStringUtils.hash2string(loc.blockHash)}",
-            |  "transactionIndex": ${loc.txIndex}
+            |  "blockHash": "${ByteStringUtils.hash2string(found.block.header.hash.value)}",
+            |  "transactionIndex": ${found.txIndex}
             |}""".stripMargin
         case None =>
           s"""{"error": "Transaction not found: $hashStr"}"""
