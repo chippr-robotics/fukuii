@@ -3044,6 +3044,85 @@ class SyncControllerSpec
     auditName(testSetup) shouldBe None
   }
 
+  // ---- B-435: the controller answers GetStatus in every state that waits on slow work -------------------------------
+  // The miner's ask (5 s) and eth_syncing timed out because a state stashed or dropped the ask while a slow call ran:
+  // the check before SNAP (blocking dispatcher, asked again every 5 s on Wait) and the checkpoint import (it ran inside
+  // start(), on the actor's thread). The slow work is held by a latch here; no sleeps.
+
+  private def expectSyncingAnswer(testSetup: TestSetup): Unit =
+    import testSetup.*
+    val asker = TestProbe()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(asker.ref.toTyped[SyncProtocol.Status]))
+    asker.expectMsgType[SyncProtocol.Status.Syncing]: Unit
+
+  "SyncController" should "answer GetStatus while the check before SNAP is still running (B-435)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val release = new java.util.concurrent.CountDownLatch(1)
+    val entered = new java.util.concurrent.CountDownLatch(1)
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false)):
+      override def beforeSnap(): SyncController.SnapStartOnGuard =
+        entered.countDown()
+        release.await()
+        super.beforeSnap()
+    pathLiveSync = Some(port)
+    try
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually {
+        someTimePasses()
+        withClue("beforeSnap was reached: ")(entered.getCount shouldBe 0)
+      }
+      expectSyncingAnswer(testSetup)
+    finally release.countDown()
+  }
+
+  it should "answer GetStatus while the check before SNAP says wait (B-435)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Wait("a recovery was executing a block"))
+    pathLiveSync = Some(port)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      port.asked.get() shouldBe 1
+    }
+    expectSyncingAnswer(testSetup)
+  }
+
+  it should "answer GetStatus while a checkpoint download or import runs, and go on to SNAP after it (B-435)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    val release = new java.util.concurrent.CountDownLatch(1)
+    val onTheClient = new java.util.concurrent.CountDownLatch(1)
+    val testSetup = new TestSetup():
+      override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(
+        doSnapSync = true,
+        checkpointSyncUrl = Some("https://checkpoint.invalid/archive")
+      )
+    testSetup.checkpointHttpClient = () =>
+      onTheClient.countDown()
+      release.await()
+      Left("no client in this test")
+    try
+      import testSetup.*
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      onTheClient.await()
+      withClue("the import is under way on another thread, and the ask is answered: ") {
+        expectSyncingAnswer(testSetup)
+      }
+      snapChildren(testSetup) shouldBe empty
+      release.countDown()
+      awaitSnapStarted(syncController)
+    finally
+      release.countDown()
+      testSetup.cleanup()
+  }
+
   // ---- a refused checkpoint archive at the start (spec 018 C5c, T292 wiring; B-380) ----------------------------------
   //
   // CheckpointImportRetrySpec pins the importer's no-retry rule and recoverInterrupted. These pin the two call sites in
@@ -3082,10 +3161,11 @@ class SyncControllerSpec
   /** The `[CHECKPOINT IMPORT]` lines SyncController logs at WARN or above while it starts, once SNAP has started. */
   private def checkpointLinesAtStart(testSetup: TestSetup): List[String] =
     import testSetup.*
+    // B-435: the import runs off the actor's thread, so its lines come before SNAP starts, not before Start returns
     val lines = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.WARN) {
       syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      awaitSnapStarted(syncController)
     }
-    awaitSnapStarted(syncController)
     lines.filter(_.contains("[CHECKPOINT IMPORT]"))
 
   it should "skip a checkpoint archive this node refused before, say so, and start SNAP (T292)" taggedAs (
@@ -3251,7 +3331,8 @@ class SyncControllerSpec
           // #1654: these fixtures store weights that do not follow from genesis; the pass would repair them.
           chainWeightReconcileOn = false,
           stateEscalation = stateEscalation,
-          pathLiveSync = pathLiveSync
+          pathLiveSync = pathLiveSync,
+          checkpointHttpClient = checkpointHttpClient
         )
       )
     )
@@ -3261,6 +3342,10 @@ class SyncControllerSpec
 
     /** A sync on the unified layout (spec 018 C5a part 10): set before the controller is first used. */
     var pathLiveSync: Option[SyncController.PathLiveSyncPort] = None
+
+    /** The checkpoint download's client, built when a download is due, off the actor's thread (B-435 tests hold it). */
+    var checkpointHttpClient: () => Either[String, java.net.http.HttpClient] =
+      () => Right(com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader.defaultHttpClient)
 
     /** The node's tx gossip gate, as NodeBuilder shares it between SyncController, the Engine API and the pool. */
     lazy val txGossipGate: com.chipprbots.ethereum.transactions.TxGossipGate =

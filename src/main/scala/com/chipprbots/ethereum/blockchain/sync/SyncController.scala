@@ -293,6 +293,8 @@ object SyncController:
   // the clear of a state that is given up ended: done, not begun (a recovery was still running), or failed
   private case object SnapStoppedForBranchRetry extends Command
   private case class BranchRetryCleared(ended: scala.util.Try[Boolean]) extends Command
+  // B-435: the checkpoint download and import, run off the actor's thread, ended
+  private case class CheckpointSyncEnded(ended: scala.util.Try[Unit]) extends Command
   // spec 018 C5a part 10: what the port answered before a SNAP sync on the unified layout
   private case class SnapStartChecked(minPivotBlock: Option[BigInt], answer: scala.util.Try[SnapStartOnGuard])
       extends Command
@@ -673,6 +675,15 @@ object SyncController:
       * through the wildcard and match themselves. `WrappedSyncProtocol` preserves the ask `sender()` because callers
       * `.tell` it with the original sender; `WrappedExternal` is fire-and-forget (its arms never read `sender()`).
       */
+    /** B-435: the generic "syncing" answer, from the stored progress alone, for a state that does no sync of its own.
+      */
+    private def replySyncing(replyTo: TypedActorRef[SyncProtocol.Status]): Unit =
+      replyTo ! SyncProtocol.Status.Syncing(
+        startingBlockNumber = appStateStorage.getSyncStartingBlock(),
+        blocksProgress = SyncProtocol.Status.Progress(appStateStorage.getBestBlockNumber(), BigInt(0)),
+        stateNodesProgress = None
+      )
+
     private def unwrap(cmd: Command): Any = cmd match // Any: returns Classic msg from WrappedExternal
       case WrappedExternal(m)     => m
       case WrappedSyncProtocol(m) => m
@@ -1684,6 +1695,10 @@ object SyncController:
           case bh: ForkChoiceManager.BeaconHead =>
             handleBeaconHead(bh, snapSyncOpt = None)
             Behaviors.same
+          case msg: SyncProtocol.GetStatus =>
+            // B-435: answered, not dropped (a dropped ask times out for the miner and eth_syncing)
+            replySyncing(msg.replyTo)
+            Behaviors.same
           case _ => Behaviors.same
       }
 
@@ -2226,7 +2241,9 @@ object SyncController:
       //      (resumable via HTTP Range) and import.
       // On success the importer marks SNAP/bytecode/storage as done; the match below routes to
       // RegularSync. On failure we log and fall through to the normal SNAP/Regular path.
-      if appStateStorage.getBestBlockNumber() == 0 && !appStateStorage.isSnapSyncDone() then
+      // B-435: the download and the import run for minutes. They run off this actor's thread (blocking dispatcher), and
+      // the controller answers `GetStatus` meanwhile (`importingCheckpoint`) instead of leaving every ask to time out.
+      def runCheckpointSync(): Unit =
         val fileOpt: Option[java.nio.file.Path] = syncConfig.checkpointSyncFile.orElse {
           syncConfig.checkpointSyncUrl.flatMap { url =>
             // INFO-5: normalize + validate to prevent path-traversal from a crafted system-property value.
@@ -2292,13 +2309,50 @@ object SyncController:
             case Left(err) =>
               log.error("[CHECKPOINT IMPORT] failed: {} — falling through to SNAP/Regular", err)
         }
-      else if syncConfig.checkpointSyncFile.isDefined || syncConfig.checkpointSyncUrl.isDefined then
-        log.info(
-          "Checkpoint sync configured but DB already initialized (bestBlock={}, snapDone={}); skipping import",
-          appStateStorage.getBestBlockNumber(),
-          appStateStorage.isSnapSyncDone()
-        )
 
+      val checkpointDue = appStateStorage.getBestBlockNumber() == 0 && !appStateStorage.isSnapSyncDone()
+      val checkpointConfigured = syncConfig.checkpointSyncFile.isDefined || syncConfig.checkpointSyncUrl.isDefined
+      if checkpointDue && checkpointConfigured then
+        val blocking = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
+        ctx.pipeToSelf(scala.concurrent.Future(runCheckpointSync())(using blocking))(CheckpointSyncEnded(_))
+        importingCheckpoint(startMode, floorSetThisStart)
+      else
+        if checkpointConfigured then
+          log.info(
+            "Checkpoint sync configured but DB already initialized (bestBlock={}, snapDone={}); skipping import",
+            appStateStorage.getBestBlockNumber(),
+            appStateStorage.isSnapSyncDone()
+          )
+        continueStart(startMode, floorSetThisStart)
+
+    /** The checkpoint download and import run on the blocking dispatcher (B-435). What is asked meanwhile: `GetStatus`
+      * (`eth_syncing`, the miner, the health check) is answered, not held; a CL head is kept; the rest waits and is
+      * handled once the import has ended and the start goes on.
+      */
+    private def importingCheckpoint(startMode: SyncMode, floorSetThisStart: Option[BigInt]): Behavior[Command] =
+      Behaviors.withStash(SyncController.ClearingStashSize) { waiting =>
+        Behaviors.receive { (_, cmd) =>
+          unwrap(cmd) match
+            case CheckpointSyncEnded(scala.util.Success(_)) =>
+              waiting.unstashAll(continueStart(startMode, floorSetThisStart))
+            case CheckpointSyncEnded(scala.util.Failure(failed)) =>
+              log.error("[CHECKPOINT IMPORT] ended with an exception. The node stops syncing; restart it.", failed)
+              throw failed
+            case msg: SyncProtocol.GetStatus =>
+              replySyncing(msg.replyTo)
+              Behaviors.same
+            case bh: ForkChoiceManager.BeaconHead =>
+              handleBeaconHead(bh, snapSyncOpt = None)
+              Behaviors.same
+            case _ =>
+              if waiting.isFull then
+                log.warn("A message was dropped during the checkpoint import: {}", cmd.getClass.getSimpleName)
+              else waiting.stash(cmd)
+              Behaviors.same
+        }
+      }
+
+    private def continueStart(startMode: SyncMode, floorSetThisStart: Option[BigInt]): Behavior[Command] =
       // Recovery flag: -Dfukuii.snap.clearDoneOnStart=true clears SnapSyncDone to re-enter healing.
       // Use when healing completed prematurely (BUG-006: root mismatch) to resume without a full re-sync.
       // spec 022 D7: this also takes the invariant marker, done or not, so the next SNAP run is a repair pass.
@@ -2562,14 +2616,11 @@ object SyncController:
               snapPeers = Some(snapPeers.get.copy(waitOver = true, ticksSinceWaitOver = 0))
               countSnapPeers()
               Behaviors.same
-            case SnapPeersRecount | SnapPeersWaitOver               => Behaviors.same
-            case msg: SyncProtocol.GetStatus if snapPeers.isDefined =>
-              // the wait for peers can be long: eth_syncing is answered, not held
-              msg.replyTo ! SyncProtocol.Status.Syncing(
-                startingBlockNumber = appStateStorage.getSyncStartingBlock(),
-                blocksProgress = SyncProtocol.Status.Progress(appStateStorage.getBestBlockNumber(), BigInt(0)),
-                stateNodesProgress = None
-              )
+            case SnapPeersRecount | SnapPeersWaitOver => Behaviors.same
+            case msg: SyncProtocol.GetStatus          =>
+              // B-435: the wait for peers, and the check before SNAP (asked again every 5 s while it says wait), can be
+              // long: eth_syncing and the miner's ask are answered, not stashed until after their timeout
+              replySyncing(msg.replyTo)
               Behaviors.same
             case SnapStartChecked(minPivot, scala.util.Success(SnapStartOnGuard.Begin(clearedGenesis))) =>
               if clearedGenesis then
@@ -3439,6 +3490,10 @@ object SyncController:
           handleBeaconHead(bh, snapSyncOpt = None)
           Behaviors.same
 
+        case msg: SyncProtocol.GetStatus =>
+          replySyncing(msg.replyTo) // B-435: a scan can be long; the ask is answered
+          Behaviors.same
+
         case other =>
           log.debug("Ignoring message during combined recovery scan: {}", other.getClass.getSimpleName)
           Behaviors.same
@@ -3618,6 +3673,9 @@ object SyncController:
           Behaviors.same
         case msg if isInternalMarker(msg) =>
           // Late self/death-watch marker for a child stopped before this transition — drop silently.
+          Behaviors.same
+        case msg: SyncProtocol.GetStatus =>
+          replySyncing(msg.replyTo) // B-435: recovery can be long; the ask is answered
           Behaviors.same
         case other =>
           // All SNAP response types (ByteCodesResponse, StorageRangesResponse, AccountRangeResponse,
