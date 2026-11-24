@@ -2708,21 +2708,21 @@ items:
   - id: B-314
     title: "C5 gate: hive engine re-org suites with the guard on, once part 10 starts the importer there (B-297 item 5)"
     priority: P1
-    status: in-progress
+    status: review
     area: consensus
     opened: 2026-11-16
     refs: [B-297]
     links:
-      prs: [1910]
+      prs: [1910, 2082]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-18T00:57:40Z
-      heartbeat: 2026-11-24T11:40:30Z
+      heartbeat: 2026-11-24T13:07:16Z
     notes: |-
-      2026-11-24 in-progress: hive-engine.yml dispatched on staging 2026-11-24 03:17Z, path_live=true, sim_limit=/re-?org; awaiting result
       2026-11-24 in-progress: hive engine path_live on staging 4a722435c5 (run 45372923367): 78/83 fail, all re-org (Invalid Missing Ancestor Syncing ReOrg P8/P9, Withdrawals Fork re-org); hash layout same filter passes. Root-causing from sim logs.
       2026-11-24 in-progress: root cause: path-live PoS-from-genesis startup guard killed every hive client at launch (78/78 'client did not start'; re-orgs never exercised). User 2026-11-24: allow by default. Fix queued (scratchpad b314-fix.md), then re-run the gate.
+      2026-11-24 review: guard fix; after merge re-run hive engine path_live (the real re-org round)
   - id: B-315
     title: "Weight arm of reorganiseOnLayers: weigh again when the head moved between the comparison and the move"
     priority: P3
