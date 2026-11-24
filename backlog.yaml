@@ -5293,3 +5293,14 @@ items:
     links:
       spec: 018
     notes: "beacon W4 on B-460. Also N3: leftBy works by exclusion; pin the producers. W3: announce-path blame uses block.number (ETC)."
+  - id: B-515
+    title: "Pool reset: the Engine API path and the importer don't share the pool's last head; an FCU after an importer reorg leaves the pool stale"
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: beacon W1 on B-338 (EngineApiService.poolHead only moves on FCU). Pool contents/RPC only, never a build. One shared tracker for both paths.
