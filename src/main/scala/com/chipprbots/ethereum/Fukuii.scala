@@ -167,10 +167,7 @@ object Fukuii extends Logger:
           else new StdNode
         node = Some(built)
         // SIGTERM stops this node and exits 0 when its database closed, not the JVM's 143 (B-426).
-        StopSignal.install(() =>
-          built.shutdown()
-          built.stoppedCleanly
-        )
+        StopSignal.install(() => built.stopForExit())
         built.start()
       ,
       NodeStartup.OnFailure(
@@ -187,7 +184,12 @@ object Fukuii extends Logger:
 
     // An Ephemery iteration ends at its reset: exit 75 for a supervisor to restart (managed), or only warn (an
     // operator's prepared directory, or `exit-at-reset = false`). Nothing is armed on any other network.
-    if started then EphemeryResetWatchdog.startFor(Config.config, deps)
+    // Its exit 75 comes after the node's stop, as SIGTERM's does (B-452): the JVM's hook does not wait for a stop that
+    // began elsewhere, and exiting first could cut the database's close.
+    if started then
+      val stopThenExit: Int => Unit = code =>
+        StopSignal.stopThenExit(s"exit $code", () => node.forall(_.stopForExit()), deps.exit, _ => code)
+      EphemeryResetWatchdog.startFor(Config.config, deps.copy(exit = stopThenExit))
 
   private def truncateLogs(): Unit =
     import scala.util.Try

@@ -37,16 +37,35 @@ object StopSignal extends Logger:
 
   /** The first call stops the node and exits with its status; the next ones only log. */
   private[nodebuilder] def onSignal(handled: AtomicBoolean, stop: () => Boolean, exit: Int => Unit): Unit =
-    if handled.compareAndSet(false, true) then
-      log.info("[SHUTDOWN] SIGTERM: stopping the node")
-      val clean =
-        try stop()
-        catch
-          case NonFatal(e) =>
-            log.error("[SHUTDOWN] The node's stop failed", e)
-            false
-      val status = if clean then CleanExit else UncleanExit
-      if clean then log.info("[SHUTDOWN] Stopped cleanly: exit 0")
-      else log.error(s"[SHUTDOWN] The database did not close cleanly: exit $status")
-      exit(status)
+    if handled.compareAndSet(false, true) then stopThenExit("SIGTERM", stop, exit)
     else log.warn("[SHUTDOWN] SIGTERM again: the stop under way goes on (SIGKILL ends it)")
+
+  /** Stops the node, then exits: the way out of every exit path that starts once the node is up (SIGTERM, the TUI's
+    * `q`, the Ephemery reset; B-426, B-452). `stop` runs the node's stop through its [[StopOnce]], so when another path
+    * began the stop it waits for that stop to end, and says whether the database closed. The exit comes only after it:
+    * an exit made at once would run the JVM's hook, which does not wait for a stop under way (B-274), and the process
+    * would end while the database still closes.
+    *
+    * @param why
+    *   what asked for the stop, for the log
+    * @param status
+    *   the exit status for a clean stop (true) or one that did not close the database (false); by default [[CleanExit]]
+    *   and [[UncleanExit]]
+    */
+  def stopThenExit(
+      why: String,
+      stop: () => Boolean,
+      exit: Int => Unit,
+      status: Boolean => Int = clean => if clean then CleanExit else UncleanExit
+  ): Unit =
+    log.info(s"[SHUTDOWN] $why: stopping the node")
+    val clean =
+      try stop()
+      catch
+        case NonFatal(e) =>
+          log.error("[SHUTDOWN] The node's stop failed", e)
+          false
+    val code = status(clean)
+    if clean then log.info(s"[SHUTDOWN] Stopped cleanly: exit $code")
+    else log.error(s"[SHUTDOWN] The database did not close cleanly: exit $code")
+    exit(code)
