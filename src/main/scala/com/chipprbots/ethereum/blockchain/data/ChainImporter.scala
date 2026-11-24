@@ -200,8 +200,15 @@ class ChainImporter(
       // on its parent's state wherever that is: after the merge the last valid block of the file is the head.
       // Blob sidecars take no part in the state transition: the hive consensus / consume-engine fixtures expect the
       // head to advance over blob blocks.
-      val parentWeight = blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)
-      blockExecution.executeAndAdoptBlockIf(block, parentWeight, () => None) match
+      // Under the head's lock (B-511): the block is committed as the head, with its index entry, and a fork choice is
+      // not between its parent's weight read here and that commit. Taken before the chain insert lock the execution
+      // takes, as every holder of both takes them. The fork choice's arm above is not under it: the import it runs
+      // takes it itself, on another thread.
+      val adopted = CanonicalHeadLock.held(s"the lenient import of block $blockNum") {
+        val parentWeight = blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)
+        blockExecution.executeAndAdoptBlockIf(block, parentWeight, () => None)
+      }
+      adopted match
         case Right(_) => LenientOutcome.Imported(1)
         case Left(error) =>
           log.error(s"Chain import: block $blockNum failed — ${error.describe}")

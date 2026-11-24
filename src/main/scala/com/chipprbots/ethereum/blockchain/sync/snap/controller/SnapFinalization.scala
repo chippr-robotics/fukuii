@@ -412,12 +412,15 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       .commit()
 
     // Set best block info with BOTH hash and number (putBestBlockNumber only
-    // sets the number, leaving getBestBlockInfo().hash empty).
-    stateIngest.appState
-      .putBestBlockInfo(
-        com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivot)
-      )
-      .commit()
+    // sets the number, leaving getBestBlockInfo().hash empty). Under the head's lock (B-511): a consensus client's fork
+    // choice may come as SNAP finishes; one write, so the hold is short.
+    com.chipprbots.ethereum.domain.CanonicalHeadLock.held(s"SNAP's best block at its finalised pivot $pivot") {
+      stateIngest.appState
+        .putBestBlockInfo(
+          com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivot)
+        )
+        .commit()
+    }
 
     // D4: snapSyncDone written AFTER pivot header and best-block info are stored.
     // Pivot data is written first so a crash between writes leaves the node in a

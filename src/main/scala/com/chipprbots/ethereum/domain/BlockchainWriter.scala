@@ -126,6 +126,13 @@ class BlockchainWriter(
       .remove(blockHash.value)
       .and(blockBodiesStorage.remove(blockHash.value))
 
+  /** The delete of the entry of the index of blocks by number at `number`, for a caller that removes the block it names
+    * (`EngineApiService`'s removal of an invalid block, B-511), on the hash layout, under the head's lock.
+    */
+  def removeBlockNumberMapping(number: BigInt): DataSourceBatchUpdate =
+    refuseOnTheUnifiedLayout(s"removeBlockNumberMapping at block $number")
+    blockNumberMappingStorage.remove(number)
+
   def storeBlockHeader(blockHeader: BlockHeader): DataSourceBatchUpdate =
     val hash = blockHeader.hash
     blockHeadersStorage.put(hash.value, blockHeader).and(saveBlockNumberMapping(blockHeader.number.value, hash))

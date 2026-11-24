@@ -429,7 +429,14 @@ final class CheckpointImporter(
           // kill or a refusal never reaches this write, so the stamp is never present over a partial import.
           val withStamp =
             if countsExactBefore then finalRecords.and(appStateStorage.markRefCountsExact()) else finalRecords
-          Right(withStamp.and(appStateStorage.snapSyncDone()).commitSync())
+          // Under the head's lock (B-511), as every writer of the best block on this layout that may run beside a
+          // consensus client's fork choice: the import runs at the start of sync, but the Engine API may be up. One
+          // write, so the hold is short.
+          Right(
+            com.chipprbots.ethereum.domain.CanonicalHeadLock.held(s"the checkpoint import's best block $blockNum")(
+              withStamp.and(appStateStorage.snapSyncDone()).commitSync()
+            )
+          )
     }
 
     finished match

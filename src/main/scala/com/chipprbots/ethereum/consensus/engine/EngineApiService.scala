@@ -298,9 +298,38 @@ class EngineApiService(
       val iter = set.iterator()
       while iter.hasNext do
         val child = iter.next()
-        blockchainWriter.removeBlockByHash(BlockHash(child)).commit()
+        removeInvalidBlock(BlockHash(child))
         markInvalidRecursive(child, effectiveLvh)
     }
+
+  /** A block found invalid, or standing on one, is removed: its header and body, and on the hash layout the entry of
+    * the index of blocks by number that names it, in the same batch, under the head's lock (B-511): the look at the
+    * index and the write are one step that a fork choice is not between, and no entry is left naming a block that is
+    * gone (`engine_newPayload` writes an entry for a payload that extends the index, ahead of the best block). On the
+    * unified layout the index is the held head's ancestry and moves only with it, and names no such block: only the
+    * block goes, as before.
+    */
+  private[engine] def removeInvalidBlock(hash: BlockHash): Unit =
+    if stateHeldInPlace.isDefined then blockchainWriter.removeBlockByHash(hash).commit()
+    else
+      CanonicalHeadLock.held(s"the removal of invalid block ${hash.toHexString}") {
+        val entry = blockchainReader
+          .getBlockHeaderByHash(hash)
+          .map(_.number.value)
+          .filter(n => blockchainReader.getCanonicalHashByNumber(n).contains(hash))
+        entry.foreach(n =>
+          log.warn(
+            "[ENGINE-API] block #{} {} is invalid and its entry of the index of blocks by number is removed with it",
+            n,
+            hash.toHexString
+          )
+        )
+        entry
+          .fold(blockchainWriter.removeBlockByHash(hash))(n =>
+            blockchainWriter.removeBlockByHash(hash).and(blockchainWriter.removeBlockNumberMapping(n))
+          )
+          .commit()
+      }
 
   /** Read-only copy of the invalid-block registry (blockHash -> latestValidHash), for specs that must assert the WHOLE
     * registry — "these entries and nothing else" — rather than probe it hash by hash through forkchoiceUpdated, which
@@ -380,7 +409,7 @@ class EngineApiService(
         val latestValid = block.header.parentHash.value
         (block :: above).foreach { invalid =>
           markInvalidRecursive(invalid.header.hash.value, latestValid)
-          blockchainWriter.removeBlockByHash(invalid.header.hash).commit()
+          removeInvalidBlock(invalid.header.hash)
         }
 
       // the rest of a catch-up's chain above a block that was rejected: marked and removed as those are (C5a part 8)
@@ -390,7 +419,7 @@ class EngineApiService(
       ): Unit =
         above.foreach { invalid =>
           markInvalidRecursive(invalid.hash.value, latestValid)
-          blockchainWriter.removeBlockByHash(invalid.hash).commit()
+          removeInvalidBlock(invalid.hash)
         }
 
   /** Has the state of the head `hash` names recovered, when this node recovers states: the stored blocks of its chain

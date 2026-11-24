@@ -486,18 +486,22 @@ private[snap] trait PivotSelector
           (proxy, "BLOCK_NUMBER_PROXY")
         }
     // #1434: one batch, so a crash cannot leave the best block on the previous pivot while the new pivot's header is
-    // stored: startup routing compares SNAP's saved pivot with the best block.
-    stateIngest.chainWriter
-      .storeBlockHeader(header)
-      .and(
-        stateIngest.chainWriter
-          .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
-      )
-      .and(
-        stateIngest.appState
-          .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivotBlockNumber))
-      )
-      .commit()
+    // stored: startup routing compares SNAP's saved pivot with the best block. Under the head's lock (B-511): a
+    // consensus client's fork choice may come while SNAP runs, and this writes the best block and an index entry; one
+    // write, so the hold is short.
+    com.chipprbots.ethereum.domain.CanonicalHeadLock.held(s"SNAP's best block for its pivot $pivotBlockNumber") {
+      stateIngest.chainWriter
+        .storeBlockHeader(header)
+        .and(
+          stateIngest.chainWriter
+            .storeChainWeight(pivotHash, ChainWeight.totalDifficultyOnly(estimatedTotalDifficulty))
+        )
+        .and(
+          stateIngest.appState
+            .putBestBlockInfo(com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivotBlockNumber))
+        )
+        .commit()
+    }
     ctx.log.info(
       s"Updated best block for ETH status: block=$pivotBlockNumber, hash=${pivotHash.value.toHex.take(16)}..., " +
         s"estimatedTD=$estimatedTotalDifficulty (source=$tdSource)"
