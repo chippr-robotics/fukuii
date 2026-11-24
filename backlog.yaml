@@ -1569,7 +1569,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T04:27:49Z
-      heartbeat: 2026-11-24T04:38:58Z
+      heartbeat: 2026-11-24T06:21:54Z
       branch: fix/b417-ci-fetch-retry
     notes: |-
       #1777 run 42570595438, 2026-11-09: curl sbt-1.13.0.tgz from github releases got 504 on all 6 tries within 25 s (retry-delay 5), so hive never ran. Use actions/cache for /tmp/sbt.tgz or setup-sbt, and exponential backoff.
@@ -1710,7 +1710,7 @@ items:
       by: cloud-719c6644
       agent: vault
       since: 2026-11-24T04:39:01Z
-      heartbeat: 2026-11-24T06:21:51Z
+      heartbeat: 2026-11-24T06:21:54Z
       branch: fix/b190-account-store-fault
     notes: AccountTrieAssembly.scala:287-291 catch branch in handleStoreAccountChunk. If next was advanced before the store failed, the unstored tail may be skipped until healing. Unverified; vault/forge to confirm (trie assembly).
   - id: B-191
@@ -1780,7 +1780,7 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T04:25:46Z
-      heartbeat: 2026-11-24T04:38:51Z
+      heartbeat: 2026-11-24T06:21:54Z
       branch: fix/b198-getblobsv2-null
     notes: "Sepolia gate 2026-11-10, Lighthouse v8.3.2: ERROR Error fetching or processing blobs from EL: invalid type: null, expected struct BlobAndProofV2. execution-apis Osaka getBlobsV2: all-or-nothing (null response if any blob is missing); per-element nulls are V1 (and V3) semantics. Lighthouse falls back to gossip, so not fatal. beacon/conduit."
   - id: B-199
@@ -3704,7 +3704,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T04:42:39Z
-      heartbeat: 2026-11-24T06:16:03Z
+      heartbeat: 2026-11-24T06:21:54Z
       branch: fix/b399-shutdown-unset-tui
     notes: Seen on every 'Refusing to start' during spec 030 S11 T099; shutdown should skip unset parts.
   - id: B-400
@@ -3957,7 +3957,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T04:27:45Z
-      heartbeat: 2026-11-24T04:38:54Z
+      heartbeat: 2026-11-24T06:21:54Z
       branch: fix/b417-ci-fetch-retry
     notes: "Seen on #1948 (2026-11-19) and #1978 (2026-11-21): the artifact exists on Maven Central; the coursier cache miss plus a transient fetch error fail formatCheck before tests. Options: include the scalafix-cli artifacts in the actions/cache key/path, prefetch with a retry step, or set coursier retry env (COURSIER_RETRY / sbt csrConfiguration)."
   - id: B-418
