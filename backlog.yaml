@@ -4601,18 +4601,19 @@ items:
   - id: B-465
     title: clearForResync can run while a ConsensusImpl adoption hold is open on ETC; refuse it while any attempt is open
     priority: P3
-    status: in-progress
+    status: review
     area: storage
     size: S
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2041]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:45:39Z
-      heartbeat: 2026-11-24T04:22:37Z
+      heartbeat: 2026-11-24T04:59:00Z
     notes: |-
       2026-11-24 in-progress: clone-e lane batch 2
       2026-11-24 in-progress: branch pushed; vault (and forge for B-455) review running
