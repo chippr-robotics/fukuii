@@ -4137,12 +4137,17 @@ items:
   - id: B-440
     title: "BlockImporter: a throw from evaluateBranch (IOException at the cap, head back) drops the batch unqueued; only re-offered by new announcements"
     priority: P3
-    status: open
+    status: claimed
     area: consensus
     opened: 2026-11-23
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T03:21:22Z
+      heartbeat: 2026-11-24T03:21:22Z
     notes: Found in B-439. importWith handleError (BlockImporter.scala:1927) logs and goes Running, so no crash; but ConsensusAdapter's re-queue is skipped and no LocalFault is told the feed. ReorgBlockhashParitySpec pins the rethrow as intended (#2001); decide whether the adapter should map a thrown write failure to a StateFault.
   - id: B-441
     title: SyncController idle() drops GetStatus before Start; answer it (NotSyncing/starting)
