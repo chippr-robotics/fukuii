@@ -5153,13 +5153,18 @@ items:
   - id: B-498
     title: Test-only head moves (TestService:432, TestingService:207) don't reset the tx pool through TxPoolReset (B-253)
     priority: P3
-    status: open
+    status: claimed
     area: rpc
     size: S
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T15:02:23Z
+      heartbeat: 2026-11-24T15:02:23Z
     notes: Found during B-253; low priority, test endpoints only.
   - id: B-499
     title: "OmmersPool.AddOmmers trims before it de-duplicates: re-adding a header already in the pool evicts a real candidate"
