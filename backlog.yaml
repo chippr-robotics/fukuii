@@ -926,12 +926,17 @@ items:
   - id: B-088
     title: ETC settleHead leaves stale tx lookups after reorgs; also the ConsensusImpl PoS designated-head arm
     priority: P3
-    status: open
+    status: claimed
     area: sync
     size: M
     opened: 2026-11-07
     refs: [handoff §3]
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T08:33:15Z
+      heartbeat: 2026-11-24T08:33:15Z
     notes: "Unverified dev-node item (handoff section 3): check it still applies before starting."
   - id: B-090
     title: engine_getPayloadBodiesByRange V1/V2 should return -38004 for count > 1024
