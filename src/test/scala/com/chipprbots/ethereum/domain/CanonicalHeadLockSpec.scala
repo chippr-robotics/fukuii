@@ -112,6 +112,19 @@ class CanonicalHeadLockSpec extends AnyFlatSpec with Matchers:
     told shouldBe Nil
   }
 
+  // B-506 (forge review W2): what runs between taking the lock and the `try` that lets it go must not keep the lock
+  // when it throws: a writer that names itself or a wait metric that fails lets it go, and the next writer has it.
+  it should "be let go when the wait metric or the writer's name throws as it is taken" taggedAs UnitTest in {
+    val lock = new HeadLock(30.seconds, _ => (), waited = _ => throw new IllegalStateException("no registry"))
+    lock.held("the import")(1) shouldBe 1
+    lock.held(throw new IllegalStateException("no name"))(2) shouldBe 2
+    lock.isHeldByCurrentThread shouldBe false
+    val other = new Thread(() => lock.held("the fork choice")(()))
+    other.start()
+    other.join(30_000)
+    other.isAlive shouldBe false
+  }
+
   "The node's head lock" should "throw in the tests when it is asked for inside the chain insert lock" taggedAs UnitTest in {
     System.getProperty(CanonicalHeadLock.OrderCheckProperty) shouldBe "fail"
     val thrown = intercept[IllegalStateException](

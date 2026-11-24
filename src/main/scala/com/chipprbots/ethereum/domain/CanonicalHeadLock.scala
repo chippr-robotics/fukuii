@@ -5,6 +5,7 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.locks.ReentrantLock
 
 import scala.concurrent.duration.*
+import scala.util.control.NonFatal
 
 import io.micrometer.core.instrument.Timer
 
@@ -132,7 +133,7 @@ final private[ethereum] class HeadLock(
     waited: Long => Unit = _ => (),
     heldInside: () => Option[String] = () => None,
     wrongOrder: String => Unit = _ => ()
-):
+) extends Logger:
   // fair: a fork choice that waits has the lock before the batch that lets it go can take it again (B-511)
   private val lock = new ReentrantLock(true)
 
@@ -158,15 +159,31 @@ final private[ethereum] class HeadLock(
           s"$by; it waits on"
       )
       lock.lock()
-      warn(s"[HEAD-LOCK] $waiter had the head's lock after ${(System.nanoTime() - asked) / 1000000} ms")
+      afterTaken(warn(s"[HEAD-LOCK] $waiter had the head's lock after ${(System.nanoTime() - asked) / 1000000} ms"))
     val outermost = lock.getHoldCount == 1
+    // Everything between taking the lock and the `try` that lets it go must not throw: a throw there would keep the
+    // head's lock for good, and every later fork choice, payload, import and rewind would wait on it forever.
     if outermost then
-      waited(System.nanoTime() - asked)
-      holder = Some((what, System.nanoTime()))
+      afterTaken(waited(System.nanoTime() - asked))
+      holder = Some((afterTakenOr(what, "a writer whose name could not be read"), System.nanoTime()))
     try body
     finally
       if outermost then holder = None
       lock.unlock()
+
+  /** Runs `step`, which observes a hold the lock already covers; a NonFatal throw out of it is logged, never raised, so
+    * it cannot keep the lock (B-506).
+    */
+  private def afterTaken(step: => Unit): Unit =
+    try step
+    catch case NonFatal(e) => log.error(s"[HEAD-LOCK] an observer of the head's lock failed: ${e.getMessage}", e)
+
+  private def afterTakenOr(value: => String, fallback: String): String =
+    try value
+    catch
+      case NonFatal(e) =>
+        log.error(s"[HEAD-LOCK] an observer of the head's lock failed: ${e.getMessage}", e)
+        fallback
 
   def isWaiting(thread: Thread): Boolean = lock.hasQueuedThread(thread)
   def hasWaiters: Boolean = lock.hasQueuedThreads

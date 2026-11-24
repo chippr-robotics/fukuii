@@ -317,6 +317,11 @@ class BlockchainWriter(
   /** The deletes of the lookups of the transactions the `left` blocks include and the `chain` blocks do not, and how
     * many: go-ethereum `reorg`, `types.HashDifference(deletedTxs, addedTxs)`. The one implementation for every writer
     * that takes blocks off the index. A block whose body is not stored contributes no transaction.
+    *
+    * Only a lookup that names one of the `left` blocks is deleted. go-ethereum's `deletedTxs` come from the old head's
+    * own chain down to the common block, so none of them can also be canonical below the fork; the entries cleared
+    * above a head can belong to a chain that forked lower, whose transactions a canonical block below the fork may
+    * include too, and that block's lookup stays (B-506).
     */
   private def staleLookupRemoval(
       left: Seq[BlockHash],
@@ -326,7 +331,13 @@ class BlockchainWriter(
     def txHashes(blocks: Seq[BlockHash]): Set[ByteString] =
       blocks.flatMap(reader.getBlockBodyByHash).flatMap(_.transactionList.map(_.hash.value)).toSet
     val leftTxs = txHashes(left)
-    val stale = if leftTxs.isEmpty then leftTxs else leftTxs -- txHashes(chain)
+    val leftBlocks: Set[ByteString] = left.map(_.value).toSet
+    val stale =
+      if leftTxs.isEmpty then leftTxs
+      else
+        (leftTxs -- txHashes(chain)).filter(tx =>
+          transactionMappingStorage.get(tx).forall(l => leftBlocks(l.blockHash))
+        )
     val removal = stale.foldLeft(transactionMappingStorage.emptyBatchUpdate) { (acc, tx) =>
       acc.and(transactionMappingStorage.remove(tx))
     }
