@@ -179,7 +179,7 @@ class StopThenExitSpec extends AnyFlatSpec with Matchers:
     exits.asScala.toList shouldBe List((StopSignal.CleanExit, true, true))
   }
 
-  // B-440: a write of the store refused during an import stops the node. The import holds what the database's close
+  // B-440: the store failing during an import stops the node. The import holds what the database's close
   // waits for, so the stop runs on a thread of its own and the call returns at once; the exit is unclean whatever the
   // stop ends in, and a second failure starts no second stop
   "A failure that ends the node" should "stop it aside, once, and exit with the unclean status even after a clean stop" taggedAs UnitTest in {
@@ -187,7 +187,7 @@ class StopThenExitSpec extends AnyFlatSpec with Matchers:
     val stops = new java.util.concurrent.atomic.AtomicInteger(0)
     val exits = new ConcurrentLinkedQueue[Int]()
     val fail = StopSignal.stopThenExitAside(
-      "a write of the store was refused",
+      "the store failed",
       () =>
         stops.incrementAndGet()
         true

@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.EscalationTrigger
 import com.chipprbots.ethereum.blockchain.sync.EscalationWatch
 import com.chipprbots.ethereum.blockchain.sync.PowEscalationFeed
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockEnqueued
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedDueToMissingNode
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
@@ -51,14 +52,21 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
 
   private val forkHash = BlockHash(ByteString(Array.fill[Byte](32)(7)))
 
-  private def branch(from: Int, blocks: Int): NonEmptyList[Block] =
+  /** `blocks` blocks from `from`, the first standing on `parent`; `mark` tells siblings at the same height apart. */
+  private def branch(
+      from: Int,
+      blocks: Int,
+      parent: BlockHash = forkHash,
+      mark: Byte = 0
+  ): NonEmptyList[Block] =
     NonEmptyList.fromListUnsafe(
       (0 until blocks)
         .foldLeft(List.empty[Block]) { (made, i) =>
           val header = Fixtures.Blocks.ValidBlock.header.copy(
-            parentHash = made.headOption.fold(forkHash)(_.header.hash),
+            parentHash = made.headOption.fold(parent)(_.header.hash),
             number = BlockNumber(from + i),
-            difficulty = Difficulty(100)
+            difficulty = Difficulty(100),
+            extraData = if mark == 0 then Fixtures.Blocks.ValidBlock.header.extraData else ByteString(mark)
           )
           Block(header, BlockBody.empty) :: made
         }
@@ -339,41 +347,106 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     later.toList.foreach(block => on.queue.isQueued(block.hash) shouldBe true)
   }
 
-  // forge W1: a store busy on the same block, batch after batch, takes no write. At the fifth answer in a row (some ten
-  // minutes, with the importer's backoff) the node stops as for a store that failed; a batch from another block, or one
-  // evaluated, starts the count again
-  it should "stop the node when the store is busy on the same block too many times in a row" taggedAs UnitTest in {
-    val busy = Thrown.busy.head
-    var fails = true
-    val on = new ThrowingRig(busy)
-    val rig = new Rig(
-      blocks => if fails then throw busy else ExtendedCurrentBestBranch(blocks.toList.map(data)),
-      on.host.blockchainReader,
-      on.queue
-    )
-    def busyAnswer(blocks: NonEmptyList[Block]): Boolean = rig.imported(blocks) match
+  // forge W1: a store busy on the same block, batch after batch, takes no write. The answers are counted by the block the
+  // batch stands on, until a block becomes the head; at the fifth (some ten minutes, with the importer's backoff) the
+  // node stops as for a store that failed
+  private class BusyRig:
+    val busy: Throwable = Thrown.busy.head
+    private var answer: NonEmptyList[Block] => ConsensusResult = _ => throw busy
+    private val on = new ThrowingRig(busy)
+    val rig = new Rig(blocks => answer(blocks), on.host.blockchainReader, on.queue)
+    def busyAnswer(blocks: NonEmptyList[Block]): Unit = rig.imported(blocks) match
       case BlockImportStateFault(fault: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable, _) =>
-        fault.askAgain
-      case other => fail(s"not a fault of this node's state: $other")
-    // four in a row, broken by an evaluation, then by a batch from another block: the count starts again each time
-    (1 until ConsensusAdapter.BusyBeforeStop).foreach(_ => busyAnswer(on.blocks) shouldBe true)
-    fails = false
-    rig.imported(on.blocks) shouldBe a[BlockImportedToTop]
-    fails = true
-    (1 until ConsensusAdapter.BusyBeforeStop).foreach(_ => busyAnswer(on.blocks) shouldBe true)
-    busyAnswer(branch(6, 2)) shouldBe true
-    (2 until ConsensusAdapter.BusyBeforeStop).foreach(_ => busyAnswer(on.blocks) shouldBe true)
-    rig.stopped shouldBe empty
-    // the fifth in a row from the same block stops the node
-    (1 until ConsensusAdapter.BusyBeforeStop).foreach(_ => busyAnswer(branch(9, 1)) shouldBe true)
-    rig.stopped shouldBe empty
-    rig.imported(branch(9, 1)) match
-      case BlockImportStateFault(fault, _) =>
-        fault.getMessage should include(s"was busy ${ConsensusAdapter.BusyBeforeStop} times in a row on block 9")
-        fault.getMessage should include("the node stops")
-      case other => fail(s"not a fault of this node's state: $other")
-    rig.stopped.toList.map(_ eq busy) shouldBe List(true)
-    rig.feed.refusedWeight shouldBe None
+        fault.askAgain shouldBe true
+      case other => fail(s"not a store that was busy: $other")
+    def busyAnswers(blocks: NonEmptyList[Block], times: Int): Unit = (1 to times).foreach(_ => busyAnswer(blocks))
+    // the batch is answered as `result` says, once
+    def answering(blocks: NonEmptyList[Block])(result: NonEmptyList[Block] => ConsensusResult): Any =
+      answer = result
+      try rig.imported(blocks)
+      finally answer = _ => throw busy
+    def stopsOn(blocks: NonEmptyList[Block]): Unit =
+      rig.stopped shouldBe empty
+      rig.imported(blocks) match
+        case BlockImportStateFault(fault, _) =>
+          fault.getMessage should include(
+            s"was busy ${ConsensusAdapter.BusyBeforeStop} times on block ${blocks.head.number}"
+          )
+          fault.getMessage should include("the node stops")
+        case other => fail(s"not a fault of this node's state: $other")
+      rig.stopped.toList.map(_ eq busy) shouldBe List(true)
+
+  private val otherParent = BlockHash(ByteString(Array.fill[Byte](32)(3)))
+  private val UnderStop = ConsensusAdapter.BusyBeforeStop - 1
+
+  it should "stop the node when the store is busy on the same block too many times" taggedAs UnitTest in {
+    val on = new BusyRig
+    val blocks = branch(5, 3)
+    // four, then a batch evaluated that moved the head: the count starts again
+    on.busyAnswers(blocks, UnderStop)
+    on.answering(blocks)(moved => ExtendedCurrentBestBranch(moved.toList.map(data))) shouldBe a[BlockImportedToTop]
+    // four, then a batch that stands on another block: the count starts again
+    on.busyAnswers(blocks, UnderStop)
+    on.busyAnswer(branch(9, 1, parent = otherParent))
+    on.busyAnswers(blocks, UnderStop - 1)
+    on.rig.stopped shouldBe empty
+    // the fifth on the same block stops the node
+    val other = branch(9, 1, parent = otherParent)
+    on.busyAnswers(other, UnderStop)
+    on.stopsOn(other)
+    // nothing of it is told to the escalation
+    on.rig.feed.refusedWeight shouldBe None
+  }
+
+  // forge W1: a lighter side branch kept as it is reads the store and writes nothing. It says nothing of a store that
+  // takes writes, and does not start the count again
+  it should "count on through lighter branches kept without a write" taggedAs UnitTest in {
+    val on = new BusyRig
+    val blocks = branch(5, 3)
+    val lighter = branch(5, 2, parent = otherParent)
+    (1 to UnderStop).foreach { _ =>
+      on.busyAnswer(blocks)
+      on.answering(lighter)(_ => Consensus.KeptCurrentBestBranch) shouldBe BlockEnqueued
+    }
+    on.stopsOn(blocks)
+  }
+
+  // forge W1: siblings stand on the same block; a store busy on one and on the other is busy on that block
+  it should "count the busy answers of sibling blocks at the same height together" taggedAs UnitTest in {
+    val on = new BusyRig
+    val one = branch(5, 3)
+    val sibling = branch(5, 3, mark = 1)
+    one.head.hash should not be sibling.head.hash
+    one.head.header.parentHash shouldBe sibling.head.header.parentHash
+    (1 to UnderStop).foreach(i => on.busyAnswer(if i % 2 == 1 then one else sibling))
+    on.stopsOn(one)
+  }
+
+  // forge W1: a prefix of a batch that became the head is a write the store took; the count starts again
+  it should "start the count again when a prefix of a batch becomes the head" taggedAs UnitTest in {
+    val on = new BusyRig
+    val blocks = branch(5, 3)
+    val corrupt = new ReorgTooDeep(ReorgRefusal.Corrupt, "a record is not what it should be")
+    on.busyAnswers(blocks, UnderStop)
+    on.answering(blocks)(batch => ConsensusStateFault(corrupt, List(data(batch.head)), batch.tail)) match
+      case BlockImportStateFault(_, imported) => imported.map(_.block) shouldBe List(blocks.head)
+      case other                              => fail(s"not a fault of this node's state: $other")
+    on.busyAnswers(blocks, UnderStop)
+    on.stopsOn(blocks)
+  }
+
+  // forge W1: a store read as corrupt with no block made the head took no write; the count goes on
+  it should "count on through another failure of the store that moved no head" taggedAs UnitTest in {
+    val on = new BusyRig
+    val blocks = branch(5, 3)
+    on.busyAnswers(blocks, 2)
+    on.answering(blocks)(_ => throw Thrown.corrupt.head) match
+      case BlockImportStateFault(_, imported) => imported shouldBe Nil
+      case other                              => fail(s"not a fault of this node's state: $other")
+    on.busyAnswers(blocks, UnderStop - 2)
+    on.stopsOn(blocks)
+    // the corrupt store is counted, as ever; the busy answers are not
+    on.rig.feed.refusedWeight.isDefined shouldBe true
   }
 
   // a store busy for now: the same write may go through at the next try. Queued again, no peer blamed, not counted

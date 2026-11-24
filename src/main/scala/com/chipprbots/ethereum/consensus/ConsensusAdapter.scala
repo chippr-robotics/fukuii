@@ -87,7 +87,11 @@ class ConsensusAdapter(
     */
   private val stopAskedFor = new AtomicBoolean(false)
 
-  /** The first block of the last batches the store answered busy, and how many times in a row (B-440, forge W1). */
+  /** The block the last batches the store answered busy stand on, and how many times it answered busy on it since a
+    * block last became the head (B-440, forge W1). Keyed on the parent: siblings at the same height stand on it too.
+    * Only a head that moved starts the count again ([[toldOfTheHead]]): a branch kept as it is, or another failure,
+    * wrote nothing, and says nothing of a store that takes writes.
+    */
   private val busyRunning = new AtomicReference[Option[(BlockHash, Int)]](None)
 
   /** Report a block the import path has PROVEN consensus-invalid, so `engine_newPayload` / `engine_forkchoiceUpdated`
@@ -365,13 +369,12 @@ class ConsensusAdapter(
         IO.defer(
           if accessLists.isEmpty then consensus.evaluateBranch(newBranch)
           else consensus.evaluateBranchWithAccessLists(newBranch, accessLists)
-        ).flatTap(_ => IO(if storeFailureIsAFault then busyRunning.set(None)))
-          .recover(Function.unlift { (thrown: Throwable) =>
-            Option
-              .when(storeFailureIsAFault)(ConsensusAdapter.thrownFromTheStore(thrown))
-              .flatten
-              .map(thrownByTheStore(newBranch, thrown, _))
-          })
+        ).recover(Function.unlift { (thrown: Throwable) =>
+          Option
+            .when(storeFailureIsAFault)(ConsensusAdapter.thrownFromTheStore(thrown))
+            .flatten
+            .map(thrownByTheStore(newBranch, thrown, _))
+        })
     )
 
   /** A proof-of-work branch, known by its `headers` from the block above the one it leaves the chain at, that regular
@@ -480,7 +483,7 @@ class ConsensusAdapter(
     * are imported, and the others wait in the queue and are fetched again without blame. Only a fault of the state
     * (thrown as it is, or a store that reads as corrupt) is told to the feed as a branch not judged; a store that
     * failed stops the node, and a store that was busy is tried again, up to [[ConsensusAdapter.BusyBeforeStop]] times
-    * in a row on the same block.
+    * on the same parent block with no block made the head between.
     *
     * The stop is asked for before the store is read (forge C1): a disk that refused a write may refuse the reads too,
     * and the stop must not hang on them. Otherwise the reads here run inside the evaluation's `recover`: one that
@@ -495,16 +498,16 @@ class ConsensusAdapter(
     val blocks = s"[${newBranch.head.number}-${newBranch.last.number}]"
     val busyInARow = failure match
       case StoreFailure.Busy =>
-        val first = newBranch.head.header.hash
+        val parent = newBranch.head.header.parentHash
         busyRunning
           .updateAndGet {
-            case Some((`first`, count)) => Some((first, count + 1))
-            case _                      => Some((first, 1))
+            case Some((`parent`, count)) => Some((parent, count + 1))
+            case _                       => Some((parent, 1))
           }
           .fold(1)(_._2)
-      case _ =>
-        busyRunning.set(None)
-        0
+      // no reset here: a store corrupt or a fault of the state wrote nothing; only a head that moved starts the count
+      // again, and a store that failed stops the node
+      case _ => 0
     if failure == StoreFailure.Failed || busyInARow >= ConsensusAdapter.BusyBeforeStop then
       stopped(newBranch, thrown, blocks, busyInARow)
     else
@@ -532,7 +535,7 @@ class ConsensusAdapter(
         case _ =>
           log.warn(
             s"[STATE-FAULT] The import of blocks $blocks met this node's store busy (${ConsensusAdapter.statusOf(thrown)}, " +
-              s"$busyInARow time(s) in a row on block ${newBranch.head.number}; the node stops at " +
+              s"$busyInARow time(s) on block ${newBranch.head.number} with no block made the head; the node stops at " +
               s"${ConsensusAdapter.BusyBeforeStop}), after ${imported.size} block(s) of it became the head: the others " +
               s"are queued again and tried again, no peer is blamed: $thrown"
           )
@@ -555,7 +558,7 @@ class ConsensusAdapter(
   ): ConsensusResult =
     val why =
       if busyInARow >= ConsensusAdapter.BusyBeforeStop then
-        s"was busy $busyInARow times in a row on block ${newBranch.head.number} " +
+        s"was busy $busyInARow times on block ${newBranch.head.number}, with no block made the head between " +
           s"(${ConsensusAdapter.statusOf(thrown)}), a store that does not take the write"
       else s"failed (${ConsensusAdapter.statusOf(thrown)})"
     val first = stopAskedFor.compareAndSet(false, true)
@@ -597,8 +600,14 @@ class ConsensusAdapter(
       val bestBlockNumber = blockchainReader.getBestBlockNumber
       blocks.foreach(blockQueue.enqueueBlock(_, bestBlockNumber))
 
+  /** A block became the head: the escalation's feed is told, and the store took a write, so the count of busy answers
+    * starts again (forge W1).
+    */
   private def toldOfTheHead(head: Option[Block]): Unit =
-    head.foreach(block => toldTheFeed("a head that moved")(_.headMoved(block)))
+    head.foreach { block =>
+      busyRunning.set(None)
+      toldTheFeed("a head that moved")(_.headMoved(block))
+    }
 
   /** The escalation's feed is told after the import is done, and says only: whatever goes wrong in it is logged, and
     * the import's result stands (forge).
@@ -671,11 +680,12 @@ object ConsensusAdapter extends Logger:
   val NoStopWired: Throwable => Unit = thrown =>
     log.error(s"[STORE-FAILED] No stop is wired to this import: the node is not stopped ($thrown)")
 
-  /** How many batches in a row from the same block the store may answer busy before the node stops as for a store that
-    * failed (forge W1). The importer tries the first two again at once and spaces the tries out from the third on
-    * (`BlockImporter.StateFaultBackoffAfter`, `exhaustBackoff`, 5 minutes), so the fifth comes some ten minutes after
-    * the first. A write stall, a compaction behind or a lock timed out clears in seconds; a store busy on the same
-    * block for ten minutes takes no write, and a node that retries it for ever follows no chain while it looks alive.
+  /** How many batches standing on the same block the store may answer busy, with no block made the head between, before
+    * the node stops as for a store that failed (forge W1). The importer tries the first two again at once and spaces
+    * the tries out from the third on (`BlockImporter.StateFaultBackoffAfter`, `exhaustBackoff`, 5 minutes), so the
+    * fifth comes some ten minutes after the first. A write stall, a compaction behind or a lock timed out clears in
+    * seconds; a store busy on the same block for ten minutes takes no write, and a node that retries it for ever
+    * follows no chain while it looks alive.
     */
   private[consensus] val BusyBeforeStop: Int = 5
 
