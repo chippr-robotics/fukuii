@@ -866,7 +866,7 @@ class EngineApiService(
                         // lock (B-511), as go-ethereum's InsertBlockWithoutSetHead takes `chainmu`: a branch the p2p
                         // import executes meanwhile writes its blocks' entries as they are committed, and an entry
                         // written between the look and the write would land over one of them.
-                        CanonicalHeadLock.held {
+                        CanonicalHeadLock.held(s"newPayload #${payload.blockNumber}") {
                           val extendsIt = extendsCanonical
                           if extendsIt then blockchainWriter.storeBlock(block).commit()
                           else

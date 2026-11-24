@@ -135,7 +135,7 @@ class ForkChoiceManager(
         // Under the head's lock (B-511), the move with the reference counts that follow it: a branch the p2p import
         // executes and settles holds it, so this moves the head from the index that settle leaves, and the settle
         // never sees the head moved under it.
-        val move = CanonicalHeadLock.held {
+        val move = CanonicalHeadLock.held(s"the fork choice to block ${header.number.value}") {
           val move = blockchainWriter.promoteToCanonicalHead(header, blockchainReader)
           // Reference counts follow the canonical index: a block is applied exactly while it is canonical (see
           // ReorgStateHandler). Abandon first, then re-adopt, as ConsensusImpl.settleHead does; both are idempotent.

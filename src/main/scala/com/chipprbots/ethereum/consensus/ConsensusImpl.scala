@@ -208,7 +208,7 @@ class ConsensusImpl(
         // head as it is once the lock is held (B-511)
         IO
           .delay(
-            CanonicalHeadLock.held(
+            CanonicalHeadLock.held(s"the import of blocks [${branch.head.number}-${branch.last.number}]")(
               againstTheHeadNow(branch, currentBestHeader, currentBestBlockWeight, accessLists)
             )
           )

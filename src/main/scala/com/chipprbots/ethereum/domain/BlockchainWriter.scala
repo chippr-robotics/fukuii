@@ -272,7 +272,7 @@ class BlockchainWriter(
       admit: () => Option[String] = () => None
   ): Either[String, Int] =
     refuseOnTheUnifiedLayout("rewriteCanonicalIndex")
-    CanonicalHeadLock.held {
+    CanonicalHeadLock.held("a rewrite of the index of blocks by number") {
       admit() match
         case Some(refused) => Left(refused)
         case None =>
@@ -360,7 +360,7 @@ class BlockchainWriter(
     */
   def promoteToCanonicalHead(head: BlockHeader, reader: BlockchainReader): CanonicalMove =
     refuseOnTheUnifiedLayout(s"promoteToCanonicalHead to block ${head.number.value}")
-    CanonicalHeadLock.held(promoteUnderTheLock(head, reader))
+    CanonicalHeadLock.held(s"a move of the head to block ${head.number.value}")(promoteUnderTheLock(head, reader))
 
   private def promoteUnderTheLock(head: BlockHeader, reader: BlockchainReader): CanonicalMove =
     val update = canonicalHeadUpdate(head, reader)
