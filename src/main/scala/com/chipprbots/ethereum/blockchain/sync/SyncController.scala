@@ -3339,100 +3339,38 @@ object SyncController:
             bfsQueueStorageOpt
           )
 
-          if snapSyncConfig.parallelRecoveryScan then
-            // Combined path: ONE parallel, resumable single-pass scan finds both gap sets; downloads start
-            // once it reports (in `runningCombinedScan`).
-            log.info("Recovery: combined parallel scan enabled — one pass finds bytecode + storage gaps.")
-            // Phase gauges are need-aware: a phase already done in a prior run shows Complete (not idle) while the
-            // combined scan re-verifies it in the same pass.
-            RecoveryMetrics.setBytecodePhase(
-              if needBytecode then RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
-            )
-            RecoveryMetrics.setStoragePhase(
-              if needStorage then RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
-            )
-            ctx.spawn(
-              Behaviors
-                .supervise(
-                  CombinedRecoveryScanActor(
-                    stateRoot,
-                    stateStorage,
-                    evmCodeStorage,
-                    appStateStorage,
-                    combinedScanAdapter,
-                    pivotBlock,
-                    snapSyncConfig,
-                    blockchainWriter.positionRepairs
-                  )
+          // ONE parallel, resumable single-pass scan finds both gap sets; downloads start once it reports (in
+          // `runningCombinedScan`). The legacy per-phase scans (`parallel-recovery-scan = false`) stopped at the first
+          // absent node and settled the flags on that partial walk; they were retired (B-217).
+          log.info("Recovery: combined parallel scan — one pass finds bytecode + storage gaps.")
+          // Phase gauges are need-aware: a phase already done in a prior run shows Complete (not idle) while the
+          // combined scan re-verifies it in the same pass.
+          RecoveryMetrics.setBytecodePhase(
+            if needBytecode then RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
+          )
+          RecoveryMetrics.setStoragePhase(
+            if needStorage then RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
+          )
+          ctx.spawn(
+            Behaviors
+              .supervise(
+                CombinedRecoveryScanActor(
+                  stateRoot,
+                  stateStorage,
+                  evmCodeStorage,
+                  appStateStorage,
+                  combinedScanAdapter,
+                  pivotBlock,
+                  snapSyncConfig,
+                  blockchainWriter.positionRepairs
                 )
-                // PR #1378: CombinedRecoveryScanActor owns a full recovery pass that must complete — no cap.
-                .onFailure[Throwable](SupervisorStrategy.restartWithBackoff(1.second, 30.seconds, 0.2)),
-              s"combined-recovery-scan-$syncGeneration",
-              DispatcherSelector.fromConfig("sync-dispatcher")
-            )
-            runningCombinedScan(needBytecode, needStorage, stateRoot, pivotBlock, snapSyncConfig, stateIngest)
-          else
-            // Legacy path: each phase scans the full trie independently, then downloads.
-            val bytecodeActor =
-              if needBytecode then
-                Some(
-                  ctx
-                    .spawn(
-                      Behaviors
-                        .supervise(
-                          BytecodeRecoveryActor(
-                            stateRoot,
-                            stateIngest,
-                            networkPeerManager,
-                            bytecodeRecoveryAdapter,
-                            pivotBlock,
-                            snapSyncConfig,
-                            blockchainWriter.positionRepairs
-                          )
-                        )
-                        .onFailure[Throwable](
-                          // PR #1378: state-recovery phase owner — a `.withMaxRestarts` cap would
-                          // stall recovery permanently (silently stops the actor forever). No cap.
-                          SupervisorStrategy.restartWithBackoff(1.second, 30.seconds, 0.2)
-                        ),
-                      s"bytecode-recovery-$syncGeneration",
-                      DispatcherSelector.fromConfig("sync-dispatcher")
-                    )
-                )
-              else None
-            val storageActor =
-              if needStorage then
-                Some(
-                  ctx
-                    .spawn(
-                      Behaviors
-                        .supervise(
-                          StorageRecoveryActor(
-                            stateRoot,
-                            stateIngest,
-                            networkPeerManager,
-                            storageRecoveryAdapter,
-                            pivotBlock,
-                            snapSyncConfig,
-                            blockchainWriter.positionRepairs
-                          )
-                        )
-                        .onFailure[Throwable](
-                          // PR #1378: state-recovery phase owner — a `.withMaxRestarts` cap would
-                          // stall recovery permanently (silently stops the actor forever). No cap.
-                          SupervisorStrategy.restartWithBackoff(1.second, 30.seconds, 0.2)
-                        ),
-                      s"storage-recovery-$syncGeneration",
-                      DispatcherSelector.fromConfig("sync-dispatcher")
-                    )
-                )
-              else None
-            beginRecoveryDownloads(
-              bytecodeActor,
-              storageActor,
-              bytecodeComplete = !needBytecode,
-              storageComplete = !needStorage
-            )
+              )
+              // PR #1378: CombinedRecoveryScanActor owns a full recovery pass that must complete — no cap.
+              .onFailure[Throwable](SupervisorStrategy.restartWithBackoff(1.second, 30.seconds, 0.2)),
+            s"combined-recovery-scan-$syncGeneration",
+            DispatcherSelector.fromConfig("sync-dispatcher")
+          )
+          runningCombinedScan(needBytecode, needStorage, stateRoot, pivotBlock, snapSyncConfig, stateIngest)
 
         case None =>
           recoveryCouldNotRun(
@@ -3509,14 +3447,11 @@ object SyncController:
                     Behaviors
                       .supervise(
                         BytecodeRecoveryActor.applyPreloaded(
-                          stateRoot,
                           stateIngest,
                           networkPeerManager,
                           bytecodeRecoveryAdapter,
-                          pivotBlock,
                           snapSyncConfig,
-                          effByte,
-                          blockchainWriter.positionRepairs
+                          effByte
                         )
                       )
                       .onFailure[Throwable](
@@ -3625,14 +3560,13 @@ object SyncController:
       else log.info("All recovery complete. Transitioning to regular sync.")
       startRegularSync()._2
 
-    /** A legacy scan (`parallel-recovery-scan = false`) could not run. Its phase is over for this run and settles
-      * nothing: its actor wrote no flag, and the cap on bulk bytecode recovery is not counted against a scan that never
-      * ran, as [[recoveryCouldNotRun]] has it for the combined scan.
+    /** The storage recovery actor refused to run (the unified layout, B-376). Its phase is over for this run and
+      * settles nothing: the actor wrote no flag, as [[recoveryCouldNotRun]] has it for the combined scan.
       */
-    private def legacyScanCouldNotRun(phase: String): Unit =
+    private def storageRecoveryNotRun(): Unit =
       log.error(
-        s"[SNAP-RECOVERY] The $phase recovery scan could not run (logged above). Its flag is not written, so the next " +
-          "start scans again. Regular sync fetches what it reaches on demand."
+        "[SNAP-RECOVERY] Storage recovery did not run (logged above). Its flag is not written, so the next start scans " +
+          "again. Regular sync fetches what it reaches on demand."
       )
       recoveryScanCouldNotRun = true
 
@@ -3655,13 +3589,8 @@ object SyncController:
           else runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true)
 
         // Over for this run, like a phase that completed, and said for what it is.
-        case BytecodeRecoveryActor.RecoveryNotRun =>
-          legacyScanCouldNotRun("bytecode")
-          if storageComplete then completeRecovery()
-          else runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete)
-
         case StorageRecoveryActor.RecoveryNotRun =>
-          legacyScanCouldNotRun("storage")
+          storageRecoveryNotRun()
           if bytecodeComplete then completeRecovery()
           else runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true)
 

@@ -16,7 +16,6 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
-import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.cache.LruCache
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -39,12 +38,8 @@ import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
 import com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
-import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
-import com.chipprbots.ethereum.domain.UInt256
-import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
-import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializable
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 
@@ -125,8 +120,8 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   private def positionsRead(member: String): Nothing =
     throw new UnsupportedOperationException(s"a refused recovery read PositionRepairs.$member")
 
-  /** Spin up a recovery actor already in its `downloading` state (via the preloaded-missing hook), wired to the given
-    * probes. Returns the actor plus the storages so the test can assert the done-flag.
+  /** Spin up a recovery actor already in its `downloading` state (handed `missingOne`), wired to the given probes.
+    * Returns the actor plus the storages so the test can assert the done-flag.
     */
   private def downloadingActor(
       testLabel: String,
@@ -146,7 +141,7 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
           syncController = syncController.ref.toTyped[Any],
           pivotBlockNumber = BigInt(100),
           snapSyncConfig = newConfig(abandonAfter, maxRolls),
-          preloaded = Some(missingOne),
+          missing = missingOne,
           coordinatorForTesting = Some(coordinator.ref)
         ),
         s"storage-recovery-spec-$testLabel"
@@ -155,15 +150,16 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     coordinator.expectMsgType[actors.StorageRangeCoordinator.AddStorageTasks](2.seconds)
     (actor, appStateStorage)
 
-  // A scan that could not run (here: the state root is not in the store) was taken as a scan that found no storage
-  // missing, and recovery was marked done for good on a state nobody had read. It still ends recovery for this run, so
-  // that regular sync starts; it settles nothing (spec 018 Track C, C2b; the combined scan already behaves so).
-  "StorageRecoveryActor" should "tell the controller its scan did not run, and not mark recovery done" taggedAs (
+  // The combined scan found no storage missing: the actor settles the flag at once and starts no download. (It had a
+  // scan of its own until B-217, which retired it: that scan stopped at the first absent node and the flag was then
+  // settled on the partial walk. What the scan finds is `CombinedRecoveryScan*Spec`'s and `RecoveryScansVerdictSpec`'s.)
+  "StorageRecoveryActor" should "mark recovery done at once, with no download, when no storage is missing" taggedAs (
     UnitTest,
     SyncTest
   ) in {
-    val syncController = TestProbe("syncController_scan_failed")
-    val networkPeerManager = TestProbe("npm_scan_failed")
+    val syncController = TestProbe("syncController_none_missing")
+    val coordinator = TestProbe("coordinator_none_missing")
+    val networkPeerManager = TestProbe("npm_none_missing")
     val (stateStorage, appStateStorage, flatSlots) = newStorages()
     val actor = testKit.spawn(
       StorageRecoveryActor.testApply(
@@ -172,45 +168,15 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         networkPeerManager = networkPeerManager.ref,
         syncController = syncController.ref.toTyped[Any],
         pivotBlockNumber = BigInt(100),
-        snapSyncConfig = newConfig(1.minute, 8)
-        // no preloaded gaps: the actor scans, and the root is not there
+        snapSyncConfig = newConfig(1.minute, 8),
+        missing = Seq.empty,
+        coordinatorForTesting = Some(coordinator.ref)
       ),
-      "storage-recovery-spec-scan-failed"
+      "storage-recovery-spec-none-missing"
     )
-    syncController.expectMsg(8.seconds, StorageRecoveryActor.RecoveryNotRun)
-    appStateStorage.isStorageRecoveryDone() shouldBe false
-    testKit.stop(actor)
-  }
-
-  // The actor's own scan runs in a Future. It read `ctx.log` there, which throws off the actor's thread, so every such
-  // scan ended as `ScanFailed`, whatever the state (B-406). A state with no storage missing must say so.
-  it should "run its own scan over a present state and mark recovery done when no storage is missing (B-406)" taggedAs (
-    UnitTest,
-    SyncTest
-  ) in {
-    val syncController = TestProbe("syncController_scan_ok")
-    val networkPeerManager = TestProbe("npm_scan_ok")
-    val (stateStorage, appStateStorage, flatSlots) = newStorages()
-    val build = stateStorage.getBackingStorage(0)
-    val root = ByteString(
-      MerklePatriciaTrie[Array[Byte], Array[Byte]](build)
-        .put(kec256(Array[Byte](1)), Account.empty().toBytes)
-        .put(kec256(Array[Byte](2)), Account(nonce = UInt256.One).toBytes)
-        .getRootHash
-    )
-    val actor = testKit.spawn(
-      StorageRecoveryActor.testApply(
-        stateRoot = root,
-        stateIngest = recoveryIngest(stateStorage, appStateStorage, flatSlots),
-        networkPeerManager = networkPeerManager.ref,
-        syncController = syncController.ref.toTyped[Any],
-        pivotBlockNumber = BigInt(0),
-        snapSyncConfig = newConfig(1.minute, 8)
-      ),
-      "storage-recovery-spec-scan-ok"
-    )
-    syncController.expectMsg(8.seconds, StorageRecoveryActor.RecoveryComplete)
+    syncController.expectMsg(3.seconds, StorageRecoveryActor.RecoveryComplete)
     appStateStorage.isStorageRecoveryDone() shouldBe true
+    coordinator.expectNoMessage(200.millis)
     testKit.stop(actor)
   }
 
@@ -355,7 +321,7 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         syncController = syncController.ref.toTyped[Any],
         pivotBlockNumber = BigInt(100),
         snapSyncConfig = SNAPSyncConfig(storageScheme = StorageScheme.Hash),
-        preloaded = Some(missingOne),
+        missing = missingOne,
         coordinatorForTesting = None
       ),
       "storage-recovery-spec-hash-spawn"
@@ -368,38 +334,37 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
   }
 
   // B-376 (the user's decision of 2026-11-19): on the unified layout the actor refuses to start, loudly, by its one
-  // entry; with gaps handed to it (the combined scan's form) and with a scan of its own
+  // entry, with the gaps the combined scan handed it
   "StorageRecoveryActor on the unified layout" should "refuse to start, log why at ERROR, write nothing and set no flag" taggedAs (
     UnitTest,
     SyncTest
   ) in {
-    for (preloaded, label) <- Seq((Some(missingOne), "preloaded"), (None, "scan")) do
-      val syncController = TestProbe(s"syncController_refused_$label")
-      val coordinator = TestProbe(s"coordinator_refused_$label")
-      val networkPeerManager = TestProbe(s"npm_refused_$label")
-      val (stateStorage, appStateStorage, flatSlots) = newStorages()
-      val actor = org.apache.pekko.actor.testkit.typed.scaladsl.LoggingTestKit
-        .error(StorageRecoveryActor.RefusedOnPositions)
-        .expect {
-          testKit.spawn(
-            StorageRecoveryActor.testApply(
-              stateRoot = fakeStateRoot,
-              stateIngest = recoveryIngest(stateStorage, appStateStorage, flatSlots),
-              networkPeerManager = networkPeerManager.ref,
-              syncController = syncController.ref.toTyped[Any],
-              pivotBlockNumber = BigInt(100),
-              snapSyncConfig = newConfig(1.minute, 8),
-              preloaded = preloaded,
-              coordinatorForTesting = Some(coordinator.ref),
-              positions = Some(OnThePositionLayout)
-            ),
-            s"storage-recovery-spec-refused-$label"
-          )
-        }
-      syncController.expectMsg(3.seconds, StorageRecoveryActor.RecoveryNotRun)
-      createTestProbe[Any]().expectTerminated(actor, 3.seconds)
-      coordinator.expectNoMessage(200.millis)
-      appStateStorage.isStorageRecoveryDone() shouldBe false
+    val syncController = TestProbe("syncController_refused")
+    val coordinator = TestProbe("coordinator_refused")
+    val networkPeerManager = TestProbe("npm_refused")
+    val (stateStorage, appStateStorage, flatSlots) = newStorages()
+    val actor = org.apache.pekko.actor.testkit.typed.scaladsl.LoggingTestKit
+      .error(StorageRecoveryActor.RefusedOnPositions)
+      .expect {
+        testKit.spawn(
+          StorageRecoveryActor.testApply(
+            stateRoot = fakeStateRoot,
+            stateIngest = recoveryIngest(stateStorage, appStateStorage, flatSlots),
+            networkPeerManager = networkPeerManager.ref,
+            syncController = syncController.ref.toTyped[Any],
+            pivotBlockNumber = BigInt(100),
+            snapSyncConfig = newConfig(1.minute, 8),
+            missing = missingOne,
+            coordinatorForTesting = Some(coordinator.ref),
+            positions = Some(OnThePositionLayout)
+          ),
+          "storage-recovery-spec-refused"
+        )
+      }
+    syncController.expectMsg(3.seconds, StorageRecoveryActor.RecoveryNotRun)
+    createTestProbe[Any]().expectTerminated(actor, 3.seconds)
+    coordinator.expectNoMessage(200.millis)
+    appStateStorage.isStorageRecoveryDone() shouldBe false
   }
 
   it should "start as before on the hash layout" taggedAs (UnitTest, SyncTest) in {
@@ -415,7 +380,7 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
         syncController = syncController.ref.toTyped[Any],
         pivotBlockNumber = BigInt(100),
         snapSyncConfig = newConfig(1.minute, 8),
-        preloaded = Some(missingOne),
+        missing = missingOne,
         coordinatorForTesting = Some(coordinator.ref)
       ),
       "storage-recovery-spec-hash-layout"

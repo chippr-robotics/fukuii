@@ -1686,12 +1686,10 @@ case class SNAPSyncConfig(
     // because trie nodes are content-addressed. This bounds the number of rolls so a peerless or
     // hot-only residue still terminates into the abandon path instead of rolling forever.
     storageRecoveryMaxRootRolls: Int = 8,
-    // Post-SNAP recovery scan: when true (default), one combined parallel single-pass scan
-    // (CombinedRecoveryScanner) walks the trie checking BOTH bytecode and storage per account, sharded
-    // across `recoveryScanConcurrency` workers, persisting per-shard progress so a crash resumes from the
-    // last completed shard. Replaces the two legacy single-threaded full-trie walks. Set false to fall
-    // back to the legacy per-phase scan actors.
-    parallelRecoveryScan: Boolean = true,
+    // Post-SNAP recovery scan: one combined parallel single-pass scan (CombinedRecoveryScanner) walks the
+    // trie checking BOTH bytecode and storage per account, sharded across `recoveryScanConcurrency` workers,
+    // persisting per-shard progress so a crash resumes from the last completed shard. The two legacy
+    // per-phase walks and their flag, `parallel-recovery-scan`, were retired (B-217).
     // Worker count for the combined scan. Default 3 — reserve a core + memory for the live node/GC on a
     // 4-core box (the scan runs read-only against the on-disk trie; the node is otherwise idle during it).
     recoveryScanConcurrency: Int = 3,
@@ -1891,9 +1889,6 @@ object SNAPSyncConfig:
         if snapConfig.hasPath("storage-recovery-max-root-rolls") then
           snapConfig.getInt("storage-recovery-max-root-rolls")
         else 8,
-      parallelRecoveryScan =
-        if snapConfig.hasPath("parallel-recovery-scan") then snapConfig.getBoolean("parallel-recovery-scan")
-        else true,
       recoveryScanConcurrency =
         if snapConfig.hasPath("recovery-scan-concurrency") then snapConfig.getInt("recovery-scan-concurrency")
         else 3,

@@ -103,6 +103,18 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     ConfigValidator.removedKeyWarnings(cfg("sync.pivot-block-offset = 32")) should have size 1
   }
 
+  // B-217: the legacy per-phase recovery scans were retired, and the combined scan always runs. The shipped sync.conf
+  // still sets the key true until its own change removes it, so only `false`, the one setting that asked for the
+  // legacy scans, is reported.
+  it should "warn that parallel-recovery-scan = false is ignored, and say nothing of the shipped true" taggedAs UnitTest in {
+    val warnings = ConfigValidator.removedKeyWarnings(cfg("sync.snap-sync.parallel-recovery-scan = false"))
+    warnings should have size 1
+    warnings.head should include("fukuii.sync.snap-sync.parallel-recovery-scan = false is ignored")
+    warnings.head should include("combined recovery scan")
+
+    ConfigValidator.removedKeyWarnings(cfg("sync.snap-sync.parallel-recovery-scan = true")) shouldBe empty
+  }
+
   it should "not warn about a config that sets no removed key" taggedAs UnitTest in {
     val (errors, logged) = withLoggedWarnings(ConfigValidator.validate(cfg("sync.do-snap-sync = true")))
 
