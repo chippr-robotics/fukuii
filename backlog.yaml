@@ -5336,7 +5336,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:15:27Z
-      heartbeat: 2026-11-24T11:15:32Z
+      heartbeat: 2026-11-24T12:16:50Z
     notes: |-
       beacon W2 on B-338; geth beacon-mode downloader drops no peer for an invalid chain (from memory, verify). Hive: the only peer gets blacklisted.
       2026-11-24 in-progress: folded into the B-338/B-460 round 2 (user: fix in the PR, don't split)
