@@ -5354,7 +5354,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:15:36Z
-      heartbeat: 2026-11-24T11:15:40Z
+      heartbeat: 2026-11-24T12:16:54Z
     notes: |-
       beacon W4 on B-460. Also N3: leftBy works by exclusion; pin the producers. W3: announce-path blame uses block.number (ETC).
       2026-11-24 in-progress: folded into the B-338/B-460 round 2 (user: fix in the PR, don't split)
