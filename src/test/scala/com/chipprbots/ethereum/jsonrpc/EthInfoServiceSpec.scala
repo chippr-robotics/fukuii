@@ -195,6 +195,33 @@ class EthServiceSpec
     ethService.call(CallRequest(tx, BlockParam.Latest)).unsafeRunSync() shouldEqual
       Left(JsonRpcError(-32000, s"err: $refused (supplied gas 50000)", None))
 
+  // B-173: the gas in "(supplied gas N)" is the message's gas after CallDefaults, not the request's: a call that names
+  // no gas runs with the RPC gas cap (transaction_args.go CallDefaults: `globalGasCap`), and one that names more is
+  // lowered to it, so that is the gas the message carries and the error names.
+  it should "name the defaulted gas, the RPC gas cap, in a refused call that supplied none" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+    val refused: String = "insufficient funds for transfer: address 0xdA714fE079751FA7a1aD80b76571EA6Ec52a446c"
+    val cap: BigInt = CallTxBuilder.DefaultGasCap
+    stxLedger.simulateCall
+      .expects(where { (stx: SignedTransactionWithSender, _: BlockHeader, _, _, _) =>
+        stx.tx.tx.gasLimit.value == cap
+      })
+      .returning(Left(StxLedger.CallPreCheckError(refused)))
+      .twice()
+    val tx: TxArgs = TxArgs(
+      from = Some(Address("0xda714fe079751fa7a1ad80b76571ea6ec52a446c")),
+      to = Some(Address("0xabbb6bebfa05aa13e908eaa492bd7a8343760477")),
+      value = Some(3)
+    )
+    ethService.call(CallRequest(tx, BlockParam.Latest)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError(-32000, s"err: $refused (supplied gas $cap)", None))
+    ethService.call(CallRequest(tx.copy(gas = Some(GasAmount(cap + 1))), BlockParam.Latest)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError(-32000, s"err: $refused (supplied gas $cap)", None))
+
   // A pre-Homestead creation that runs its init code but cannot pay its code deposit succeeds in the frame (ETC blocks
   // 0-1,149,999: no code, gas and state kept, `vmError` None). go-ethereum's and core-geth's `create` return
   // ErrCodeStoreOutOfGas as the message's error there, which each endpoint reports as it reports any VM error.

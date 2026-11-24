@@ -175,7 +175,11 @@ class StxLedger(
     val result = blockPreparator.runVMWithTracer(tx, senderAddress, blockHeader, worldForTx, tracer)
     val totalGasToRefund = blockPreparator.calcTotalGasToRefund(tx, result, blockHeader.number.value)
     val gasUsed = tx.tx.gasLimit.value - totalGasToRefund
-    tracer.onTxEnd(gasUsed, result.returnData, result.error.map(ProgramErrorText.vmErrorMessage))
+    tracer.onTxEnd(
+      gasUsed,
+      result.returnData,
+      ProgramErrorText.frameErrorMessage(result.error, result.codeDepositShortfall)
+    )
 
     TxResult(result.world, gasUsed, result.logs, result.returnData, result.error)
 
@@ -310,7 +314,13 @@ class StxLedger(
     callPreCheck(stx, blockHeader, world1, options).map { _ =>
       val (result, authRefund) = runCallFrame(stx, blockHeader, world1, options, tracer)
       val gasUsed = callGasUsed(stx, blockHeader, result, authRefund)
-      tracer.foreach(_.onTxEnd(gasUsed, result.returnData, result.error.map(ProgramErrorText.vmErrorMessage)))
+      tracer.foreach(
+        _.onTxEnd(
+          gasUsed,
+          result.returnData,
+          ProgramErrorText.frameErrorMessage(result.error, result.codeDepositShortfall)
+        )
+      )
       StxLedger.CallOutcome(
         TxResult(result.world, gasUsed, result.logs, result.returnData, result.error),
         codeDepositShortfall = result.codeDepositShortfall
@@ -543,8 +553,10 @@ class StxLedger(
       _ <-
         if tx.value == 0 then Right(())
         else
-          val upfront =
-            tx.gasLimit.value * Transaction.effectiveGasPrice(tx, blockHeader.baseFee) + blobGas * blobBaseFee
+          // the blob base fee is derived only for a message with blob gas (B-173): a `def`, and on a header with an
+          // absurd excessBlobGas its exponential is not free
+          val blobCharge = if blobGas == 0 then BigInt(0) else blobGas * blobBaseFee
+          val upfront = tx.gasLimit.value * Transaction.effectiveGasPrice(tx, blockHeader.baseFee) + blobCharge
           if world.getBalance(sender).toBigInt - upfront < tx.value then
             Left(E(s"insufficient funds for transfer: address $address"))
           else Right(())

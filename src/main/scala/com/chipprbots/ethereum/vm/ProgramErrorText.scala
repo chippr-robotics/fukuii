@@ -35,6 +35,15 @@ object ProgramErrorText:
     case CodeStoreOutOfGas                    => "contract creation code storage out of gas"
     case other                                => other.toString.toLowerCase
 
+  /** The error a tracer is told a frame ended with: its VM error, or, for a pre-Homestead creation that could not pay
+    * its code deposit, go-ethereum's `ErrCodeStoreOutOfGas` (B-173). That frame is a consensus success here (no error,
+    * gas and state kept: `ProgramResult.codeDepositShortfall`), but go-ethereum's `create` returns the error and its
+    * deferred `captureEnd` hands it to the tracer, for the top-level frame and for a CREATE inside one alike
+    * (core/vm/evm.go); only `opCreate` then ignores it for the stack value. Text only: nothing reads it back.
+    */
+  def frameErrorMessage(error: Option[ProgramError], codeDepositShortfall: Boolean): Option[String] =
+    error.map(vmErrorMessage).orElse(Option.when(codeDepositShortfall)(vmErrorMessage(CodeStoreOutOfGas)))
+
   /** The precompile's go-ethereum reason. Where there is none, the fallback "precompiled contract failed" is a
     * divergence from go-ethereum, said once per message at WARN with a counter (B-176, [[PrecompileDivergence]]).
     */
