@@ -4612,23 +4612,19 @@ items:
   - id: B-465
     title: clearForResync can run while a ConsensusImpl adoption hold is open on ETC; refuse it while any attempt is open
     priority: P3
-    status: review
+    status: done
     area: storage
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2041]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T03:45:39Z
-      heartbeat: 2026-11-24T04:59:00Z
     notes: |-
-      2026-11-24 in-progress: clone-e lane batch 2
       2026-11-24 in-progress: branch pushed; vault (and forge for B-455) review running
       2026-11-24 in-progress: vault: approve with changes: branch-retry path must not restart SNAP on a refused clear; pre-check holdOpen before StateRecovery.reset; note on clearForImport/clearGenesisStateForSync. Queued for clone-e after B-440.
+      2026-11-24 done: merged 6f79cd0a6
   - id: B-466
     title: testing_commitBlockV1 (hash store) writes code, block, receipts and access list as four commits; fold into one batch
     priority: P3
