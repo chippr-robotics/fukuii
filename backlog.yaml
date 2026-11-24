@@ -391,12 +391,12 @@ items:
     opened: 2026-11-08
     refs: ["#1746 follow-up"]
     links:
-      prs: [2087]
+      prs: [2087, 2090]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T13:35:00Z
-      heartbeat: 2026-11-24T13:35:30Z
+      heartbeat: 2026-11-24T13:47:30Z
     notes: herald.
   - id: B-036
     title: "Chore: list enrtree:// URLs in the chain confs, document dns-tree-deadline/dns-concurrency, refresh a sync.conf comment"
