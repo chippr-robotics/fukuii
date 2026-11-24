@@ -72,6 +72,9 @@ jobs:
           scripts/ci/test_check_scala_imports.sh
           scripts/ci/check_scala_imports.sh
 
+      - name: Self-test the sbt download retry
+        run: scripts/ci/test_sbt_retry.sh
+
       # Spec 018 Track C (T062): the state's entry points (the accessors by root, the reads by hash alone, the tries
       # and stores built by hand) are used only where scripts/state-accessor-allowlist.txt says, and as often.
       # StateAccessorRatchetSpec runs the same script in the test step; here it fails before the compile.
@@ -87,8 +90,10 @@ jobs:
       - name: Check the outbound TLS allow-list (spec 030)
         run: scripts/check-outbound-tls.sh
 
+      # sbt-retry.sh runs sbt again only when it failed to download something (sbt's launcher or a dependency
+      # answered 429, 5xx or a reset); a compile, format or test failure fails at once (B-417).
       - name: Compile all modules
-        run: sbt compile-all
+        run: scripts/ci/sbt-retry.sh compile-all
         env:
           FUKUII_DEV: true
 
@@ -96,8 +101,9 @@ jobs:
       # (root, bytes, crypto, rlp, scalanet, scalanetDiscovery) and scalafixAll --check on root, bytes,
       # crypto and rlp. The root project does not aggregate the others, so a bare scalafmtCheckAll
       # checks root alone. After the compile, so a compile error is reported as one, not as a lint failure.
+      # formatCheck fetches scalafix-cli; that fetch failing transiently (#1948, #1978) is retried (B-417).
       - name: Check formatting (all modules) and scalafix (root, bytes, crypto, rlp)
-        run: sbt formatCheck
+        run: scripts/ci/sbt-retry.sh formatCheck
         env:
           FUKUII_DEV: true
       
