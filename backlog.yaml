@@ -4654,7 +4654,8 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T16:21:07Z
-      heartbeat: 2026-11-24T16:21:07Z
+      heartbeat: 2026-11-24T16:21:27Z
+      branch: fix/r4-simulate-parity
     notes: "Pre-existing, found in B-230 (#2018). PoW pending build runs over getReadOnlyMptStorage (in-memory buffer); EthSimulateService opens scratchStateAt(pendingHeader). Fix: base on the pending world's storage via a fresh overlay (do NOT write into the shared, non-thread-safe pending buffer) plus its deployedCode. eth_call/estimate/trace already use pendingState."
   - id: B-459
     title: Document sync.backfill-stall-timeout (B-410) in sync.conf; fix branches cannot touch src/main/resources
