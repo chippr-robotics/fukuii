@@ -4949,11 +4949,16 @@ items:
   - id: B-490
     title: "Chain weights: check StateRecovery's in-place adoption and the p2p hand-off re-derive weights of blocks they make canonical (B-126 covers fork-choice moves)"
     priority: P3
-    status: open
+    status: claimed
     area: sync
     opened: 2026-11-24
     refs: []
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T09:20:21Z
+      heartbeat: 2026-11-24T09:20:21Z
     notes: "B-126 re-derives weights in ForkChoiceManager only (hash: move.adopted; unified: walk before moveHeadInPlace, bounded 8192). Blocks a recovery commits in place (C4d part 4) or adopts take keepExecuted's parent+difficulty at execution time; if ChainWeightReconcile repaired the parent in between they keep the stale value. Verify, and route through the same helper if so. beacon."
   - id: B-491
     title: "B-126 follow-ups: log when the fork-choice weight walk hits MaxAdoptedWalk; doc vs code on a missing header; crash window between head move and weight write"
