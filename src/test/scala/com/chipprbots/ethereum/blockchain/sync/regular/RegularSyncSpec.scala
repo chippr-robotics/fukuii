@@ -3043,6 +3043,107 @@ class RegularSyncSpec
             appender.close()
       )
 
+      // B-315 (forge's review, W2): a branch refused because the head moved after it was weighed is weighed again against
+      // the head as it is, and the refusal ends there. Tried again at once, at the importer's usual pace, and not counted
+      // in B-294's streak of busy refusals, whose back-off would hold it five minutes from the third: for as long as each
+      // refusal finds the head higher than before (an operator's admin_importChain committing blocks meanwhile).
+      "try again at once, uncounted, a block refused because the head moved after its branch was weighed, while the head climbs" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          val attempts = new java.util.concurrent.atomic.AtomicInteger(0)
+          // the wait between two spaced-out tries: longer than this test
+          BlockImporter.exhaustBackoff = 1.hour
+          try
+            setImportResult(
+              failingBlock,
+              IO {
+                // each refusal finds the head a block higher
+                val n = attempts.incrementAndGet()
+                BlockImportStateFault(
+                  new com.chipprbots.ethereum.db.storage.pathstate.StateBusy(
+                    s"the writer that moved the head to block ${100 + n}",
+                    "the move of the head was not made: the head moved after the branch was weighed",
+                    com.chipprbots.ethereum.db.storage.pathstate.StateBusy.Cause.HeadMovedSinceWeighed(BigInt(100 + n))
+                  )
+                )
+              }
+            )
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            // past the third, where a busy refusal of any other kind is spaced out by an hour
+            awaitCond(attempts.get >= BlockImporter.StateFaultBackoffAfter + 3, 30.seconds)
+            withClue("neither blacklisted nor evicted: ") {
+              peersClient
+                .receiveWhile(syncConfig.syncRetryInterval * 2) { case m => m }
+                .collect { case b: PeersClient.BlacklistPeer => b } shouldBe empty
+            }
+          finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
+      // B-315 (forge's review, W2): the bound on the retry at once. The same branch refused so with the head no higher
+      // (moved back and forth, or sideways, between the weighing and the move) brings no new information: from the
+      // HeadMovedRetriesWithoutProgress-th such refusal in a row its tries are spaced out, as any busy refusal's are, and
+      // said once at WARN.
+      "space out the tries of a block refused because the head moved after its branch was weighed, when the head does not climb" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          val attempts = new java.util.concurrent.atomic.AtomicInteger(0)
+          val logger: Logger = org.slf4j.LoggerFactory
+            .getLogger("com.chipprbots.ethereum.blockchain.sync.regular")
+            .asInstanceOf[Logger]
+          val appender = new ListAppender[ILoggingEvent]
+          val previousLevel = logger.getLevel
+          appender.start()
+          logger.addAppender(appender)
+          logger.setLevel(Level.WARN)
+          def said: List[ILoggingEvent] =
+            import scala.jdk.CollectionConverters.*
+            appender.synchronized(appender.list.asScala.toList)
+          BlockImporter.exhaustBackoff = 1.hour
+          try
+            setImportResult(
+              failingBlock,
+              IO {
+                // the head found at block 101 or 100 in turn: never higher than the highest found before
+                val n = attempts.incrementAndGet()
+                BlockImportStateFault(
+                  new com.chipprbots.ethereum.db.storage.pathstate.StateBusy(
+                    s"the writer that moved the head to block ${100 + n % 2}",
+                    "the move of the head was not made: the head moved after the branch was weighed",
+                    com.chipprbots.ethereum.db.storage.pathstate.StateBusy.Cause
+                      .HeadMovedSinceWeighed(BigInt(100 + n % 2))
+                  )
+                )
+              }
+            )
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            awaitCond(attempts.get == BlockImporter.HeadMovedRetriesWithoutProgress, 15.seconds)
+            awaitCond(said.exists(_.getFormattedMessage.contains("with the head no higher")), 15.seconds)
+            withClue("neither blacklisted nor evicted: ") {
+              peersClient
+                .receiveWhile(syncConfig.syncRetryInterval * 3) { case m => m }
+                .collect { case b: PeersClient.BlacklistPeer => b } shouldBe empty
+            }
+            attempts.get shouldBe BlockImporter.HeadMovedRetriesWithoutProgress
+            said.filter(e => e.getLevel == Level.ERROR) shouldBe empty
+            said.count(_.getFormattedMessage.contains("with the head no higher")) shouldBe 1
+          finally
+            BlockImporter.exhaustBackoff = 5.minutes
+            logger.setLevel(previousLevel)
+            logger.detachAppender(appender)
+      )
+
       // Spec 018 C5a, B-297: the consensus layer's branch refused for what no attempt changes while the head stays (the
       // finalized block, a depth the records do not reach). Fetched again it is refused again, without end: it is tried
       // once, the fetcher goes on, what hangs from it is dropped with it, and nobody is blamed.

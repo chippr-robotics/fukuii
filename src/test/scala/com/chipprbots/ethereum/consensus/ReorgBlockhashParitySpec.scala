@@ -705,6 +705,8 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
             case BlockImportStateFault(refused: StateBusy, Nil) =>
               refused.reason should include(s"block ${oldChain.last.number.value}")
               refused.holder should include(s"block ${now.number.value}")
+              // the kind regular sync tries again at once, with the head it found (W2)
+              refused.cause shouldBe StateBusy.Cause.HeadMovedSinceWeighed(now.number.value)
             case other => fail(s"not refused as busy: $other")
           // nothing of the adoption was written: the head is where the other writer left it
           if race.atThePin then
@@ -724,7 +726,10 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
           // queued again, and said at WARN as busy, never at ERROR
           branch.foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
           said.filter(_.getLevel == ch.qos.logback.classic.Level.ERROR) shouldBe empty
-          said.exists(e => e.getFormattedMessage.startsWith("[STATE-BUSY]")) shouldBe true
+          // said once, at WARN, where the branch is queued again (N3): not again by the refusal of the move
+          said.count(e => e.getFormattedMessage.startsWith("[STATE-BUSY]")) shouldBe 1
+          said.filter(_.getFormattedMessage.startsWith("[STATE-BUSY]")).map(_.getLevel).distinct shouldBe
+            List(ch.qos.logback.classic.Level.WARN)
           // offered again: weighed against the head as it is
           val again: BlockImportResult = offer()
           race.leftAgain(this, now) match
@@ -740,6 +745,123 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
               validHead(node, datadir).hash shouldBe branch.last.hash
       }
   }
+
+  // B-315 (forge's review, W1): the move of the weight arm's branch finds the state held at another block than the head
+  // the branch was weighed against, and the best block is that head still. No head moved: a writer moved the state
+  // without the best block (data-model 5.1, I1). Refused as busy, it would be refused again at every offer and never be
+  // said. It fails as `PathStateStorage.bestIsTheAnchor` fails before a batch is written: at ERROR, with an
+  // IllegalStateException, and nothing written. A best block that moved with the state is the busy refusal above.
+  it should "fail at ERROR, with nothing written, a move of the head whose state moved without the best block after the branch was weighed" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new HeadRacedReorg(identity, atThePin = false):
+    val untouched = new java.util.concurrent.atomic.AtomicReference[Map[java.nio.ByteBuffer, Array[Byte]]]()
+    meanwhile = () =>
+      // the state moved back to block 10, the best block with it; then the best block alone put back on block 12
+      movedBackTo(oldChain(9))
+      node.storagesInstance.storages.appStateStorage
+        .putBestBlockInfo(
+          com.chipprbots.ethereum.domain.appstate.BlockInfo(oldChain.last.hash.value, oldChain.last.number.value)
+        )
+        .commit()
+      untouched.set(datadir.storage)
+    val (thrown, said) =
+      com.chipprbots.ethereum.testing.LogCapture.capture(classOf[ConsensusImpl])(scala.util.Try(offer()))
+    ranMeanwhile shouldBe true
+    thrown.failed.toOption match
+      case Some(failed: IllegalStateException) =>
+        failed.getMessage should include("is not the block the state is held at")
+      case _ => fail(s"not failed as a broken invariant: $thrown")
+    // nothing was written: the state is where the other writer left it, and so is the best block
+    (datadir.storage eq untouched.get) shouldBe true
+    state.anchor.map(_.hash) shouldBe Some(oldChain(9).hash.value)
+    node.bestHash shouldBe oldChain.last.hash
+    state.headGeneration % 2 shouldBe 0
+    said.exists(e =>
+      e.getLevel == ch.qos.logback.classic.Level.ERROR && e.getFormattedMessage.startsWith("[STATE-MOVE]")
+    ) shouldBe true
+    said.exists(_.getFormattedMessage.contains("[STATE-BUSY]")) shouldBe false
+  )
+
+  // B-504 on the proof-of-work rule's way at the cap (forge's review, N4): the branch is weighed against a head that a
+  // move of the head on another thread is passing through, paused between two of its batches. The head read again at the
+  // cap is that block, and so is the anchor, so neither B-315's check nor B-463's refuses the hold; the move under way
+  // does. Held, the adoption's own move would wait for the paused one, and a move back would lead to a block half-way up
+  // it. Refused as busy, nothing of the head written, the branch queued again; once the move has ended the next offer
+  // weighs it against the head the move left, and adopts it.
+  it should "refuse, as busy, the hold at the cap while a move of the head on another thread is between two of its batches" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new HeadRacedReorg(config => pinnedCap(1L)(config).copy(maxBlocksPerMoveBatch = 1), atThePin = true):
+    // the other thread's move: from block 10 up to block 12, a block a batch, paused before its second batch
+    movedBackTo(oldChain(9))
+    val paused = new java.util.concurrent.CountDownLatch(1)
+    val goOn = new java.util.concurrent.CountDownLatch(1)
+    val batches = new java.util.concurrent.atomic.AtomicInteger(0)
+    val moveEnded = new java.util.concurrent.atomic.AtomicReference[scala.util.Try[Any]]()
+    val moving = new Thread(() =>
+      moveEnded.set(
+        scala.util.Try(
+          node.blockchainWriter.moveHeadInPlace(
+            oldChain.last.header,
+            node.blockchainReader,
+            refuse = _ =>
+              if batches.incrementAndGet() == 2 then
+                paused.countDown()
+                goOn.await(60, java.util.concurrent.TimeUnit.SECONDS)
+              None
+          )
+        )
+      )
+    )
+    def releaseTheMove(): Unit =
+      goOn.countDown()
+      moving.join(60000)
+    try
+      moving.start()
+      paused.await(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+      // between its first and second batch: the head and the state are block 11, which the move passes through
+      node.bestHash shouldBe oldChain(10).hash
+      state.anchor.map(_.hash) shouldBe Some(oldChain(10).hash.value)
+      val before = datadir.storage
+      // offered on another thread: a hold granted would wait for the paused move with its own, and is said, not hung
+      val offered = scala.concurrent.Future(
+        com.chipprbots.ethereum.testing.LogCapture.capture(classOf[ConsensusImpl])(offer())
+      )(using scala.concurrent.ExecutionContext.global)
+      val (first, said) =
+        try scala.concurrent.Await.result(offered, scala.concurrent.duration.Duration(60, "s"))
+        catch case _: java.util.concurrent.TimeoutException => fail("the adoption waited for the paused move")
+      first match
+        case BlockImportStateFault(refused: StateBusy, Nil) =>
+          refused.holder should include("the move of the head under way on another thread")
+          refused.cause shouldBe StateBusy.Cause.HeldByAnother
+        case other => fail(s"not refused as busy: $other")
+      // nothing of the head was written (the branch was executed under its pin, by its blocks' hashes)
+      val written = (datadir.storage.keySet ++ before.keySet).filterNot(key =>
+        java.util.Arrays.equals(datadir.storage.getOrElse(key, null), before.getOrElse(key, null))
+      )
+      written.map(_.get(0)) should contain noneOf (
+        Namespaces.HeightsNamespace.head,
+        Namespaces.AppStateNamespace.head
+      )
+      node.bestHash shouldBe oldChain(10).hash
+      state.recordsHeld shouldBe false
+      branch.foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
+      said.filter(_.getLevel == ch.qos.logback.classic.Level.ERROR) shouldBe empty
+      said.count(_.getFormattedMessage.startsWith("[STATE-BUSY]")) shouldBe 1
+      // the move ends where it was going
+      releaseTheMove()
+      moveEnded.get.isSuccess shouldBe true
+      node.bestHash shouldBe oldChain.last.hash
+      // offered again: weighed against block 12, 13000 against 12000, and adopted
+      offer() match
+        case ChainReorganised(oldBranch, newBranch, _, _) =>
+          oldBranch.map(_.hash) shouldBe oldChain.drop(3).map(_.hash)
+          newBranch.map(_.hash) shouldBe branch.map(_.hash)
+        case other => fail(s"not adopted: $other")
+      validHead(node, datadir).hash shouldBe branch.last.hash
+    finally releaseTheMove()
+  )
 
   // B-503: a batch the store was busy for is queued again (B-440), and regular sync fetches it again and adopts it
   // with `evaluateBranch`. The blocks it made the head must leave the queue, as a branch the queue resolved does: left
