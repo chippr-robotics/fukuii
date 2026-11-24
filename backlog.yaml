@@ -4616,21 +4616,22 @@ items:
   - id: B-463
     title: "Race before the hold: a block committed on the settled head between ConsensusImpl reading oldHead and opening withRecordsHeld"
     priority: P3
-    status: in-progress
+    status: review
     area: state
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2063]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T08:03:27Z
-      heartbeat: 2026-11-24T08:23:24Z
+      heartbeat: 2026-11-24T08:26:25Z
     notes: |-
-      Outside B-294's window (the head is settled then). The adoption weighs the branch against the old head and its move-back target is the stale oldHead; the extra block becomes a side block. No corruption expected; forge to confirm whether a re-check of the head after the hold is wanted.
       2026-11-24 in-progress: forge agent, clone-d, per forge ruling
       2026-11-24 in-progress: pushed 0e5a7bf9aa; severity higher than written: without the check a heavier block in the window led to adopting the lighter branch (self-corrects next block). beacon confirming StateRecovery anchor
+      2026-11-24 review: beacon APPROVE
   - id: B-464
     title: "StateRecovery: moveBack after an invalid branch or local fault skips the asked() check and may undo a fork choice in flight"
     priority: P3
