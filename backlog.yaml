@@ -2646,7 +2646,7 @@ items:
   - id: B-316
     title: The consensus layer's branch that forks below what a view reaches is adopted by no one (archive)
     priority: P2
-    status: claimed
+    status: in-progress
     area: consensus
     opened: 2026-11-16
     refs: [B-297]
@@ -2655,8 +2655,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T04:08:42Z
-      heartbeat: 2026-11-24T04:08:42Z
-    notes: StateRecovery.walk stops only at a state a view reaches; queued again until the escalation
+      heartbeat: 2026-11-24T04:08:46Z
+    notes: |-
+      StateRecovery.walk stops only at a state a view reaches; queued again until the escalation
+      2026-11-24 in-progress: clone-d consensus lane batch 2
   - id: B-317
     title: A head refused -38002 is still published to SNAP as a pivot hint (publishBeaconHead)
     priority: P2
