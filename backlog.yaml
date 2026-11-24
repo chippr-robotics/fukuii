@@ -2830,7 +2830,7 @@ items:
   - id: B-343
     title: "Execute a deep reorg's lost side parents in bounded chunks: they are loaded whole and run as one list, under the pin and in place at the cap"
     priority: P2
-    status: claimed
+    status: in-progress
     area: consensus
     opened: 2026-11-18
     refs: []
@@ -2840,7 +2840,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b343
       since: 2026-11-23T21:03:14Z
-      heartbeat: 2026-11-24T01:54:10Z
+      heartbeat: 2026-11-24T01:54:20Z
     notes: "B-296 follow-up (forge): ConsensusImpl.reorganiseOnLayers loads every side parent whose state is not held (all of them after a restart) and commitInPlaceAtTheCap runs them with the branch as one List[Block]; load lazily and execute in chunks carrying the weight"
   - id: B-344
     title: "Bound the side parents a reorg tells as of its new branch: a deep side chain is broadcast, published and sent to the pool block by block"
