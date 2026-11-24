@@ -5278,7 +5278,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:15:19Z
-      heartbeat: 2026-11-24T11:15:23Z
+      heartbeat: 2026-11-24T12:16:45Z
     notes: |-
       forge, found during B-503. Partial arms: state fault, missing node, side blocks a failed move-back left the head on. Weightless child never resolved (pre-existing); recompute from the stored parent.
       2026-11-24 in-progress: folded into the B-338/B-460 round 2 (user: fix in the PR, don't split)
