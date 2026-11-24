@@ -4623,7 +4623,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T10:48:37Z
-      heartbeat: 2026-11-24T10:48:42Z
+      heartbeat: 2026-11-24T12:16:41Z
     notes: |-
       2026-11-24 in-progress: forge agent clone-d
       2026-11-24 released by cloud-dc960fdc: depends on B-338, which builds on B-253 (#2066); pick up after #2066 merges
