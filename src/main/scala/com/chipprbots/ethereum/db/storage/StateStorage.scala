@@ -53,14 +53,41 @@ trait StagedBlockState:
     */
   def pendingWith(@unused blockNumber: BigInt, @unused blockHash: ByteString): Option[DataSourceBatchUpdate] = pending
 
-  /** Commit this block's state (with `extra`, the block's other writes, in the SAME atomic batch), state ONCE.
-    * Execution reads reference counts while it runs and commits ABSOLUTE values, so committing the same block twice
-    * (the Engine API `newPayload` path and the regular-sync importer each execute a block the other has not committed
-    * yet) applies its count changes twice. A mode that keeps counts overrides this to drop the state half of a second
-    * commit; the others write straight through (or have nothing buffered) and just commit.
+  private var stagedCode: Option[DataSourceBatchUpdate] = None
+
+  /** The write of the contract code this block deployed, held until its state is committed and written in the SAME
+    * atomic batch as that state (B-454): a block's code exists on disk if and only if its state does (with the one
+    * exception [[commitApart]] names on the unified layout). Execution hands it over once the block is valid, and an
+    * execution run again replaces it; a block that is discarded leaves it unwritten. A staged state that wraps another
+    * forwards this, as it forwards the commit.
+    */
+  def stageCode(write: DataSourceBatchUpdate): Unit = synchronized {
+    stagedCode = Some(write)
+  }
+
+  /** The staged code write, taken: it is written by the commit that takes it, once. */
+  final protected def takeStagedCode(): Option[DataSourceBatchUpdate] = synchronized {
+    val taken = stagedCode
+    stagedCode = None
+    taken
+  }
+
+  /** `extra` with the staged code write ([[stageCode]]) in front of it, in one batch: what a commit of this block's
+    * state writes beside the state.
+    */
+  final protected def withStagedCode(extra: Option[DataSourceBatchUpdate]): Option[DataSourceBatchUpdate] =
+    (takeStagedCode(), extra) match
+      case (Some(code), Some(other)) => Some(code.and(other))
+      case (code, other)             => code.orElse(other)
+
+  /** Commit this block's state (with `extra`, the block's other writes, and its code ([[stageCode]]) in the SAME atomic
+    * batch), state ONCE. Execution reads reference counts while it runs and commits ABSOLUTE values, so committing the
+    * same block twice (the Engine API `newPayload` path and the regular-sync importer each execute a block the other
+    * has not committed yet) applies its count changes twice. A mode that keeps counts overrides this to drop the state
+    * half of a second commit; the others write straight through (or have nothing buffered) and just commit.
     */
   def commitWith(blockNumber: BigInt, blockHash: ByteString, extra: Option[DataSourceBatchUpdate]): Unit =
-    (pendingWith(blockNumber, blockHash), extra) match
+    (pendingWith(blockNumber, blockHash), withStagedCode(extra)) match
       case (Some(state), Some(other)) => other.and(state).commit()
       case (Some(state), None)        => state.commit()
       case (None, Some(other))        => other.commit()
@@ -68,9 +95,9 @@ trait StagedBlockState:
 
   /** Commit this block's state apart from the block, for a block executed without being adopted (a payload ahead of the
     * head, a side branch): its state is kept beside the head, and the block itself is stored by its caller. On the
-    * modes that write a block's state with no head behind it, that is [[commitWith]] with nothing else in the batch. On
-    * the unified layout it is a forward layer beside the state the disk holds (spec 018 C4d part 2a), and the head does
-    * not move.
+    * modes that write a block's state with no head behind it, that is [[commitWith]] with nothing else in the batch but
+    * the block's code. On the unified layout it is a forward layer beside the state the disk holds (spec 018 C4d part
+    * 2a), and the head does not move.
     */
   def commitApart(blockNumber: BigInt, blockHash: ByteString): Unit = commitApart(blockNumber, blockHash, None)
 
@@ -423,10 +450,10 @@ class ReferenceCountedStateStorage(
               s"Block $blockNumber ${blockHash.take(4).toArray.map("%02x".format(_)).mkString} is already committed; " +
                 "dropping the duplicate state commit (it would apply its reference-count changes twice)"
             )
-            extra.foreach(_.commit())
+            withStagedCode(extra).foreach(_.commit())
             decodedNodes.foreach(_.evict(buffered.touchedKeys))
           else
-            (pendingWith(blockNumber, blockHash), extra) match
+            (pendingWith(blockNumber, blockHash), withStagedCode(extra)) match
               case (Some(state), Some(other)) => other.and(state).commit()
               case (Some(state), None)        => state.commit()
               case (None, Some(other))        => other.commit()
