@@ -2003,9 +2003,9 @@ items:
       spec: specs/018-storage-engine-consolidation
     claim:
       by: cloud-dc960fdc
-      agent: forge-b230
+      agent: forge-b230b
       since: 2026-11-24T00:17:11Z
-      heartbeat: 2026-11-24T00:44:38Z
+      heartbeat: 2026-11-24T01:04:23Z
     notes: |-
       Found by beacon in the spec 018 C4a part 4b consult. Content-addressed, so not wrong, but unbounded growth by RPC.
       2026-11-24 review: Merge after vault review (code write order).
