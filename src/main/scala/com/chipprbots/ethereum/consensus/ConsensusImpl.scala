@@ -1230,17 +1230,14 @@ class ConsensusImpl(
           executedBlocks.length,
           fault.getMessage
         )
-        // Not met as the code stands: on the unified layout the first block of a branch that is not adopted as it is
-        // executed is refused, and on the hash layout no such fault is thrown. When a branch is executed there on
-        // layers (spec 018 C4e), a prefix that was settled as the head has to be told here, with the old branch's
-        // blocks to queue, as a reorganisation that went through tells them (B-242).
-        if executedBlocks.nonEmpty then
-          log.error(
-            "[STATE-FAULT] REORG: {} block(s) of the branch were executed and settled before the fault, " +
-              "and are not told to the importer",
-            executedBlocks.length
-          )
-        ConsensusStateFault(fault, Nil, newBranch.toList.drop(executedBlocks.length))
+        // A prefix that outweighed the head became it before the fault (B-337): it is told as imported, and the blocks
+        // it moved the head off are queued again with the blocks that were not judged, as a reorganisation that went
+        // through tells them (and as `whereTheHeadIsLeft` tells a head left on a branch). A prefix that did not
+        // outweigh the head left it as it was, and only the rest is handed back.
+        val notJudged = newBranch.toList.drop(executedBlocks.length)
+        if adopted && executedBlocks.nonEmpty then
+          ConsensusStateFault(fault, executedBlocks, oldBranchTold(oldCanonical) ++ notJudged)
+        else ConsensusStateFault(fault, Nil, notJudged)
       case None => reorganised(newBranch, oldCanonical, executedBlocks, maybeError, adopted = adopted)
 
   /** @param oldCanonical
@@ -1282,7 +1279,13 @@ class ConsensusImpl(
           reason.getMessage,
           newBranch.head.number - 1
         )
-        ConsensusErrorDueToMissingNode(executedBlocks.map(_.block), reason)
+        // B-337: a prefix that outweighed the head became it before the missing node. It is told as imported, so that
+        // the retry starts at the block the node is missing under and whoever follows the head is told of it; the
+        // blocks it moved the head off are queued again, as a reorganisation's are. The missing node is fetched as
+        // ever. A prefix that did not outweigh the head left it as it was: its executed blocks are queued again.
+        if adopted && executedBlocks.nonEmpty then
+          ConsensusErrorDueToMissingNode(oldBranchTold(oldCanonical), reason, executedBlocks)
+        else ConsensusErrorDueToMissingNode(executedBlocks.map(_.block), reason)
 
       case Some(error) =>
         log.error(
@@ -1299,17 +1302,23 @@ class ConsensusImpl(
         val told = newBranchTold(sideParents ++ executedBlocks)
         val failure = s"$ReorganiseFailurePrefix$error"
         // B-291 (forge): the valid prefix outweighed the head and is the head now. The blocks it replaced left the
-        // canonical chain, and are queued again as a reorganisation's are; whoever follows the head is told of it. Only
-        // for a block's own fault: this node's state fault keeps the answer the importer escalates it by (T062), and
-        // the failing block is not dropped as an invalid one would be.
-        if adopted && told.nonEmpty && !Consensus.isLocalStateFault(failure) then
+        // canonical chain, and are queued again as a reorganisation's are; whoever follows the head is told of it.
+        // B-337: so too when what stopped it is this node's state fault (T062). The adapter answers that as the fault
+        // the importer escalates it by, with the prefix as imported, and the failing block and those after it, which
+        // were not judged, wait in the queue: none is dropped as an invalid block would be.
+        val localFault = Consensus.isLocalStateFault(failure)
+        if adopted && told.nonEmpty then
           SelectedNewBestBranchPartially(
             oldBranchTold(oldCanonical),
             told.map(_.block),
             told.map(_.weight),
-            BranchExecutionFailure(Nil, failingBlock.hash.value, failure)
+            BranchExecutionFailure(if localFault then unexecuted else Nil, failingBlock.hash.value, failure)
           )
-        else BranchExecutionFailure(executedBlocks.map(_.block), failingBlock.hash.value, failure)
+        else
+          // the head stayed: the executed blocks are queued again, and on this node's state fault the blocks that were
+          // not judged with them (B-336)
+          val toEnqueue = if localFault then newBranch.toList else executedBlocks.map(_.block)
+          BranchExecutionFailure(toEnqueue, failingBlock.hash.value, failure)
 
   /** Is the tip of this candidate branch on the path to the head the consensus layer designated?
     *

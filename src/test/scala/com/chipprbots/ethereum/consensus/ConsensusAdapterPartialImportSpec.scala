@@ -16,9 +16,11 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusResult
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
+import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranchPartially
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
@@ -105,6 +107,56 @@ class ConsensusAdapterPartialImportSpec extends AnyFlatSpec with Matchers with M
     queued(branch(2)) shouldBe true
 
     imported(BranchExecutionFailure(Nil, branch(1).hash.value, invalidBlock)) shouldBe BlockImportFailed(invalidBlock)
+    queued(branch(1)) shouldBe false
+    queued(branch(2)) shouldBe false
+  )
+
+  // B-337: a reorganisation whose prefix became the head before this node's state fault. `side` stands for a block the
+  // branch stands on that became canonical with it (told ahead of the branch, never one of the batch's)
+  private class Reorganised extends Setup:
+    val side: Block = BlockHelpers
+      .generateChain(1, BlockHelpers.genesis, b => b.copy(header = b.header.copy(difficulty = Difficulty(7))))
+      .head
+    val oldHead: Block = BlockHelpers
+      .generateChain(1, BlockHelpers.genesis, b => b.copy(header = b.header.copy(difficulty = Difficulty(9))))
+      .head
+    val weights: List[ChainWeight] = List(ChainWeight.totalDifficultyOnly(1500), ChainWeight.totalDifficultyOnly(2000))
+    def partially(blocksToEnqueue: List[Block], error: String): ConsensusResult =
+      SelectedNewBestBranchPartially(
+        List(oldHead),
+        List(side, branch.head),
+        weights,
+        BranchExecutionFailure(blocksToEnqueue, branch(1).hash.value, error)
+      )
+
+  "A reorganisation whose prefix became the head" should "queue the old branch again, keep the failing block queued, and answer the fault with the prefix, when this node's state faulted" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new Reorganised:
+    imported(partially(branch.drop(1), s"${Consensus.ReorganiseFailurePrefix}$localFault")) match
+      case at: BlockImportFailedAt =>
+        Consensus.isLocalStateFault(at.error) shouldBe true
+        at.failingBlockHash shouldBe branch(1).hash.value
+        // the blocks of the batch that are the head, with their weights: what the importer counts the batch by
+        at.imported shouldBe List(BlockData(branch.head, Nil, weights(1)))
+      case other => fail(s"not the fault, with the prefix: $other")
+    queued(oldHead) shouldBe true
+    queued(branch(1)) shouldBe true
+    queued(branch(2)) shouldBe true
+  )
+
+  it should "queue the old branch again and drop the failing block, as before, when the block was invalid" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new Reorganised:
+    val error: String = s"${Consensus.ReorganiseFailurePrefix}$invalidBlock"
+    imported(partially(Nil, error)) match
+      case at: BlockImportFailedAt =>
+        at shouldBe BlockImportFailed(error)
+        at.failingBlockHash shouldBe branch(1).hash.value
+        at.imported shouldBe Nil
+      case other => fail(s"not the failure at the failing block: $other")
+    queued(oldHead) shouldBe true
     queued(branch(1)) shouldBe false
     queued(branch(2)) shouldBe false
   )
