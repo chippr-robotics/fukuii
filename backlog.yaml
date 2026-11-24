@@ -1185,22 +1185,23 @@ items:
   - id: B-121
     title: ChainWeightReconcile waits forever at a height with no number index entry; surface it or walk parent links
     priority: P3
-    status: in-progress
+    status: review
     area: sync
     size: S
     opened: 2026-11-08
     refs: ["#1654-B"]
-    links: {}
+    links:
+      prs: [2057]
     depends_on: [B-002]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T06:31:53Z
-      heartbeat: 2026-11-24T07:08:09Z
+      heartbeat: 2026-11-24T07:27:25Z
     notes: |-
-      2026-11-24 in-progress: clone-d lane, chain-weight batch
       2026-11-24 in-progress: pushed; review running
       2026-11-24 in-progress: vault CHANGES (Broken hot loop, header hash check, lock per chunk); brief scratchpad b121-round2.md; queued
+      2026-11-24 review: vault round 2 addressed b1edd5014a
   - id: B-122
     title: "EngineApiService test: newPayload weight write waits for the chain-weight finish (ChainInsertLock.shared)"
     priority: P3
