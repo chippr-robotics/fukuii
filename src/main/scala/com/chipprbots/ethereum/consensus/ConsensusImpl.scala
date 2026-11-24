@@ -69,9 +69,14 @@ class ConsensusImpl(
     // again and handed to the pool. A shallower reorganisation tells them all. The same bound holds for the blocks it
     // moved the head onto, the nearest the new head, at least that head (B-344). A node passes its
     // `sync.max-queued-block-number-behind` (B-345).
-    oldBranchToldAtMost: Int = ConsensusImpl.OldBranchToldAtMost
+    oldBranchToldAtMost: Int = ConsensusImpl.OldBranchToldAtMost,
+    // How many of the side blocks a reorganisation executes again are read and executed at a time (B-343): the blocks
+    // in memory at once, however deep the side chain. Tests give it to compare a run in chunks with one in one piece.
+    reorgChunkBlocks: Int = ConsensusImpl.ReorgChunkBlocks
 ) extends Consensus
     with Logger:
+
+  require(reorgChunkBlocks > 0, s"reorgChunkBlocks must be positive, was $reorgChunkBlocks")
 
   /** Tell the consensus layer that `failingBlock` is consensus-invalid, but ONLY when the execution error proves it.
     *
@@ -371,6 +376,129 @@ class ConsensusImpl(
     // by its error (and reports it invalid) can be handed one.
     BlockExecution.BatchOutcome.of(executed, error)
 
+  /** The side blocks a branch stands on whose state is not held, from the lowest such one up (`chain`, by number and
+    * hash), with the header of that lowest one (`first`); `None` when every one is held ([[lostSideParents]]).
+    */
+  final private case class LostSideParents(first: BlockHeader, chain: List[(BigInt, BlockHash)])
+
+  /** Every side block the branch stands on (`fork.parentSideChain`) is checked stored whole, as it always was, and
+    * those from the lowest one whose state is not held up are the ones executed again: what stands on such a block is
+    * not held either. Read one at a time and not kept (B-343): of the blocks, only the lowest one's header is.
+    *
+    * The answers are those of reading them all whole first: a block not stored whole is told by the highest such one,
+    * and the state is asked of no block once one is found not stored whole.
+    */
+  private def lostSideParents(fork: ForkPoint): Either[StateFault, Option[LostSideParents]] =
+    var notStoredWhole: Option[BigInt] = None
+    var firstLost: Option[(Int, BlockHeader)] = None
+    fork.parentSideChain.iterator.zipWithIndex.foreach { case ((number, hash), index) =>
+      blockchainReader.getBlockByHash(hash) match
+        case None => notStoredWhole = Some(number)
+        case Some(block) =>
+          if notStoredWhole.isEmpty && firstLost.isEmpty && !blockchainWriter.stateHeldInPlaceOf(block.header) then
+            firstLost = Some(index -> block.header)
+    }
+    notStoredWhole match
+      case Some(number) =>
+        Left(new StateUnavailable(s"block $number, which the branch stands on, is not stored whole"))
+      case None =>
+        Right(firstLost.map((index, header) => LostSideParents(header, fork.parentSideChain.drop(index))))
+
+  /** Blocks still to run at a reorganisation, in order: side blocks the branch stands on, by number and hash, read from
+    * the store a chunk at a time as they are executed, then blocks of the branch itself, which are in memory already.
+    */
+  final private case class ToRun(sideParents: List[(BigInt, BlockHash)], branch: List[Block]):
+    def size: Int = sideParents.size + branch.size
+
+  /** What [[executeInChunks]] ran: how many blocks were executed, what is kept of them, and how the run ended.
+    *
+    * `kept` is, of the side blocks executed, the last `newBranchToldAtMost` only and without their receipts, then every
+    * block of the branch executed, as it was executed: no more of the side blocks is ever read by an answer
+    * ([[sideParentsTold]] reads the ones nearest the branch, the commit in place the last block's weight), and no
+    * answer carries a side block's receipts (what is told of the blocks that became canonical is blocks and weights).
+    */
+  final private case class ChunkedRun(executedCount: Int, kept: List[BlockData], ended: ChunkedRun.Ended):
+    def error: Option[BlockExecutionError] = ended match
+      case ChunkedRun.Ended.Failed(_, error) => Some(error)
+      case _                                 => None
+    def stateFault: Option[StateFault] = ended match
+      case ChunkedRun.Ended.Faulted(fault) => Some(fault)
+      case _                               => None
+
+  private object ChunkedRun:
+    enum Ended:
+      /** Every block ran. */
+      case Whole
+
+      /** `block`'s own execution or validation failed with `error`; it and what follows were not run. */
+      case Failed(block: Block, error: BlockExecutionError)
+
+      /** This node's state could not take the next block, or a side block to run was not read whole. */
+      case Faulted(fault: StateFault)
+
+  /** `toRun` executed as one [[executeBranch]] over its blocks would execute it (B-343): the same blocks, in the same
+    * order, each on its parent's state and its parent's weight, stopping at the same block for the same reason, with
+    * the same `adoptEachBlock`, access lists and pin. Only how many are in memory at once changes: the side blocks are
+    * read from the store `reorgChunkBlocks` at a time, each chunk executed by one call, and the next chunk carries on
+    * from the weight of the last block executed. Nothing else passes from one block to the next: each block is staged
+    * on its parent's state as the store, or the pin, holds it (`BlockExecution.executeAndCommit`).
+    *
+    * A side block that is not read whole here was read whole a moment before ([[lostSideParents]]): another writer took
+    * it meanwhile. That ends the run as a fault of this node, with nothing of that chunk executed.
+    */
+  private def executeInChunks(
+      toRun: ToRun,
+      parentWeight: ChainWeight,
+      adoptEachBlock: Boolean,
+      accessLists: Map[ByteString, BlockAccessList],
+      pin: Option[BranchPin] = None
+  )(implicit blockchainConfig: BlockchainConfig): ChunkedRun =
+    val sideKept = scala.collection.mutable.ArrayDeque.empty[BlockData]
+    def keep(executed: List[BlockData]): Unit =
+      executed.foreach { data =>
+        sideKept.append(data.copy(receipts = Nil))
+        if sideKept.size > newBranchToldAtMost then sideKept.removeHead()
+      }
+    def ended(outcome: BlockExecution.BatchOutcome, chunk: List[Block]): Option[ChunkedRun.Ended] =
+      outcome.stateFault
+        .map(ChunkedRun.Ended.Faulted(_))
+        .orElse(outcome.error.map(error => ChunkedRun.Ended.Failed(chunk.drop(outcome.executed.size).head, error)))
+
+    @tailrec
+    def sides(
+        remaining: List[(BigInt, BlockHash)],
+        weight: ChainWeight,
+        executed: Int
+    ): (Int, ChainWeight, Option[ChunkedRun.Ended]) =
+      if remaining.isEmpty then (executed, weight, None)
+      else
+        val (chunkKeys, rest) = remaining.splitAt(reorgChunkBlocks)
+        val read = chunkKeys.map((number, hash) => blockchainReader.getBlockByHash(hash).toRight(number))
+        read.collectFirst { case Left(number) => number } match
+          case Some(number) =>
+            val fault = new StateUnavailable(s"block $number, which the branch stands on, is not stored whole")
+            (executed, weight, Some(ChunkedRun.Ended.Faulted(fault)))
+          case None =>
+            val chunk = read.collect { case Right(block) => block }
+            val outcome = executeBranch(chunk, weight, adoptEachBlock, accessLists, pin)
+            keep(outcome.executed)
+            val carried = outcome.executed.lastOption.fold(weight)(_.weight)
+            ended(outcome, chunk) match
+              case Some(stop) => (executed + outcome.executed.size, carried, Some(stop))
+              case None       => sides(rest, carried, executed + chunk.size)
+
+    sides(toRun.sideParents, parentWeight, 0) match
+      case (executed, _, Some(stop)) => ChunkedRun(executed, sideKept.toList, stop)
+      case (executed, _, None) if toRun.branch.isEmpty =>
+        ChunkedRun(executed, sideKept.toList, ChunkedRun.Ended.Whole)
+      case (executed, weight, None) =>
+        val outcome = executeBranch(toRun.branch, weight, adoptEachBlock, accessLists, pin)
+        ChunkedRun(
+          executed + outcome.executed.size,
+          sideKept.toList ++ outcome.executed,
+          ended(outcome, toRun.branch).getOrElse(ChunkedRun.Ended.Whole)
+        )
+
   /** The best-block pointer, set to the last block of a batch that was adopted.
     *
     * '''On the unified state layout it writes nothing''' (spec 018 data-model 7.1): there the pointer moves with the
@@ -556,40 +684,14 @@ class ConsensusImpl(
                 // under its pin, as core-geth executes a side chain's ancestors again when their state is gone (T180,
                 // T187). From the lowest one whose state is not held up: what stands on it is not held either. Looked for
                 // under the pin, so that nothing found held is evicted before it is used (forge).
-                // Each is checked stored whole, as before, and only its header is kept: the bodies of those whose state
-                // is held are not needed, and a side chain can be thousands of blocks long (B-296).
-                val sideParents: Either[StateFault, List[BlockHeader]] =
-                  fork.parentSideChain.foldRight[Either[StateFault, List[BlockHeader]]](Right(Nil)) {
-                    case ((number, hash), above) =>
-                      above.flatMap(headers =>
-                        blockchainReader
-                          .getBlockByHash(hash)
-                          .map(_.header)
-                          .toRight(
-                            new StateUnavailable(s"block $number, which the branch stands on, is not stored whole")
-                          )
-                          .map(_ :: headers)
-                      )
-                  }
-                val lost: Either[StateFault, List[Block]] =
-                  sideParents.flatMap(headers =>
-                    headers
-                      .dropWhile(blockchainWriter.stateHeldInPlaceOf)
-                      .foldRight[Either[StateFault, List[Block]]](Right(Nil)) { (header, above) =>
-                        above.flatMap(blocks =>
-                          blockchainReader
-                            .getBlockByHash(header.hash)
-                            .toRight(
-                              new StateUnavailable(
-                                s"block ${header.number}, which the branch stands on, is not stored whole"
-                              )
-                            )
-                            .map(_ :: blocks)
-                        )
-                      }
-                  )
-                // what the cap is met with: the blocks already kept under the pin, and those still to run (C4e part 3)
-                def atTheCap(why: StateFault, pinned: List[BlockData], remaining: List[Block]): ConsensusResult =
+                // Each is checked stored whole, as before; those whose state is not held are kept by number and hash
+                // only, and read again a chunk at a time as they are executed (B-296, B-343): a side chain can be
+                // thousands of blocks long.
+                val lost: Either[StateFault, Option[LostSideParents]] = lostSideParents(fork)
+                // what the cap is met with: the blocks already kept under the pin (of the side blocks, the last
+                // `newBranchToldAtMost` only, which is all that is read of them: `sideParentsTold`), and those still to
+                // run (C4e part 3)
+                def atTheCap(why: StateFault, pinned: List[BlockData], remaining: ToRun): ConsensusResult =
                   forkHeader match
                     case Some(forkBlock) if selectedByWeight =>
                       commitInPlaceAtTheCap(
@@ -619,8 +721,8 @@ class ConsensusImpl(
                       // head (beacon, after code)
                       if why.isInstanceOf[BranchTooLarge] && branchHandOff.exists(_.isBound) then
                         // its blocks stored by hash, for the recovery to read; not a weight, which only a block
-                        // executed has (beacon)
-                        storeByHashOnly(remaining)
+                        // executed has (beacon). The side blocks among them were read from the store: stored already
+                        storeByHashOnly(remaining.branch)
                         // and what hangs from it is set aside with it while the head stays: the recovery moves the
                         // head when it has adopted it, and a branch fetched and executed again meanwhile would only
                         // pin the layers the recovery needs (beacon, after code)
@@ -646,8 +748,8 @@ class ConsensusImpl(
                 val notHeldUnder: Option[(BlockHeader, StateFault)] =
                   for
                     toRun <- lost.toOption
-                    first <- (toRun ++ newBranch.toList).headOption
-                    on <- blockchainReader.getBlockHeaderByHash(first.header.parentHash)
+                    first = toRun.fold(newBranch.head.header)(_.first)
+                    on <- blockchainReader.getBlockHeaderByHash(first.parentHash)
                     if !blockchainWriter.stateHeldInPlaceOf(on)
                   yield (
                     on,
@@ -658,41 +760,42 @@ class ConsensusImpl(
                   )
                 def lostParentsRun: Either[ConsensusResult, List[BlockData]] = lost match
                   case Left(missing) => Left(notJudged(missing))
-                  case Right(Nil)    => Right(Nil)
-                  case Right(lostParents) =>
+                  case Right(None)   => Right(Nil)
+                  case Right(Some(lostParents)) =>
                     log.info(
                       "REORG: {} block(s) the branch stands on, {} to {}, are executed again: their state is not held",
-                      lostParents.size,
-                      lostParents.head.number,
-                      lostParents.last.number
+                      lostParents.chain.size,
+                      lostParents.first.number,
+                      lostParents.chain.last._1
                     )
-                    blockchainReader.getChainWeightByHash(lostParents.head.header.parentHash) match
+                    blockchainReader.getChainWeightByHash(lostParents.first.parentHash) match
                       case None =>
                         Left(
                           notJudged(
                             new StateUnavailable(
-                              s"the chain weight under block ${lostParents.head.number}, which the branch stands on, is not stored"
+                              s"the chain weight under block ${lostParents.first.number}, which the branch stands on, is not stored"
                             )
                           )
                         )
                       case Some(weight) =>
-                        val parents = executeBranch(lostParents, weight, adoptEachBlock = false, Map.empty, pin)
-                        (parents.stateFault, parents.error) match
-                          case (Some(tooLarge: BranchTooLarge), _) =>
+                        val parents =
+                          executeInChunks(ToRun(lostParents.chain, Nil), weight, adoptEachBlock = false, Map.empty, pin)
+                        parents.ended match
+                          case ChunkedRun.Ended.Faulted(tooLarge: BranchTooLarge) =>
                             Left(
                               atTheCap(
                                 tooLarge,
-                                parents.executed.map(_.copy(receipts = Nil)),
-                                lostParents.drop(parents.executed.size) ++ newBranch.toList
+                                parents.kept,
+                                ToRun(lostParents.chain.drop(parents.executedCount), newBranch.toList)
                               )
                             )
-                          case (Some(fault), _) => Left(notJudged(fault))
+                          case ChunkedRun.Ended.Faulted(fault) => Left(notJudged(fault))
                           // A block that was executed and accepted before and fails now says nothing of the branch: this
                           // node's own fault, or a changed configuration. It is not reported invalid and the branch is
                           // not judged; it is remembered, and the branch not queued again, so that it is not executed
                           // again and again to the same end (until the escalation of C5a; forge).
-                          case (None, Some(error)) =>
-                            val diverged = divergedParent(lostParents.drop(parents.executed.size).head, error)
+                          case ChunkedRun.Ended.Failed(failing, error) =>
+                            val diverged = divergedParent(failing, error)
                             Left(diverged match
                               case ConsensusStateFault(divergence, _, _) if !selectedByWeight =>
                                 refusedForThisHead(newBranch.toList, divergence, bestBlockHash)
@@ -700,10 +803,10 @@ class ConsensusImpl(
                             )
                           // their receipts are not held while the branch runs: what is told of them is their blocks and
                           // weights (`sideParentsTold`, `commitInPlaceAtTheCap`; B-296)
-                          case (None, None) => Right(parents.executed.map(_.copy(receipts = Nil)))
+                          case ChunkedRun.Ended.Whole => Right(parents.kept)
                 val parentsRun: Either[ConsensusResult, List[BlockData]] = notHeldUnder match
                   case Some((on, why)) if forkHeader.exists(_.hash == on.hash) =>
-                    Left(atTheCap(why, Nil, lost.toOption.toList.flatten ++ newBranch.toList))
+                    Left(atTheCap(why, Nil, ToRun(lost.toOption.flatten.fold(Nil)(_.chain), newBranch.toList)))
                   case Some((_, why)) => Left(notJudged(why))
                   case None           => lostParentsRun
                 parentsRun match
@@ -716,7 +819,7 @@ class ConsensusImpl(
                         atTheCap(
                           tooLarge,
                           parentsKept ++ outcome.executed,
-                          newBranch.toList.drop(outcome.executed.size)
+                          ToRun(Nil, newBranch.toList.drop(outcome.executed.size))
                         )
                       case _ =>
                         settleOnLayers(
@@ -784,11 +887,14 @@ class ConsensusImpl(
     * committed stay the head if they outweigh the old head, as `settleOnLayers` keeps an executed prefix; otherwise the
     * head is moved back to the old head along the records held. On a fault of this node's state it is moved back
     * whatever was committed: nothing is left moved by a fault.
+    *
+    * The side blocks among `remaining` are read and committed a chunk at a time (B-343), and of `pinned` the side
+    * blocks are the last few only ([[executeInChunks]]): what is answered reads no other.
     */
   private def commitInPlaceAtTheCap(
       why: StateFault,
       pinned: List[BlockData],
-      remaining: List[Block],
+      remaining: ToRun,
       newBranch: NonEmptyList[Block],
       fork: ForkPoint,
       forkBlock: BlockHeader,
@@ -801,8 +907,10 @@ class ConsensusImpl(
     val branchHashes = newBranch.toList.map(_.header.hash).toSet
     val start: Option[(BlockHeader, ChainWeight)] =
       for
-        first <- remaining.headOption
-        on <- blockchainReader.getBlockHeaderByHash(first.header.parentHash)
+        parentOfFirst <- remaining.sideParents.headOption match
+          case Some((_, hash)) => blockchainReader.getBlockHeaderByHash(hash).map(_.parentHash)
+          case None            => remaining.branch.headOption.map(_.header.parentHash)
+        on <- blockchainReader.getBlockHeaderByHash(parentOfFirst)
         weight <- blockchainReader.getChainWeightByHash(on.hash)
       yield (on, weight)
     // the head as it is now, which must be the one the branch was weighed against: nothing else moved it meanwhile
@@ -894,8 +1002,8 @@ class ConsensusImpl(
             try
               // the layers of what was kept are still the pin's: the move applies them
               blockchainWriter.moveHeadInPlace(on, blockchainReader)
-              val committed = executeBranch(remaining, weightOn, adoptEachBlock = true, accessLists)
-              val all = pinned ++ committed.executed
+              val committed = executeInChunks(remaining, weightOn, adoptEachBlock = true, accessLists)
+              val all = pinned ++ committed.kept
               val ofTheBranch = all.filter(data => branchHashes(data.block.header.hash))
               val fault: Option[StateFault] =
                 committed.stateFault.orElse(committed.error.collect { case MPTError(reason) =>
@@ -904,10 +1012,10 @@ class ConsensusImpl(
               val weight = all.lastOption.map(_.weight).getOrElse(weightOn)
               // a block the branch stands on that fails now: as under the pin, this node's fault and not the branch's
               val failedParent: Option[(Block, BlockExecutionError)] =
-                for
-                  error <- committed.error if fault.isEmpty
-                  failing <- remaining.drop(committed.executed.size).headOption if !branchHashes(failing.header.hash)
-                yield (failing, error)
+                committed.ended match
+                  case ChunkedRun.Ended.Failed(failing, error) if fault.isEmpty && !branchHashes(failing.header.hash) =>
+                    Some((failing, error))
+                  case _ => None
               (fault, failedParent) match
                 case (Some(fault), _) =>
                   if backToTheOldHead() then notJudged(fault) else whereTheHeadIsLeft(all, fault.getMessage)
@@ -921,7 +1029,7 @@ class ConsensusImpl(
                     forkBlock.number,
                     bestBlockNumber,
                     all.lastOption.fold(on.number.value)(_.block.number),
-                    committed.executed.size
+                    committed.executedCount
                   )
                   reorganised(
                     newBranch,
@@ -1583,3 +1691,10 @@ object ConsensusImpl:
     * queue would not keep them when the new head is at the old one's height. A node is given that setting (B-345).
     */
   val OldBranchToldAtMost: Int = 1000
+
+  /** How many of the side blocks a reorganisation executes again are read from the store and executed at a time
+    * (B-343), when no other number is given. The default of `sync.blocks-batch-size`: no more blocks than one import
+    * already holds in memory, so that a deep side chain (a long private chain, after a restart) costs a chunk of
+    * memory, not its depth. Which blocks are executed, in what order, and on what state is not touched by it.
+    */
+  val ReorgChunkBlocks: Int = 50
