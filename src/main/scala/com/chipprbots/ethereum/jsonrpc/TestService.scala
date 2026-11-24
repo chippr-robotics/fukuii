@@ -672,10 +672,8 @@ class TestService(
     import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs.*
 
     val result = for
-      transactionLocation <- transactionMappingStorage.get(request.transactionHash)
-      block <- blockchainReader.getBlockByHash(BlockHash(transactionLocation.blockHash))
-      _ <- block.body.transactionList.lift(transactionLocation.txIndex)
-      receipts <- blockchainReader.getReceiptsByHash(block.header.hash)
+      found <- CanonicalTxLookup(transactionMappingStorage, blockchainReader, request.transactionHash)
+      receipts <- blockchainReader.getReceiptsByHash(found.block.header.hash)
       logs = receipts.flatMap(receipt => receipt.logs)
       rlpList: RLPList = RLPList(logs.map(_.toRLPEncodable).toList*)
     yield ByteString(crypto.kec256(rlp.encode(rlpList)))

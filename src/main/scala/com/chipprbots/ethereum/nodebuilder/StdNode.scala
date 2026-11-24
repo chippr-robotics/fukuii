@@ -46,6 +46,7 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.StateReconciliation
 import com.chipprbots.ethereum.forkid.ForkId
+import com.chipprbots.ethereum.jsonrpc.CanonicalTxLookup
 import com.chipprbots.ethereum.jsonrpc.server.RpcExposureCheck
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
@@ -712,7 +713,9 @@ abstract class BaseNode extends Node:
         isMined = hash =>
           ChainReads
             .bytes(hash)
-            .exists(b => storagesInstance.storages.transactionMappingStorage.get(b.toIndexedSeq).isDefined),
+            .exists(b =>
+              CanonicalTxLookup(storagesInstance.storages.transactionMappingStorage, blockchainReader, b).isDefined
+            ),
         poolCapacity = txPoolConfig.txPoolSize,
         poolCounters = () => Some(TxPoolMetrics.Node.snapshot),
         // Spec 029 slice 5, the RPC view: the transports as configured, and what their servers counted.
@@ -748,9 +751,8 @@ abstract class BaseNode extends Node:
           bodyByHash = blockchainReader.getBlockBodyByHash,
           receiptsByHash = blockchainReader.getReceiptsByHash,
           txLocation = hash =>
-            storagesInstance.storages.transactionMappingStorage
-              .get(hash.toIndexedSeq)
-              .map(location => (location.blockHash, location.txIndex)),
+            CanonicalTxLookup(storagesInstance.storages.transactionMappingStorage, blockchainReader, hash)
+              .map(found => (found.block.header.hash.value, found.txIndex)),
           accountAt = blockchainReader.accountAt,
           codeSize = hash => storagesInstance.storages.evmCodeStorage.get(hash).map(_.size),
           sender = stx => SignedTransaction.getSender(stx)(using blockchainConfig),
