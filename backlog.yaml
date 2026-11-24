@@ -5186,13 +5186,18 @@ items:
   - id: B-507
     title: test_getLogHash and the MCP GetTransactionTool / McpResources tx readers follow a lookup with no canonical check (B-495 leftovers)
     priority: P3
-    status: open
+    status: claimed
     area: rpc
     size: S
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T10:42:26Z
+      heartbeat: 2026-11-24T10:42:26Z
     notes: Found during B-495; reuse CanonicalTxLookup. MCP deps may need blockchainReader.
   - id: B-508
     title: "EngineApiHttpServerObservationSpec still flakes in CI after #2029 (B-374 reopened shape); seen on #2063 run 45356110651"
