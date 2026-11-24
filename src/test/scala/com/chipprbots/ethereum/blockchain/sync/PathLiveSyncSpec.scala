@@ -147,48 +147,36 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
     PathLiveSync.snapRepairRefusal(clearDoneOnStart = false) shouldBe None
   }
 
-  it should "refuse regular sync from the genesis, naming the flag, and nothing else" taggedAs UnitTest in {
+  // the user's decisions of 2026-11-18 (proof of work) and 2026-11-24 (B-314: a chain with a terminal total
+  // difficulty, where hive's engine simulators start every client from a bare genesis with do-snap-sync off). The
+  // refusal does not ask which kind of chain it is: StdNode passes it nothing that says so.
+  it should "take regular sync from the genesis state, and refuse only a node that holds no state" taggedAs UnitTest in {
     val node = new Node
     val genesis = Some(node.genesis.copy(number = 0))
-    // a chain with a terminal total difficulty: unchanged by the decision of 2026-11-18
     def refusal(
         doSnap: Boolean = false,
         test: Boolean = false,
         anchor: Option[BlockRef] = genesis,
         started: Boolean = false
     ) =
-      PathLiveSync.regularSyncFromGenesisRefusal(doSnap, test, anchor, started, proofOfWork = false)
+      PathLiveSync.regularSyncWithNoStateRefusal(doSnap, test, anchor, started)
 
-    refusal().get should include("fukuii.sync.do-snap-sync = false")
-    withClue("no state at all: ")(refusal(anchor = None) should not be empty)
-    withClue("SNAP on: ")(refusal(doSnap = true) shouldBe None)
-    withClue("test mode, which does not sync: ")(refusal(test = true) shouldBe None)
+    withClue("the genesis state, do-snap-sync off, nothing synced (a fresh datadir, hive's engine tests): ")(
+      refusal() shouldBe None
+    )
+    withClue("no state at all: regular sync has nothing to execute the first block on: ") {
+      val why = refusal(anchor = None).get
+      why should include("holds no state")
+      why should include("fukuii.sync.do-snap-sync = false")
+    }
+    withClue("no state, but a sync begun, which goes on: ")(refusal(anchor = None, started = true) shouldBe None)
+    withClue("no state, SNAP on: ")(refusal(doSnap = true, anchor = None) shouldBe None)
+    withClue("no state, test mode, which does not sync: ")(refusal(test = true, anchor = None) shouldBe None)
     withClue("a chain file took it above the genesis: ")(
       refusal(anchor = Some(node.genesis.copy(number = 3))) shouldBe None
     )
-    withClue("a sync done or begun, which goes on: ")(refusal(started = true) shouldBe None)
-  }
-
-  // spec 018 C6, the user's decision of 2026-11-18 (a): on proof of work a node regular-syncs from its genesis
-  it should "take regular sync from the genesis on proof of work, and refuse only a node that holds no state" taggedAs UnitTest in {
-    val node = new Node
-    val genesis = Some(node.genesis.copy(number = 0))
-    def refusal(
-        doSnap: Boolean = false,
-        test: Boolean = false,
-        anchor: Option[BlockRef] = genesis,
-        started: Boolean = false
-    ) =
-      PathLiveSync.regularSyncFromGenesisRefusal(doSnap, test, anchor, started, proofOfWork = true)
-
-    withClue("the genesis state, do-snap-sync off: ")(refusal() shouldBe None)
-    withClue("no state at all: regular sync has nothing to execute the first block on: ") {
-      refusal(anchor = None).get should include("holds no state")
-    }
-    withClue("no state, but a sync begun, which goes on: ")(refusal(anchor = None, started = true) shouldBe None)
-    withClue("SNAP on: ")(refusal(doSnap = true, anchor = None) shouldBe None)
-    withClue("test mode: ")(refusal(test = true, anchor = None) shouldBe None)
-    withClue("above the genesis: ")(refusal(anchor = Some(node.genesis.copy(number = 3))) shouldBe None)
+    withClue("the genesis state, SNAP on: ")(refusal(doSnap = true) shouldBe None)
+    withClue("the genesis state, a sync begun: ")(refusal(started = true) shouldBe None)
   }
 
   "A node that holds only its genesis" should "be one with the genesis state, no SNAP sync done or begun, and no clear pending" taggedAs UnitTest in {

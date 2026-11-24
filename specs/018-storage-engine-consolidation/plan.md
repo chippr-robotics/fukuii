@@ -889,7 +889,8 @@ decided; 2, 4 and 5 are partly decided; 6 is open. Each decision is also in the 
    relied on a declared peer says so. With the same decision, a proof-of-work guard node may regular-sync from its genesis
    on the unified layout: with `do-snap-sync = false`, or when no snap-capable peer comes within
    `sync.snap-sync.pow-snap-peer-wait` (10 min) of SNAP's start (one WARN with the count). Chains with a terminal total
-   difficulty keep the refusal of regular sync from the genesis, and never fall back (C6 PR-C, B-067).
+   difficulty never fall back from a SNAP start (C6 PR-C, B-067); since 2026-11-24 they take regular sync from the
+   genesis with `do-snap-sync = false`, as PoW does (B-314).
 4. **Hosts for the live gates, and the Ethash DAG on the miners.** Partly decided: EG-6's Mordor half runs on dev-node
    (since 2026-11-21); EG-6's private ETC-config PoW net is skipped (the user, 2026-11-20: no Olympia core-geth on the host);
    EG-12 waits for the NVMe drive (the user, 2026-11-20). **Open: the hosts for EG-14 (the consensus-client devnet) and
@@ -1067,7 +1068,7 @@ slice sections and data-model.md, not here.
 **2026-11-17**
 - C5a part 10, decision 1: a hand-off that left accounts out heals first and is not let through on the guard.
 - Decision 2: SNAP is advertised on the guard (ends the 2026-11-11 decision).
-- Decision 3: regular sync from the genesis is refused on the guard (narrowed for PoW on 2026-11-18, below) (IL, "C5a part 10").
+- Decision 3: regular sync from the genesis is refused on the guard (narrowed for PoW on 2026-11-18, ended on 2026-11-24, below) (IL, "C5a part 10").
 - A store that failed closed is persisted synced as `state.fault` and opens closed until a clear (B-252).
 - The oracle jar is v0.12.1, with v0.11.0 as the fallback (`baselines/pinned-jar.md`).
 
@@ -1079,7 +1080,7 @@ slice sections and data-model.md, not here.
 - Only a content fault records an archive as refused (B-384; data-model E.1, "Names").
 - B-370 (in #1921): the overwrite is done under the lock, after the `AnchorReach` check.
 - Open item 3: a declared local core-geth peer counts toward EG-12's snap-peer precondition, with a `[SNAP-PEERS]` line.
-- A PoW guard node is exempt from the refusal of regular sync from the genesis (`do-snap-sync = false`, or no snap peer within `pow-snap-peer-wait`, 10 min); chains with a TTD keep the refusal.
+- A PoW guard node is exempt from the refusal of regular sync from the genesis (`do-snap-sync = false`, or no snap peer within `pow-snap-peer-wait`, 10 min); chains with a TTD keep the refusal (ended on 2026-11-24, below).
 - B-385 is solved as a local fault (#1943).
 
 **2026-11-19**
@@ -1098,3 +1099,6 @@ slice sections and data-model.md, not here.
 **2026-11-21**
 - B-411: state RPCs resolve the block by header, for geth parity (#1976).
 - B-413: the Ethash DAG is memory-mapped off-heap (#1977).
+
+**2026-11-24**
+- B-314: regular sync from the genesis is taken on the guard on every chain, a chain with a TTD included ("allow by default"; ends decision 3 of 2026-11-17). hive's engine simulators, devnets and Ephemery start from the genesis with the consensus client building the chain, and every path-live hive engine test had died at its start on the refusal. Still refused at start: `do-snap-sync = false` on a node that holds no state at all (`PathLiveSync.regularSyncWithNoStateRefusal`).

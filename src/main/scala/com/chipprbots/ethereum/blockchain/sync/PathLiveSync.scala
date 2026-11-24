@@ -77,17 +77,18 @@ object PathLiveSync:
         "property. A node whose state is at fault gives it up through the escalation."
     )
 
-  /** Why a node on the unified layout does not start to run regular sync from its genesis (the user's decisions of
-    * 2026-11-17 and 2026-11-18).
+  /** Why a node on the unified layout does not start to run regular sync: it holds no state at all, not even its
+    * genesis's (a SNAP sync cleared the genesis state, and none began), so regular sync has no state to execute the
+    * first block on. On every chain.
     *
-    * On a chain with a terminal total difficulty: with `do-snap-sync` off and no state but the genesis, no sync done
-    * and none in progress, the first fork choice is a chain it cannot reach, and the escalation clears the genesis and
-    * starts SNAP anyway. So it is refused.
-    *
-    * On proof of work (ETC, Mordor, a private PoW net) a node follows the chain by its weight from the genesis, block
-    * by block, and no fork choice names a head it cannot reach: regular sync from the genesis is taken. What is still
-    * refused there is a node that holds no state at all (a SNAP sync cleared the genesis and none began): regular sync
-    * has no state to execute the first block on.
+    * Regular sync from the genesis state is taken, on every chain (the user's decision of 2026-11-24, B-314). On proof
+    * of work (ETC, Mordor, a private PoW net) a node follows the chain by its weight from the genesis, block by block
+    * (the decision of 2026-11-18). On a chain with a terminal total difficulty it was refused from 2026-11-17 to
+    * 2026-11-24, on the reading that the first fork choice names a chain the node cannot reach and the escalation
+    * clears the genesis and starts SNAP anyway. That holds for a node joining a live network, not for one whose
+    * consensus client builds the chain from block 1 against it: hive's engine simulators, a devnet, Ephemery at its
+    * reset. Every hive engine test on the unified layout died at its start on that refusal. A node joining a live
+    * network with `do-snap-sync` off now starts too, as it does on the hash layout.
     *
     * Test mode does not sync, and is left alone.
     *
@@ -95,30 +96,19 @@ object PathLiveSync:
     *   the block whose state is held, if any
     * @param syncStarted
     *   a SNAP sync is done here, or has begun (it has a pivot)
-    * @param proofOfWork
-    *   the chain has no terminal total difficulty
     */
-  def regularSyncFromGenesisRefusal(
+  def regularSyncWithNoStateRefusal(
       doSnapSync: Boolean,
       testMode: Boolean,
       anchor: Option[BlockRef],
-      syncStarted: Boolean,
-      proofOfWork: Boolean
+      syncStarted: Boolean
   ): Option[String] =
-    if proofOfWork then
-      Option.when(!testMode && !doSnapSync && anchor.isEmpty && !syncStarted)(
-        "fukuii.state.path-live = true with fukuii.sync.do-snap-sync = false, on a node that holds no state, not even " +
-          "its genesis's, and has no sync done or begun: a SNAP sync cleared the genesis state and did not go on, so " +
-          "regular sync has no state to execute the first block on. Set fukuii.sync.do-snap-sync = true to sync by " +
-          "SNAP, or start from a fresh datadir to regular-sync from the genesis."
-      )
-    else
-      Option.when(!testMode && !doSnapSync && anchor.forall(_.number == 0) && !syncStarted)(
-        "fukuii.state.path-live = true with fukuii.sync.do-snap-sync = false, on a node that holds no state above its " +
-          "genesis and has no sync done or begun: on the unified state layout a node syncs by SNAP, and regular sync " +
-          "from there would be given up at its first fork choice. Set fukuii.sync.do-snap-sync = true, or import a " +
-          "chain file first."
-      )
+    Option.when(!testMode && !doSnapSync && anchor.isEmpty && !syncStarted)(
+      "fukuii.state.path-live = true with fukuii.sync.do-snap-sync = false, on a node that holds no state, not even " +
+        "its genesis's, and has no sync done or begun: a SNAP sync cleared the genesis state and did not go on, so " +
+        "regular sync has no state to execute the first block on. Set fukuii.sync.do-snap-sync = true to sync by " +
+        "SNAP, or start from a fresh datadir to regular-sync from the genesis."
+    )
 
   /** What the snap-peer precondition at SNAP's start counts against, on the unified layout (spec 018 C6, T241/T242; the
     * user's decisions of 2026-11-18).

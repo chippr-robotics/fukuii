@@ -442,6 +442,9 @@ jobs:
           json_count=0
           cut_off=0
           gate_cut_off=0
+          no_launch=0
+          gate_no_launch=0
+          gate_no_launch_names=""
 
           # Tests the --sim.timelimit cut off are not failures: they never reached a verdict.
           #
@@ -477,8 +480,15 @@ jobs:
           # Exclusion uses jq `test()` which is POSIX extended regex; the
           # caller passes a `|`-alternation of substrings, e.g.
           # `"sync foo from bar|sync baz from quux"`.
+          # Tests whose client never started (B-314): hive fails them with "can't launch node
+          # (type X): client did not start: terminated unexpectedly", having run nothing against
+          # the client. They still count as failed, and still fail the gate; they are also
+          # counted apart, so a start-up refusal is not read as a protocol failure. All 78
+          # failures of the first path-live engine run were this, and were read as re-orgs.
+          # scripts/ci/hive_launch_failures.py gives, per result file, case id -> reason ($launched).
           jq_query='
-            def cases: try [.testCases | to_entries[]? | .value] catch [];
+            def cases: try [.testCases | to_entries[]? | .value + {_id: .key}] catch [];
+            def launched: ._id as $i | $launched | has($i);
             def matches($p): (.name // "") | ascii_downcase | contains($p | ascii_downcase);
             def excluded($e):
               if $e == "" then false
@@ -502,26 +512,36 @@ jobs:
               | map(select(matches($p)))
               | map(select(excluded($x) | not))
               | length) as $subcut |
+            ($judged | map(select(.summaryResult.pass == false and launched))) as $nolaunch |
+            ($subcases | map(select(.summaryResult.pass == false and launched))) as $subnolaunch |
             "\($all | map(select(. == true))  | length) " +
             "\($all | map(select(. == false)) | length) " +
             "\($sub | map(select(. == true))  | length) " +
             "\($sub | map(select(. == false)) | length) " +
-            "\($cutcases | length) \($subcut)\n" +
-            ($failed_names | join("\n"))
+            "\($cutcases | length) \($subcut) " +
+            "\($nolaunch | length) \($subnolaunch | length)\n" +
+            ($failed_names | join("\n")) +
+            "\n--launch--\n" +
+            ($subnolaunch | map("\(.name // "?")  [\($launched[._id])]") | join("\n"))
           '
 
           for jf in workspace/logs/*.json; do
             # Only count files that look like hive suite results.
             jq -e 'has("testCases")' "$jf" >/dev/null 2>&1 || continue
 
+            # A list that cannot be made is empty, never a reason to lose this file's counts.
+            launched=$(python3 -I "$GITHUB_WORKSPACE/scripts/ci/hive_launch_failures.py" "$jf" 2>/dev/null) || launched='{}'
+            jq -e 'type == "object"' <<< "$launched" >/dev/null 2>&1 || launched='{}'
+
             out=$(jq -r --arg p "$GATE_PATTERN" --arg x "$GATE_EXCLUDE" \
               --argjson timedout "$sim_timed_out" --argjson window "$cut_window_s" \
-              --arg umbrella "${TIMELIMIT_UMBRELLA:-}" \
-              "$jq_query" "$jf" 2>/dev/null || echo "0 0 0 0 0 0")
+              --arg umbrella "${TIMELIMIT_UMBRELLA:-}" --argjson launched "$launched" \
+              "$jq_query" "$jf" 2>/dev/null || echo "0 0 0 0 0 0 0 0")
             counts_line=$(printf '%s\n' "$out" | head -n1)
-            names_block=$(printf '%s\n' "$out" | tail -n +2)
-            read -r p f gp gf c gc <<< "${counts_line:-0 0 0 0 0 0}"
-            for v in p f gp gf c gc; do
+            names_block=$(printf '%s\n' "$out" | awk 'NR > 1 && $0 == "--launch--" { exit } NR > 1 { print }')
+            launch_block=$(printf '%s\n' "$out" | awk 'seen { print } $0 == "--launch--" { seen = 1 }')
+            read -r p f gp gf c gc nl gnl <<< "${counts_line:-0 0 0 0 0 0 0 0}"
+            for v in p f gp gf c gc nl gnl; do
               eval "val=\$$v"
               [[ "$val" =~ ^[0-9]+$ ]] || eval "$v=0"
             done
@@ -533,8 +553,13 @@ jobs:
             gate_failed=$((gate_failed + gf))
             cut_off=$((cut_off + c))
             gate_cut_off=$((gate_cut_off + gc))
+            no_launch=$((no_launch + nl))
+            gate_no_launch=$((gate_no_launch + gnl))
             if [ -n "$names_block" ]; then
               gate_failed_names="${gate_failed_names}${names_block}"$'\n'
+            fi
+            if [ -n "$launch_block" ]; then
+              gate_no_launch_names="${gate_no_launch_names}${launch_block}"$'\n'
             fi
           done
 
@@ -593,6 +618,8 @@ jobs:
             echo "gate_failed=$gate_failed"
             echo "json_count=$json_count"
             echo "cut_off=$cut_off"
+            echo "no_launch=$no_launch"
+            echo "gate_no_launch=$gate_no_launch"
           } >> "$GITHUB_OUTPUT"
 
           if [ "$cut_off" -gt 0 ]; then
@@ -654,6 +681,17 @@ jobs:
                 echo "--- end method histogram ---"
             } | tee /tmp/hive-histogram.txt
           fi
+          # The tests whose client never started, apart (B-314). Appended to the histogram file, so
+          # the gate step re-prints them at the end of the log too. Each is in the gated subset,
+          # and so in its failing list above.
+          if [ "$no_launch" -gt 0 ]; then
+            {
+              echo "--- ${no_launch} failed test(s) never started the client (hive: 'client did not start'; ${gate_no_launch} in the gated subset) ---"
+              echo "A start-up failure: nothing was run against the client. Read the client logs in the artifact."
+              printf '%s' "$gate_no_launch_names" | sed '/^$/d' | sort -u | head -40
+              echo "--- end of tests that never started the client ---"
+            } | tee -a /tmp/hive-histogram.txt
+          fi
           if [ -n "$sim_log" ] && [ "$failed" -gt 0 ]; then
             echo "--- first 40 FAILED test lines ---"
             grep -E '(\] FAILED |FAILED tests/|--- FAIL:)' "$sim_log" | head -40 || true
@@ -681,6 +719,19 @@ jobs:
             if [ -n "${RETRY_REASON:-}" ]; then
               echo
               echo "Retried once: the first attempt produced no results because ${RETRY_REASON}. Its logs are under \`attempt-1/\` in the artifact."
+            fi
+            if [ "$no_launch" -gt 0 ]; then
+              echo
+              echo "**${no_launch} of the ${failed} failed test(s) never started the client** (hive: \`client did not start\`; ${gate_no_launch} in the gated subset): a start-up failure, with nothing run against the client, not a protocol result. Read the client logs in the artifact."
+              if [ "$gate_no_launch" -gt 0 ]; then
+                echo
+                echo "<details><summary>Gated tests whose client never started</summary>"
+                echo
+                echo '```'
+                printf '%s' "$gate_no_launch_names" | sed '/^$/d' | sort -u
+                echo '```'
+                echo "</details>"
+              fi
             fi
             if [ -n "$GATE_PATTERN" ]; then
               echo
@@ -778,6 +829,8 @@ jobs:
           GATE_PATTERN: ${{ inputs.gate_pattern }}
           GATE_FAILED: ${{ steps.tab.outputs.gate_failed }}
           CUT_OFF: ${{ steps.tab.outputs.cut_off }}
+          NO_LAUNCH: ${{ steps.tab.outputs.no_launch }}
+          GATE_NO_LAUNCH: ${{ steps.tab.outputs.gate_no_launch }}
           HIVE_EXIT: ${{ steps.sim.outputs.hive_exit }}
           LABEL: ${{ inputs.label }}
           SIM: ${{ inputs.sim }}
@@ -796,6 +849,24 @@ jobs:
           gate_failed=${GATE_FAILED:-0}; [[ "$gate_failed" =~ ^[0-9]+$ ]] || gate_failed=0
           min_tests=${MIN_TESTS:-0};     [[ "$min_tests"   =~ ^[0-9]+$ ]] || min_tests=0
           threshold=${THRESHOLD:-0};     [[ "$threshold"   =~ ^[0-9]+$ ]] || threshold=0
+          no_launch=${NO_LAUNCH:-0};           [[ "$no_launch"      =~ ^[0-9]+$ ]] || no_launch=0
+          gate_no_launch=${GATE_NO_LAUNCH:-0}; [[ "$gate_no_launch" =~ ^[0-9]+$ ]] || gate_no_launch=0
+
+          # B-314: of the failures in scope, those whose client never started ("client did not
+          # start") are named apart from the rest. They fail the gate as before; the split only
+          # says which kind of failure it is, so a start-up refusal is not read as protocol
+          # failures. Clamped: the in-scope count is never below its start-up part.
+          say_failures() { # in-scope failures, of which never started, what the rest are
+            local all=$1 nostart=$2 rest_reason=$3 rest
+            [ "$nostart" -gt "$all" ] && nostart=$all
+            rest=$((all - nostart))
+            if [ "$nostart" -gt 0 ]; then
+              reasons+=("${nostart} failing test(s) never started the client (hive: 'client did not start') — a start-up failure, not a protocol result; read the client logs in the artifact")
+            fi
+            if [ "$rest" -gt 0 ]; then
+              reasons+=("${rest} ${rest_reason}")
+            fi
+          }
 
           verdict=0
           reasons=()
@@ -836,7 +907,7 @@ jobs:
           # whole point of the pattern, so it applies only when one is set.
           if [ -n "${GATE_PATTERN:-}" ] && [ "$gate_failed" -gt 0 ]; then
             verdict=1
-            reasons+=("${gate_failed} failing test(s) match gate '${GATE_PATTERN}'")
+            say_failures "$gate_failed" "$gate_no_launch" "failing test(s) match gate '${GATE_PATTERN}'"
           fi
 
           # (6) No subset gate configured -> the whole suite is ours, so ANY
@@ -852,7 +923,7 @@ jobs:
           # fukuii's own, and a failure is a failure.
           if [ -z "${GATE_PATTERN:-}" ] && [ "$failed" -gt 0 ]; then
             verdict=1
-            reasons+=("${failed} failing test(s) and no gate_pattern is set — with no subset filter the whole suite is in scope")
+            say_failures "$failed" "$no_launch" "failing test(s) and no gate_pattern is set — with no subset filter the whole suite is in scope"
           fi
 
           {
@@ -864,6 +935,10 @@ jobs:
             if [ "${CUT_OFF:-0}" != "0" ]; then
               echo
               echo "${CUT_OFF} test(s) were still running when \`--sim.timelimit\` ended the run: no verdict, counted in neither column."
+            fi
+            if [ "$no_launch" -gt 0 ]; then
+              echo
+              echo "${no_launch} of the failed test(s) never started the client (hive: \`client did not start\`), ${gate_no_launch} of them in the gated subset."
             fi
             echo
           } >> "$GITHUB_STEP_SUMMARY"

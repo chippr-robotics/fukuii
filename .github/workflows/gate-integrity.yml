@@ -52,3 +52,6 @@ jobs:
 
       - name: Self-test the hive skip regex
         run: python3 scripts/ci/test_hive_skip_regex.py
+
+      - name: Self-test the hive start-up failure count
+        run: python3 scripts/ci/test_hive_launch_failures.py
