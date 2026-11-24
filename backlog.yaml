@@ -2890,12 +2890,18 @@ items:
   - id: B-339
     title: SecureRandomBuilder reads secure-random-algo from the global ConfigFactory.load(), not the instance config
     priority: P3
-    status: open
+    status: claimed
     area: rpc
     opened: 2026-11-17
     refs: []
     links:
       spec: 030-zero-trust-tls
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T06:29:49Z
+      heartbeat: 2026-11-24T06:29:49Z
+      branch: fix/b339-securerandom-instance-config
     notes: "Found in B-148: SecureRandomBuilder.rawFukuiiConfig is global; same multi-instance shape as the SSL config fix."
   - id: B-340
     title: "Hive engine/cancun/prague/osaka run on B-005's branch: newPayload SYNCING vs ACCEPTED on missing-ancestor and syncing cases"
