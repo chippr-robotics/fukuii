@@ -47,6 +47,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the sync under way). A hole in the state under a canonical parent (#1694) is now SYNCING. Consensus clients import on
   either answer as before; `app_engine_newpayload_syncing` now counts. Inside the node, why a fork choice was not
   followed is a typed value, not the start of a message (`LOCAL FAULT: ` and the others); nothing a client sees changes.
+- **DNS discovery trees are walked again every 30 minutes (B-035).** fukuii walked each EIP-1459 tree once, at start,
+  so a long-running node kept the nodes the tree listed that day. It now walks every tree again 30 minutes after the
+  last walk ended, as go-ethereum re-checks its roots (`recheckInterval`), and adds the nodes it had not seen. Set
+  `network.discovery.dns-recheck-interval` to change the interval.
 - **`app_engine_newpayload_invalid` counts INVALID answers alone (B-193).** It also counted every `engine_newPayload`
   answered ACCEPTED, and any status it did not know. ACCEPTED has its own series, `app_engine_newpayload_accepted`
   (since 0.10.0). A dashboard panel on the invalid series drops by the number of ACCEPTED answers, and its history
