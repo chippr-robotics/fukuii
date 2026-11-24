@@ -5507,3 +5507,13 @@ items:
     refs: [B-180]
     links: {}
     notes: "Found in B-180. Import's pre-Amsterdam preamble writes the slots directly (valid only with the canonical code). geth simulate runs ProcessBeaconBlockRoot/ProcessParentBlockHash as EVM calls after overrides, so overridden code runs there. Needs a decision: a simulate-only system-call preamble would be a second implementation (proposer-import-parity Rule 2)."
+  - id: B-518
+    title: StxLedger estimator ignores maxUsedGas (geth gasestimator.go:155 uses it)
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-24
+    refs: [B-161]
+    links: {}
+    notes: Second half of B-161's note, not in the R4 cluster scope.
