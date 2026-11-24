@@ -1651,7 +1651,8 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T16:21:10Z
-      heartbeat: 2026-11-24T16:21:10Z
+      heartbeat: 2026-11-24T16:21:31Z
+      branch: fix/r4-simulate-parity
     notes: "conduit review of #1778: UnexplainedFailure (precompiled contract failed) fires when exec fails but geth checks pass (e.g. Besu lib rejects what geth accepts). Log contract name and input length/hash, not the input; counter json.rpc.precompile.unexplained.counter. Also no RPC-level test for estimateGas/createAccessList/simulateV1 -32015 on a precompile failure (precedents TypedCallPathSpec:607, EthSimulateGethParitySpec:422)."
   - id: B-177
     title: "Hive ETH chains: BLS12-381 and P256VERIFY precompiles are active from London (getContracts lacks the !isEthereum guard on the Olympia branch)"
