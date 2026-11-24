@@ -242,7 +242,11 @@ private[console] object OpsPanels:
           val tail = if below > 0 then Vector(s"${c.g.ellipsis.text} $below rows below (Down, PgDn)") else Vector.empty
           head ++ page.slice(head.size, page.size - tail.size) ++ tail
       shown.map(line =>
-        fit(text(" " + TuiText.external(line, c.g), if line.startsWith(c.g.ellipsis.text) then c.t.muted else c.t.value), w, c.g)
+        fit(
+          text(" " + TuiText.external(line, c.g), if line.startsWith(c.g.ellipsis.text) then c.t.muted else c.t.value),
+          w,
+          c.g
+        )
       )
     Seq(
       vitalsPanel(c, withSummary = true),
