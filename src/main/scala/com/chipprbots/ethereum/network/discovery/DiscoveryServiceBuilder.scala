@@ -40,6 +40,7 @@ trait DiscoveryServiceBuilder extends Logger:
       tcpPort: Int,
       nodeStatusHolder: AtomicReference[NodeStatus],
       knownNodesStorage: KnownNodesStorage,
+      isBlocked: InetAddress => Boolean = _ => false,
       forkIdTag: Option[ForkIdTag] = None
   )(implicit scheduler: IORuntime): Resource[IO, v4.DiscoveryService] =
 
@@ -163,9 +164,16 @@ trait DiscoveryServiceBuilder extends Logger:
         v5EnrRef,
         v5OutboundSenderRef
       )
-      chainedResponder = StaticUDPPeerGroup.chainResponders(v5Responder, v4SyncResponder)
+      // B-288: the operator's IP block reaches discovery. A packet from a blocked address is dropped before either
+      // responder or the async path sees it (Stop: no reply, nothing decoded).
+      chainedResponder = StaticUDPPeerGroup.chainResponders(
+        DiscoveryServiceBuilder.dropBlocked(isBlocked),
+        v5Responder,
+        v4SyncResponder
+      )
       udpConfig = makeUdpConfig(discoveryConfig, host, chainedResponder)
       network <- makeDiscoveryNetwork(privateKey, localNode, v4Config, udpConfig, pingDedup, v5OutboundSenderRef)
+        .map(DiscoveryServiceBuilder.OperatorBlockedNetwork(_, isBlocked))
       service <- makeDiscoveryService(privateKey, localNode, v4Config, network, forkIdTag)
       _ <- Resource.eval {
         setDiscoveryStatus(nodeStatusHolder, ServerStatus.Listening(udpConfig.bindAddress))
@@ -397,3 +405,45 @@ trait DiscoveryServiceBuilder extends Logger:
       enrollInBackground = true,
       tags = forkIdTag.toList
     )
+
+object DiscoveryServiceBuilder:
+
+  /** A first responder that claims every datagram from an address `isBlocked` names, with no reply and no async
+    * handling, and passes every other one on (B-288).
+    */
+  def dropBlocked(isBlocked: InetAddress => Boolean): StaticUDPPeerGroup.SyncResponder =
+    (sender, _) =>
+      val address = sender.getAddress
+      if address != null && isBlocked(address) then StaticUDPPeerGroup.SyncResult.Stop
+      else StaticUDPPeerGroup.SyncResult.Pass
+
+  /** The discv4 network with no request sent to an address `isBlocked` names: each such request answers `None`, as a
+    * peer that never replies does (B-288). The address is checked when the request is made, so a block added while the
+    * node runs applies from then on. Incoming requests are already dropped by [[dropBlocked]].
+    */
+  final class OperatorBlockedNetwork(
+      underlying: v4.DiscoveryNetwork[InetMultiAddress],
+      isBlocked: InetAddress => Boolean
+  ) extends v4.DiscoveryNetwork[InetMultiAddress]:
+    import v4.DiscoveryNetwork.Peer
+
+    private def blocked(peer: Peer[InetMultiAddress]): Boolean =
+      val address = peer.address.inetSocketAddress.getAddress
+      address != null && isBlocked(address)
+
+    override def ping: Peer[InetMultiAddress] => Option[v4.DiscoveryRPC.ENRSeq] => IO[
+      Option[Option[v4.DiscoveryRPC.ENRSeq]]
+    ] =
+      peer => seq => if blocked(peer) then IO.pure(None) else underlying.ping(peer)(seq)
+
+    override def findNode
+        : Peer[InetMultiAddress] => com.chipprbots.scalanet.discovery.crypto.PublicKey => IO[Option[Seq[ScNode]]] =
+      peer => target => if blocked(peer) then IO.pure(None) else underlying.findNode(peer)(target)
+
+    override def enrRequest: Peer[InetMultiAddress] => Unit => IO[Option[EthereumNodeRecord]] =
+      peer => unit => if blocked(peer) then IO.pure(None) else underlying.enrRequest(peer)(unit)
+
+    override def startHandling(
+        handler: v4.DiscoveryRPC[Peer[InetMultiAddress]]
+    ): IO[cats.effect.Deferred[IO, Unit]] =
+      underlying.startHandling(handler)

@@ -256,7 +256,8 @@ object PeerActions:
                   s"${there.size} connected peer${if there.size == 1 then "" else "s"} at it " +
                     s"(${there.map(p => brief(p.id)).mkString(", ")}) ${if there.size == 1 then "is" else "are"} disconnected now."
                 ,
-                "Discovery (UDP) packets to and from it are not blocked."
+                "Discovery drops its UDP packets and sends it none. To keep it blocked after a restart, list it in " +
+                  "network.peer.blocked-ips."
               )
             )
       ,
