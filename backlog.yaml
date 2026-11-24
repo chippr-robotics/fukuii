@@ -1611,17 +1611,18 @@ items:
   - id: B-173
     title: "PR 7a nits: GraphQL shortfall data 0x; trace endpoints carry no error for the deposit shortfall; guard blobBaseFee when blobGas 0; test defaulted supplied gas"
     priority: P3
-    status: in-progress
+    status: review
     area: rpc
     size: S
     opened: 2026-11-09
     refs: [B-133]
-    links: {}
+    links:
+      prs: [2101]
     claim:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T16:21:14Z
-      heartbeat: 2026-11-24T17:15:48Z
+      heartbeat: 2026-11-24T17:17:46Z
       branch: fix/r4-simulate-parity
     notes: |-
       conduit review of #1777.
