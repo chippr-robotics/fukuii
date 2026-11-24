@@ -5535,3 +5535,16 @@ items:
     notes: |-
       src/main/resources/logback.xml:235 sets com.chipprbots.ethereum.blockchain.sync.snap to ERROR and opens only snap.actors and SNAPSyncController; ChainDownloader logs through context.log in that package, so nothing in 4 h 50 min (mainnet) or on Mordor.
       ops/cirith-ungol/conf/logback.xml already sets snap.ChainDownloader to INFO. Add it to the shipped config; check its per-batch lines are not too chatty at INFO first.
+  - id: B-522
+    title: "SNAP on ETC: the header download from genesis is the critical path (state ready at 63 min, finalisation then held 47 min on mainnet)"
+    priority: P3
+    status: open
+    area: snap
+    size: M
+    opened: 2026-11-24
+    refs: ["sync reports v0.12.117, 2026-11-23/24"]
+    links: {}
+    depends_on: [B-521]
+    notes: |-
+      v0.12.117: mainnet 25.8M headers in 110 min, 2,870/s while the state downloaded and 5,330/s after; Mordor 4,430/s and 6,980/s, held 41 min. Both runs are header-bound.
+      Once ChainDownloader logs (B-521): look at the SNAP-era header budget (boostHeaderDownload), chain-download-timeout (10 s) and how many peers serve headers during the state download.
