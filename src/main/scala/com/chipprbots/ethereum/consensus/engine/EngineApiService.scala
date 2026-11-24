@@ -1547,17 +1547,20 @@ class EngineApiService(
     * newPayload executed and no forkchoiceUpdated has adopted yet) as the build serves it. The anchor-chain door
     * ([[BlockchainReader.accountAt]]) refuses such a parent, and the refusal failed the whole build (B-239). A fault of
     * that state ([[com.chipprbots.ethereum.db.storage.pathstate.StateFault]]) is still thrown: the build would meet the
-    * same state, and skipping the filter instead would let a payload carry a transaction that can never validate.
+    * same state, and skipping the filter instead would let a payload carry a transaction that can never validate. A
+    * view that went stale under the filter is first made again on a fresh one, as the build's is ([[onFreshViews]],
+    * B-451): the disk moved on, and the parent's state may still be held.
     */
   def executableAtParent(parent: BlockHeader, txs: Seq[SignedTransaction]): Seq[SignedTransaction] =
     if txs.isEmpty then txs
     else
       try
-        // with the guard off there is no proposer's door, and the read-only buffer over the hash store is read
-        val parentState = blockchainReader.proposerStateOn(parent).getOrElse(blockchainReader.stateAt(parent))
-        val parentAccounts = blockchainReader.accountsIn(parentState, parent)
-        val nextNonce = scala.collection.mutable.Map.empty[Address, BigInt]
-        val (kept, dropped) =
+        // all of it again on a fresh view: what a stale view gave is not kept
+        val (kept, dropped) = onFreshViews(new FreshViews(parent, "pool filter")) {
+          // with the guard off there is no proposer's door, and the read-only buffer over the hash store is read
+          val parentState = blockchainReader.proposerStateOn(parent).getOrElse(blockchainReader.stateAt(parent))
+          val parentAccounts = blockchainReader.accountsIn(parentState, parent)
+          val nextNonce = scala.collection.mutable.Map.empty[Address, BigInt]
           txs.foldLeft((Vector.empty[SignedTransaction], Vector.empty[String])) { case ((keep, drop), stx) =>
             SignedTransaction.getSender(stx) match
               case None => (keep, drop :+ s"${stx.hash.toHex}: unrecoverable sender")
@@ -1578,6 +1581,7 @@ class EngineApiService(
                   (keep, drop :+ s"${stx.hash.toHex}: nonce $nonce below state nonce $expected")
                 else (keep, drop :+ s"${stx.hash.toHex}: nonce $nonce leaves a gap after $expected")
           }
+        }
         if dropped.nonEmpty then
           log.info(
             "Proposer build on block {}: excluding {} non-executable pool transaction(s): {}",
@@ -1726,6 +1730,36 @@ class EngineApiService(
     */
   private val StaleViewRebuilds = 3
 
+  /** What one proposer read of its parent's state has left of [[StaleViewRebuilds]]: the pool's filter on that state
+    * ([[executableAtParent]]) and the build ([[buildLeniently]]) each have their own, shared by all their attempts.
+    */
+  final private class FreshViews(val parent: BlockHeader, val what: String):
+    var left: Int = StaleViewRebuilds
+
+  /** `read`, made again from the start when the view of the parent's state went stale under it (the unified layout), as
+    * long as `views` has any left: a fresh view of the same parent is made by `read` itself. Then the
+    * [[com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException]] is thrown, as every other fault of this
+    * node's own state is: the parent's state is not held any more, and the caller answers that no payload was built.
+    */
+  private def onFreshViews[A](views: FreshViews)(read: => A): A =
+    import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
+    @scala.annotation.tailrec
+    def again(): A =
+      (try Right(read)
+      catch case stale: StaleStateViewException => Left(stale)) match
+        case Right(done)                        => done
+        case Left(stale) if views.left > 0 =>
+          views.left -= 1
+          log.info(
+            "Proposer {} on block {}: the view of its parent's state went stale ({}); made again on a fresh one",
+            views.what,
+            views.parent.number,
+            stale.getMessage
+          )
+          again()
+        case Left(stale) => throw stale
+    again()
+
   private def executeProposerBlock(
       block: Block
   ): Either[com.chipprbots.ethereum.ledger.BlockExecutionError, ProposerExecution] =
@@ -1770,27 +1804,18 @@ class EngineApiService(
       gasLimit: GasAmount
   ): BuiltBlock =
     import com.chipprbots.ethereum.ledger.BlockExecutionError.TxsExecutionError
-    import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
-    // One attempt, with a view that went stale under it (the unified layout) caught as a value: the attempt is made
-    // again on a fresh view, with the list it had. Any other fault of this node's own state is thrown through, past
-    // both fallbacks below: neither the empty payload nor a block sealed over its parent's state root can be built
-    // on a state that is not held, and the caller answers that no payload was built.
+    // One attempt, made again on a fresh view, with the list it had, when the view went stale under it (the unified
+    // layout), as often as one build may ([[onFreshViews]]). Any other fault of this node's own state is thrown
+    // through, past both fallbacks below: neither the empty payload nor a block sealed over its parent's state root
+    // can be built on a state that is not held, and the caller answers that no payload was built.
+    val views = new FreshViews(parent.header, "build")
     def attemptOn(txs: Seq[SignedTransaction]) =
-      try Right(sealProposerBlock(parent, attrs, txs, extraData, gasLimit)(executeProposerBlock))
-      catch case stale: StaleStateViewException => Left(stale)
+      onFreshViews(views)(sealProposerBlock(parent, attrs, txs, extraData, gasLimit)(executeProposerBlock))
     @scala.annotation.tailrec
-    def attempt(txs: Seq[SignedTransaction], retriesLeft: Int, freshViewsLeft: Int): BuiltBlock =
+    def attempt(txs: Seq[SignedTransaction], retriesLeft: Int): BuiltBlock =
       attemptOn(txs) match
-        case Left(stale) if freshViewsLeft > 0 =>
-          log.info(
-            "Proposer build on block {}: the view of its parent's state went stale ({}); building again on a fresh one",
-            parent.header.number,
-            stale.getMessage
-          )
-          attempt(txs, retriesLeft, freshViewsLeft - 1)
-        case Left(stale)         => throw stale
-        case Right(Right(built)) => built
-        case Right(Left(TxsExecutionError(failed, before, reason))) =>
+        case Right(built) => built
+        case Left(TxsExecutionError(failed, before, reason)) =>
           val failedAt = txs.indexWhere(_.hash == failed.hash)
           val remaining =
             if failedAt < 0 then Nil
@@ -1822,16 +1847,16 @@ class EngineApiService(
             remaining.size,
             txs.size
           )
-          attempt(remaining, retriesLeft - 1, freshViewsLeft)
-        case Right(Left(other)) if txs.nonEmpty =>
+          attempt(remaining, retriesLeft - 1)
+        case Left(other) if txs.nonEmpty =>
           log.warn(
             "Proposer build on block {}: execution failed for a reason no transaction explains ({}); building the " +
               "empty payload instead",
             parent.header.number,
             other.describe
           )
-          attempt(Nil, retriesLeft, freshViewsLeft)
-        case Right(Left(other)) =>
+          attempt(Nil, retriesLeft)
+        case Left(other) =>
           log.error(
             "Proposer build on block {}: even the empty payload failed to execute ({}); sealing it over the " +
               "parent's state root",
@@ -1844,7 +1869,7 @@ class EngineApiService(
           sealProposerBlock(parent, attrs, Nil, extraData, gasLimit)(_ =>
             Right(ProposerExecution(Nil, BigInt(0), parent.header.stateRoot.value, Nil, None))
           ).fold(err => throw new IllegalStateException(s"sealing without execution failed: $err"), identity)
-    attempt(transactions, LenientBuildRetries, StaleViewRebuilds)
+    attempt(transactions, LenientBuildRetries)
 
   /** What block execution hands the proposer's header derivation. */
   final private case class ProposerExecution(
