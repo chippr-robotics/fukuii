@@ -27,29 +27,18 @@ class TestMptStorage extends MptStorage:
     val hash = ByteString(node.hash)
     nodes(hash) = node
 
+  /** As [[com.chipprbots.ethereum.db.storage.SerializingMptStorage]] does it: the new nodes are stored, each decoded
+    * with its hash and encoding cached, and the root comes back collapsed (B-206). Returning the new root as built, as
+    * this used to, handed the trie back a tree of nodes with no cached hash, so each later put hashed the whole trie
+    * again: StackTrieSpec's 10,000-key reference trie took 2 minutes. Removed nodes stay, as nothing here reads them.
+    */
   override def updateNodesInStorage(
       newRoot: Option[MptNode],
       toRemove: Seq[MptNode]
   ): Option[MptNode] =
-    newRoot.foreach { root =>
-      storeNodeRecursively(root)
-    }
-    newRoot
-
-  private def storeNodeRecursively(node: MptNode): Unit =
-    node match
-      case leaf: LeafNode =>
-        putNode(leaf)
-      case ext: ExtensionNode =>
-        putNode(ext)
-        storeNodeRecursively(ext.next)
-      case branch: BranchNode =>
-        putNode(branch)
-        branch.children.foreach(storeNodeRecursively)
-      case hash: HashNode =>
-        putNode(hash)
-      case NullNode =>
-      // Nothing to store
+    val (collapsed, newNodes) = com.chipprbots.ethereum.db.storage.MptStorage.collapseNode(newRoot)
+    storeRawNodes(newNodes)
+    collapsed
 
   override def persist(): Unit = {
     // No-op for in-memory storage

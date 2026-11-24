@@ -714,9 +714,17 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     val onlyUser = ProxyEnv.selector(Map("https_proxy" -> "http://alice@proxy.example:3128"))
     onlyUser.isLeft shouldBe true
     (onlyUser.left.getOrElse("") should not).include("alice")
-    // the production factory refuses it too
+    // The production factory refuses it too. With no JDK proxy property: `default` prefers `https.proxyHost`, which a
+    // host may set for every JVM (cloud containers do, in JAVA_TOOL_OPTIONS), and then never reads HTTPS_PROXY (B-247).
     JdkHttpsTransport
-      .default(SourcePolicy.DefaultGithub, "1", Map("HTTPS_PROXY" -> "http://a:b@p:1"))
+      .create(
+        SourcePolicy.DefaultGithub,
+        "1",
+        Map("HTTPS_PROXY" -> "http://a:b@p:1"),
+        java.time.Clock.systemUTC(),
+        None,
+        _ => None
+      )
       .left
       .map(_.contains("credentials")) shouldBe Left(true)
   }
