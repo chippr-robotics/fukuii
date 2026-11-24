@@ -5355,7 +5355,8 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:13:55Z
-      heartbeat: 2026-11-24T11:13:59Z
+      heartbeat: 2026-11-24T11:15:55Z
     notes: |-
       beacon, found as B-318 item 3. Pre-move check (ConsensusImpl ~:1293 plan.anchor.hash != bestBlockHash) only refuses a head that moved after weighing. Fix: refuse a backward-only move in that check (like 'moved meanwhile'). Repro in B-318 report: import 1-5, adopt b3'-b6', import b7 named, evaluate b3'-b6' again -> head back to b6'.
       2026-11-24 in-progress: beacon agent clone-e (after #2074; refuse backward-only move)
+      2026-11-24 in-progress: folded into B-318 / PR #2074 (user: fix in the PR, don't split)
