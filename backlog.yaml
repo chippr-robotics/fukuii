@@ -4324,3 +4324,13 @@ items:
     links:
       spec: specs/018-storage-engine-consolidation
     notes: Kill-safe as is (one RocksDB, one WAL, code first). Same-batch needs the code carried to commitWith/commitApart past the executeAndValidateStaged seam.
+  - id: B-455
+    title: ChainImporter's hash-store lenient import (executeBlockNoValidation) writes a block's code and trie nodes before it validates the block
+    priority: P3
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-24
+    refs: [B-230]
+    links: {}
+    notes: Unchanged by B-230 (operator file import, not RPC-reachable). An invalid block in a chain file leaves its code and nodes behind.
