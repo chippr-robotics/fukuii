@@ -148,6 +148,7 @@ class SNAPSyncingDispatchTableSpec
     "ProgressAccountsTrieFinalized" -> ProgressAccountsTrieFinalized,
     "AccountTrieFinalized" -> AccountTrieFinalized(root),
     "AccountTrieFinalizationFailed" -> AccountTrieFinalizationFailed("s0d table"),
+    "SnapStoreFaulted" -> SnapStoreFaulted("s0d table", "s0d table"),
     "ProgressBytecodesDownloaded" -> ProgressBytecodesDownloaded(0L),
     "ProgressStorageSlotsSynced" -> ProgressStorageSlotsSynced(0L),
     "ProgressNodesHealed" -> ProgressNodesHealed(0L),

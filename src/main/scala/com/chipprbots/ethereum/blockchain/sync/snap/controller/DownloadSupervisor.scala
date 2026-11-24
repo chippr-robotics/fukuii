@@ -519,11 +519,20 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
     case AccountTrieFinalizationFailed(error) =>
       // Root mismatch: the trie we built doesn't hash to the pivot's state root.
       // This means peers returned empty/wrong data (e.g., snapshot not ready).
-      // Also a local fault storing an account range (B-190: a node write failed mid-range).
       // Restart with a fresh pivot rather than entering healing with corrupt state.
       ctx.log.error(s"Account trie finalization failed ($error) — restarting SNAP sync with fresh pivot")
       progressMonitor.setFinalizingTrie(false)
       restartSnapSync(s"account trie finalization failed: $error")
+
+    case SnapStoreFaulted(where, error) =>
+      // B-488: a write of downloaded state failed here, not at a peer. Restarting on a fresh pivot clears a transient
+      // fault; a lasting one (a full or read-only disk) would restart without end, so it counts as a critical failure
+      // and the threshold sends SNAP dormant, as the validation retries do (StateValidationModule).
+      ctx.log.error(s"SNAP store fault in $where: $error")
+      progressMonitor.setFinalizingTrie(false)
+      if recordCriticalFailure(s"store fault in $where: $error") then
+        enterDormantMode(s"repeated store faults, the last in $where: $error")
+      else restartSnapSync(s"store fault in $where: $error")
   }
 
   /** A run of `commonSyncingArms` arms lifted into a class member (spec 016 lift before M11b, CQ-SNAP-016-32), bodies

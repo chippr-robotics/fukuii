@@ -81,14 +81,17 @@ private[actors] trait ByteCodeResponseHandling:
             // Store only the returned codes
             storeBytecodesWithHashes(validated.codesByHashInOrder) match
               case Left(error) =>
-                log.warn(s"Failed to store bytecodes: $error")
+                // B-488: this node's store failed, not the peer: the peer is neither cooled down nor given a smaller
+                // response target. The task goes back to the queue whole, so nothing is skipped, and the controller
+                // decides: a restart on a fresh pivot, or dormant mode once store faults repeat. Before, the task was
+                // re-queued and re-fetched against a store that kept failing, without end.
+                log.error(s"Failed to store bytecodes: $error")
                 activeTasks.remove(response.requestId)
                 pendingTasks.enqueue(task.copy(pending = false))
-
-                // Storage failure isn't necessarily the peer's fault, but to be a good neighbor
-                // (and avoid tight loops), briefly cool down this peer.
-                recordPeerCooldown(peer, cooldownConfig.baseTimeout, s"local store failed: $error")
-                adjustResponseBytesTargetOnFailure(peer, s"local store failed: $error")
+                snapSyncController ! SNAPSyncController.SnapStoreFaulted(
+                  s"bytecode (${task.codeHashes.size} codes)",
+                  error
+                )
                 worker ! ByteCodeWorkerRelease(response.requestId)
                 markWorkerIdle(worker)
                 checkCompletion()

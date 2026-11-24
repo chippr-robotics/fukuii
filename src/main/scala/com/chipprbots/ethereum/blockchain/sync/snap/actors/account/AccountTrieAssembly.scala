@@ -294,7 +294,8 @@ private[actors] trait AccountTrieAssembly:
         // response (AccountTaskLifecycle advances `next` before the store), so re-queueing it, as this did, skipped the
         // failed chunk and the unsent rest for good, and the range could still complete with a hole that its committed
         // fragment claims is whole (spec 022's present-means-complete). Drop the range's trie and stop the run instead:
-        // the controller restarts SNAP (AccountTrieFinalizationFailed), as geth stops on a failed account write
+        // the controller restarts SNAP, or goes dormant on repeated faults (SnapStoreFaulted, B-488), as geth stops on a
+        // failed account write
         // (snap/sync.go forwardAccountTask: log.Crit "Failed to persist accounts").
         log.error(
           s"Failed to store account chunk of ${task.rangeString} (${storedSoFar} of $totalCount stored); " +
@@ -309,8 +310,9 @@ private[actors] trait AccountTrieAssembly:
         storingTasks.update(task.last, task.copy(next = firstUnstored, pending = false, done = false))
         // Best effort: on Path, reset deletes the right-boundary stubs through the store that may just have failed.
         taskStackTries.remove(task.last).foreach(trie => Try(trie.reset()))
-        snapSyncController ! SNAPSyncController.AccountTrieFinalizationFailed(
-          s"account store failed for ${task.rangeString} after $storedSoFar of $totalCount accounts: ${e.getMessage}"
+        snapSyncController ! SNAPSyncController.SnapStoreFaulted(
+          s"account range ${task.rangeString}",
+          s"store failed after $storedSoFar of $totalCount accounts: ${e.getMessage}"
         )
 
   /** Get-or-create the per-task [[SnapTrie]] for the StackTrie path. Each task gets its own streaming trie keyed by
