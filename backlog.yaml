@@ -2132,20 +2132,17 @@ items:
   - id: B-237
     title: PeerManagerActor dials bootstrap/discovered enodes with TCP port 0 (enode ...:0?discport=N form)
     priority: P3
-    status: review
+    status: done
     area: p2p
     size: S
     opened: 2026-11-12
+    closed: 2026-11-24
     refs: [B-231]
     links:
       prs: [2052]
-    claim:
-      by: cloud-719c6644
-      agent: herald
-      since: 2026-11-24T06:36:47Z
-      heartbeat: 2026-11-24T07:33:22Z
-      branch: fix/b237-tcp-port-zero
-    notes: "Found in spec 028 S1 (HoodiBootnodeSpec): NodeParser accepts tcp 0; PeerDiscoveryManager hands bootstrap nodes to PeerManagerActor which ConnectToPeerCmd's :0. DnsDiscovery.scala:515 already skips tcp-0 ENRs. Hoodi ships only :30303 enodes meanwhile."
+    notes: |-
+      Found in spec 028 S1 (HoodiBootnodeSpec): NodeParser accepts tcp 0; PeerDiscoveryManager hands bootstrap nodes to PeerManagerActor which ConnectToPeerCmd's :0. DnsDiscovery.scala:515 already skips tcp-0 ENRs. Hoodi ships only :30303 enodes meanwhile.
+      2026-11-24 done: merged
   - id: B-238
     title: "the head-only callers of the state seam read in a scope: one block's race when the anchor moves between getBestBlock and stateAt"
     priority: P2
