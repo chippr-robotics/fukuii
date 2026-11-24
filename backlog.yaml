@@ -3300,18 +3300,18 @@ items:
   - id: B-374
     title: "CI flakes: console LookupsSpec and EngineApiHttpServerObservationSpec fail under CI load (5 s eventually), pass locally"
     priority: P2
-    status: claimed
+    status: review
     area: tests
     size: S
     opened: 2026-11-18
     refs: []
     links:
-      prs: [1927]
+      prs: [1927, 2029]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T03:42:18Z
-      heartbeat: 2026-11-24T03:42:18Z
+      heartbeat: 2026-11-24T03:43:58Z
       branch: ccr-719c6644-afp6qz
     notes: |-
       2026-11-18 in-progress: LookupsSpec race fixed in #1927 (waited on a count true part-way). Left: EngineApiHttpServerObservationSpec and JsonRpcHttpServerLifecycleSpec each failed once on CI 2026-11-18 (#1921); capture their failure text from the full job log (logs_url, not the 5000-line tail) when they recur.
