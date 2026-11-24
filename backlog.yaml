@@ -4269,11 +4269,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:21:22Z
-      heartbeat: 2026-11-24T04:40:59Z
+      heartbeat: 2026-11-24T05:15:03Z
     notes: |-
-      2026-11-24 in-progress: clone-d consensus lane, branch fix/b440-evaluate-branch-throw
       2026-11-24 in-progress: branch pushed; forge/beacon review running
       2026-11-24 in-progress: forge re-review CHANGES (C1 stop before reads, C2 latch after stop, W1 busy bound); rebuild by cherry-pick after #2034; brief in session scratchpad b440-rebuild-brief.md
+      2026-11-24 in-progress: rebuilt clean 0170ea956f; forge round 3: only W1 busy-bound reset needs fixing (see scratchpad b440-rebuild-brief.md round 3); queued for next free clone
   - id: B-441
     title: SyncController idle() drops GetStatus before Start; answer it (NotSyncing/starting)
     priority: P3
