@@ -206,6 +206,75 @@ class BlockQueueSpec extends AnyFlatSpec with Matchers with MockFactory:
     blockQueue.isQueued(block3.header.hash) shouldBe false
     blockQueue.isQueued(block2b.header.hash) shouldBe true
 
+  // B-509: a block queued with no weight, because its queued parent had none, is weighed from the parent's stored
+  // weight when the parent becomes the head's, and what hangs from it too: left weightless it is rooted on nothing, and
+  // a block that hangs from it is never resolved as a branch
+  it should "weigh a weightless block from its stored parent when the parent becomes the head's" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestConfig:
+    val block1: Block = getBlock(1, 101)
+    val block2: Block = getBlock(2, 102, block1.header.hash.value)
+    val block3: Block = getBlock(3, 103, block2.header.hash.value)
+    val block4: Block = getBlock(4, 104, block3.header.hash.value)
+    val storedWeight: ChainWeight = ChainWeight.totalDifficultyOnly(4242)
+
+    setBestBlockNumber(1).anyNumberOfTimes()
+    // queued while block1's parent was unknown: the three are weightless
+    setChainWeightForParent(block1, None)
+    setChainWeightForParent(block2, None)
+    setChainWeightForParent(block3, None)
+    List(block1, block2, block3).foreach(blockQueue.enqueueBlock(_))
+    blockQueue.getChainWeightByHash(block2.header.hash) shouldBe None
+
+    // block1 became the head's: the store holds its weight now
+    blockchainReader.getChainWeightByHash.expects(block1.header.hash).returning(Some(storedWeight))
+    blockQueue.removeImported(List(block1.header.hash))
+
+    val weight2: ChainWeight = storedWeight.increase(block2.header)
+    val weight3: ChainWeight = weight2.increase(block3.header)
+    blockQueue.getChainWeightByHash(block2.header.hash) shouldBe Some(weight2)
+    blockQueue.getChainWeightByHash(block3.header.hash) shouldBe Some(weight3)
+    setChainWeightForParent(block4, None)
+    blockQueue.enqueueBlock(block4) shouldEqual Some(Leaf(block4.header.hash.value, weight3.increase(block4.header)))
+    blockQueue.getBranch(block4.header.hash, dequeue = true) shouldEqual List(block2, block3, block4)
+
+  it should "weigh a weightless block from its stored parent when the parent, never queued, becomes the head's" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestConfig:
+    // block1 is fetched in a batch, never queued: block2 was announced ahead of it, and queued weightless
+    val block1: Block = getBlock(1, 101)
+    val block2: Block = getBlock(2, 102, block1.header.hash.value)
+    val storedWeight: ChainWeight = ChainWeight.totalDifficultyOnly(4242)
+
+    setBestBlockNumber(1).anyNumberOfTimes()
+    setChainWeightForParent(block2, None)
+    blockQueue.enqueueBlock(block2) shouldBe None
+
+    blockchainReader.getChainWeightByHash.expects(block1.header.hash).returning(Some(storedWeight))
+    blockQueue.removeImported(List(block1.header.hash))
+
+    blockQueue.getChainWeightByHash(block2.header.hash) shouldBe Some(storedWeight.increase(block2.header))
+
+  it should "leave a weightless block weightless when the store holds no weight for the parent that left" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestConfig:
+    val block1: Block = getBlock(1, 101)
+    val block2: Block = getBlock(2, 102, block1.header.hash.value)
+
+    setBestBlockNumber(1).anyNumberOfTimes()
+    setChainWeightForParent(block1, None)
+    setChainWeightForParent(block2, None)
+    List(block1, block2).foreach(blockQueue.enqueueBlock(_))
+
+    blockchainReader.getChainWeightByHash.expects(block1.header.hash).returning(None)
+    blockQueue.removeImported(List(block1.header.hash))
+
+    blockQueue.isQueued(block2.header.hash) shouldBe true
+    blockQueue.getChainWeightByHash(block2.header.hash) shouldBe None
+
   trait TestConfig:
     val syncConfig: SyncConfig =
       SyncConfig(Config.config).copy(maxQueuedBlockNumberAhead = 10, maxQueuedBlockNumberBehind = 10)

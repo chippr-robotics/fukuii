@@ -1371,10 +1371,9 @@ class EthSimulateService(
           // Geth wire format for revert:
           //   - call.returnData = "0x" (always empty; payload moves into error.data)
           //   - error.data      = the raw revert payload (always present, even "0x")
-          //   - error.message   = "execution reverted" + ": <decoded>" when payload
-          //                       starts with the Error(string) selector 0x08c379a0.
-          val decoded = decodeErrorString(returnData)
-          val msg = decoded.fold("execution reverted")(s => s"execution reverted: $s")
+          //   - error.message   = "execution reverted" + ": <reason>" when the payload is an
+          //                       Error(string) or a Panic(uint256) (abi.UnpackRevert).
+          val msg = com.chipprbots.ethereum.vm.RevertReason.message(returnData)
           SimulateCallResult(
             status = BigInt(0),
             returnData = ByteString.empty,
@@ -1518,26 +1517,3 @@ class EthSimulateService(
     else
       val blooms = receipts.map(_.logsBloomFilter.toArray)
       ByteString(ByteUtils.or(EmptyBloom.toArray +: blooms*))
-
-  /** ABI-decode the string payload of an `Error(string)` revert (selector 0x08c379a0). Returns None for any other
-    * revert payload (custom errors, raw bytes, etc.) so the caller falls back to the bare "execution reverted" message
-    * — matching geth's behavior.
-    */
-  private def decodeErrorString(returnData: ByteString): Option[String] =
-    boundary:
-      if returnData.length < 4 + 32 + 32 then break(None)
-      val bytes = returnData.toArray
-      val selector = (bytes(0) & 0xff, bytes(1) & 0xff, bytes(2) & 0xff, bytes(3) & 0xff)
-      if selector != (0x08, 0xc3, 0x79, 0xa0) then break(None)
-      // ABI: head[0] = offset (always 0x20 for a single string arg)
-      // head[1] = string length (right-aligned uint256)
-      // head[2..] = string bytes (padded to 32-byte boundary)
-      val payload = bytes.drop(4)
-      val offset = BigInt(1, payload.slice(0, 32))
-      if offset != 32 then break(None)
-      // The length is a uint256 the contract chose: compared as a BigInt, so 2^32 + 5 is not 5 and 2^31 - 32 does not
-      // overflow `64 + length`. Only a length inside the payload is narrowed (#1727).
-      val length = BigInt(1, payload.slice(32, 64))
-      if length + 64 > payload.length then break(None)
-      val end = 64 + length.toInt
-      scala.util.Try(new String(payload.slice(64, end), "UTF-8")).toOption

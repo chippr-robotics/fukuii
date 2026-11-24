@@ -92,10 +92,10 @@
       "pc":142,
       "op":"SSTORE",
       "gas":17865,
-      "gasCost":17865,
+      "gasCost":22100,
       "depth":1,
       "stack":["0x1","0x100000000000000000000000000000000"],
-      "error":"OutOfGas"
+      "error":"out of gas"
     }]
   },
   "structLogWithMemory":{
@@ -194,11 +194,11 @@
       "pc":142,
       "op":"SSTORE",
       "gas":17865,
-      "gasCost":17865,
+      "gasCost":22100,
       "depth":1,
       "stack":["0x1","0x100000000000000000000000000000000"],
       "memory":["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff","0x8000000000000000000000000000000000000000000000000000000000000000"],
-      "error":"OutOfGas"
+      "error":"out of gas"
     }]
   },
   "callTracer":{

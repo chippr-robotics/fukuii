@@ -102,9 +102,9 @@ object StdValidators:
     * CanonicalReOrg=False, Invalid P9" (Paris and Cancun). hive's `RemoveTransaction` empties the transaction list and
     * recomputes `transactionsRoot` but keeps the original `gasUsed`, `receiptsRoot` and `stateRoot`. Our receipts
     * (none) therefore do not hash to the kept `receiptsRoot`, so [[HeaderGasContradictsReceiptsMarker]] cannot apply.
-    * The block fails mid-batch, `ConsensusAdapter` maps the partial batch to `BlockImportedToTop` and drops the error,
-    * and nobody reported it. The node then imported up to the invalid block's parent and answered the CL's tip ACCEPTED
-    * until hive timed out.
+    * The block fails mid-batch, `ConsensusAdapter` mapped the partial batch to `BlockImportedToTop` and dropped the
+    * error (until B-338, which answers it `ImportedPartially`), and nobody reported it. The node then imported up to
+    * the invalid block's parent and answered the CL's tip ACCEPTED until hive timed out.
     *
     * Same substring constraints as [[HeaderGasContradictsReceiptsMarker]]: it must not contain any substring another
     * consumer matches on, and the message it is appended to keeps "Block has invalid gas used" as a contiguous prefix.

@@ -664,6 +664,9 @@ class EthInfoService(
   private def callPreCheckError(suppliedGas: BigInt)(e: StxLedger.CallPreCheckError): JsonRpcError =
     JsonRpcError.LogicError(s"err: ${e.message} (supplied gas $suppliedGas)")
 
+  /** go-ethereum `revertError` (internal/ethapi): "execution reverted", with ": <reason>" when the payload is an
+    * `Error(string)` or a `Panic(uint256)` (`abi.UnpackRevert`), and the payload as `data` (B-026, from B-172).
+    */
   private def revertError(data: ByteString): JsonRpcError =
     val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(data.toArray[Byte])
-    JsonRpcError(3, "execution reverted", Some(org.json4s.JString(dataHex)))
+    JsonRpcError(3, com.chipprbots.ethereum.vm.RevertReason.message(data), Some(org.json4s.JString(dataHex)))

@@ -146,16 +146,40 @@ class BlockQueue(
     * and that branch then leaves the chain below the head: it is executed again as a reorganisation onto the node's own
     * chain.
     *
+    * A queued block that hangs from one of them, queued or not, and was queued with no weight (its parent had none, or
+    * was not known: the branch was not rooted then) is weighed now from its parent's stored weight, and what hangs from
+    * it with it (B-509), as [[enqueueBlock]] weighs a block whose parent is stored. Left with none, it is rooted on
+    * nothing: [[findClosestChainedAncestor]] stops at a parent that is not queued, so no block that hangs from it is
+    * ever resolved as a branch.
+    *
     * @param imported
     *   the hashes of the blocks that became the head's
     */
   def removeImported(imported: Iterable[BlockHash]): Unit =
-    imported.foreach { hash =>
+    val heads = imported.toList
+    heads.foreach { hash =>
       blocks.remove(hash).foreach { case QueuedBlock(block, _) =>
         val parentHash = block.header.parentHash
         parentToChildren.get(parentHash).foreach(siblings => parentToChildren += parentHash -> (siblings - hash))
       }
     }
+    heads.foreach(weighChildrenFromTheStore)
+
+  /** The weightless queued children of `parent`, a block that became the head's, weighed from its stored weight, and
+    * their subtrees with them. None when the store holds no weight for it.
+    */
+  private def weighChildrenFromTheStore(parent: BlockHash): Unit =
+    val weightless =
+      parentToChildren.getOrElse(parent, Set.empty).filter(child => blocks.get(child).exists(_.weight.isEmpty))
+    if weightless.nonEmpty then
+      blockchainReader.getChainWeightByHash(parent).foreach { parentWeight =>
+        weightless.foreach { child =>
+          blocks.get(child).foreach { queued =>
+            blocks += child -> queued.copy(weight = Some(parentWeight.increase(queued.block.header)))
+            updateChainWeights(child)
+          }
+        }
+      }
 
   /** Clear the BlockQueue
     */

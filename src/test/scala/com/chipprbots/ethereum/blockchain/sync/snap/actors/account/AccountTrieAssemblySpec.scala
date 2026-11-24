@@ -331,9 +331,9 @@ class AccountTrieAssemblySpec extends ScalaTestWithActorTestKit with AnyFlatSpec
     m.completedTasks shouldBe empty
     m.taskStackTries shouldBe empty
     h.selfMessages() shouldBe empty
-    val failures = h.controller.receiveAll().collect { case f: SNAPSyncController.AccountTrieFinalizationFailed => f }
+    val failures = h.controller.receiveAll().collect { case f: SNAPSyncController.SnapStoreFaulted => f }
     failures.map(_.error) should have size 1
-    failures.head.error should include("account store failed")
+    failures.head.where should startWith("account range")
 
   it should "stop the account phase, not re-queue, when the Path scheme has no node store (B-190)" taggedAs UnitTest in {
     val h = new Harness(scheme = StorageScheme.Path, pathNodes = None)

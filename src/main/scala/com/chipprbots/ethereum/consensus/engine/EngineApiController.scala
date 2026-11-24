@@ -516,19 +516,30 @@ class EngineApiController(
     )
     IO.pure(JsonRpcResponse("2.0", Some(clientVersion), None, reqId(request)))
 
+  /** go-ethereum's request bound for engine_getBlobsV1 and V2 (eth/catalyst/api.go: `len(hashes) > 128` answers -38004
+    * "Too large request"); cancun.md and osaka.md require at least 128 and -38004 above what is served (B-477).
+    */
+  private val MaxBlobHashes = 128
+  private val TooLargeRequest = -38004
+
+  /** The versioned hashes a getBlobs request asks for: its one param, a list of 0x-hex strings. Anything else is -32602
+    * (it was taken as an empty list and answered `[]`), more than 128 is -38004 (B-477).
+    */
+  private def blobHashes(request: JsonRpcRequest): Either[JsonRpcError, List[JValue]] =
+    request.params.map(_.arr).getOrElse(Nil) match
+      case JArray(items) :: Nil if items.forall(_.isInstanceOf[JString]) =>
+        if items.size > MaxBlobHashes then
+          Left(JsonRpcError(TooLargeRequest, s"Too large request: ${items.size} hashes, at most $MaxBlobHashes", None))
+        else Right(items)
+      case _ => Left(JsonRpcError(-32602, "invalid argument 0: expected a list of versioned hashes", None))
+
   private def handleGetBlobs(request: JsonRpcRequest): IO[JsonRpcResponse] =
     // engine_getBlobsV1: return null for each requested versioned hash (we don't store blobs)
     // Lighthouse will fall back to fetching blobs from CL peers
-    val hashes = request.params
-      .map(_.arr)
-      .getOrElse(Nil)
-      .headOption
-      .collect { case JArray(items) =>
-        items
-      }
-      .getOrElse(Nil)
-    val nullBlobs = hashes.map(_ => JNull)
-    IO.pure(JsonRpcResponse("2.0", Some(JArray(nullBlobs)), None, reqId(request)))
+    IO.pure(blobHashes(request) match
+      case Left(error)   => JsonRpcResponse("2.0", None, Some(error), reqId(request))
+      case Right(hashes) => JsonRpcResponse("2.0", Some(JArray(hashes.map(_ => JNull))), None, reqId(request))
+    )
 
   /** engine_getBlobsV2 (execution-apis osaka.md, EIP-7594 / PeerDAS) answers `Array of BlobAndProofV2` or `null`: all
     * or nothing. The client "MUST return `null` in case of any missing or older version blobs", so a missing blob makes
@@ -540,16 +551,11 @@ class EngineApiController(
     * answered `[]`, as go-ethereum does (GetBlobsV2: `available != len(hashes)` is false for zero hashes).
     */
   private def handleGetBlobsV2(request: JsonRpcRequest): IO[JsonRpcResponse] =
-    val hashes = request.params
-      .map(_.arr)
-      .getOrElse(Nil)
-      .headOption
-      .collect { case JArray(items) =>
-        items
-      }
-      .getOrElse(Nil)
-    val result = if hashes.isEmpty then JArray(Nil) else JNull
-    IO.pure(JsonRpcResponse("2.0", Some(result), None, reqId(request)))
+    IO.pure(blobHashes(request) match
+      case Left(error) => JsonRpcResponse("2.0", None, Some(error), reqId(request))
+      case Right(hashes) =>
+        JsonRpcResponse("2.0", Some(if hashes.isEmpty then JArray(Nil) else JNull), None, reqId(request))
+    )
 
   /** engine_getPayloadBodiesByHashV1 (execution-apis shanghai.md) and engine_getPayloadBodiesByHashV2 (amsterdam.md),
     * which "follows the same specification as engine_getPayloadBodiesByHashV1": one entry per requested hash, "in the

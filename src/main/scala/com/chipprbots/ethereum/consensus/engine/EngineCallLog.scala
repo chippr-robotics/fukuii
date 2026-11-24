@@ -108,7 +108,8 @@ final class EngineCallLog(clock: () => Long = () => System.currentTimeMillis(), 
         val response = answer.toOption
         val status = response.flatMap(statusOf(name, _)).orElse(Option.when(answer.isFailure)("failed"))
         val block = blockNumberOf(name, request, response)
-        add(EngineCallRecord(clock(), name, status, System.nanoTime() - startedNanos, block))
+        // The CL's identity and capability count are recorded before the call is counted (B-423): a reader that sees
+        // the new total then sees them too. Counted first, a snapshot could show the call without them.
         if response.exists(_.error.isEmpty) then
           if name == "engine_getClientVersionV1" then identityOf(request).foreach(identity.set)
           else if name == "engine_exchangeCapabilities" then
@@ -117,6 +118,7 @@ final class EngineCallLog(clock: () => Long = () => System.currentTimeMillis(), 
               case JArray(JArray(names) :: _) if names.forall(_.isInstanceOf[JString]) =>
                 capabilities.set(names.size.toLong)
               case _ => ()
+        add(EngineCallRecord(clock(), name, status, System.nanoTime() - startedNanos, block))
     catch case NonFatal(_) => ()
 
   /** A request that never became a call: a body that was not JSON, or not a request. */

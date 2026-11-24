@@ -127,7 +127,22 @@ class JwtAuthenticator(secretHex: String, calls: EngineCallLog = EngineCallLog.N
         val now = BigInt(Instant.now().getEpochSecond)
         val skew = (now - iat).abs
         if skew > BigInt(MaxClockSkewSeconds) then Left(s"JWT expired: iat=$iat, now=$now, skew=${skew}s")
-        else Right(())
+        else checkExpiresAt(payload, now)
+
+  /** The optional `exp` claim (RFC 7519 4.1.4): a token past it is refused, as go-ethereum's JWT handler refuses it
+    * (golang-jwt's claims validation, `VerifyExpiresAt`; B-419). Absent, nothing is checked; the Engine API spec makes
+    * only `iat` required.
+    */
+  private def checkExpiresAt(payload: JObject, now: BigInt): Either[String, Unit] =
+    val expiresAt: Option[BigInt] = field(payload, "exp").collect {
+      case JInt(n)                                 => n
+      case JLong(n)                                => BigInt(n)
+      case JDouble(n) if !n.isInfinite && !n.isNaN => BigDecimal(n).toBigInt
+      case JDecimal(n)                             => n.toBigInt
+    }
+    expiresAt match
+      case Some(exp) if now > exp => Left(s"JWT expired: exp=$exp")
+      case _                      => Right(())
 
   /** Decodes a base64url segment (padded or not) holding a JSON object. */
   private def decodeJson(segment: String, what: String): Either[String, JObject] =
