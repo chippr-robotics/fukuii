@@ -2877,18 +2877,15 @@ items:
   - id: B-329
     title: "Mutation pass over C5a part 10 (#1880): PathLiveSync, the guard arms in SyncController, the hand-off's index and cursor trim, HandoffsHeldForExcluded"
     priority: P2
-    status: review
+    status: done
     area: sync
     opened: 2026-11-17
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2104]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T13:44:23Z
-      heartbeat: 2026-11-24T19:41:40Z
+    notes: "2026-11-24 done: merged 727544496b"
   - id: B-331
     title: TUI Ops pagination hint prints a Unicode ellipsis in ASCII mode (OpsPanels.scala:175; regenerate the ops-*-ascii goldens)
     priority: P3
