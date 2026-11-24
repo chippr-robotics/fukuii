@@ -274,23 +274,48 @@ class GfxSpec extends AnyFlatSpec with Matchers:
     first should include("X=2,Y=12")
     val (again, same) = PixelLayer.diff(layer, Seq(mascot(2, 0)), cell, art)
     again shouldBe ""
-    same shouldBe layer
+    // Only the bookkeeping of when each image was last shown moves.
+    same.copy(frame = layer.frame, shownAt = layer.shownAt) shouldBe layer
+  }
+
+  // B-259: the images the terminal holds were never freed until a clear; at scale 4 the mascot's frames alone are about
+  // 112 MB, a third of kitty's quota.
+  it should "free the least recently shown images off screen once the budget is passed, and send one again when shown" taggedAs (
+    UnitTest
+  ) in {
+    val frameBytes = 256L * 256 * 4
+    val budget = 2 * frameBytes
+    val (_, a) = PixelLayer.diff(PixelLayer.Empty, Seq(mascot(1, 0)), cell, art, budget)
+    val (_, b) = PixelLayer.diff(a, Seq(mascot(1, 1)), cell, art, budget)
+    b.heldBytes shouldBe 2 * frameBytes
+    val (third, c) = PixelLayer.diff(b, Seq(mascot(1, 2)), cell, art, budget)
+    // Three frames held, two allowed: the least recently shown, frame 0 (image 1), is freed with its data.
+    third should include(s"${Esc}_Ga=d,d=I,i=1,q=2")
+    c.heldBytes shouldBe 2 * frameBytes
+    c.images.values.toSet shouldBe Set(2, 3)
+    // Shown again, it is sent again, under a new id: a freed image's id is never reused.
+    val (back, d) = PixelLayer.diff(c, Seq(mascot(1, 0)), cell, art, budget)
+    uploads(back) shouldBe 1
+    d.images.get(PixelLayer.ImageKey.Frame("mascot", 1, 0, PixelLayer.scale(cell))) shouldBe Some(4)
+    // The image on screen is never freed, whatever it costs.
+    val (_, tiny) = PixelLayer.diff(PixelLayer.Empty, Seq(mascot(1, 0)), cell, art, budgetBytes = 1)
+    tiny.images should have size 1
   }
 
   it should "change a frame with one placement and one removal, and send a frame it has shown no second time" taggedAs (
     UnitTest
   ) in {
-    val (_, a) = PixelLayer.diff(PixelLayer.Empty, Seq(mascot(2, 0)), cell, art)
-    val (blink, b) = PixelLayer.diff(a, Seq(mascot(2, 1)), cell, art)
+    val (_, a) = PixelLayer.diff(PixelLayer.Empty, Seq(mascot(1, 0)), cell, art)
+    val (blink, b) = PixelLayer.diff(a, Seq(mascot(1, 1)), cell, art)
     uploads(blink) shouldBe 1 // the blink frame, the first time
     places(blink) shouldBe 1
     removes(blink) shouldBe 1
     blink.indexOf("a=p,") should be < blink.indexOf("a=d,") // the new one first: no flicker
-    val (back, c) = PixelLayer.diff(b, Seq(mascot(2, 0)), cell, art)
+    val (back, c) = PixelLayer.diff(b, Seq(mascot(1, 0)), cell, art)
     uploads(back) shouldBe 0
     places(back) shouldBe 1
     back.length should be < 120 // a frame change costs no pixel data (FR-017)
-    val (blinkAgain, _) = PixelLayer.diff(c, Seq(mascot(2, 1)), cell, art)
+    val (blinkAgain, _) = PixelLayer.diff(c, Seq(mascot(1, 1)), cell, art)
     uploads(blinkAgain) shouldBe 0
   }
 
