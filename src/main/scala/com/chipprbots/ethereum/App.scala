@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.ephemery.EphemeryFetchCli
 import com.chipprbots.ethereum.ephemery.EphemeryResolver
 import com.chipprbots.ethereum.ephemery.StartupDeps
 import com.chipprbots.ethereum.faucet.Faucet
+import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.utils.JvmFlagGuard
 import com.chipprbots.ethereum.utils.LogbackReload
 import com.chipprbots.ethereum.utils.Logger
@@ -108,6 +109,13 @@ object App extends Logger:
       case Some(network) if isNetwork(network) => Some(network)
       case _                                   => None
 
+  /** Whether the operator's config (the config file chosen, or a -D property) sets `path`: built-in defaults do not
+    * define the keys asked about here, so a value present at all is the operator's.
+    */
+  private def operatorSets(path: String): Boolean =
+    ConfigFactory.invalidateCaches()
+    ConfigFactory.load().hasPath(path)
+
   /** Apply modifiers to system configuration */
   private def applyModifiers(modifiers: Set[String]): Unit =
     if modifiers.contains("public") then
@@ -129,21 +137,26 @@ object App extends Logger:
       // Use known nodes from configuration/bootstrap only
       System.setProperty("fukuii.network.discovery.reuse-known-nodes", "true")
 
-      // Enterprise mode: ignore bootstrap nodes, use only static-nodes.json
-      System.setProperty("fukuii.network.discovery.use-bootstrap-nodes", "false")
+      // Enterprise mode: ignore bootstrap nodes, use only static-nodes.json, unless the operator's config says
+      // otherwise (B-401: a system property overrides every config file, so setting it unconditionally overrode an
+      // operator's explicit setting, contrary to the template).
+      val bootstrapByOperator = operatorSets(DiscoveryConfig.UseBootstrapNodesPath)
+      if !bootstrapByOperator then System.setProperty(DiscoveryConfig.UseBootstrapNodesPath, "false")
 
       // Disable sync blacklisting to allow retry in controlled environments
       System.setProperty("fukuii.sync.blacklist-duration", "0.seconds")
 
-      // Set RPC interface to localhost by default for security
-      // Can be overridden with explicit config if needed
-      System.setProperty("fukuii.network.rpc.http.interface", "localhost")
+      // The RPC interface is not set here (B-401): its built-in default is already localhost, and a system property
+      // would override the operator's `fukuii.network.rpc.http.interface`, contrary to the template.
+      ConfigFactory.invalidateCaches()
 
       log.info("Enterprise mode enabled: configured for private/permissioned network")
       log.info("- Public discovery disabled")
-      log.info("- Using ONLY static-nodes.json (bootstrap nodes ignored)")
+      if bootstrapByOperator then
+        log.info(s"- Bootstrap nodes as the config sets ${DiscoveryConfig.UseBootstrapNodesPath}")
+      else log.info("- Using ONLY static-nodes.json (bootstrap nodes ignored)")
       log.info("- Automatic port forwarding disabled")
-      log.info("- RPC bound to localhost (override with config if needed)")
+      log.info("- RPC interface as configured (localhost unless fukuii.network.rpc.http.interface says otherwise)")
 
   private def showHelp(): Unit =
     log.info(
