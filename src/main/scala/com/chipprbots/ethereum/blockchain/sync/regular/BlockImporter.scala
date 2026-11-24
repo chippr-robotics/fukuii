@@ -1591,14 +1591,18 @@ final private class BlockImporterLogic(
             val importedNow = blockImportData.map(_.block)
             importedNow.foreach(b => unknownParentStrikes -= b.hash.value)
             importedNow.foreach(b => forkRecoveredFor -= b.hash.value)
+            tellBatchImported(importedNow, Nil, importedNow)
             val imported = importedNow.reverse ::: importedBlocks
             imported.headOption
               .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
             IO.pure((imported, None))
 
-          case ChainReorganised(_, newBranch, _, _) =>
+          case ChainReorganised(oldBranch, newBranch, _, branchBlocks) =>
             newBranch.foreach(b => unknownParentStrikes -= b.hash.value)
             newBranch.foreach(b => forkRecoveredFor -= b.hash.value)
+            // as importBlock tells a reorganisation, peers aside: the pool of every block told, new-head subscribers of
+            // the blocks this import executed, the head always among them (B-344)
+            tellBatchImported(newBranch, oldBranch, newBranch.takeRight(math.max(1, branchBlocks)))
             val imported = newBranch.reverse ::: importedBlocks
             imported.headOption
               .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
@@ -1755,18 +1759,36 @@ final private class BlockImporterLogic(
       if expected != hash then RepairOutcome.Rejected else repairs.repairNodeAt(position, expected, node.toArray)
 
   /** Accounting for the validated prefix of a batch whose later block hit a missing node: those blocks are adopted, so
-    * they are imported like any other (strikes cleared, progress reported) and prepended to `importedBlocks` (newest
-    * first), which is what makes the caller's `blocks.drop(importedBlocks.size)` start at the failing block.
+    * they are imported like any other (strikes cleared, the pool and new-head subscribers told, progress reported) and
+    * prepended to `importedBlocks` (newest first), which is what makes the caller's `blocks.drop(importedBlocks.size)`
+    * start at the failing block.
     */
   private def adoptedPrefix(adopted: List[BlockData], importedBlocks: List[Block]): List[Block] =
     val adoptedBlocks = adopted.map(_.block)
     adoptedBlocks.foreach(b => unknownParentStrikes -= b.hash.value)
     adoptedBlocks.foreach(b => forkRecoveredFor -= b.hash.value)
+    // the prefix only: the failing block and those after it are not on the chain (B-336, B-337)
+    tellBatchImported(adoptedBlocks, Nil, adoptedBlocks)
     val imported = adoptedBlocks.reverse ::: importedBlocks
     if adoptedBlocks.nonEmpty then
       imported.headOption
         .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
     imported
+
+  /** What a fetched batch put on the chain is told as core-geth tells what its downloader inserts (B-448): each block
+    * this import executed is published to new-head subscribers (`insertChain` sends a chain event per block it writes
+    * as canonical), and the pool drops the transactions of the blocks that became canonical and takes back those of the
+    * blocks moved off (core-geth's tx pool resets on the new head). Peers are not told: core-geth broadcasts a block
+    * that was propagated to it or that it mined, never one its downloader inserted, as a peer that serves the batch has
+    * it and the rest fetch it as this node did. Before B-448 a batch told none of them; only [[importBlock]] (announced
+    * and mined blocks) did.
+    *
+    * Bounded: one message per block the import executed or adopted, and a reorganisation's lists are bounded by
+    * consensus (B-296, B-344).
+    */
+  private def tellBatchImported(onto: List[Block], off: List[Block], executed: List[Block]): Unit =
+    updateTxPool(onto, off)
+    executed.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
 
   /** The consensus call of an import, timed: when it put blocks on the chain, how many and how long it took go to
     * `RegularSyncMetrics` (spec 027 C-7, the TUI's last-import duration). Timed here, around the call, so no consensus

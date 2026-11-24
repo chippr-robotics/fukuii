@@ -339,6 +339,99 @@ class RegularSyncSpec
       deleted.add((position, expectedHash))
       com.chipprbots.ethereum.db.storage.BadEntryDelete.NoLongerBad
 
+  /** An importer spawned alone, with probes for whom it tells of an import (B-448): new-head subscribers, the pool and
+    * the broadcaster to peers. Every batch it is handed is answered `answer`; this node's chain is the genesis block.
+    */
+  abstract class BatchImportTells(name: String) extends Fixture:
+    val answer: java.util.concurrent.atomic.AtomicReference[BlockImportResult] =
+      new java.util.concurrent.atomic.AtomicReference(BlockEnqueued)
+    val newHeads: TypedTestProbe[Topic.Command[NewBlockImported]] =
+      testKit.createTestProbe[Topic.Command[NewBlockImported]](s"$name-new-heads")
+    val pool: TypedTestProbe[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command] =
+      testKit.createTestProbe[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command](s"$name-pool")
+    val toPeers: TypedTestProbe[BlockBroadcasterActor.BroadcasterMsg] =
+      testKit.createTestProbe[BlockBroadcasterActor.BroadcasterMsg](s"$name-broadcaster")
+    val importerFetcher: TestProbe = TestProbe(s"$name-fetcher")
+    val importerSupervisor: TestProbe = TestProbe(s"$name-supervisor")
+
+    override lazy val consensusAdapter: ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
+      // a proof-of-work chain: no consensus layer refuses a branch (B-297)
+      override def refusedWithTheirParent(blocks: NonEmptyList[Block]): Boolean = false
+      override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
+          blockExecutionScheduler: IORuntime,
+          blockchainConfig: BlockchainConfig
+      ): IO[BlockImportResult] = IO(answer.get())
+
+    override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
+      override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult = NewBetterBranch(Nil)
+
+    val importer: TypedActorRef[BlockImporter.Command] = testKit.spawn(
+      BlockImporter.apply(
+        importerFetcher.ref.toTyped[BlockFetcher.FetchCommand],
+        consensusAdapter,
+        blockchainReader,
+        blockchainWriter,
+        stateStorage,
+        evmCodeStorage,
+        branchResolution,
+        syncConfig,
+        ommersPool.ref.toTyped[com.chipprbots.ethereum.ommers.OmmersPool.Command],
+        toPeers.ref,
+        pool.ref,
+        newHeads.ref,
+        importerSupervisor.ref,
+        peerEventBus.ref,
+        networkPeerManager.ref,
+        blockchain,
+        blacklist,
+        this,
+        exhausts = exhausts,
+        importLock = importLock
+      ),
+      s"$name-importer"
+    )
+    importerFetcher.expectMsgClass(3.seconds, classOf[BlockFetcher.Start])
+    importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
+
+    def weighed(block: Block): BlockData =
+      BlockData(block, Nil, ChainWeight.totalDifficultyOnly(block.number.value))
+
+    def importBatch(blocks: List[Block]): Unit =
+      importer ! BlockImporter.FetcherResponse(BlockFetcher.PickedBlocks(NonEmptyList.fromListUnsafe(blocks)))
+
+    // What the pool was sent, in order, until it is sent no more
+    private lazy val toThePool: Seq[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command] =
+      import com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions
+      // the import's own last message to the pool is a removal: waited for, then whatever follows it
+      val first = pool.fishForMessage(5.seconds) {
+        case _: RemoveTransactions => FishingOutcome.Complete
+        case _                     => FishingOutcome.Continue
+      }
+      val rest = Iterator
+        .continually(scala.util.Try(pool.receiveMessage(500.millis)).toOption)
+        .takeWhile(_.isDefined)
+        .flatten
+        .toList
+      first ++ rest
+
+    /** The transactions the pool was told to drop, one entry per block. */
+    def removedFromThePool(): Seq[Seq[SignedTransaction]] = toThePool.collect {
+      case com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions(txs) => txs
+    }
+
+    /** The transactions handed back to the pool, but for the empty hand-back of the branch resolution (no old branch).
+      */
+    def takenBackByThePool(): Seq[Seq[SignedTransaction]] = toThePool.collect {
+      case com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions(txs)
+          if txs.nonEmpty =>
+        txs
+    }
+
+    /** No peer is told of a fetched batch, and no more new-head events come. */
+    def noneTold(): Unit =
+      toPeers.expectNoMessage(1.second)
+      newHeads.expectNoMessage(200.millis)
+
   /** An importer whose import of block 15 meets a missing trie node, until the node is written: the importer on the
     * unified layout (`unified`) or on the hash layout, and following a consensus layer (Ethereum,
     * `followsConsensusLayer`) or not (the proof-of-work importer, Classic). The two differ in the branch resolution and
@@ -3449,13 +3542,16 @@ class RegularSyncSpec
           // the side parent is announced by no message: neither in full nor by its hash
           sent.collect { case NewBlockHashes(hashes) => hashes.map(_.hash) }.flatten should
             not contain sideParent.hash.value
-          // both blocks are canonical now: the pool drops its copies of the transactions of each
+          // both blocks are canonical now: the pool drops its copies of the transactions of each. Told by their
+          // transactions: goToTop's batches tell the pool of their own blocks too (B-448)
           val toThePool: Seq[Any] = pendingTransactionsManager.receiveWhile(max = 5.seconds, idle = 1.second) {
             case message => message
           }
-          toThePool.count(
-            _.isInstanceOf[com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions]
-          ) shouldBe 2
+          val removed: Seq[Seq[SignedTransaction]] = toThePool.collect {
+            case com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions(txs) => txs
+          }
+          val ofTheseTwo: Seq[Seq[SignedTransaction]] = Seq(sideParent.body.transactionList, told.body.transactionList)
+          removed.filter(ofTheseTwo.contains) should contain theSameElementsAs ofTheseTwo
           // a new-head event for the executed head, none for the side parent (core-geth's chain event); the events
           // before are goToTop's own imports
           // compared by equality: the message Topic.Publish builds has no public extractor
@@ -3466,6 +3562,83 @@ class RegularSyncSpec
           published.last shouldBe ofTheHead
           published should not contain Topic.Publish(NewBlockImported(sideParent))
           newHeads.expectNoMessage(1.second)
+      )
+    }
+
+    // B-448: a fetched batch is told as core-geth tells what its downloader inserts. New-head subscribers get each block
+    // the import executed and the pool is updated, as for an announced block; no peer is told of it.
+    "importing a fetched batch" should {
+      "tell new-head subscribers and the pool of each block, and no peer" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("batch-to-top"):
+          val batch: List[Block] = testBlocks.take(3)
+          answer.set(BlockImportedToTop(batch.map(weighed)))
+
+          importBatch(batch)
+
+          newHeads.receiveMessages(3, 5.seconds) shouldBe batch.map(b => Topic.Publish(NewBlockImported(b)))
+          removedFromThePool() shouldBe batch.map(_.body.transactionList)
+          takenBackByThePool() shouldBe empty
+          noneTold()
+      )
+
+      "tell of a reorganisation: the blocks moved off back to the pool, new-head events for the executed only" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("batch-reorg"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          // a stored side block the branch stands on, and the two blocks of the batch executed by this import
+          val sideParent: Block = testBlocks.head
+          val executed: List[Block] = testBlocks.slice(1, 3)
+          val onto: List[Block] = sideParent :: executed
+          answer.set(ChainReorganised(List(movedOff), onto, onto.map(weighed).map(_.weight), branchBlocks = 2))
+
+          importBatch(executed)
+
+          newHeads.receiveMessages(2, 5.seconds) shouldBe executed.map(b => Topic.Publish(NewBlockImported(b)))
+          removedFromThePool() shouldBe onto.map(_.body.transactionList)
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+          noneTold()
+      )
+
+      // B-336: a fault of this node's own state after a prefix of the batch became the head. The prefix is told as
+      // imported blocks are; the failing block and those after it are not on the chain and are not told.
+      "tell of the imported prefix only when this node's state fails a later block of the batch" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("batch-prefix"):
+          val prefix: Block = testBlocks.head
+          val failing: Block = testBlocks(1)
+          val localFault: String = BlockExecutionError.MPTError(new MPTException("Invalid Node")).toString
+          answer.set(new BlockImportFailedAt(localFault, failing.hash.value, List(weighed(prefix))))
+
+          importBatch(testBlocks.take(3))
+
+          newHeads.receiveMessages(1, 5.seconds) shouldBe List(Topic.Publish(NewBlockImported(prefix)))
+          removedFromThePool() shouldBe List(prefix.body.transactionList)
+          noneTold()
+      )
+
+      // Spec 018 C4b: the same for a state fault, which carries the adopted prefix itself
+      "tell of the adopted prefix only when this node's state could not take a later block" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("batch-state-fault"):
+          val prefix: List[Block] = testBlocks.take(2)
+          answer.set(
+            BlockImportStateFault(
+              new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the head moved under the batch"),
+              prefix.map(weighed)
+            )
+          )
+
+          importBatch(testBlocks.take(3))
+
+          newHeads.receiveMessages(2, 5.seconds) shouldBe prefix.map(b => Topic.Publish(NewBlockImported(b)))
+          removedFromThePool() shouldBe prefix.map(_.body.transactionList)
+          noneTold()
       )
     }
 
