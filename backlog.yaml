@@ -197,13 +197,15 @@ items:
   - id: B-017
     title: "SNAP review: StateValidator now reports wrong-hash list nodes as \"Corrupt trie node, not a hole\""
     priority: P2
-    status: open
+    status: done
     area: snap
     size: S
     opened: 2026-11-08
+    closed: 2026-11-24
     refs: [H3 follow-up]
     links: {}
     depends_on: [B-001]
+    notes: "2026-11-24 done: settled by design: StateValidator.scala:16-21 (a corrupt node is not a hole), pinned by RecoveryScannersPositionSpec"
   - id: B-018
     title: "16 E2E sync integration tests have never passed: test-design bugs, not sync faults"
     priority: P2
@@ -226,20 +228,22 @@ items:
     refs: [H11, CHASE E, "task #80"]
     links: {}
     notes: |-
-      2026-11-20 P2->P1 (user): blocking CI at bad times. #1957 fixes SNAPCoordinatorGoneSpec's null child ref (stub registers in its own setup; new fixture childSelf waits). AccountRangeCoordinatorSpec cooldown, StaleVerificationWalk, HealRequestFixtures still open.
       2026-11-20 #1957 merged to main (6ea4ffd): GoneSpec childSelf fix landed. Not on staging yet (cherry-pick 3cb05e4). Cooldown/StaleVerificationWalk/HealRequestFixtures still open.
       2026-11-20 #1958 merged: the #1957 fixture changes are on staging too, so a promotion keeps them.
+      2026-11-24 rescoped (validation): GoneSpec fixed; left: AccountRangeCoordinatorSpec 11 fixed waits, StaleVerificationWalk 1, HealRequestFixtures 30 s poll
   - id: B-021
-    title: scalanet discovery tests hang (v4 DiscoveryNetworkSpec ping) and 6 fail; KBucketsWithSubnetLimitsSpec is vacuous
+    title: "scalanetDiscovery tests: v4 DiscoveryNetworkSpec hang, V5DemuxResponderSpec/codec failures; then run the suite in CI"
     priority: P2
     status: open
     area: tests
     size: M
     opened: 2026-11-05
-    refs: [H11, CHASE E]
+    refs: [H11, CHASE E, B-416]
     links:
       issues: [1504]
-    notes: Nothing in CI runs these; do not add them to CI until the hang is fixed.
+    notes: |-
+      Nothing in CI runs these; do not add them to CI until the hang is fixed.
+      2026-11-24: absorbs B-416 (validation of 2026-11-24)
   - id: B-022
     title: "Flaky #1679: PeerDiscoveryManagerSpec 'do lookups in the background' times out under coverage"
     priority: P2
@@ -286,15 +290,17 @@ items:
     links: {}
     notes: conduit. Check hive rpc-compat's expectations first (JsonRpcHttpServer.scala:148-153).
   - id: B-026
-    title: "debug_trace structLog parity: CALL step order, the CALL step's gasCost, an out-of-gas step's gasCost"
+    title: "Trace and error-text parity with geth: structLog CALL order and gasCost, tracer error text, eth_call/estimateGas revert suffix; re-pin goldens once"
     priority: P2
     status: open
     area: rpc
     size: M
     opened: 2026-11-07
-    refs: [10b]
+    refs: [10b, B-171, B-172]
     links: {}
-    notes: conduit + forge. Regenerate src/test/resources/trace-goldens/ in the same commit.
+    notes: |-
+      conduit + forge. Regenerate src/test/resources/trace-goldens/ in the same commit.
+      2026-11-24: absorbs B-171, B-172 (validation of 2026-11-24)
   - id: B-028
     title: "#1677 tx fetcher parity: one GetPooledTransactions in flight per peer, 128 KB cap"
     priority: P2
@@ -305,7 +311,9 @@ items:
     refs: [H8]
     links:
       issues: [1677]
-    notes: herald.
+    notes: |-
+      herald.
+      2026-11-24 rescoped: per-hash dedup and 256-hash batches done; left: one GetPooledTransactions in flight per peer and the 128 KB cap
   - id: B-030
     title: Failed UDP sends log ERROR with a stack trace (IPv6 unreachable spam); demote, rate-limit, or skip IPv6
     priority: P2
@@ -402,6 +410,7 @@ items:
     notes: |-
       T006 (gate row 10b once with jar A) needs this; it blocks S1.
       2026-11-17 priority P3: spec 021 S1 not scheduled
+      2026-11-24: gates spec 021 S1's merge (GT-3/row 10b); schedule the planned stops on dev-node
   - id: B-047
     title: "Spec 021 T002 (P-2): export Mordor blocks 0-10,000,000 from the stopped Mordor node"
     priority: P3
@@ -412,7 +421,9 @@ items:
     refs: [021 T002]
     links:
       spec: specs/021-fixed-width-uint256
-    notes: "2026-11-17 priority P3: spec 021 S1 not scheduled"
+    notes: |-
+      2026-11-17 priority P3: spec 021 S1 not scheduled
+      2026-11-24: gates spec 021 S1's merge (GT-3/row 10b); schedule the planned stops on dev-node
   - id: B-048
     title: Copy the ETC chain export to the NAS
     priority: P3
@@ -426,7 +437,7 @@ items:
   - id: B-049
     title: "Spec 021 S1: the limb type behind the same API, with GT-2"
     priority: P2
-    status: blocked
+    status: open
     area: evm
     size: L
     opened: 2026-10-17
@@ -437,6 +448,7 @@ items:
     notes: |-
       beacon + forge. Blockers: T006 (gate row 10b with jar A), T008 (GT-1 part B), RP-2 sign-offs.
       2026-11-17 blocked: waits for B-046, B-047
+      2026-11-24 open: B-046/B-047 gate S1's merge (GT-3, row 10b), not its code; pre-swap tests T023-T031 can start (plan.md Gates)
   - id: B-050
     title: "Spec 021 S2: the T-005 hot-path conversions"
     priority: P2
@@ -929,13 +941,16 @@ items:
   - id: B-091
     title: discv4 crypto saturates the compute pool and starves block import
     priority: P3
-    status: open
+    status: done
     area: p2p
     size: M
     opened: 2026-11-07
+    closed: 2026-11-24
     refs: [handoff §3]
     links: {}
-    notes: "Unverified dev-node item (handoff section 3): check it still applies before starting."
+    notes: |-
+      Unverified dev-node item (handoff section 3): check it still applies before starting.
+      2026-11-24 done: fixed: DiscoveryRuntime gives discovery its own discovery-compute pool (cites this starvation)
   - id: B-092
     title: "SNAP: SyncController status asks time out (the off-thread ctx.log half is fixed)"
     priority: P3
@@ -945,7 +960,9 @@ items:
     opened: 2026-11-07
     refs: [handoff §3]
     links: {}
-    notes: "Unverified dev-node item (handoff section 3): check it still applies before starting."
+    notes: |-
+      Unverified dev-node item (handoff section 3): check it still applies before starting.
+      2026-11-24 probably fixed by #2007 (B-435: GetStatus answered in every state); confirm on dev-node, then close
   - id: B-093
     title: admin_peers shows placeholder names; admin_nodeInfo timed out
     priority: P3
@@ -955,7 +972,9 @@ items:
     opened: 2026-11-07
     refs: [handoff §3]
     links: {}
-    notes: "Unverified dev-node item (handoff section 3): check it still applies before starting."
+    notes: |-
+      Unverified dev-node item (handoff section 3): check it still applies before starting.
+      2026-11-24 rescoped: nodeInfo no longer asks an actor (IO.pure); left: admin_peers placeholder names (AdminService ~:373)
   - id: B-094
     title: CI-only NPE in an EEST fixture (UInt256.bytes takeRight null), JDK 25 suspected
     priority: P3
@@ -998,17 +1017,22 @@ items:
     opened: 2026-11-07
     refs: [handoff §3]
     links: {}
-    notes: "Unverified dev-node item (handoff section 3): check it still applies before starting."
+    notes: |-
+      Unverified dev-node item (handoff section 3): check it still applies before starting.
+      2026-11-24 rescoped: stateless evidence now wins over scarcity; left: resume reuses a pivot up to maxPivotStalenessBlocks=4096 vs a 128-block serve window
   - id: B-099
     title: SNAP resume on Path re-downloads every carried storage task, finished ones included
     priority: P3
-    status: open
+    status: done
     area: snap
     size: M
     opened: 2026-11-07
+    closed: 2026-11-24
     refs: [handoff §3]
     links: {}
-    notes: "Unverified dev-node item (handoff section 3): check it still applies before starting."
+    notes: |-
+      Unverified dev-node item (handoff section 3): check it still applies before starting.
+      2026-11-24 done: fixed: SnapResumePlanner re-queues only storageDoneStorage.unfinished; always on for Path
   - id: B-100
     title: "Backfill: subsequence matching for bodies and receipts, and no full-chain walk after completion"
     priority: P3
@@ -1031,6 +1055,7 @@ items:
     notes: |-
       Unverified dev-node item (handoff section 3): check it still applies before starting.
       Research is done (dev-node).
+      2026-11-24 rescoped: BalPrefetcher covers the BAL-driven prefetch (Amsterdam); left: the non-BAL state/code IO strategy
   - id: B-102
     title: hive sampled gates count tests cut off by "simulation timed out" as failures
     priority: P1
@@ -1087,41 +1112,52 @@ items:
   - id: B-112
     title: "Message decoder: switch on the negotiated p2p protocol version"
     priority: P3
-    status: open
+    status: dropped
     area: p2p
     opened: 2026-09-27
+    closed: 2026-11-24
     refs: [N-003]
     links: {}
-    notes: MessageCodec.scala:127.
+    notes: |-
+      MessageCodec.scala:127.
+      2026-11-24 dropped: user 2026-11-24 wontfix: snappy, the only version-dependent behaviour, is handled in MessageCodec; no bug
   - id: B-113
     title: Pass the Hello message's capabilities to the handshake state machine
     priority: P3
-    status: open
+    status: done
     area: p2p
     opened: 2026-09-27
+    closed: 2026-11-24
     refs: [N-004]
     links: {}
-    notes: PeerActor.scala:136.
+    notes: |-
+      PeerActor.scala:136.
+      2026-11-24 done: fixed: HelloExchangeState passes hello.capabilities to SNAP/ETH negotiation
   - id: B-114
     title: Deprecate pre-EIP-8 RLPx handshake support
     priority: P3
-    status: open
+    status: dropped
     area: p2p
     opened: 2026-09-27
+    closed: 2026-11-24
     refs: [N-005]
     links: {}
-    notes: Needs network coordination before removal.
+    notes: |-
+      Needs network coordination before removal.
+      2026-11-24 dropped: user 2026-11-24 wontfix: geth still accepts pre-EIP-8; removal gains nothing and risks interop
   - id: B-115
     title: Consistent rate limiting across JSON-RPC endpoint categories
     priority: P3
-    status: open
+    status: dropped
     area: rpc
     opened: 2026-09-27
+    closed: 2026-11-24
     refs: [R-001]
     links: {}
     notes: |-
       JsonRpcHttpServer.scala:82.
       2026-11-17 priority P3: vague consistency polish
+      2026-11-24 dropped: user 2026-11-24 wontfix: no definition of 'consistent'; reopen with a concrete gap if one is found
   - id: B-118
     title: Constitution and docs name .github/agents/{forge,beacon,herald}.md; the agent files live in .claude/agents/
     priority: P3
@@ -1229,15 +1265,17 @@ items:
       issues: [1683]
     notes: B-007 now rewinds without blame, but each false orphan still costs a rewind. Advance on the importer's ack, or compare the announced parentHash with the last handed-over hash.
   - id: B-140
-    title: "Orphan announce: check the header seal before counting a strike, so an invalid seal is an offence at once"
+    title: "handleOrphanAnnounce: check the header seal before a strike; respect the maintained-peer exemption"
     priority: P3
     status: open
     area: p2p
     size: S
     opened: 2026-11-08
-    refs: [B-007]
+    refs: [B-007, B-143]
     links: {}
-    notes: "Consensus-adjacent (what counts as a valid header): needs forge review, and a cost check for Ethash on ETC."
+    notes: |-
+      Consensus-adjacent (what counts as a valid header): needs forge review, and a cost check for Ethash on ETC.
+      2026-11-24: absorbs B-143 (validation of 2026-11-24)
   - id: B-141
     title: "Validate B-007 on Mordor: no peer blacklisted for a missing parent in a 24 h run"
     priority: P2
@@ -1262,13 +1300,16 @@ items:
   - id: B-143
     title: Orphan-strike blacklist should respect PeerListHelper maintained-peer exemption
     priority: P3
-    status: open
+    status: dropped
     area: p2p
     size: S
     opened: 2026-11-08
+    closed: 2026-11-24
     refs: [B-007]
     links: {}
-    notes: "H4 follow-up: handleOrphanAnnounce adds to the blacklist directly; maintained (static/trusted) peers are otherwise exempt. Plumb peersClient or check the exemption."
+    notes: |-
+      H4 follow-up: handleOrphanAnnounce adds to the blacklist directly; maintained (static/trusted) peers are otherwise exempt. Plumb peersClient or check the exemption.
+      2026-11-24 dropped: merged into B-140 (one fix)
   - id: B-144
     title: CHANGELOG fragments (one file per PR, assembled at release) so parallel PRs stop conflicting on [Unreleased]
     priority: P2
@@ -1353,9 +1394,9 @@ items:
     links:
       prs: [1888]
     notes: |-
-      Needs a holder, or the user accepts an 'ETH not supported on Windows' release note.
       2026-11-17 released by cloud-retro (expired claim of fukuii-fc): claim expired (heartbeat 2026-11-08)
       2026-11-17 user: assigned to dev-node; handoff .claude/agent-protocols/handoffs/B-151-windows-bls-to-dev-node.md
+      2026-11-24 user 2026-11-24: build the Windows BLS backend (not a release note); needs a holder (handoff: B-151-windows-bls-to-dev-node.md)
   - id: B-155
     title: "B-135 follow-ups: gate KZG on config not header shape; FatalErrors doc wording; restore the TUI terminal before halt"
     priority: P2
@@ -1371,13 +1412,16 @@ items:
   - id: B-156
     title: "Flaky: HealNoWalkCompletionSpec:404 count-reseeds-per-root on Hash expects a root request, gets a child path"
     priority: P2
-    status: open
+    status: done
     area: tests
     size: S
     opened: 2026-11-08
+    closed: 2026-11-24
     refs: ["#1764 CI run 42530634470"]
     links: {}
-    notes: "CI 2026-11-08: Vector(List(ByteString(16))) was not equal to List(List(ByteString(0))). After answerUntilAsked(root, 2) the next GetTrieNodes can be a child path, not the reseed. Timing race in the hand-answered rig. Constitution: deterministic tests. Passed on #1763 run."
+    notes: |-
+      CI 2026-11-08: Vector(List(ByteString(16))) was not equal to List(List(ByteString(0))). After answerUntilAsked(root, 2) the next GetTrieNodes can be a child path, not the reseed. Timing race in the hand-answered rig. Constitution: deterministic tests. Passed on #1763 run.
+      2026-11-24 done: fixed: HealNoWalkCompletionSpec counts root asks as they arrive, with a deadline
   - id: B-157
     title: "TypedTxConformanceSpec send-blob-tx fails locally in WSL: KZG computeCellsAndKzgProofs error (CI passes)"
     priority: P3
@@ -1427,7 +1471,9 @@ items:
     opened: 2026-11-09
     refs: [B-131]
     links: {}
-    notes: "From #1727 PR 5 (conduit): EthSimulateService runs request system calls only for Amsterdam blocks; geth runs PostExecution for every Prague block (simulate.go:499). Changes simulated requestsHash and state for Prague/Osaka; RPC only, not import. Many simulate tests on empty state will need the queue stubs (RequestContractStubs)."
+    notes: |-
+      From #1727 PR 5 (conduit): EthSimulateService runs request system calls only for Amsterdam blocks; geth runs PostExecution for every Prague block (simulate.go:499). Changes simulated requestsHash and state for Prague/Osaka; RPC only, not import. Many simulate tests on empty state will need the queue stubs (RequestContractStubs).
+      2026-11-24 do with B-180 (shared preamble); B-166's ordering fix lands there
   - id: B-164
     title: "EthashUtils.checkDifficulty: difficulty <= 0 is invalid and the target is computed as a BigInt (geth parity)"
     priority: P2
@@ -1441,13 +1487,16 @@ items:
   - id: B-166
     title: "eth_simulateV1 pre-Amsterdam: 4788/2935 writes happen before state overrides (stateDiff on those slots lands after); deposit logs parsed after queue calls"
     priority: P3
-    status: open
+    status: dropped
     area: rpc
     size: S
     opened: 2026-11-09
+    closed: 2026-11-24
     refs: [B-163]
     links: {}
-    notes: "beacon review of #1774: EthSimulateService.scala:534-552 writes 4788/2935 storage directly before overrides on Cancun/Prague/Osaka, so F15 relocations do not apply there and a stateDiff on those slots differs from geth. Also SimulatedBlockSystemCalls.requests runs queue calls before deposit-log parsing (geth :207 parses first). Add to CHANGELOG Known issues with B-163."
+    notes: |-
+      beacon review of #1774: EthSimulateService.scala:534-552 writes 4788/2935 storage directly before overrides on Cancun/Prague/Osaka, so F15 relocations do not apply there and a stateDiff on those slots differs from geth. Also SimulatedBlockSystemCalls.requests runs queue calls before deposit-log parsing (geth :207 parses first). Add to CHANGELOG Known issues with B-163.
+      2026-11-24 dropped: merged into B-180 (one fix)
   - id: B-169
     title: "Sepolia pre-merge block reward: sepolia-chain.conf sets every reward to 0 (since 404de9937); geth pays 2 ETH before block 1450409"
     priority: P2
@@ -1471,26 +1520,30 @@ items:
   - id: B-171
     title: "Tracer error text: route callTracer/prestate errors through CallErrors.vmErrorMessage (geth err.Error()); re-pin TraceGoldenSpec"
     priority: P2
-    status: open
+    status: dropped
     area: rpc
     size: S
     opened: 2026-11-09
+    closed: 2026-11-24
     refs: [B-133]
     links: {}
     notes: |-
-      beacon review of #1777: tracers print bare Scala names (VM.scala:141,291 -> CallTracer.scala:128). Also optional: a minStack member on ImmediateStackOp for geth stack-underflow text on DUPN/SWAPN/EXCHANGE (bucket C; text only, no consensus difference per execution-specs stack.py:229-237); do not raise delta.
       Includes B-136: CallTracer:77,105 match 'execution reverted', so revert reasons are never decoded.
       2026-11-17 priority P2: absorbs B-136 (P2)
+      2026-11-24 dropped: merged into B-026 (one fix)
   - id: B-172
     title: "eth_call/eth_estimateGas revert message lacks geth \": <reason>\" suffix; estimator lacks \"failed with %d gas:\" prefix; EIP-2681 nonce overflow text"
     priority: P2
-    status: open
+    status: dropped
     area: rpc
     size: S
     opened: 2026-11-09
+    closed: 2026-11-24
     refs: [B-133]
     links: {}
-    notes: "conduit review of #1777: EthInfoService.scala:614 omits the decoded revert reason (eth_simulateV1 adds it at EthSimulateService:1377; rpc-compat .io fixtures expect it). gasestimator.go:266 prefix missing for non-intrinsic pre-check errors (TypedCallPathSpec:491 pins unprefixed). No ProgramError for nonce uint64 overflow (falls to toString.toLowerCase, CallErrors:39)."
+    notes: |-
+      conduit review of #1777: EthInfoService.scala:614 omits the decoded revert reason (eth_simulateV1 adds it at EthSimulateService:1377; rpc-compat .io fixtures expect it). gasestimator.go:266 prefix missing for non-intrinsic pre-check errors (TypedCallPathSpec:491 pins unprefixed). No ProgramError for nonce uint64 overflow (falls to toString.toLowerCase, CallErrors:39).
+      2026-11-24 dropped: merged into B-026 (one fix)
   - id: B-173
     title: "PR 7a nits: GraphQL shortfall data 0x; trace endpoints carry no error for the deposit shortfall; guard blobBaseFee when blobGas 0; test defaulted supplied gas"
     priority: P3
@@ -1544,25 +1597,30 @@ items:
     links: {}
     notes: "beacon review of #1778: PrecompiledContracts.getContracts (~:192) has no isEthereum guard on the Olympia branch (ModExp has one); hive/fukuii/fukuii.sh:141 maps London to olympiaBlockNumber, so on hive ETH configs 0x0b-0x11 and 0x100 are active London..Prague. Pre-existing. beacon then forge."
   - id: B-180
-    title: eth_simulateV1 inline EIP-4788/EIP-2935 writes differ from import on ETH (4788 creates an absent account, 2935 self-deploys at Prague)
+    title: "eth_simulateV1 and trace replays apply import's block preamble (BlockExecution.applyBlockPreamble): 4788/2935/DAO, before overrides"
     priority: P2
     status: open
     area: rpc
     size: S
     opened: 2026-11-09
-    refs: [B-167]
+    refs: [B-167, B-181, B-166]
     links: {}
-    notes: "EthSimulateService.applyEip4788/applyEip2935 vs BlockExecution (no code: no change). Call BlockExecution.applyBlockPreamble/applyEip2935 instead. ETC Olympia fixed in B-167. beacon, conduit."
+    notes: |-
+      EthSimulateService.applyEip4788/applyEip2935 vs BlockExecution (no code: no change). Call BlockExecution.applyBlockPreamble/applyEip2935 instead. ETC Olympia fixed in B-167. beacon, conduit.
+      2026-11-24: absorbs B-181, B-166 (validation of 2026-11-24)
   - id: B-181
     title: "Trace replays (StxLedger.advanceWorldToTx) skip the pre-Amsterdam block preamble: DAO drain, EIP-4788, EIP-2935"
     priority: P2
-    status: open
+    status: dropped
     area: rpc
     size: S
     opened: 2026-11-09
+    closed: 2026-11-24
     refs: [B-167]
     links: {}
-    notes: Earlier txs of an ETC Olympia or ETH Cancun/Prague block replay on a state without the history/beacon writes, so a traced tx that reads them sees a different state. Use BlockExecution.applyBlockPreamble.
+    notes: |-
+      Earlier txs of an ETC Olympia or ETH Cancun/Prague block replay on a state without the history/beacon writes, so a traced tx that reads them sees a different state. Use BlockExecution.applyBlockPreamble.
+      2026-11-24 dropped: merged into B-180 (one fix)
   - id: B-182
     title: "PoW generator on ETH configs: apply London gas-limit elasticity at the fork block (parent < olympia <= block), as the validator expects"
     priority: P3
@@ -1614,7 +1672,9 @@ items:
     opened: 2026-11-09
     refs: [027 slice 4a pp run 2026-11-09]
     links: {}
-    notes: "E2EHandshakeSpec.scala:317 asserts the second peer has NOT synced within 3 s. FastSyncBranchResolverActorSpec: a different case fails on each run (7 s expectMsg timeouts), seen on origin/staging 5c77ecbbc. Neither is gated in CI (nightly only / SyncTest tier); see B-018, B-019."
+    notes: |-
+      E2EHandshakeSpec.scala:317 asserts the second peer has NOT synced within 3 s. FastSyncBranchResolverActorSpec: a different case fails on each run (7 s expectMsg timeouts), seen on origin/staging 5c77ecbbc. Neither is gated in CI (nightly only / SyncTest tier); see B-018, B-019.
+      2026-11-24 rescoped: FastSyncBranchResolver half is B-350; left: E2EHandshakeSpec:303-317 asserts peer2 has not synced after a 3 s sleep
   - id: B-189
     title: "Spec 027 UAT across all slices: the deferred manual gates (T029, T057, T081, T149 and slice 4/5 runs) on Mordor and a live TUI"
     priority: P2
@@ -1678,7 +1738,9 @@ items:
     opened: 2026-11-10
     refs: ["prism review of 027 slice 4, 2026-11-10"]
     links: {}
-    notes: network/PeerScore.scala recency term drifts idle scores; the TUI compares at 3 decimals. If drift per publish exceeds 0.001 every idle peer shows a down trend. herald owns; check in the B-189 UAT.
+    notes: |-
+      network/PeerScore.scala recency term drifts idle scores; the TUI compares at 3 decimals. If drift per publish exceeds 0.001 every idle peer shows a down trend. herald owns; check in the B-189 UAT.
+      2026-11-24 confirmed: recency steps 0.1/60 per minute > the TUI's 0.001 compare; round the term or compare at 2 dp
   - id: B-197
     title: eth_getBalance on pruned state answers code 3 "Execution error" (the revert code); geth answers missing state with -32000
     priority: P3
@@ -1728,7 +1790,9 @@ items:
     opened: 2026-11-11
     refs: ["prism review of 027 slice 5, 2026-11-10"]
     links: {}
-    notes: The TUI now filters non-finite scores (draws a dash, sorts last). The NaN source in network/PeerScore.scala is not fixed; herald owns.
+    notes: |-
+      The TUI now filters non-finite scores (draws a dash, sorts last). The NaN source in network/PeerScore.scala is not fixed; herald owns.
+      2026-11-24 user 2026-11-24: no NaN source found in PeerScore; add a property test (finite for all inputs), then close
   - id: B-203
     title: "Spec 018 C1 gates that wait for C0's pinned jar: M7 on the Mordor range (T033), roots against the jar (T025), DC-14 figures (T034)"
     priority: P2
@@ -1822,7 +1886,9 @@ items:
     refs: []
     links:
       spec: 018
-    notes: "beacon and conduit, review of C2b PR B (2026-11-11). Old behaviour (the tip check of getAccount(BestBranch, address, n)), kept on purpose by BlockchainReader.accountIn / accountProofIn so that C2b changes no RPC answer. It is also what answers the pending block with the empty account. Better: answer from the held state, or with an error. Decide with conduit; hive rpc-compat does not exercise it."
+    notes: |-
+      beacon and conduit, review of C2b PR B (2026-11-11). Old behaviour (the tip check of getAccount(BestBranch, address, n)), kept on purpose by BlockchainReader.accountIn / accountProofIn so that C2b changes no RPC answer. It is also what answers the pending block with the empty account. Better: answer from the held state, or with an error. Decide with conduit; hive rpc-compat does not exercise it.
+      2026-11-24 user 2026-11-24: follow core-geth's answers for a held block above best (by number and by hash); conduit + beacon
   - id: B-211
     title: "RPC: GraphQL call and estimateGas reach EthInfoService without the controller, so without the stale-view retry (StateRead.request)"
     priority: P3
@@ -1877,13 +1943,16 @@ items:
   - id: B-215
     title: SubscriptionManagerSpec 'push newHeads notification' times out under full-suite load (a 5 s Await on a pub/sub delivery)
     priority: P3
-    status: open
+    status: done
     area: ci
     size: S
     opened: 2026-11-11
+    closed: 2026-11-24
     refs: []
     links: {}
-    notes: "Failed once in a full testEssential run in a cloud container (TimeoutException: Future timed out after [5 seconds], SubscriptionManagerSpec.scala:216); passes 3 of 3 run alone. A timed wait on an actor delivery: against the constitution's rule that tests are deterministic. Seen during spec 018 C2b; not touched by it."
+    notes: |-
+      Failed once in a full testEssential run in a cloud container (TimeoutException: Future timed out after [5 seconds], SubscriptionManagerSpec.scala:216); passes 3 of 3 run alone. A timed wait on an actor delivery: against the constitution's rule that tests are deterministic. Seen during spec 018 C2b; not touched by it.
+      2026-11-24 done: fixed by #1994: each SubscriptionManagerSpec test has its own topic names
   - id: B-216
     title: "Spec 018 C5a: what the SNAP controller does when a validation walk ends in a state fault (StateValidationModule reopens healing for any Left but a missing root)"
     priority: P2
@@ -2321,23 +2390,28 @@ items:
   - id: B-278
     title: "miner_start / miner_stop answer success when no miner exists (mining disabled, or an Engine API node): nothing starts or stops"
     priority: P2
-    status: open
+    status: dropped
     area: rpc
     size: S
     opened: 2026-11-14
+    closed: 2026-11-24
     refs: []
     links: {}
-    notes: Found mapping services for spec 029 slice 7. EthMiningService.startMiner/stopMiner are gated by mining.ifEthash only; MiningBuilder builds PoWMining for every protocol, and the coordinator is spawned only when miningEnabled. sendMiner is fire-and-forget, so with no coordinator the call returns Right(true) having done nothing. getMining's isMining means 'an external miner called recently', not the internal miner's state.
+    notes: |-
+      Found mapping services for spec 029 slice 7. EthMiningService.startMiner/stopMiner are gated by mining.ifEthash only; MiningBuilder builds PoWMining for every protocol, and the coordinator is spawned only when miningEnabled. sendMiner is fire-and-forget, so with no coordinator the call returns Right(true) having done nothing. getMining's isMining means 'an external miner called recently', not the internal miner's state.
+      2026-11-24 dropped: merged into B-279 (one fix)
   - id: B-279
-    title: "miner_stop is permanent until restart: the coordinator actor ends and miner_start then messages a dead actor, answering success"
+    title: "Miner control has real state: error when no coordinator exists, respawn after miner_stop, track whether the internal miner runs"
     priority: P2
     status: open
     area: rpc
     size: M
     opened: 2026-11-14
-    refs: []
+    refs: [B-278]
     links: {}
-    notes: "forge, spec 029 slice 7 analysis. PoWMiningCoordinator StopMining returns Behaviors.stopped (PoWMiningCoordinator.scala:103-105); PoWMining.minerCoordinatorRef is never cleared and startMiningProcess runs once at boot (PoWMining.scala:71,107), so a later StartMining/SetMiningMode is dropped. Also nothing records whether the internal miner runs: EthMiningService.isMining is 'someone reported a hashrate recently' and lags both ways. Related: B-278. The TUI will refuse 'mining start' and say why, and treat 'mining stop' as lasting until restart."
+    notes: |-
+      forge, spec 029 slice 7 analysis. PoWMiningCoordinator StopMining returns Behaviors.stopped (PoWMiningCoordinator.scala:103-105); PoWMining.minerCoordinatorRef is never cleared and startMiningProcess runs once at boot (PoWMining.scala:71,107), so a later StartMining/SetMiningMode is dropped. Also nothing records whether the internal miner runs: EthMiningService.isMining is 'someone reported a hashrate recently' and lags both ways. Related: B-278. The TUI will refuse 'mining start' and say why, and treat 'mining stop' as lasting until restart.
+      2026-11-24: absorbs B-278 (validation of 2026-11-24)
   - id: B-281
     title: "RocksDbDataSource: a manual compaction that does not hold the database lock (compactionGuard, per family, cancellable), then the TUI's compact action"
     priority: P2
@@ -2363,7 +2437,9 @@ items:
     opened: 2026-11-15
     refs: []
     links: {}
-    notes: Recorded by forge at spec 018 C4e; pre-existing on both layouts; a decision, not a defect to fix silently.
+    notes: |-
+      Recorded by forge at spec 018 C4e; pre-existing on both layouts; a decision, not a defect to fix silently.
+      2026-11-24 user 2026-11-24: adopt core-geth's tie rule (equal TD: lower number, then random); consensus protocol, forge first
   - id: B-285
     title: StorageConsistencyChecker never reads the best block's own entry, and best.intValue wraps past 2^31-1
     priority: P3
@@ -2382,16 +2458,18 @@ items:
   - id: B-286
     title: "The blocked-ips configuration key is documented on BlockedIPRegistry and never read: the list starts empty"
     priority: P3
-    status: open
+    status: dropped
     area: p2p
     size: S
     opened: 2026-11-15
+    closed: 2026-11-24
     refs: []
     links:
       spec: specs/029-tui-command-center
     notes: |-
       NodeBuilder builds BlockedIPRegistry(Set.empty). admin_blockIP and the TUI's peer block work since B-277, until restart only.
       Read the key at start, validate each address with AdminService.canonicalIp, and say in the TUI's tunables that the block is configured.
+      2026-11-24 dropped: merged into B-288 (one fix)
   - id: B-287
     title: "TUI net report does not say the UPnP state: whether a port mapping was asked for, and whether the gateway gave it"
     priority: P3
@@ -2406,18 +2484,19 @@ items:
       contracts/actions.md listed UPnP state under net. NetworkAddressInfo keeps the detected address and its step, not the mapping's outcome.
       PortForwarder would have to record it.
   - id: B-288
-    title: "Operator IP block does not reach discovery: UDP packets to and from a blocked address still flow"
+    title: "Operator IP block: read the blocked-ips config at start, and enforce the block in discovery (UDP)"
     priority: P3
     status: open
     area: p2p
     size: M
     opened: 2026-11-15
-    refs: []
+    refs: [B-286]
     links:
       spec: specs/029-tui-command-center
     notes: |-
       B-277 blocks RLPx dial and accept through OperatorBlockingBlacklist. Discovery (scalanet) has no hook for it.
       The TUI's peer block preview says so.
+      2026-11-24: absorbs B-286 (validation of 2026-11-24)
   - id: B-291
     title: "A reorg that keeps a heavier prefix then meets an invalid block: the chain it left is not queued again, the pool not told"
     priority: P2
@@ -2725,12 +2804,15 @@ items:
   - id: B-335
     title: "FastSyncBranchResolverActorSpec flakes under load: a 7 s expectMsg times out (about 1 run in 3 on staging with a second build running)"
     priority: P3
-    status: open
+    status: dropped
     area: tests
     opened: 2026-11-17
+    closed: 2026-11-24
     refs: []
     links: {}
-    notes: "Seen 2026-11-17 on staging 9b2fcf0fe: 'highest common block is in the first half' and 'No common block is found' each failed once. Find what the actor waits on; no sleeps"
+    notes: |-
+      Seen 2026-11-17 on staging 9b2fcf0fe: 'highest common block is in the first half' and 'No common block is found' each failed once. Find what the actor waits on; no sleeps
+      2026-11-24 dropped: duplicate of B-350 (same spec and cases; B-350 has the root cause)
   - id: B-336
     title: A partial extension's local state fault drops the failing block from the queue as invalid, and loses the escalation (ExtendedCurrentBestBranchPartially)
     priority: P2
@@ -2936,7 +3018,9 @@ items:
     refs: []
     links:
       spec: "016"
-    notes: "Seen on B-349 (#1912): 5 full runs, 2 with one failure each, a different test each time; 'save fetched node' also fails on plain staging. Fixed waits (fishForSpecificMessage 5 s, a 1 ms deadline) race a loaded machine. Find each wait and synchronise on the event instead; never skip."
+    notes: |-
+      Seen on B-349 (#1912): 5 full runs, 2 with one failure each, a different test each time; 'save fetched node' also fails on plain staging. Fixed waits (fishForSpecificMessage 5 s, a 1 ms deadline) race a loaded machine. Find each wait and synchronise on the event instead; never skip.
+      2026-11-24 rescoped: ancestor-bodies deadline fixed by #2015; left: 'save fetched node' (untagged, runs in testEssential)
   - id: B-353
     title: "CI: a commit pushed by the 'Apply scalafmt' workflow starts no CI, so the PR's head has no checks"
     priority: P3
@@ -3116,13 +3200,16 @@ items:
   - id: B-366
     title: "Spec 030 S9 follow-up: AllowlistThreeNodeItSpec (T081): A, B, C on a dev chain, C refused, A never dials C"
     priority: P2
-    status: open
+    status: done
     area: network
     opened: 2026-11-18
+    closed: 2026-11-24
     refs: []
     links:
       spec: 030-zero-trust-tls
-    notes: S9 covered at RLPx handshake + PeerManager level with TestKit; the three-node IntegrationTest of SC-005 was not written.
+    notes: |-
+      S9 covered at RLPx handshake + PeerManager level with TestKit; the three-node IntegrationTest of SC-005 was not written.
+      2026-11-24 done: user 2026-11-24: T081 met by dev-node's manual three-node run; no automated IT
   - id: B-367
     title: "Spec 030 S9 follow-up: swap NodeAllowlistStore.schedule for tls/FilePoller when S4 merges (T082)"
     priority: P3
@@ -3223,9 +3310,9 @@ items:
     links:
       prs: [1927]
     notes: |-
-      Seen 2026-11-18 on #1916 (LookupsSpec) and #1921 (both), unrelated diffs; both pass locally 2/2 on the same heads. LookupsSpec uses PatienceConfig(5 s) eventually throughout. Synchronise on the event instead of a timeout; never skip.
       2026-11-18 in-progress: LookupsSpec race fixed in #1927 (waited on a count true part-way). Left: EngineApiHttpServerObservationSpec and JsonRpcHttpServerLifecycleSpec each failed once on CI 2026-11-18 (#1921); capture their failure text from the full job log (logs_url, not the 5000-line tail) when they recur.
       2026-11-24 released by cloud-dc960fdc: not being worked by this session; open for anyone
+      2026-11-24 e1b5790b0 (the ObservationSpec wait, B-423) is on main only: cherry-pick to staging; JsonRpcHttpServerLifecycleSpec left
   - id: B-375
     title: "B-065 follow-up: compare the recovery scans' verdicts with the pinned 0.12.1 jar's (T214 oracle)"
     priority: P2
@@ -3404,12 +3491,15 @@ items:
   - id: B-387
     title: "JwtAuthenticatorSpec: audit Engine API specs for clock-boundary races (iat at the 60 s skew edge)"
     priority: P3
-    status: open
+    status: dropped
     area: engine-api
     opened: 2026-11-18
+    closed: 2026-11-24
     refs: []
     links: {}
-    notes: "Seen on #1941: iat = now + 61 accepted when a second ticked between the test's clock read and the authenticator's. Fixed there with 120 s; other time-window specs not yet audited."
+    notes: |-
+      Seen on #1941: iat = now + 61 accepted when a second ticked between the test's clock read and the authenticator's. Fixed there with 120 s; other time-window specs not yet audited.
+      2026-11-24 dropped: merged into B-419 (one fix)
   - id: B-388
     title: "Olympia treasury: blockchains.conf d6165F3a... differs from ECIP-1112 0x60d0A739... in forge.md; verify against local ECIP-1112"
     priority: P2
@@ -3805,13 +3895,16 @@ items:
   - id: B-416
     title: "scalanetDiscovery tests fail on staging: V5DemuxResponderSpec ClaimedReply x2, codec 'cannot acquire 64 bits' x3"
     priority: P2
-    status: open
+    status: dropped
     area: network
     opened: 2026-11-21
+    closed: 2026-11-24
     refs: []
     links:
       spec: none
-    notes: "Found by B-415: 5 failures in scalanetDiscovery / test on origin/staging a164090a9 with and without the log-volume change."
+    notes: |-
+      Found by B-415: 5 failures in scalanetDiscovery / test on origin/staging a164090a9 with and without the log-volume change.
+      2026-11-24 dropped: merged into B-021 (one fix)
   - id: B-417
     title: "CI: scalafix-cli fetch fails transiently (Failed to fetch scalafix-cli_3.9.0:0.14.9) and fails Test and Build; cache it or retry"
     priority: P3
@@ -3835,15 +3928,17 @@ items:
       prs: [1980]
       branch: ccr-5b6106a7-stx0ft
   - id: B-419
-    title: "Engine API JWT: reject a token whose optional exp claim has passed (geth VerifyExpiresAt parity)"
+    title: "Engine API JWT: reject an expired exp (geth VerifyExpiresAt); audit specs for clock-edge races"
     priority: P2
     status: open
     area: rpc
     size: S
     opened: 2026-11-21
-    refs: [B-418]
+    refs: [B-418, B-387]
     links: {}
-    notes: "Found in beacon review of PR #1980. fukuii ignores exp; geth rejects expired exp. JwtAuthenticatorSpec covers only a future exp."
+    notes: |-
+      Found in beacon review of PR #1980. fukuii ignores exp; geth rejects expired exp. JwtAuthenticatorSpec covers only a future exp.
+      2026-11-24: absorbs B-387 (validation of 2026-11-24)
   - id: B-420
     title: "Marketing agent (herald-of-releases) and release-announcement skill: Discord post, release card, spec blog posts"
     priority: P3
