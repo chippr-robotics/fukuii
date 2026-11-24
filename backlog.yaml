@@ -2067,12 +2067,17 @@ items:
   - id: B-218
     title: SyncControllerSpec 'leave SNAP's resume alone once SNAP has taken over...' fails when the spec is run alone
     priority: P3
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-11
     refs: []
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T15:39:42Z
+      heartbeat: 2026-11-24T15:39:42Z
     notes: "sbt 'testOnly *SyncControllerSpec': 149 pass, that one fails (isSnapSyncAccountsComplete was false, SyncControllerSpec.scala:1182), 3 of 3, at 80e1fef7c (#1797's head) and after. In the full testEssential run of the same tree it passed (767 suites, 2026-11-11 15:39Z), and CI's Test and Build was green on that head. Order- or environment-dependent: something another suite does, or leaves behind, decides it. Found during spec 018 C2b; not touched by it."
   - id: B-219
     title: "MinedBlockOnPositionsSpec: an Olympia block (base fee to the Treasury) on Mordor's configuration (forge)"
