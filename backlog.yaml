@@ -4622,22 +4622,18 @@ items:
   - id: B-463
     title: "Race before the hold: a block committed on the settled head between ConsensusImpl reading oldHead and opening withRecordsHeld"
     priority: P3
-    status: review
+    status: done
     area: state
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2063]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T08:03:27Z
-      heartbeat: 2026-11-24T08:26:25Z
     notes: |-
-      2026-11-24 in-progress: forge agent, clone-d, per forge ruling
       2026-11-24 in-progress: pushed 0e5a7bf9aa; severity higher than written: without the check a heavier block in the window led to adopting the lighter branch (self-corrects next block). beacon confirming StateRecovery anchor
       2026-11-24 review: beacon APPROVE
+      2026-11-24 done: merged
   - id: B-464
     title: "StateRecovery: moveBack after an invalid branch or local fault skips the asked() check and may undo a fork choice in flight"
     priority: P3
