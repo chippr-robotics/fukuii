@@ -266,7 +266,11 @@ class AdminService(
     // Spec 030 FR-052: admin_addPeer and admin_addTrustedPeer refuse a node that is not on the allowlist.
     allowlist: NodeAllowlist = NodeAllowlist.Disabled,
     // Spec 030 FR-056: the store the admin_ allowlist edits persist through; None where the allowlist is off.
-    allowlistStore: Option[com.chipprbots.ethereum.network.NodeAllowlistStore] = None
+    allowlistStore: Option[com.chipprbots.ethereum.network.NodeAllowlistStore] = None,
+    // B-093: the name admin_nodeInfo gives (go-ethereum: the node's client id, as its Hello says it), and where
+    // admin_peers learns each peer's own (the Hello clientId the handshake read). None: the peers' names are not known.
+    clientId: String = "fukuii",
+    networkPeerManager: Option[typed.ActorRef[com.chipprbots.ethereum.network.NetworkPeerManagerActor.Command]] = None
 )(implicit scheduler: typed.Scheduler)
     extends Logger:
   import AdminService.*
@@ -339,7 +343,7 @@ class AdminService(
             id = nodeId,
             ip = Some(host),
             listenAddr = Some(listenAddr),
-            name = "fukuii/v0.1",
+            name = clientId,
             ports = Map("listener" -> port, "discovery" -> port),
             protocols = Map("eth" -> ethInfo),
             activeFork = fork
@@ -352,7 +356,7 @@ class AdminService(
             id = nodeId,
             ip = None,
             listenAddr = None,
-            name = "fukuii/v0.1",
+            name = clientId,
             ports = Map.empty,
             protocols = Map("eth" -> ethInfo),
             activeFork = fork
@@ -364,13 +368,27 @@ class AdminService(
     * PeerManagerActor.GetPeers instead (actor-based P2P, no EthPeers).
     */
   def peers(@unused req: AdminPeersRequest): ServiceResponse[AdminPeersResponse] =
+    // go-ethereum's `name` is the peer's Hello clientId; a peer still handshaking has none yet and is named by address.
+    val clientIds: IO[Map[com.chipprbots.ethereum.network.PeerId, String]] = networkPeerManager match
+      case None => IO.pure(Map.empty)
+      case Some(npm) =>
+        npm
+          .askForTyped[com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers](
+            com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd(_)
+          )
+          .map(_.peers.map { case (p, info) => p.id -> info.remoteStatus.remoteClientId })
+          .handleError(_ => Map.empty)
     peerManager
       .askForTyped[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_))
-      .map { peersResult =>
+      .flatMap(peersResult => clientIds.map(names => (peersResult, names)))
+      .map { (peersResult, names) =>
         val peerInfos = peersResult.peers.map { case (peer, _) =>
           AdminPeerInfo(
             id = peer.nodeId.map(bs => Hex.toHexString(bs.toArray)).getOrElse(peer.id.value),
-            name = s"fukuii-peer/${peer.remoteAddress}",
+            name = names
+              .get(peer.id)
+              .filter(_.nonEmpty)
+              .getOrElse(s"fukuii-peer/${peer.remoteAddress.getHostString}:${peer.remoteAddress.getPort}"),
             remoteAddress = peer.remoteAddress.toString,
             inbound = peer.incomingConnection
           )

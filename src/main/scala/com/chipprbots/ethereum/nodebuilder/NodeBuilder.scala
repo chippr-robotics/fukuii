@@ -1013,7 +1013,7 @@ trait ApisBuilder extends ApisBase:
 trait AdminServiceBuilder:
   this: PeerManagerActorBuilder & NodeStatusBuilder & BlockchainBuilder & BlockchainConfigBuilder &
     InstanceConfigProvider & ActorSystemBuilder & ConsensusBuilder & SyncControllerRefBuilder & BlacklistBuilder &
-    NodeAllowlistBuilder =>
+    NodeAllowlistBuilder & NetworkPeerManagerActorBuilder =>
 
   lazy val adminService: AdminService = new AdminService(
     nodeStatusHolder,
@@ -1035,6 +1035,8 @@ trait AdminServiceBuilder:
         scheduler = classicSystem.toTyped.scheduler
       )
     ,
+    clientId = instanceConfig.clientId,
+    networkPeerManager = Some(networkPeerManager),
     peerLimitsConfig = Some(
       AdminService.PeerLimits(
         minOutgoing = peerConfiguration.minOutgoingPeers,
