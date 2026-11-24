@@ -1699,17 +1699,18 @@ items:
   - id: B-190
     title: "Check AccountTrieAssembly's failed-store requeue: the task re-queues with next already advanced past the response"
     priority: P2
-    status: claimed
+    status: review
     area: snap
     size: S
     opened: 2026-11-10
     refs: ["prism review of B-044, 2026-11-10"]
-    links: {}
+    links:
+      prs: [2046]
     claim:
       by: cloud-719c6644
       agent: vault
       since: 2026-11-24T04:39:01Z
-      heartbeat: 2026-11-24T04:39:01Z
+      heartbeat: 2026-11-24T06:21:51Z
       branch: fix/b190-account-store-fault
     notes: AccountTrieAssembly.scala:287-291 catch branch in handleStoreAccountChunk. If next was advanced before the store failed, the unstored tail may be skipped until healing. Unverified; vault/forge to confirm (trie assembly).
   - id: B-191
