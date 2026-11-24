@@ -117,7 +117,7 @@ class SimulatedBlockSystemCallsSpec extends AnyFlatSpec with Matchers with Amste
       world: InMemoryWorldStateProxy,
       relocations: Map[Address, Address]
   ): InMemoryWorldStateProxy =
-    SimulatedBlockSystemCalls.amsterdamPreamble(amsterdamBlock, world, None, relocations)(using amsterdamConfig)
+    SimulatedBlockSystemCalls.preamble(amsterdamBlock, world, None, relocations)(using amsterdamConfig)
 
   // ---- F13: an empty request contract fails the simulated block ----
 

@@ -44,8 +44,9 @@ import com.chipprbots.ethereum.vm.PrestateTracer
   * EIP-2935 contracts, so the preamble writes storage. Each replay is checked against block execution: gas per
   * transaction, the gas the tracer reports, and the state root after every transaction.
   *
-  * A block before Amsterdam, and an ETC block, replays exactly as before: `replayTransaction` is the bare VM of
-  * `simulateTransaction`, result for result.
+  * A block before Amsterdam, and an ETC block, replays each transaction exactly as before: `replayTransaction` is the
+  * bare VM of `simulateTransaction`, result for result. Since B-180 every replay starts after the block's preamble,
+  * which import runs (`BlockExecution.applyBlockPreamble`): before Amsterdam the EIP-4788 / EIP-2935 direct writes.
   */
 // scalastyle:off magic.number
 class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamFixtureVectors:
@@ -291,21 +292,41 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
     (a.gasUsed, a.logs, a.vmReturnData, a.vmError, a.worldState.stateRootHash) shouldBe
       (b.gasUsed, b.logs, b.vmReturnData, b.vmError, b.worldState.stateRootHash)
 
-  "Replaying a block before Amsterdam" should "be the bare VM, exactly as before" taggedAs (UnitTest, StateTest) in
-    (new Chain(amsterdamConfig):
-      val osaka: BlockHeader = preAmsterdamHeader(46, 300)
-      val stxs: Seq[SignedTransactionWithSender] = withSenders(txs.take(1) :+ txs(3))
-      // No preamble before the first transaction, and each earlier one replayed on the bare VM.
-      ledger.advanceWorldToTx(osaka, stxs, 0, parentHeader).stateRootHash shouldBe parent.stateRootHash
-      stxs.foreach { stx =>
-        sameResult(
-          ledger.replayTransaction(stx, osaka, parent, tracer = None),
-          ledger.simulateTransaction(stx, osaka, parent)
-        )
-      }
-      // The floor-bound call reports its execution gas, not the floor, as every pre-Amsterdam replay did.
-      ledger.replayTransaction(stxs.head, osaka, parent, tracer = None).gasUsed shouldBe BigInt(37000)
-    )
+  "Replaying a block before Amsterdam" should "replay each transaction on the bare VM, exactly as before" taggedAs (
+    UnitTest,
+    StateTest
+  ) in (new Chain(amsterdamConfig):
+    val osaka: BlockHeader = preAmsterdamHeader(46, 300)
+    val stxs: Seq[SignedTransactionWithSender] = withSenders(txs.take(1) :+ txs(3))
+    stxs.foreach { stx =>
+      sameResult(
+        ledger.replayTransaction(stx, osaka, parent, tracer = None),
+        ledger.simulateTransaction(stx, osaka, parent)
+      )
+    }
+    // The floor-bound call reports its execution gas, not the floor, as every pre-Amsterdam replay did.
+    ledger.replayTransaction(stxs.head, osaka, parent, tracer = None).gasUsed shouldBe BigInt(37000)
+  )
+
+  // B-180 (was B-181): a replay before Amsterdam starts where block import starts its first transaction, after the
+  // block's preamble (BlockExecution.applyBlockPreamble): the EIP-4788 and EIP-2935 direct storage writes. It used to
+  // start on the parent's state, so a traced transaction that read either contract saw the parent's slots.
+  it should "start from the parent's state with import's EIP-4788 / EIP-2935 preamble applied" taggedAs (
+    UnitTest,
+    StateTest
+  ) in (new Chain(amsterdamConfig):
+    val osaka: BlockHeader = preAmsterdamHeader(46, 300).copy(parentHash = header.parentHash)
+    val world: InMemoryWorldStateProxy = ledger.advanceWorldToTx(osaka, withSenders(txs), 0, parentHeader)
+    // timestamp 300 -> slots 300 and 300 + 8191 (a zero root); block 46 -> history slot 45.
+    world.getStorage(BlockExecution.BeaconRootContractAddress).load(UInt256(300)) shouldBe BigInt(300)
+    world.getStorage(BlockExecution.HistoryStorageAddress).load(UInt256(45)) shouldBe
+      BigInt(1, osaka.parentHash.value.toArray)
+    parent.getStorage(BlockExecution.BeaconRootContractAddress).load(UInt256(300)) shouldBe BigInt(0)
+    // the state import executes the block's first transaction on, to the byte
+    InMemoryWorldStateProxy.persistState(world).stateRootHash shouldBe
+      InMemoryWorldStateProxy.persistState(executed(osaka, Nil).worldState).stateRootHash
+    InMemoryWorldStateProxy.persistState(world).stateRootHash should not be parent.stateRootHash
+  )
 
   "Replaying an ETC block" should "be the bare VM, exactly as before" taggedAs (UnitTest, StateTest, OlympiaTest) in
     (new Chain(Config.blockchains.blockchainConfig):

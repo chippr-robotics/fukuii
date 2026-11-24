@@ -533,14 +533,6 @@ class EthSimulateService(
     val amsterdam = blockchainConfig.isAmsterdamTimestamp(simHeader.unixTimestamp)
     val accessList = Option.when(amsterdam)(new BlockAccessListBuilder)
 
-    // Before Amsterdam, unchanged: the EIP-4788 / EIP-2935 direct storage writes, then the state overrides.
-    if !amsterdam then
-      // Apply EIP-4788: store parent beacon block root in system contract
-      if blockchainConfig.isCancunTimestamp(simHeader.unixTimestamp) then world = applyEip4788(simHeader, world)
-
-      // Apply EIP-2935: store parent block hash in history storage
-      if blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp) then world = applyEip2935(simHeader, world)
-
     // Apply state overrides and build precompile relocations. The precompiles are this block's own: go-ethereum builds
     // them per block from the block's header (simulate.go:366), so a move or a deletion lasts for its block only.
     var precompileRelocations = Map.empty[Address, Address]
@@ -552,21 +544,24 @@ class EthSimulateService(
         case Left(err) => break(Left(err))
     }
 
-    // Amsterdam: "State overrides [...] are applied to the pre-state before the pre-execution system calls run. They
-    // are not recorded in the block access list at any index." So the overridden world is index 0's starting point,
-    // and the EIP-4788 / EIP-2935 calls run as the real block's system calls, recording at index 0.
-    if amsterdam then
-      val beforePreamble = InMemoryWorldStateProxy.persistState(world)
-      val preambleReads = new BlockAccessRecorder
-      val afterPreamble =
-        SimulatedBlockSystemCalls.amsterdamPreamble(
-          simHeader,
-          beforePreamble,
-          Some(preambleReads),
-          precompileRelocations
-        )
-      accessList.foreach(_.addIndex(0L, preambleReads, beforePreamble, afterPreamble))
-      world = afterPreamble
+    // The block's preamble, by block import's own code (BlockExecution.applyBlockPreamble, through
+    // SimulatedBlockSystemCalls.preamble; proposer-import-parity.md Rule 2): the DAO fork block's drain, then EIP-4788
+    // and EIP-2935, which are direct storage writes before Amsterdam and system calls from it. Like import, it does
+    // nothing at a system contract with no code: it neither creates the account nor deploys the contract (ETC's Olympia
+    // deploys the history contract, as import does).
+    //
+    // It runs AFTER the state overrides, on the world they left: go-ethereum's processBlock applies
+    // `StateOverrides.Apply` and then runs ProcessBeaconBlockRoot / ProcessParentBlockHash on the EVM it built
+    // (simulate.go), and for Amsterdam execution-apis says "State overrides [...] are applied to the pre-state before
+    // the pre-execution system calls run. They are not recorded in the block access list at any index." So a
+    // `stateDiff` on a slot the preamble writes is overwritten by it, as in geth. On Amsterdam the overridden world is
+    // persisted first: it is block access index 0's starting point, and the system calls record at index 0.
+    world = SimulatedBlockSystemCalls.preamble(
+      simHeader,
+      if amsterdam then InMemoryWorldStateProxy.persistState(world) else world,
+      accessList,
+      precompileRelocations
+    )
 
     // Execute calls (pass through any blob base fee override from blockOverrides)
     val execResult = executeCalls(
@@ -1421,56 +1416,6 @@ class EthSimulateService(
       )
     )
   }
-
-  /** EIP-4788: Store the parent beacon block root in the beacon root system contract */
-  private def applyEip4788(
-      blockHeader: BlockHeader,
-      world: InMemoryWorldStateProxy
-  ): InMemoryWorldStateProxy =
-    import com.chipprbots.ethereum.ledger.BlockExecution.*
-    blockHeader.parentBeaconBlockRoot match
-      case Some(beaconRoot) =>
-        // Must match BlockExecution.applyEip4788 exactly, or eth_simulateV1 becomes an
-        // oracle that disagrees with real execution. See the note there.
-        val timestamp = blockHeader.unixTimestamp.toUInt256
-        val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
-        val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
-        val account = world
-          .getAccount(BeaconRootContractAddress)
-          .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-        val w1 =
-          if !world.getAccount(BeaconRootContractAddress).isDefined then
-            world.saveAccount(BeaconRootContractAddress, account)
-          else world
-        val storage = w1.getStorage(BeaconRootContractAddress)
-        val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
-        val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot.value).toBigInt)
-        w1.saveStorage(BeaconRootContractAddress, s2)
-      case None => world
-
-  /** EIP-2935: Store parent block hash in history storage contract */
-  private def applyEip2935(
-      blockHeader: BlockHeader,
-      world: InMemoryWorldStateProxy
-  ): InMemoryWorldStateProxy =
-    import com.chipprbots.ethereum.ledger.BlockExecution.*
-    val blockNumber = blockHeader.number.value
-    // Deploy history storage contract if not already deployed
-    val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
-      val account = world
-        .getAccount(HistoryStorageAddress)
-        .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-        .copy(nonce = UInt256(1))
-      world
-        .saveAccount(HistoryStorageAddress, account)
-        .saveCode(HistoryStorageAddress, HistoryStorageCode)
-    else world
-    // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
-    val parentHashValue = UInt256(blockHeader.parentHash.value)
-    val slot = (blockNumber - 1) % HistoryServeWindow
-    val storage = w1.getStorage(HistoryStorageAddress)
-    val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
-    w1.saveStorage(HistoryStorageAddress, updatedStorage)
 
   /** EIP-1559: Compute the base fee for the next block */
   private def computeNextBaseFee(parentHeader: BlockHeader): BigInt =

@@ -12,6 +12,8 @@ import com.chipprbots.ethereum.db.storage.MptStorageDecorator
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlobTransaction
+import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.GasAmount
@@ -185,9 +187,16 @@ class StxLedger(
     * @param blockHeader
     *   block header containing the transactions
     * @param txs
-    *   all transactions in the block with recovered sender addresses
+    *   all transactions in the block with recovered sender addresses Every block, on every fork and both chains, starts
+    *   from the parent's state with the block's preamble applied, by the code block import runs
+    *   ([[BlockExecution.applyBlockPreamble]]): the DAO fork block's drain, then EIP-4788 and EIP-2935 (direct storage
+    *   writes before Amsterdam, system calls from it; ETC writes EIP-2935 from Olympia). Before B-180 only an Amsterdam
+    *   replay ran it, so a traced transaction of a Cancun, Prague or Osaka block, of ETH's DAO fork block or of an ETC
+    *   Olympia block saw the parent's beacon-root and history slots (and balances), not the block's. ETC declares no
+    *   DAO refund contract, so on ETC the drain moves nothing.
+    *
     * @param txIndex
-    *   index of the target transaction (0-based); returns parent state if 0
+    *   index of the target transaction (0-based); 0 gives the parent's state with the block's preamble applied
     * @param parentHeader
     *   the parent block: the replay starts from its state, taken as a scratch state of that block (not of
     *   `blockHeader`, whose state is the one the replay arrives at)
@@ -200,6 +209,7 @@ class StxLedger(
       txIndex: Int,
       parentHeader: BlockHeader
   ): InMemoryWorldStateProxy =
+    val preambleBlock = Block(blockHeader, BlockBody.empty) // the preamble reads the header alone
     if !blockchainConfig.isAmsterdamTimestamp(blockHeader.unixTimestamp) then
       val world0 = InMemoryWorldStateProxy(
         evmCodeStorage = evmCodeStorage,
@@ -210,12 +220,14 @@ class StxLedger(
         noEmptyAccounts = EvmConfig.forBlock(blockHeader.number.value, blockchainConfig).noEmptyAccounts,
         ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
       )
-      (0 until txIndex).foldLeft(world0) { (world, i) =>
+      val afterPreamble =
+        BlockExecution.applyBlockPreamble(preambleBlock, blockHeader.number.value, world0, accessList = None)
+      (0 until txIndex).foldLeft(afterPreamble) { (world, i) =>
         simulateTransaction(txs(i), blockHeader, world).worldState
       }
     else
-      // Amsterdam: the state block execution had before `txs(txIndex)`. The parent's state, then the block's EIP-4788 /
-      // EIP-2935 preamble (system calls from Amsterdam, as BlockExecution runs them), then each earlier transaction
+      // Amsterdam: the state block execution had before `txs(txIndex)`. The parent's state, then the block's preamble
+      // (the EIP-4788 / EIP-2935 system calls from Amsterdam, as BlockExecution runs them), then each earlier transaction
       // replayed as block import executed it. BLOCKHASH walks the block's own ancestry, as in block execution
       // (BlockExecution.buildInitialWorld), which matters when the block being traced is not canonical.
       val world0 = InMemoryWorldStateProxy(
@@ -227,7 +239,8 @@ class StxLedger(
         noEmptyAccounts = EvmConfig.forBlock(blockHeader.number.value, blockchainConfig).noEmptyAccounts,
         ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
       )
-      val afterPreamble = BlockExecution.applyAmsterdamPreambleSystemCalls(blockHeader, world0, accessRecorder = None)
+      val afterPreamble =
+        BlockExecution.applyBlockPreamble(preambleBlock, blockHeader.number.value, world0, accessList = None)
       (0 until txIndex).foldLeft(afterPreamble) { (world, i) =>
         replayTransaction(txs(i), blockHeader, world, tracer = None).worldState
       }
