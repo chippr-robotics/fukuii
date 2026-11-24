@@ -588,9 +588,9 @@ class ConsensusImpl(
     *
     * The branch a consensus layer designates (`!selectedByWeight`, never on ETC; C4e part 5) is executed on layers as a
     * heavier one is, and becomes the head by one move when the whole of it is valid and still leads to the head the
-    * consensus layer names. An invalid block of it leaves the head where it was (the hash layout makes the valid prefix
-    * the head). It is never committed in place here: a branch longer than the executed blocks kept, or one that forks
-    * below the views, is the fork choice's recovery's (`StateRecovery`), and is not judged.
+    * consensus layer names. An invalid block of it leaves the head where it was, as on the hash layout since B-505. It
+    * is never committed in place here: a branch longer than the executed blocks kept, or one that forks below the
+    * views, is the fork choice's recovery's (`StateRecovery`), and is not judged.
     */
   private def reorganiseOnLayers(
       bestBlockNumber: BigInt,
@@ -1385,8 +1385,23 @@ class ConsensusImpl(
     val outcome = executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists)
     val (executedBlocks, maybeError) = (outcome.executed, outcome.error)
 
+    // The consensus layer's branch becomes the head only when the whole of it is valid and it still leads to the head
+    // the consensus layer names, as on the unified layout (`settleOnLayers`; the user's decision of 2026-11-14) and in
+    // go-ethereum, which sets a head only once it was inserted whole. A prefix executed before an invalid block or a
+    // fault of this node's state, or a branch whose head is no longer named, is kept beside the head (B-505).
+    val designatedAdopts =
+      !selectedByWeight && maybeError.isEmpty && outcome.stateFault.isEmpty && leadsToDesignatedHead(newBranch)
     val adopted =
-      settleHead(executedBlocks, parentWeight, bestBlockNumber, bestBlockWeight, fork, oldCanonical, selectedByWeight)
+      settleHead(
+        executedBlocks,
+        parentWeight,
+        bestBlockNumber,
+        bestBlockWeight,
+        fork,
+        oldCanonical,
+        selectedByWeight,
+        designatedAdopts
+      )
 
     outcome.stateFault match
       case Some(fault) =>
@@ -1402,11 +1417,23 @@ class ConsensusImpl(
         // A prefix that outweighed the head became it before the fault (B-337): it is told as imported, and the blocks
         // it moved the head off are queued again with the blocks that were not judged, as a reorganisation that went
         // through tells them (and as `whereTheHeadIsLeft` tells a head left on a branch). A prefix that did not
-        // outweigh the head left it as it was, and only the rest is handed back.
+        // outweigh the head, or of the consensus layer's branch (B-505), left it as it was, and only the rest is
+        // handed back.
         val notJudged = newBranch.toList.drop(executedBlocks.length)
         if adopted && executedBlocks.nonEmpty then
           ConsensusStateFault(fault, executedBlocks, oldBranchTold(oldCanonical) ++ notJudged)
         else ConsensusStateFault(fault, Nil, notJudged)
+      // The consensus layer named another head while its branch was executed: the branch is valid and stays beside the
+      // head. Not a fault and not a verdict, as on the unified layout (beacon)
+      case None if !selectedByWeight && maybeError.isEmpty && !adopted =>
+        log.info(
+          "REORG-SUPERSEDED: the consensus layer names another head; its branch [{}-{}] was executed and is kept " +
+            "beside the head {}",
+          newBranch.head.number,
+          newBranch.last.number,
+          bestBlockNumber
+        )
+        KeptCurrentBestBranch
       case None => reorganised(newBranch, oldCanonical, executedBlocks, maybeError, adopted = adopted)
 
   /** @param oldCanonical
@@ -1537,8 +1564,11 @@ class ConsensusImpl(
     * Nothing executed: nothing was written, nothing changes.
     *
     * Branch chosen by the designated head alone (`selectedByWeight` false — the post-merge PoS arm, never taken on a
-    * PoW chain): the last executed block becomes the head, written as the weight arm below writes an adoption (B-088).
-    * It used to move only the best block, as before this method existed.
+    * PoW chain): the last executed block becomes the head, written as the weight arm below writes an adoption (B-088),
+    * only when `designatedAdopts`: the whole branch executed, valid, and still leading to the head the consensus layer
+    * names. Otherwise the old head stays and the index is put back, as for a lighter prefix below (B-505; the unified
+    * layout and go-ethereum's SetCanonical alike). It used to move only the best block, as before this method existed,
+    * and then (B-088 to B-505) adopted whatever prefix was executed.
     *
     * Every arm that writes the index deletes, in the same batch, the lookups of the transactions that only the blocks
     * leaving the chain include (core-geth `reorg`: `types.HashDifference(deletedTxs, addedTxs)`; B-088).
@@ -1562,7 +1592,8 @@ class ConsensusImpl(
       oldBestWeight: ChainWeight,
       fork: ForkPoint,
       oldCanonical: List[(BigInt, BlockHash)],
-      selectedByWeight: Boolean
+      selectedByWeight: Boolean,
+      designatedAdopts: Boolean
   ): Boolean =
     var adopted = false
     executedBlocks.lastOption.foreach { last =>
@@ -1608,58 +1639,55 @@ class ConsensusImpl(
             droppedTxLookups,
             displaced.size
           )
-      if !selectedByWeight then
+      // Whether the executed blocks become the head. The post-merge arm: when the caller found the whole branch valid
+      // and still leading to the head the consensus layer names (B-505). The weight arm: when they outweigh the old
+      // head, recomputed from the headers rather than read from BlockData: it is exactly what BlockExecution computes,
+      // and it does not depend on the executor having filled the weight in.
+      val adopt =
+        if selectedByWeight then
+          executedBlocks.foldLeft(parentWeight)((w, b) => w.increase(b.block.header)) > oldBestWeight
+        else designatedAdopts
+      if adopt then
         adopted = true
         // The post-merge arm writes what the weight arm writes when it adopts (B-088): it used to move only the best
         // block, leaving the old chain's entries above the tip and below it at the side blocks' heights, and the
         // lookups of the transactions only the old chain held. A forkchoiceUpdated to the tip then found the index
         // naming the tip and rewrote nothing below it.
         adoptTip()
-        // The head moved to the new branch, so the old head's blocks above the fork point left the canonical chain with
-        // their reference-count changes applied: take them back out, and put back an already-executed side parent the
-        // branch builds on (undone when it was executed as a side payload or dropped). Idempotent through the record's
-        // applied flag.
+        // The old head's blocks left the canonical chain with their state changes applied: take them back out, or a
+        // node only they replaced stays at zero references while the new chain uses it, and is pruned. The side blocks
+        // the new branch builds on are canonical again (their changes were taken out when they were executed as a side
+        // payload or dropped). Idempotent through the record's applied flag.
         reorgState.abandonBlockStates(displaced.map { case (n, h) => (n, h.value) })
         reorgState.readoptBlockStates(fork.parentSideChain.map { case (n, h) => (n, h.value) })
       else
-        // Recomputed from the headers rather than read from BlockData: it is exactly what BlockExecution computes, and
-        // it does not depend on the executor having filled the weight in.
-        val executedWeight = executedBlocks.foldLeft(parentWeight)((w, b) => w.increase(b.block.header))
-        if executedWeight > oldBestWeight then
-          adopted = true
-          adoptTip()
-          // The old head's blocks left the canonical chain with their state changes applied: take them back out, or a
-          // node only they replaced stays at zero references while the new chain uses it, and is pruned. The side
-          // blocks the new branch builds on are canonical again (their changes were taken out when they were dropped).
-          reorgState.abandonBlockStates(displaced.map { case (n, h) => (n, h.value) })
-          reorgState.readoptBlockStates(fork.parentSideChain.map { case (n, h) => (n, h.value) })
-        else
-          val old = oldCanonical.toMap
-          val executedHeights = executedBlocks.map(_.block.number.value)
-          log.warn(
-            "REORG-PARTIAL: executed blocks {}-{} do not outweigh the current head {} — keeping it and restoring the " +
-              "canonical index",
-            executedHeights.head,
-            executedHeights.last,
-            oldBestNumber
-          )
-          // The executed side blocks are committed but not canonical. A re-presented canonical block among them is put
-          // back in the index below, so it stays applied.
-          val sideBlocks =
-            executedBlocks.map(b => (b.block.number.value, b.block.hash)).filterNot(id => oldCanonical.contains(id))
-          // All of the captured segment, not only the executed heights: that also re-points the transaction
-          // locations of every old block, which a side block carrying the same transaction may have overwritten. The
-          // transactions only the side blocks (and the side blocks the branch stands on) include lose the lookups
-          // their commits wrote (B-088): none of those blocks is canonical.
-          blockchainWriter.rewriteCanonicalIndex(
-            put = oldCanonical,
-            remove = executedHeights.filterNot(old.contains),
-            newBest = None,
-            left = (fork.parentSideChain ++ sideBlocks).map(_._2),
-            chain = oldCanonical.map(_._2),
-            reader = blockchainReader
-          )
-          reorgState.abandonBlockStates(sideBlocks.map { case (n, h) => (n, h.value) })
+        val old = oldCanonical.toMap
+        val executedHeights = executedBlocks.map(_.block.number.value)
+        log.warn(
+          "REORG-PARTIAL: executed blocks {}-{} {} the current head {} — keeping it and restoring the canonical index",
+          executedHeights.head,
+          executedHeights.last,
+          if selectedByWeight then "do not outweigh"
+          else "are not the whole valid branch to the head the consensus layer names, and do not replace",
+          oldBestNumber
+        )
+        // The executed side blocks are committed but not canonical. A re-presented canonical block among them is put
+        // back in the index below, so it stays applied.
+        val sideBlocks =
+          executedBlocks.map(b => (b.block.number.value, b.block.hash)).filterNot(id => oldCanonical.contains(id))
+        // All of the captured segment, not only the executed heights: that also re-points the transaction
+        // locations of every old block, which a side block carrying the same transaction may have overwritten. The
+        // transactions only the side blocks (and the side blocks the branch stands on) include lose the lookups
+        // their commits wrote (B-088): none of those blocks is canonical.
+        blockchainWriter.rewriteCanonicalIndex(
+          put = oldCanonical,
+          remove = executedHeights.filterNot(old.contains),
+          newBest = None,
+          left = (fork.parentSideChain ++ sideBlocks).map(_._2),
+          chain = oldCanonical.map(_._2),
+          reader = blockchainReader
+        )
+        reorgState.abandonBlockStates(sideBlocks.map { case (n, h) => (n, h.value) })
     }
     adopted
 

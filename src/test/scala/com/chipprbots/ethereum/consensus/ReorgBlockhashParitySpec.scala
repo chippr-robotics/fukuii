@@ -679,7 +679,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     evaluate(bChain.take(2) :+ invalid) match
       case BranchExecutionFailure(_, failing, _) => failing shouldBe invalid.hash.value
       case other                                 => fail(s"not a failure of the branch: $other")
-    // not the valid prefix, which the hash layout makes the head: nothing has moved
+    // not the valid prefix: nothing has moved (and so on the hash layout since B-505)
     node.bestHash shouldBe aChain.last.hash
     (1 to 5).foreach(n => node.indexed(n) shouldBe Some(aChain(n - 1).hash))
     reported shouldBe List(invalid.hash.value -> bChain(1).hash.value)
@@ -1522,14 +1522,99 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.lookup(OnlyB) shouldBe Some(TransactionLocation(designated(1).hash.value, 1))
     )
 
+  // B-505: on the hash layout the consensus layer's branch becomes the head only when the whole of it is valid and it
+  // still leads to the head the consensus layer names, as on the unified layout (`settleOnLayers`) and in go-ethereum,
+  // whose SetCanonical only runs on a head that was inserted whole. What of it was executed before an invalid block, a
+  // fault of this node's state, or another head named meanwhile is kept beside the head: the index is put back, and
+  // the transactions only those blocks include lose the lookups their commits wrote. `left` is blocks 3 and 4 on
+  // `common`; `prefix` leaves `common` at the same block and is blocks 3 to 5, one above the old head.
+  class DesignatedOnTheHashLayout extends DesignatedFixture(guard = false, hooked = true):
+    val common: List[Block] = oracle.extendCanonical(oracle.genesis, 2, difficulty = 0)
+    val left: List[Block] = oracle.extendWith(common.last, List(Seq(Shared), Seq(OnlyA)), difficulty = 0, tag = 0x61)
+    val prefix: List[Block] =
+      oracle.extendWith(common.last, List(Nil, Seq(Shared, OnlyB), Nil), difficulty = 0, tag = 0x62)
+    node.importAll(common ++ left) shouldBe a[BlockImportedToTop]
+
+    def keptTheOldHead(): Unit =
+      node.bestHash shouldBe left.last.hash
+      (1 to 2).foreach(n => node.indexed(n) shouldBe Some(common(n - 1).hash))
+      (3 to 4).foreach(n => node.indexed(n) shouldBe Some(left(n - 3).hash))
+      node.indexed(5) shouldBe None
+      node.lookup(OnlyB) shouldBe None
+      node.lookup(Shared) shouldBe Some(TransactionLocation(left.head.hash.value, 0))
+      node.lookup(OnlyA) shouldBe Some(TransactionLocation(left(1).hash.value, 0))
+
+  "The consensus layer's branch on the hash layout" should
+    "leave the head and the index where they were when a block after a valid prefix is invalid, and report that block" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new DesignatedOnTheHashLayout:
+      val invalid: Block = oracle.invalidChild(prefix.last, difficulty = 0)
+      named.set(Some(invalid.hash.value))
+      evaluate(prefix :+ invalid) match
+        case BranchExecutionFailure(_, failing, _) => failing shouldBe invalid.hash.value
+        case other                                 => fail(s"not a failure of the branch: $other")
+      keptTheOldHead()
+      reported shouldBe List(invalid.hash.value -> prefix.last.hash.value)
+    )
+
+  it should "leave the head and the index where they were when this node's state faults mid-branch, and judge nothing" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedOnTheHashLayout:
+    val injected = new StateUnavailable("injected: the state of block 5")
+    onExecute = block => if block.hash == prefix(2).hash then throw injected
+    named.set(Some(prefix.last.hash.value))
+    evaluate(prefix) match
+      case ConsensusStateFault(fault, imported, toEnqueue) =>
+        (fault should be).theSameInstanceAs(injected)
+        imported shouldBe Nil
+        toEnqueue shouldBe prefix.drop(2)
+      case other => fail(s"not a fault of this node's state: $other")
+    keptTheOldHead()
+    reported shouldBe Nil
+  )
+
+  it should "not move the head when the consensus layer names another head while the branch is executed" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedOnTheHashLayout:
+    named.set(Some(prefix.last.hash.value))
+    onExecute = block => if block.hash == prefix.last.hash then named.set(Some(left.last.hash.value))
+    evaluate(prefix) shouldBe KeptCurrentBestBranch
+    keptTheOldHead()
+    reported shouldBe Nil
+  )
+
+  it should "become the head when every block of it is valid and it still leads to the head named" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedOnTheHashLayout:
+    named.set(Some(prefix.last.hash.value))
+    evaluate(prefix) match
+      case SelectedNewBestBranch(oldBranch, newBranch, _, _) =>
+        oldBranch.map(_.hash) shouldBe left.map(_.hash)
+        newBranch.map(_.hash) shouldBe prefix.map(_.hash)
+      case other => fail(s"not adopted: $other")
+    node.bestHash shouldBe prefix.last.hash
+    (3 to 5).foreach(n => node.indexed(n) shouldBe Some(prefix(n - 3).hash))
+    node.lookup(OnlyA) shouldBe None
+    node.lookup(Shared) shouldBe Some(TransactionLocation(prefix(1).hash.value, 0))
+    node.lookup(OnlyB) shouldBe Some(TransactionLocation(prefix(1).hash.value, 1))
+    reported shouldBe Nil
+  )
+
   /** A node past the merge (a terminal total difficulty of 0), on the unified layout unless `guard` is false, with a
     * `ConsensusImpl` that has a head the consensus layer names and a reporter of invalid blocks, as the node builds one
-    * with the Engine API on. `aChain` is blocks 1 to 5; `bChain` leaves it after block 2 and is blocks 3 to 6.
+    * with the Engine API on. `aChain` is blocks 1 to 5; `bChain` leaves it after block 2 and is blocks 3 to 6. With
+    * `hooked`, its `consensus` executes through a `BlockExecution` that runs `onExecute` on each block it is about to
+    * execute (B-505).
     */
   class DesignatedFixture(
       tune: StateConfig => StateConfig = identity,
       handOff: Option[BranchHandOff] = None,
-      guard: Boolean = true
+      guard: Boolean = true,
+      hooked: Boolean = false
   ):
     private val merged = (config: BlockchainConfig) => config.copy(terminalTotalDifficulty = Some(BigInt(0)))
     val oracle: Oracle = new Oracle:
@@ -1542,10 +1627,27 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     private val reporter = new InvalidChainReporter:
       override def reportInvalid(blockHash: ByteString, latestValidHash: ByteString): Unit =
         reported :+= (blockHash -> latestValidHash)
+    @volatile var onExecute: Block => Unit = _ => ()
+    private val execution: BlockExecution =
+      if !hooked then node.blockExecution
+      else
+        new BlockExecution(
+          node.blockchain,
+          node.blockchainReader,
+          node.blockchainWriter,
+          node.storagesInstance.storages.evmCodeStorage,
+          node.mining.blockPreparator,
+          node.blockValidation
+        ):
+          override def executeAndValidateStaged(block: Block, alreadyValidated: Boolean, staged: StagedBlockState)(
+              implicit blockchainConfig: BlockchainConfig
+          ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+            onExecute(block)
+            super.executeAndValidateStaged(block, alreadyValidated, staged)
     val consensus = new ConsensusImpl(
       node.blockchainReader,
       node.blockchainWriter,
-      node.blockExecution,
+      execution,
       Some(reporter),
       Some(DesignatedHead(() => namedNow())),
       ReorgStateHandler.NoOp,
