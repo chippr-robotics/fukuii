@@ -4061,19 +4061,14 @@ items:
   - id: B-419
     title: "Engine API JWT: reject an expired exp (geth VerifyExpiresAt); audit specs for clock-edge races"
     priority: P2
-    status: review
+    status: done
     area: rpc
     size: S
     opened: 2026-11-21
+    closed: 2026-11-24
     refs: [B-418, B-387]
     links:
       prs: [2079]
-    claim:
-      by: cloud-719c6644
-      agent: beacon
-      since: 2026-11-24T12:41:57Z
-      heartbeat: 2026-11-24T13:09:36Z
-      branch: fix/b419-engine-api-parity
     notes: |-
       Found in beacon review of PR #1980. fukuii ignores exp; geth rejects expired exp. JwtAuthenticatorSpec covers only a future exp.
       2026-11-24: absorbs B-387 (validation of 2026-11-24)
