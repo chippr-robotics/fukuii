@@ -4450,3 +4450,13 @@ items:
     links:
       spec: none
     notes: "Follow-up of B-454. TestingService.commitBlock importInPlace=None path: writeBuiltCode then storeBlock/storeReceipts/storeBlockAccessList each .commit(). State is written straight through by the build, so only the block records + code can share a batch. Test-mode only."
+  - id: B-467
+    title: "stopThenExit catches only NonFatal: a fatal error in the stop leaves the q/Ephemery/SIGTERM thread dead and the process running"
+    priority: P3
+    status: open
+    area: node
+    size: S
+    opened: 2026-11-24
+    refs: [B-452]
+    links: {}
+    notes: "Follow-up of B-452. StopSignal.stopThenExit (and SIGTERM before it) exits only when stop() returns or throws NonFatal; an OOM/StackOverflow in the stop kills the exiting thread with no exit. Decide: exit(UncleanExit) in a finally, or halt. Also: Fukuii.run's Ephemery stop-then-exit wiring has no unit seam (stopThenExit itself is tested)."
