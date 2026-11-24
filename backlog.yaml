@@ -5067,17 +5067,18 @@ items:
   - id: B-497
     title: "Flaky: PendingTransactionsManagerSpec 'should override transactions with the same sender and nonce' failed once locally, passed on rerun"
     priority: P3
-    status: in-progress
+    status: review
     area: ci
     size: S
     opened: 2026-11-24
     refs: []
-    links: {}
+    links:
+      prs: [2075]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:07:21Z
-      heartbeat: 2026-11-24T11:07:25Z
+      heartbeat: 2026-11-24T11:30:54Z
     notes: |-
       Seen 2026-11-24 during B-253 (pool actor unchanged). Find the timing assumption; no Thread.sleep fixes.
       2026-11-24 in-progress: agent clone-d
