@@ -7,7 +7,13 @@ import scala.collection.mutable
 
 import com.chipprbots.ethereum.utils.Logger
 
-class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logger:
+/** @param clock
+  *   the time the completion line's rates are measured with (B-524); the system clock, injectable for tests
+  */
+class SyncProgressMonitor(
+    @annotation.unused _scheduler: Scheduler,
+    clock: () => Long = () => System.currentTimeMillis()
+) extends Logger:
 
   import SNAPSyncController.*
   import SNAPSyncController.SyncPhase.*
@@ -49,6 +55,30 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
 
   // Periodic logging
   private var periodicLogTask: Option[Cancellable] = None
+
+  // B-524: when each counter first and last moved (epoch ms): the completion line divides each count by its own active
+  // time. Dividing by the whole run's elapsed time understated every rate (bytecodes counted over the account phase).
+  private val firstMoved = mutable.Map.empty[String, Long]
+  private val lastMoved = mutable.Map.empty[String, Long]
+  private def moved(counter: String): Unit =
+    val now = clock()
+    firstMoved.getOrElseUpdate(counter, now): Unit
+    lastMoved.update(counter, now)
+
+  /** The completion line (B-524): each count with its rate over the time it was moving, and the run's elapsed time. */
+  def completionSummary: String = synchronized {
+    def rate(counter: String, n: Long): String =
+      val secs = (for
+        first <- firstMoved.get(counter)
+        last <- lastMoved.get(counter)
+      yield (last - first) / 1000.0).getOrElse(0.0)
+      if secs > 0 then f"${(n / secs).toLong}/s over ${secs.toLong}s" else "-"
+    val elapsed = (clock() - startTime) / 1000
+    s"SNAP Sync done: accounts=$accountsSynced (${rate("accounts", accountsSynced)}), " +
+      s"bytecodes=$bytecodesDownloaded (${rate("bytecodes", bytecodesDownloaded)}), " +
+      s"slots=$storageSlotsSynced (${rate("slots", storageSlotsSynced)}), " +
+      s"nodes=$nodesHealed (${rate("nodes", nodesHealed)}), elapsed=${elapsed}s"
+  }
 
   // Metrics history for throughput averaging
   private val metricsWindow = 60 // 60 seconds window for averaging
@@ -98,6 +128,8 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
     )
     currentPhaseState = Idle
     phaseProgressMark = 0
+    firstMoved.clear()
+    lastMoved.clear()
     accountsSynced = 0
     bytecodesDownloaded = 0
     storageSlotsSynced = 0
@@ -141,6 +173,7 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
     logProgress()
 
   def incrementAccountsSynced(count: Long): Unit = synchronized {
+    if count > 0 then moved("accounts")
     accountsSynced += count
     val now = System.currentTimeMillis()
     accountsHistory.enqueue((now, accountsSynced))
@@ -148,6 +181,7 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
   }
 
   def incrementBytecodesDownloaded(count: Long): Unit = synchronized {
+    if count > 0 then moved("bytecodes")
     bytecodesDownloaded += count
     val now = System.currentTimeMillis()
     bytecodesHistory.enqueue((now, bytecodesDownloaded))
@@ -155,6 +189,7 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
   }
 
   def incrementStorageSlotsSynced(count: Long): Unit = synchronized {
+    if count > 0 then moved("slots")
     storageSlotsSynced += count
     val now = System.currentTimeMillis()
     slotsHistory.enqueue((now, storageSlotsSynced))
@@ -162,6 +197,7 @@ class SyncProgressMonitor(@annotation.unused _scheduler: Scheduler) extends Logg
   }
 
   def incrementNodesHealed(count: Long): Unit = synchronized {
+    if count > 0 then moved("nodes")
     nodesHealed += count
     val now = System.currentTimeMillis()
     nodesHistory.enqueue((now, nodesHealed))
