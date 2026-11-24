@@ -69,9 +69,6 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
 
   def corsAllowedOrigins: HttpOriginMatcher
 
-  lazy val jsonRpcErrorCodes: List[Int] =
-    List(JsonRpcError.InvalidRequest.code, JsonRpcError.ParseError.code, JsonRpcError.InvalidParams().code)
-
   val corsSettings: CorsSettings = (CorsSettings.defaultSettings: @annotation.nowarn("cat=deprecation"))
     .withAllowGenericHttpRequests(true)
     .withAllowedOrigins(corsAllowedOrigins)
@@ -80,8 +77,10 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
     RejectionHandler
       .newBuilder()
       .handle {
+        // A body that is not JSON-RPC is answered with the -32700 error in a 200 response, as go-ethereum's HTTP server
+        // answers every JSON-RPC error (rpc/http.go); the status says only whether HTTP itself failed (B-025).
         case _: MalformedRequestContentRejection =>
-          complete((StatusCodes.BadRequest, JsonRpcResponse("2.0", None, Some(JsonRpcError.ParseError), JInt(0))))
+          complete((StatusCodes.OK, JsonRpcResponse("2.0", None, Some(JsonRpcError.ParseError), JInt(0))))
         case _: CorsRejection =>
           complete(StatusCodes.Forbidden)
       }
@@ -163,12 +162,10 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
   private def handleRequest(controller: JsonRpcBaseController, request: JsonRpcRequest): StandardRoute =
     complete(handleResponse(controller.handleRequest(request)).unsafeToFuture())
 
-  private def handleResponse(f: IO[JsonRpcResponse]): IO[(StatusCode, JsonRpcResponse)] = f.map { jsonRpcResponse =>
-    jsonRpcResponse.error match
-      case Some(JsonRpcError(error, _, _)) if jsonRpcErrorCodes.contains(error) =>
-        (StatusCodes.BadRequest, jsonRpcResponse)
-      case _ => (StatusCodes.OK, jsonRpcResponse)
-  }
+  // Every JSON-RPC answer, error or not, is a 200: the error is in the body (go-ethereum rpc/http.go). Parse errors,
+  // invalid requests and invalid params answered 400 here before (B-025).
+  private def handleResponse(f: IO[JsonRpcResponse]): IO[(StatusCode, JsonRpcResponse)] =
+    f.map(jsonRpcResponse => (StatusCodes.OK, jsonRpcResponse))
 
   /** The actor system the server binds in. */
   def actorSystem: ActorSystem

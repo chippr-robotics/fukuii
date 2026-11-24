@@ -199,13 +199,13 @@ class JsonRpcHttpServerSpec
       }
     )
 
-  it should "return BadRequest when malformed request is received" taggedAs (UnitTest, RPCTest) in new TestSetup:
+  it should "answer 200 with the parse error when a malformed request is received (B-025)" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val jsonRequestInvalid: ByteString = ByteString("""{"jsonrpc":"2.0", "method": "this is not a valid json""")
     val postRequest: HttpRequest =
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequestInvalid))
 
     postRequest ~> Route.seal(mockJsonRpcHttpServer.route) ~> check {
-      status shouldEqual StatusCodes.BadRequest
+      status shouldEqual StatusCodes.OK
     }
 
   it should "return a CORS Error" taggedAs (UnitTest, RPCTest) in new TestSetup:
@@ -388,7 +388,7 @@ class JsonRpcHttpServerSpec
       jsonRpcResponse.id shouldEqual JInt(id)
     }
 
-  it should "return status code BadRequest when request invalid is received" taggedAs (
+  it should "answer 200 with the error when an invalid request is received (B-025)" taggedAs (
     UnitTest,
     RPCTest
   ) in new TestSetup:
@@ -415,14 +415,14 @@ class JsonRpcHttpServerSpec
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequest))
 
     postRequest ~> Route.seal(mockJsonRpcHttpServer.route) ~> check {
-      status shouldEqual StatusCodes.BadRequest
+      status shouldEqual StatusCodes.OK
       val jsonRpcResponse = JsonRpcHttpServerSpec.parser(responseAs[String])
       jsonRpcResponse.error shouldEqual Some(JsonRpcError.InvalidRequest)
       jsonRpcResponse.jsonrpc shouldEqual jsonRpc
       jsonRpcResponse.id shouldEqual JInt(id)
     }
 
-  it should "return status code BadRequest when parser request failure" taggedAs (UnitTest, RPCTest) in new TestSetup:
+  it should "answer 200 with the error on a parser failure (B-025)" taggedAs (UnitTest, RPCTest) in new TestSetup:
     mockJsonRpcController.handleRequest
       .expects(*)
       .returning(
@@ -442,14 +442,14 @@ class JsonRpcHttpServerSpec
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequest))
 
     postRequest ~> Route.seal(mockJsonRpcHttpServer.route) ~> check {
-      status shouldEqual StatusCodes.BadRequest
+      status shouldEqual StatusCodes.OK
       val jsonRpcResponse = JsonRpcHttpServerSpec.parser(responseAs[String])
       jsonRpcResponse.error shouldEqual Some(JsonRpcError.ParseError)
       jsonRpcResponse.jsonrpc shouldEqual jsonRpc
       jsonRpcResponse.id shouldEqual JInt(id)
     }
 
-  it should "return status code BadRequest when the request has invalid params" taggedAs (
+  it should "answer 200 with the error when the request has invalid params (B-025)" taggedAs (
     UnitTest,
     RPCTest
   ) in new TestSetup:
@@ -471,7 +471,7 @@ class JsonRpcHttpServerSpec
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequest))
 
     postRequest ~> Route.seal(mockJsonRpcHttpServer.route) ~> check {
-      status shouldEqual StatusCodes.BadRequest
+      status shouldEqual StatusCodes.OK
       val jsonRpcResponse = parser(responseAs[String])
       jsonRpcResponse.error shouldEqual Some(error)
       jsonRpcResponse.jsonrpc shouldEqual jsonRpc
