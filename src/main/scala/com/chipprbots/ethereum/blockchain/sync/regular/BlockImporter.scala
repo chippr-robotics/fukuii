@@ -2757,7 +2757,9 @@ final private class BlockImporterLogic(
         },
       messActiveAt = Option.when(mess.enabled)(mess.isActiveAtBlock),
       messRefuses = ArtificialFinality.shouldRejectReorg,
-      firstInvalidHeader = headers => consensus.firstInvalidHeaderOf(headers)
+      firstInvalidHeader = headers => consensus.firstInvalidHeaderOf(headers),
+      // the import's own fork choice: a tie is weighed as the import weighs it, a coin's once (B-284)
+      forkChoice = consensus.powForkChoice
     )
 
   /** The common block a heavier branch below the floor was escalated for (B-346), by hash: the escalation is asked for

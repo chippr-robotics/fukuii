@@ -577,7 +577,9 @@ object ChainImporter:
         blockchainWriter,
         blockExecution,
         designatedHead = Some(com.chipprbots.ethereum.consensus.engine.DesignatedHead(() => named)),
-        reorgState = reorgState
+        reorgState = reorgState,
+        // the block is the head by its name, never by weight: no tie is broken for it (B-284)
+        powForkChoice = com.chipprbots.ethereum.consensus.PowForkChoice.HeavierOnly
       )
       consensus
         .evaluateBranch(cats.data.NonEmptyList.one(block))(using IORuntime.global, blockchainConfig)

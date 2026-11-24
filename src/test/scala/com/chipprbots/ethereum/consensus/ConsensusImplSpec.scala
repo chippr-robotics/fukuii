@@ -231,12 +231,13 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
   // is the whole decision under it.
   // ---------------------------------------------------------------------------------------------------------------
 
-  it should "KEEP the current chain for an equal-TD competing PoW branch, under an unbound LateBound" taggedAs (
+  it should "KEEP the current chain for an equal-TD competing PoW branch at its height when the coin keeps it, under an unbound LateBound" taggedAs (
     UnitTest,
     ConsensusTest
-  ) in new ConsensusSetup:
+  ) in new ConsensusSetup(coin = () => 0.5):
     // Same height as the tip and same per-block difficulty (generateBlock copies the parent's), so equal total
-    // difficulty. The TD rule is strict `>`, so a PoW node keeps its chain.
+    // difficulty. core-geth's tie rule (B-284): at the same height, neither block this node's own, the coin decides;
+    // from one half it keeps the chain.
     val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
     val etcShaped: ConsensusImpl = consensusWith(Some(new DesignatedHead.LateBound))
 
@@ -244,6 +245,18 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       _ shouldBe KeptCurrentBestBranch
     }
     blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
+
+  it should "SELECT an equal-TD competing PoW branch at its height when the coin takes it, under an unbound LateBound" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup(coin = () => 0.0):
+    val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
+    val etcShaped: ConsensusImpl = consensusWith(Some(new DesignatedHead.LateBound))
+
+    whenReady(etcShaped.evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
+      _ shouldBe a[SelectedNewBestBranch]
+    }
+    blockchainReader.getBestBlock shouldBe Some(equalTdBranch.last)
 
   it should "SELECT a heavier competing PoW branch, under an unbound LateBound" taggedAs (UnitTest, ConsensusTest) in
     (new ConsensusSetup:
@@ -279,10 +292,10 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
   it should "read the cake's own DesignatedHead holder — the wiring every other case in this spec runs under" taggedAs (
     UnitTest,
     ConsensusTest
-  ) in new ConsensusSetup:
+  ) in new ConsensusSetup(coin = () => 0.5):
     // `consensus` in this spec is NodeBuilder's ConsensusBuilder.consensus (StdTestMiningBuilder mixes it in), i.e.
     // `new ConsensusImpl(..., Some(invalidChainReporter), Some(designatedHead))`. Unbound, it keeps an equal-TD
-    // branch; binding THAT holder flips it. This proves every pre-existing case above already ran under the
+    // branch the coin keeps (B-284); binding THAT holder flips it. This proves every pre-existing case above already ran under the
     // production shape, with an unbound LateBound.
     val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
     designatedHead.isBound shouldBe false
@@ -771,8 +784,13 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
 
   // SCALA 3 MIGRATION: Moved ConsensusSetup inside class to access MockFactory context
-  class ConsensusSetup extends EphemBlockchainTestSetup:
+  /** @param coin
+    *   the coin of the proof-of-work fork choice's tie rule (B-284), for the cake's consensus and [[consensusWith]]: by
+    *   default one that fails the case if a tie is ever left to it
+    */
+  class ConsensusSetup(coin: () => Double = PowForkChoiceSpec.NoCoin) extends EphemBlockchainTestSetup:
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
+    override lazy val powForkChoice: PowForkChoice = new PowForkChoice(_ => false, coin)
 
     // Set up stub behavior
     (blockExecution
@@ -839,7 +857,14 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       failureOverride = Some(error)
 
     def consensusWith(designatedHead: Option[DesignatedHead]): ConsensusImpl =
-      new ConsensusImpl(blockchainReader, blockchainWriter, blockExecution, None, designatedHead)
+      new ConsensusImpl(
+        blockchainReader,
+        blockchainWriter,
+        blockExecution,
+        None,
+        designatedHead,
+        powForkChoice = powForkChoice
+      )
 
     /** `branch` evaluated through an adapter over this setup's consensus, as the importer is answered. */
     def answered(branch: List[Block]): BlockImportResult =

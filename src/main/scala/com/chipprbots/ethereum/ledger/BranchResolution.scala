@@ -6,6 +6,7 @@ import cats.data.NonEmptyList
 
 import scala.concurrent.duration.FiniteDuration
 
+import com.chipprbots.ethereum.consensus.PowForkChoice
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.mess.ArtificialFinality
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
@@ -27,12 +28,17 @@ import com.chipprbots.ethereum.utils.Logger
   *   ([[acrossAGap]], B-410): `sync.backfill-stall-timeout`
   * @param nanoTime
   *   the clock the backfill's progress is timed by
+  * @param powForkChoice
+  *   the proof-of-work fork choice, core-geth's `ReorgNeeded` with its tie rule (B-284): a node gives the one its
+  *   consensus holds (`Consensus.powForkChoice`), so that a tie a coin decides is decided once for the headers and for
+  *   the branch. Asked only where no consensus layer is followed
   */
 class BranchResolution(
     blockchainReader: BlockchainReader,
     designatedHead: Option[DesignatedHead] = None,
     backfillStallAfter: FiniteDuration = BranchResolution.DefaultBackfillStallAfter,
-    nanoTime: () => Long = () => System.nanoTime()
+    nanoTime: () => Long = () => System.nanoTime(),
+    powForkChoice: PowForkChoice = PowForkChoice.withoutMiner()
 ) extends Logger:
 
   /** Optional MESS config for anti-reorg protection. Set by SyncController when configured. */
@@ -113,8 +119,8 @@ class BranchResolution(
           w.increase(h)
         }
 
-        if newWeight > oldWeight then
-          // New branch has higher TD — check MESS anti-reorg protection
+        if outweighs(oldBlocks.lastOption.map(_.header), oldWeight, newHeaders.lastOption, newWeight) then
+          // New branch has higher TD, or wins the tie (B-284) — check MESS anti-reorg protection
           if shouldMessReject(oldBlocks, newHeaders) then NoChainSwitch
           else NewBetterBranch(oldBlocks)
         else if newWeight == oldWeight && newHeaders.nonEmpty && oldBlocks.isEmpty then
@@ -163,6 +169,24 @@ class BranchResolution(
         // after removing common prefix both 'new' and 'old` were empty
         log.warn("Attempted to compare identical branches")
         NoChainSwitch
+
+  /** Whether a branch whose tip is `tip`, of weight `newWeight`, takes the head from this node's chain, whose head is
+    * `head`, of weight `oldWeight`, by weight: core-geth's `ForkChoice.ReorgNeeded` with its tie rule
+    * ([[PowForkChoice]], B-284), as `ConsensusImpl` selects the branch. Strictly heavier where either is not known
+    * (nothing of this node's chain is displaced: the branch extends it) and where a consensus layer is followed, as
+    * before.
+    */
+  private def outweighs(
+      head: Option[BlockHeader],
+      oldWeight: ChainWeight,
+      tip: Option[BlockHeader],
+      newWeight: ChainWeight
+  ): Boolean =
+    (for
+      current <- head
+      extern <- tip
+      if !followsConsensusLayer
+    yield powForkChoice.reorgNeeded(current, oldWeight, extern, newWeight)).getOrElse(newWeight > oldWeight)
 
   /** Is the tip of this candidate branch on the path to the head the consensus layer designated?
     *
@@ -417,7 +441,7 @@ class BranchResolution(
           val ownWeight = blockchainReader.getChainWeightByHash(
             own.lastOption.map(_.header.hash).getOrElse(com.chipprbots.ethereum.domain.BlockHash(branch.commonHash))
           )
-          val taken = ownWeight.exists(longer.weight > _) &&
+          val taken = ownWeight.exists(outweighs(own.lastOption.map(_.header), _, Some(longer.tip), longer.weight)) &&
             !messRejects(own, longer.difficultyAboveTheCommonBlock, longer.tip)
           Some((longer, taken))
 

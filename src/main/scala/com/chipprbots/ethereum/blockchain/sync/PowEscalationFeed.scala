@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.blockchain.sync
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.consensus.PowForkChoice
 import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
@@ -59,7 +60,12 @@ import com.chipprbots.ethereum.domain.ChainWeight
   * @param head
   *   the head's header, of the head `headWeight` weighs: where the weight of the block a branch stands on is not
   *   stored, it is that weight less the difficulty of the head's blocks above that block, found by their parent hashes
-  *   (B-385)
+  *   (B-385); and the head a branch of the same weight is set against by the tie rule (B-284)
+  * @param forkChoice
+  *   the import's fork choice by weight, core-geth's `ReorgNeeded` with its tie rule (B-284): a node on a chain that
+  *   declares no terminal total difficulty gives its consensus's, so that a branch is counted as the chain to follow by
+  *   the rule the import follows chains by, a tie a coin decides as the import decided it. The default keeps the head
+  *   on a tie, as this did before
   */
 final class PowEscalationFeed(
     watch: EscalationWatch,
@@ -70,7 +76,8 @@ final class PowEscalationFeed(
     mess: Option[PowEscalationFeed.Mess] = None,
     note: String => Unit = _ => (),
     chainHashAt: BigInt => Option[BlockHash] = _ => None,
-    head: () => Option[BlockHeader] = () => None
+    head: () => Option[BlockHeader] = () => None,
+    forkChoice: PowForkChoice = PowForkChoice.HeavierOnly
 ):
   import PowEscalationFeed.*
 
@@ -115,7 +122,7 @@ final class PowEscalationFeed(
       else
         (weighed(headers, forkWeightOf), headWeight()) match
           case (None, _) | (_, None) => note(s"branch $name is not counted: its weight, or the head's, is not stored")
-          case (Some(of), Some(head)) if of <= head =>
+          case (Some(of), Some(headAt)) if !takesTheHead(headers.last, of, headAt) =>
             note(s"branch $name is not counted: it does not outweigh the head")
           case (Some(of), _) =>
             firstInvalidHeader(headers) match
@@ -134,8 +141,13 @@ final class PowEscalationFeed(
   def outweighsTheHead(headers: List[BlockHeader]): Boolean =
     headers.nonEmpty && (for
       of <- weighed(headers)
-      head <- headWeight()
-    yield of > head).contains(true)
+      headAt <- headWeight()
+    yield takesTheHead(headers.last, of, headAt)).contains(true)
+
+  // Whether a branch whose last header is `tip`, of weight `of`, takes the head, of weight `headAt`, by the import's
+  // fork choice (B-284): heavier, or a tie it wins. Strictly heavier where the head's header is not given
+  private def takesTheHead(tip: BlockHeader, of: ChainWeight, headAt: ChainWeight): Boolean =
+    head().fold(of > headAt)(current => forkChoice.reorgNeeded(current, headAt, tip, of))
 
   // the chain weight at the last of `headers`, from the weight `of` gives the block the first stands on
   private def weighed(

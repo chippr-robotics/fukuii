@@ -52,7 +52,12 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
 
   private def refusedAt(rig: Rig): Option[BigInt] = rig.feed.refusedWeight.map(_.totalDifficulty.value)
 
-  private class Rig(refusals: Int = 64):
+  private class Rig(
+      refusals: Int = 64,
+      headHeader: Option[BlockHeader] = None,
+      forkChoice: com.chipprbots.ethereum.consensus.PowForkChoice =
+        com.chipprbots.ethereum.consensus.PowForkChoice.HeavierOnly
+  ):
     val escalated: mutable.ArrayBuffer[EscalationKind] = mutable.ArrayBuffer.empty
     val said: mutable.ArrayBuffer[(EscalationKind, String)] = mutable.ArrayBuffer.empty
     val left: mutable.ArrayBuffer[String] = mutable.ArrayBuffer.empty
@@ -69,7 +74,9 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
       ),
       hash => if hash == forkHash then forkWeight else None,
       () => head,
-      note = left += _
+      note = left += _,
+      head = () => headHeader,
+      forkChoice = forkChoice
     )
     def validation(blocks: List[Block]): Option[(BlockHeader, String)] =
       validated += 1
@@ -186,6 +193,37 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
     rig.escalated shouldBe empty
     rig.validated shouldBe 0
     refusedAt(rig) shouldBe None
+  }
+
+  it should "count a branch of the head's weight that the import's tie rule takes, and no other (B-284)" taggedAs UnitTest in {
+    import com.chipprbots.ethereum.consensus.PowForkChoice
+    import com.chipprbots.ethereum.consensus.PowForkChoiceSpec
+    // one block at 50 on the fork's 1000: block 5, of the head's weight 1050
+    val even: List[BlockHeader] = branch(5, 1, difficulty = 50).map(_.header)
+    val headAt6 = Some(Fixtures.Blocks.ValidBlock.header.copy(number = BlockNumber(6)))
+    // as before B-284: not the heavier
+    val strict = new Rig(headHeader = headAt6)
+    strict.feed.outweighsTheHead(even) shouldBe false
+    strict.refusedHeaders(even, tooDeep)
+    strict.escalated shouldBe empty
+    // the head at block 6: block 5 is the lower, and wins the tie
+    val lower = new Rig(headHeader = headAt6, forkChoice = new PowForkChoice(_ => false, PowForkChoiceSpec.NoCoin))
+    lower.feed.outweighsTheHead(even) shouldBe true
+    lower.refusedHeaders(even, tooDeep)
+    lower.escalated.toList shouldBe List(EscalationKind.Unreachable)
+    // the head at block 5: the coin's, tossed once for both questions
+    for (landing, counted) <- Seq(0.0 -> true, 0.5 -> false) do
+      withClue(s"the coin at $landing: ") {
+        val coin = new PowForkChoiceSpec.Coins(landing)
+        val rig = new Rig(
+          headHeader = Some(Fixtures.Blocks.ValidBlock.header.copy(number = BlockNumber(5))),
+          forkChoice = new PowForkChoice(_ => false, coin)
+        )
+        rig.feed.outweighsTheHead(even) shouldBe counted
+        rig.refusedHeaders(even, tooDeep)
+        rig.escalated.nonEmpty shouldBe counted
+        coin.tossed shouldBe 1
+      }
   }
 
   it should "say at once for a branch regular sync cannot fetch whole" taggedAs UnitTest in {

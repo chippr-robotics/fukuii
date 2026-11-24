@@ -2924,7 +2924,9 @@ object SyncController:
               val br = new BranchResolution(
                 blockchainReader,
                 designatedHeadOpt,
-                backfillStallAfter = syncConfig.backfillStallTimeout
+                backfillStallAfter = syncConfig.backfillStallTimeout,
+                // the consensus's own: a tie a coin decides is decided once for the headers and the branch (B-284)
+                powForkChoice = consensus.powForkChoice
               )
               br.messConfig = messConfig
               br

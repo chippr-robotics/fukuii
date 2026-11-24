@@ -200,6 +200,11 @@ class ConsensusAdapter(
     */
   def refusedWithTheirParent(blocks: NonEmptyList[Block]): Boolean = consensus.refusedWithTheirParent(blocks)
 
+  /** The proof-of-work fork choice the consensus weighs branches by (B-284): for the importer's other weighings to
+    * share.
+    */
+  def powForkChoice: PowForkChoice = consensus.powForkChoice
+
   def evaluateBranch(blocks: NonEmptyList[Block])(implicit
       blockExecutionScheduler: IORuntime,
       blockchainConfig: BlockchainConfig

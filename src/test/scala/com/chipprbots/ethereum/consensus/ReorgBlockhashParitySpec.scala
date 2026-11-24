@@ -165,6 +165,90 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       (9 to 15).foreach(n => node.indexed(n) shouldBe None)
       (1 to 5).foreach(n => node.indexed(n) shouldBe Some(oldChain(n - 1).hash))
 
+    // B-284, core-geth's tie rule (`ForkChoice.ReorgNeeded`) where the executed prefix of a branch is weighed against the
+    // head after execution: the hash layout's settle, the unified layout's on layers, and the commit in place at the cap.
+    it should "move the head to an executed prefix that ties it by weight and ends lower: the lower block wins a tie (B-284)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in new Fixture(guard, cap):
+      // Canonical h1..h15 at 1000. Side s6..s10 at 2000 each: 10000, as h6..h15, and five blocks lower; s11 invalid.
+      val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 15, difficulty = 1000)
+      val sidePrefix: List[Block] = oracle.extendSide(oldChain(4), 5, difficulty = 2000, tag = 0x5a)
+      val invalid: Block = oracle.invalidChild(sidePrefix.last, difficulty = 5000)
+
+      node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+      node.importAll(sidePrefix :+ invalid) match
+        case ImportedPartially(ChainReorganised(off, onto, _, _), failingBlockHash, _) =>
+          failingBlockHash shouldBe invalid.hash.value
+          onto shouldBe sidePrefix
+          off shouldBe oldChain.drop(5)
+        case other => fail(s"not the partial reorganisation to the lower prefix: $other")
+      node.bestHash shouldBe sidePrefix.last.hash
+      (6 to 10).foreach(n => node.indexed(n) shouldBe Some(sidePrefix(n - 6).hash))
+      (11 to 15).foreach(n => node.indexed(n) shouldBe None)
+      (1 to 5).foreach(n => node.indexed(n) shouldBe Some(oldChain(n - 1).hash))
+
+    it should "move the head to an executed prefix that ties it at its height when the coin says so, and keep it when not (B-284)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      // Canonical h1..h10 at 1000. Side s6..s10 at 1000: the head's weight and height; s11 invalid. The whole branch is
+      // the heavier and is executed; its valid prefix ties the head, and the coin decides, as core-geth's
+      // writeBlockAndSetHead asks `ReorgNeeded` of s10.
+      for (landing, taken) <- Seq(0.0 -> true, 0.5 -> false) do
+        withClue(s"the coin at $landing: ") {
+          val coin = new PowForkChoiceSpec.Coins(landing)
+          val f = new Fixture(guard, cap, coin)
+          import f.*
+          val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 10, difficulty = 1000)
+          val sidePrefix: List[Block] = oracle.extendSide(oldChain(4), 5, difficulty = 1000, tag = 0x5b)
+          val invalid: Block = oracle.invalidChild(sidePrefix.last, difficulty = 5000)
+          node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+          val result = node.importAll(sidePrefix :+ invalid)
+          coin.tossed shouldBe 1
+          if taken then
+            result match
+              case ImportedPartially(ChainReorganised(off, onto, _, _), _, _) =>
+                onto shouldBe sidePrefix
+                off shouldBe oldChain.drop(5)
+              case other => fail(s"not the partial reorganisation to the prefix: $other")
+            node.bestHash shouldBe sidePrefix.last.hash
+            (6 to 10).foreach(n => node.indexed(n) shouldBe Some(sidePrefix(n - 6).hash))
+          else
+            result shouldBe a[BlockImportFailed]
+            node.bestHash shouldBe oldChain.last.hash
+            (1 to 10).foreach(n => node.indexed(n) shouldBe Some(oldChain(n - 1).hash))
+        }
+    }
+
+    it should "adopt a whole branch that ties the head at its height when the coin says so, tossed once for the selection and the settle (B-284)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      // Canonical h1..h10 at 1000; side s6..s10 at 1000, valid: a tie at the head's height. The coin is tossed when the
+      // branch is selected; the settle after execution asks of the same pair, and reads it: a second toss, here the
+      // opposite, would leave the executed branch beside the head (or, at the cap, report the weights as disagreeing).
+      for (first, adopted) <- Seq(0.0 -> true, 0.99 -> false) do
+        withClue(s"the coin first at $first: ") {
+          val coin = new PowForkChoiceSpec.Coins(first, 1.0 - first)
+          val f = new Fixture(guard, cap, coin)
+          import f.*
+          val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 10, difficulty = 1000)
+          val side: List[Block] = oracle.extendSide(oldChain(4), 5, difficulty = 1000, tag = 0x5c)
+          node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+          val result = node.importAll(side)
+          coin.tossed shouldBe 1
+          if adopted then
+            result shouldBe a[ChainReorganised]
+            node.bestHash shouldBe side.last.hash
+            (6 to 10).foreach(n => node.indexed(n) shouldBe Some(side(n - 6).hash))
+          else
+            result shouldBe BlockEnqueued
+            node.bestHash shouldBe oldChain.last.hash
+            (1 to 10).foreach(n => node.indexed(n) shouldBe Some(oldChain(n - 1).hash))
+        }
+    }
+
     (s"A reorg back onto a previously orphaned block ($layout)" should
       "rewrite the canonical index below the branch parent, so BLOCKHASH and the old branch match core-geth").taggedAs(
       UnitTest,
@@ -345,14 +429,24 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
           withClue(
             s"killed after write $after of ${whole.writes} (the anchor moved by ${whole.anchorMoves}), the old chain offered ${if oldChainFirst then "first" else "last"}: "
           ) {
-            val node = new Node(guard = true, cap, Some(killed.datadir), restart = true)
+            // a coin that keeps the head on a tie at its height (B-284)
+            val node = new Node(
+              guard = true,
+              cap,
+              Some(killed.datadir),
+              restart = true,
+              forkChoice = Some(new PowForkChoice(_ => false, () => 0.5))
+            )
             node.reconciled.get should (be(a[StateReconciliation.Outcome.Consistent])
               .or(be(a[StateReconciliation.Outcome.Reconciled])))
             val head = validHead(node, killed.datadir)
             restartedOn += where(head)
             if oldChainFirst then
-              // a head that weighs no less than the old chain's tip stays: a tie keeps the head (by weight alone)
-              val stays = weightOf(node, head.hash) >= weightOf(node, oldChain.last.hash)
+              // core-geth's tie rule (B-284): a head that outweighs the old chain's tip stays; on a tie, the lower block
+              // wins, and at the same height the coin keeps the head
+              val (headWeight, tipWeight) = (weightOf(node, head.hash), weightOf(node, oldChain.last.hash))
+              val stays = headWeight > tipWeight ||
+                (headWeight == tipWeight && head.number.value <= oldChain.last.number.value)
               offer(node, oldChain)
               validHead(node, killed.datadir).hash shouldBe (if stays then head.hash else oldChain.last.hash)
             offer(node, branch)
@@ -981,24 +1075,33 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       "apply TD fork choice instead of making the last block in the file the head" taggedAs (
         UnitTest,
         ConsensusTest
-      ) in (new Fixture(guard):
+      ) in {
         // ethereum/tests lotsOfLeafs / sideChainWithMoreTransactions / uncleBlockAtBlock3afterBlock4 shape: the file
         // lists the canonical chain, then a lighter side block, then (second file) a heavier side branch. core-geth's
         // `import` (InsertChain -> writeBlockAndSetHead) keeps the heaviest head; ChainImporter used to save every
         // block as best, so the file's last block won whatever its TD.
-        val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 4, difficulty = 1000)
-        val lighterSide: List[Block] = oracle.extendSide(aChain(1), 1, difficulty = 500, tag = 0x61) // b3 < a3
-        val heavierSide: List[Block] = oracle.extendSide(aChain(1), 3, difficulty = 1000, tag = 0x62) // c3..c5 > a3..a4
+        //
+        // The file is imported a block at a time, as core-geth writes it: c4 ties a4 at its height, and core-geth's tie
+        // rule (B-284) leaves that to its coin. Either way c5 is the heavier and the head: the coin decides only whether
+        // c3 c4 became the head a block early.
+        for (landing, counts) <- Seq(0.5 -> (3, 2, 0), 0.0 -> (3, 1, 0)) do
+          withClue(s"the coin at $landing: ") {
+            val f = new Fixture(guard, coin = () => landing)
+            import f.*
+            val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 4, difficulty = 1000)
+            val lighterSide: List[Block] = oracle.extendSide(aChain(1), 1, difficulty = 500, tag = 0x61) // b3 < a3
+            val heavierSide: List[Block] = oracle.extendSide(aChain(1), 3, difficulty = 1000, tag = 0x62) // c3..c5
 
-        node.importFile(aChain ++ lighterSide) shouldBe (4, 1, 0)
-        node.bestHash shouldBe aChain.last.hash
-        node.indexed(3) shouldBe Some(aChain(2).hash)
+            node.importFile(aChain ++ lighterSide) shouldBe (4, 1, 0)
+            node.bestHash shouldBe aChain.last.hash
+            node.indexed(3) shouldBe Some(aChain(2).hash)
 
-        node.importFile(heavierSide) shouldBe (3, 2, 0)
-        node.bestHash shouldBe heavierSide.last.hash
-        (3 to 5).foreach(n => node.indexed(n) shouldBe Some(heavierSide(n - 3).hash))
-        if guard then node.blockchainWriter.stateHeldInPlaceOf(heavierSide.last.header) shouldBe true
-      )
+            node.importFile(heavierSide) shouldBe counts
+            node.bestHash shouldBe heavierSide.last.hash
+            (3 to 5).foreach(n => node.indexed(n) shouldBe Some(heavierSide(n - 3).hash))
+            if guard then node.blockchainWriter.stateHeldInPlaceOf(heavierSide.last.header) shouldBe true
+          }
+      }
 
     it should "make the last valid block the head once the terminal total difficulty is reached (core-geth)" taggedAs (
       UnitTest,
@@ -2112,17 +2215,22 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         answered.toList.flatMap(com.chipprbots.ethereum.blockchain.sync.regular.MovedOff.onto).map(_.hash)
       )
 
-  "A branch of the head's own weight on a proof-of-work chain (the unified layout)" should
-    "be kept beside the head: no consensus layer names a head there" taggedAs (UnitTest, ConsensusTest) in (
+  "A branch of the head's own weight and height on a proof-of-work chain (the unified layout)" should
+    "be kept beside the head when the tie rule's coin keeps it: no consensus layer names a head there" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (
       new Fixture(guard = true):
-        // as in production on ETC: the holder is there and nothing is bound to it
+        // as in production on ETC: the holder is there and nothing is bound to it. The tie at the head's height is the
+        // coin's (B-284): here it keeps the head, and the unbound holder takes nothing either
         val unbound = new DesignatedHead.LateBound
         val consensus = new ConsensusImpl(
           node.blockchainReader,
           node.blockchainWriter,
           node.blockExecution,
           None,
-          Some(unbound)
+          Some(unbound),
+          powForkChoice = new PowForkChoice(_ => false, () => 0.5)
         )
         val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 5, difficulty = 1000)
         val bChain: List[Block] = oracle.extendSide(aChain(1), 3, difficulty = 1000, tag = 0x75)
@@ -3112,9 +3220,16 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       import node.runtime
       adapter.evaluateBranchBlock(block).unsafeRunSync()
 
-  class Fixture(guard: Boolean = false, cap: StateConfig => StateConfig = identity):
+  /** @param coin
+    *   the coin of the node's fork choice (B-284): by default one that fails the test if a tie is ever left to it
+    */
+  class Fixture(
+      guard: Boolean = false,
+      cap: StateConfig => StateConfig = identity,
+      coin: () => Double = PowForkChoiceSpec.NoCoin
+  ):
     val oracle = new Oracle
-    val node = new Node(guard, cap)
+    val node = new Node(guard, cap, forkChoice = Some(new PowForkChoice(_ => false, coin)))
 
     /** The block hash `block`'s execution recorded at `slot`, on the node under test: read from its state on the hash
       * layout; on the unified layout the recorder's storage is the oracle's, root for root (the state root the block
@@ -3236,8 +3351,13 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       guard: Boolean = false,
       cap: StateConfig => StateConfig = identity,
       datadir: Option[EphemDataSource] = None,
-      restart: Boolean = false
+      restart: Boolean = false,
+      forkChoice: Option[PowForkChoice] = None
   ) extends ChainHost(guard, cap, datadir, restart):
+
+    // the node's proof-of-work fork choice (B-284): the node's, with its miner and a real coin, unless the case gives one
+    override lazy val powForkChoice: PowForkChoice =
+      forkChoice.getOrElse(PowForkChoice.ofEtherbase(() => coinbaseProvider.get()))
     def importAll(blocks: List[Block]): BlockImportResult =
       consensusAdapter.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()
 

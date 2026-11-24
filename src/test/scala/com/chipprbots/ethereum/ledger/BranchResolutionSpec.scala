@@ -22,6 +22,8 @@ import org.slf4j.LoggerFactory
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.consensus.PowForkChoice
+import com.chipprbots.ethereum.consensus.PowForkChoiceSpec
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
 import com.chipprbots.ethereum.domain.BackfillCursors
@@ -92,8 +94,9 @@ class BranchResolutionSpec
         branchResolution.resolveBranch(headers) shouldEqual NewBetterBranch(oldBlocks)
       )
 
-    "report no need for a chain switch the headers do not have chain weight greater than currently known branch" in
-      (new BranchResolutionTestSetupImpl:
+    // Of the same weight and height as the known branch: core-geth's tie rule (B-284) leaves it to the coin
+    "report no need for a chain switch when the headers tie the known branch's weight and height and the coin keeps it" in
+      (new BranchResolutionTestSetupImpl(coin = () => 0.5):
         val headers: NonEmptyList[BlockHeader] = getChainHeadersNel(1, 10)
 
         setBestBlockNumber(10)
@@ -104,6 +107,20 @@ class BranchResolutionSpec
         oldBlocks.map(b => setBlockByNumber(b.header.number.value, Some(b)))
 
         branchResolution.resolveBranch(headers) shouldEqual NoChainSwitch
+      )
+
+    "report new better branch found when the headers tie the known branch's weight and height and the coin takes it" in
+      (new BranchResolutionTestSetupImpl(coin = () => 0.0):
+        val headers: NonEmptyList[BlockHeader] = getChainHeadersNel(1, 10)
+
+        setBestBlockNumber(10)
+        setHeaderInChain(headers.head.parentHash.value)
+        setChainWeightByHash(headers.head.parentHash.value, ChainWeight.zero)
+
+        val oldBlocks: List[Block] = getChain(1, 10, headers.head.parentHash.value, headers.head.difficulty.value)
+        oldBlocks.map(b => setBlockByNumber(b.header.number.value, Some(b)))
+
+        branchResolution.resolveBranch(headers) shouldEqual NewBetterBranch(oldBlocks)
       )
 
     "correctly handle a branch that goes up to the genesis block" in new BranchResolutionTestSetupImpl:
@@ -1181,7 +1198,12 @@ class BranchResolutionSpec
     def wireHeaders(blocks: List[Block]): NonEmptyList[BlockHeader] =
       NonEmptyList.fromListUnsafe(blocks.map(_.header.toBytes.toBlockHeader))
 
-  class BranchResolutionTestSetupImpl extends TestSetupWithVmAndValidators with MockBlockchain:
+  /** @param coin
+    *   the coin of the fork choice's tie rule (B-284): by default one that fails the case if a tie is left to it
+    */
+  class BranchResolutionTestSetupImpl(coin: () => Double = PowForkChoiceSpec.NoCoin)
+      extends TestSetupWithVmAndValidators
+      with MockBlockchain:
     // Provide mock implementations - these are created in the test class context which has MockFactory
     override lazy val mockBlockchainReader: BlockchainReader = mock[BlockchainReader]
     override lazy val mockBlockchainWriter: BlockchainWriter = mock[BlockchainWriter]
@@ -1191,7 +1213,7 @@ class BranchResolutionSpec
     // Setup default expectations
     (() => blockchainReader.getBestBranch).expects().anyNumberOfTimes().returning(EmptyBranch)
 
-    val branchResolution = new BranchResolution(blockchainReader)
+    val branchResolution = new BranchResolution(blockchainReader, powForkChoice = new PowForkChoice(_ => false, coin))
 
     // Helper methods implementation (have MockFactory context here)
     override def setBlockExists(block: Block, inChain: Boolean, inQueue: Boolean): CallHandler1[BlockHash, Boolean] =
