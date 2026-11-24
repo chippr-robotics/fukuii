@@ -990,17 +990,18 @@ items:
   - id: B-093
     title: admin_peers shows placeholder names; admin_nodeInfo timed out
     priority: P3
-    status: claimed
+    status: review
     area: rpc
     size: S
     opened: 2026-11-07
     refs: [handoff §3]
-    links: {}
+    links:
+      prs: [2078]
     claim:
       by: cloud-719c6644
       agent: conduit
       since: 2026-11-24T11:48:46Z
-      heartbeat: 2026-11-24T11:48:46Z
+      heartbeat: 2026-11-24T12:18:32Z
       branch: fix/b025-rpc-error-status-codes
     notes: |-
       Unverified dev-node item (handoff section 3): check it still applies before starting.
