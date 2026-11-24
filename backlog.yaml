@@ -4474,17 +4474,18 @@ items:
   - id: B-467
     title: "stopThenExit catches only NonFatal: a fatal error in the stop leaves the q/Ephemery/SIGTERM thread dead and the process running"
     priority: P3
-    status: in-progress
+    status: review
     area: node
     size: S
     opened: 2026-11-24
     refs: [B-452]
-    links: {}
+    links:
+      prs: [2028]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:12:50Z
-      heartbeat: 2026-11-24T03:12:54Z
+      heartbeat: 2026-11-24T03:21:19Z
     notes: |-
       Follow-up of B-452. StopSignal.stopThenExit (and SIGTERM before it) exits only when stop() returns or throws NonFatal; an OOM/StackOverflow in the stop kills the exiting thread with no exit. Decide: exit(UncleanExit) in a finally, or halt. Also: Fukuii.run's Ephemery stop-then-exit wiring has no unit seam (stopThenExit itself is tested).
       2026-11-24 in-progress: folded into B-452 branch (prism)
