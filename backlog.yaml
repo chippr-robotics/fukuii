@@ -5282,3 +5282,14 @@ items:
     links:
       spec: 018
     notes: "beacon W2 on B-338; geth beacon-mode downloader drops no peer for an invalid chain (from memory, verify). Hive: the only peer gets blacklisted."
+  - id: B-514
+    title: StateFaultAfterAMove for HeadLeftOnSideBlocks resets the pool with ofBranches(Nil, movedOff); pass headOn as the blocks added
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "beacon W4 on B-460. Also N3: leftBy works by exclusion; pin the producers. W3: announce-path blame uses block.number (ETC)."
