@@ -3,6 +3,8 @@ package com.chipprbots.ethereum.ledger
 import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
+import org.json4s.JsonAST.*
+import org.json4s.jvalue2monadic
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -14,6 +16,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.*
+import com.chipprbots.ethereum.vm.CallTracer
 
 class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
 
@@ -184,6 +187,61 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     estimate.left.toOption.collect { case StxLedger.CallEstimateFailure.Failed(error) =>
       com.chipprbots.ethereum.jsonrpc.CallErrors.vmErrorMessage(error)
     } shouldBe Some("contract creation code storage out of gas")
+
+  /** B-173: the trace endpoints tell the tracer what go-ethereum's `create` hands its deferred `captureEnd`: for a
+    * pre-Homestead creation short of its code deposit, `ErrCodeStoreOutOfGas`, though the frame is a consensus success.
+    * The top-level frame on a replay (`simulateTransactionWithTracer`) and on a traced call (`simulateCall`), and a
+    * CREATE inside a frame (the VM's call-exit hook) alike.
+    */
+  it should "tell a tracer that a pre-Homestead creation short of its code deposit failed" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new HiveGraphQLScenarioSetup:
+    val shortfall = "contract creation code storage out of gas"
+    val returns1000Bytes: ByteString = ByteString(Hex.decode("6103e86000f3")) // PUSH2 0x03e8, PUSH1 0, RETURN
+    def creation(initCode: ByteString): SignedTransactionWithSender = SignedTransactionWithSender(
+      SignedTransaction(LegacyTransaction(0, GasPrice.Zero, GasAmount(60000), None, 0, initCode), noSignature),
+      fromAddress
+    )
+    def errorOf(tracer: CallTracer): JValue = tracer.getResult \ "error"
+
+    val replayed = new CallTracer(onlyTopCall = false)
+    stxLedger.simulateTransactionWithTracer(
+      creation(returns1000Bytes),
+      block32Header,
+      stxLedger.worldAt(block32Header),
+      replayed
+    )
+    errorOf(replayed) shouldBe JString(shortfall)
+
+    val traced = new CallTracer(onlyTopCall = false)
+    stxLedger
+      .simulateCall(
+        creation(returns1000Bytes),
+        block32Header,
+        stxLedger.worldAt(block32Header),
+        StxLedger.CallOptions.Empty,
+        Some(traced)
+      )
+      .isRight shouldBe true
+    errorOf(traced) shouldBe JString(shortfall)
+
+    // PUSH6 <returns1000Bytes>, PUSH1 0, MSTORE, PUSH1 6, PUSH1 26, PUSH1 0, CREATE, STOP: the inner creation gets all
+    // the gas (Frontier) and cannot pay 200,000 for its 1,000 bytes; the outer one deploys nothing and succeeds
+    val createsShortOne: ByteString = ByteString(Hex.decode("656103e86000f3600052600660" + "1a6000f000"))
+    val nested = new CallTracer(onlyTopCall = false)
+    stxLedger.simulateTransactionWithTracer(
+      creation(createsShortOne),
+      block32Header,
+      stxLedger.worldAt(block32Header),
+      nested
+    )
+    errorOf(nested) shouldBe JNothing
+    (nested.getResult \ "calls") match
+      case JArray(inner :: Nil) =>
+        (inner \ "type") shouldBe JString("CREATE")
+        (inner \ "error") shouldBe JString(shortfall)
+      case other => fail(s"expected one inner CREATE frame, got $other")
 
   /** The message-call side of the same case: `simulateCall` hands the shortfall to the RPC beside the frame's result,
     * and the result is the one block execution's frame gives, a success: `vmError` None, the gas kept. Nothing about it

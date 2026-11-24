@@ -47,7 +47,11 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
           number = BlockNumber(29),
           difficulty = Difficulty(0),
           beneficiary = baseMiner,
-          stateRoot = TrieRoot(emptyRoot),
+          // the request contracts a real Osaka chain has: the simulated blocks call them (B-163)
+          stateRoot = TrieRoot(
+            RequestContractStubs
+              .deployedRoot(storagesInstance.storages.evmCodeStorage, blockchain.getBackingMptStorage(0))
+          ),
           gasLimit = GasAmount(30_000_000),
           gasUsed = GasAmount.Zero,
           unixTimestamp = Timestamp(300),
@@ -108,6 +112,57 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     new Node().error("""{}""") shouldBe (-32602, "empty input")
   }
 
+  // ── B-158: simOpts decodes as encoding/json does ─────────────────────────────
+
+  /** The request decoded from `payload` at "latest", or its error. */
+  private def decoded(payload: String): Either[JsonRpcError, EthSimulateRequest] =
+    EthSimulateJsonMethodsImplicits.eth_simulateV1.decodeJson(Some(JArray(List(parse(payload), JString("latest")))))
+
+  it should "match the top-level keys case-insensitively, as encoding/json does" taggedAs (UnitTest, RPCTest) in {
+    // `BlockStateCalls` used to read as no blocks, which is "empty input"
+    val (_, bs) = new Node().blocks("""{"BlockStateCalls":[{}]}""")
+    bs.size shouldBe 1
+    val req =
+      decoded("""{"BLOCKSTATECALLS":[{}],"Validation":true,"TRACETRANSFERS":true,"returnfulltransactions":true}""")
+        .fold(err => fail(s"expected a request, got $err"), identity)
+    (req.blockStateCalls.size, req.validation, req.traceTransfers, req.returnFullTransactions) shouldBe
+      ((1, true, true, true))
+  }
+
+  it should "take the last of several keys that match a flag, in document order" taggedAs (UnitTest, RPCTest) in {
+    decoded("""{"blockStateCalls":[{}],"validation":true,"VALIDATION":false}""").map(_.validation) shouldBe
+      Right(false)
+    decoded("""{"blockStateCalls":[{}],"validation":false,"Validation":true}""").map(_.validation) shouldBe Right(true)
+  }
+
+  it should "refuse a flag that is not a boolean with -32602, in encoding/json's words" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    def typeError(kind: String, field: String): Either[JsonRpcError, EthSimulateRequest] =
+      Left(
+        JsonRpcError.InvalidParams(
+          s"invalid argument 0: json: cannot unmarshal $kind into Go struct field simOpts.$field of type bool"
+        )
+      )
+    // it used to be read as false
+    decoded("""{"blockStateCalls":[{}],"validation":"true"}""") shouldBe typeError("string", "Validation")
+    decoded("""{"blockStateCalls":[{}],"validation":1}""") shouldBe typeError("number", "Validation")
+    decoded("""{"blockStateCalls":[{}],"traceTransfers":[]}""") shouldBe typeError("array", "TraceTransfers")
+    decoded("""{"blockStateCalls":[{}],"returnFullTransactions":{}}""") shouldBe
+      typeError("object", "ReturnFullTransactions")
+    new Node().error("""{"blockStateCalls":[{}],"validation":"yes"}""") shouldBe
+      ((
+        -32602,
+        "invalid argument 0: json: cannot unmarshal string into Go struct field simOpts.Validation of type bool"
+      ))
+  }
+
+  it should "read a null flag as false, as encoding/json leaves a bool alone" taggedAs (UnitTest, RPCTest) in {
+    decoded("""{"blockStateCalls":[{}],"validation":null,"traceTransfers":null}""")
+      .map(r => (r.validation, r.traceTransfers)) shouldBe Right((false, false))
+  }
+
   // ── 3-4: state override validation (override.go:80-110) ────────────────────
 
   it should "reject an account override with both state and stateDiff, -32000 (override.go:108-110)" taggedAs (
@@ -146,6 +201,36 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     val payload =
       s"""{"blockStateCalls":[{"stateOverrides":{"$one":{"movePrecompileToAddress":"$fresh"}},"calls":[{"from":"$From","to":"$fresh"}]}]}"""
     new Node().run(payload).isRight shouldBe true
+  }
+
+  // ── B-161: the EIP-7623 calldata floor is a pre-check (state_transition.go `execute`, ErrFloorDataGas) ─────────
+
+  /** One call from `From` to `To` with `gas` and 1,000 non-zero calldata bytes: at the Osaka base block the intrinsic
+    * cost is 21,000 + 16 x 1,000 = 37,000 and the EIP-7623 floor 21,000 + 40 x 1,000 = 61,000.
+    */
+  private def floorCall(gas: String): String =
+    s"""{"blockStateCalls":[{"calls":[{"from":"$From","to":"$To","gas":"$gas","input":"0x${"01" * 1000}"}]}]}"""
+
+  it should "refuse a gas limit below the calldata floor before execution, as go-ethereum's ErrFloorDataGas" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // between intrinsic (37,000) and floor (61,000): this reached execution and threw IllegalStateException
+    new Node().error(floorCall("0xc350")) shouldBe
+      ((-32603, "err: insufficient gas for floor data gas cost: have 50000, want 61000 (supplied gas 50000)"))
+    new Node().error(floorCall("0xee47")) shouldBe
+      ((-32603, "err: insufficient gas for floor data gas cost: have 60999, want 61000 (supplied gas 60999)"))
+  }
+
+  it should "still answer the intrinsic-gas check first, below both" taggedAs (UnitTest, RPCTest) in {
+    new Node().error(floorCall("0x7530")) shouldBe
+      ((-38013, "err: intrinsic gas too low: have 30000, want 37000 (supplied gas 30000)"))
+  }
+
+  it should "run a call whose gas limit is the floor exactly, and charge it the floor" taggedAs (UnitTest, RPCTest) in {
+    val (res, _) = new Node().blocks(floorCall("0xee48"))
+    val call = res.blocks.head.calls.head
+    (call.status, call.gasUsed, call.error) shouldBe ((BigInt(1), BigInt(61000), None))
   }
 
   // ── 1: traceTransfers on a creation (geth's tracer `OnEnter` is given the created address) ──────────────
@@ -421,6 +506,22 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     val error = callError("0xfe")
     str(error \ "message") shouldBe "invalid opcode: INVALID"
     (error \ "code") shouldBe JInt(-32015)
+  }
+
+  // B-176: a failing precompile is a call error like any VM error, -32015 with go-ethereum's reason
+  it should "report a precompile that rejects its input with -32015 and go-ethereum's reason" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // BN254 ADD (0x06) on the point (1, 1), which is not on the curve
+    val notOnCurve = "0x" + "00" * 31 + "01" + "00" * 31 + "01" + "00" * 64
+    val payload =
+      s"""{"blockStateCalls":[{"calls":[{"from":"$From","to":"0x0000000000000000000000000000000000000006",
+         |"gas":"0x30000","input":"$notOnCurve"}]}]}""".stripMargin
+    val call = arr(new Node().blocks(payload)._2.head \ "calls").head
+    str(call \ "status") shouldBe "0x0"
+    str(call \ "error" \ "message") shouldBe "point is not on curve"
+    (call \ "error" \ "code") shouldBe JInt(-32015)
   }
 
   it should "name an undefined opcode as geth's OpCode.String() does" taggedAs (UnitTest, RPCTest) in {

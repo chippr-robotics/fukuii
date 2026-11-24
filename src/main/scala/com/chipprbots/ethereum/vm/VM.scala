@@ -288,7 +288,10 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
             _.onCallExit(
               context.startGas - exitResult.gasRemaining,
               exitResult.returnData,
-              exitResult.error.map(exitErrorText(context, _, isCreate = true))
+              // a pre-Homestead deposit shortfall is go-ethereum's ErrCodeStoreOutOfGas to the tracer (B-173)
+              exitResult.error
+                .map(exitErrorText(context, _, isCreate = true))
+                .orElse(ProgramErrorText.frameErrorMessage(None, exitResult.codeDepositShortfall))
             )
           )
     (result, newAddress)

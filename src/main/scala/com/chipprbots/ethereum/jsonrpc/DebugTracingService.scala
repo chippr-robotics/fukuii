@@ -264,8 +264,9 @@ class DebugTracingService(
     * every prior tx from the parent state root, so calling it once per index makes this method O(n^2) in the
     * transaction count. replayTransaction already returns the post-tx world in TxResult.worldState, so we carry that
     * into the next iteration and only build the genuine parent-state world once (matches core-geth's traceBlock, which
-    * steps one statedb forward); for an Amsterdam block that first world already holds the block's system-call
-    * preamble. advanceWorldToTx itself is untouched — traceTransaction legitimately uses it for a single index.
+    * steps one statedb forward); that first world already holds the block's preamble (DAO drain, EIP-4788, EIP-2935),
+    * as block import applies it. advanceWorldToTx itself is untouched — traceTransaction legitimately uses it for a
+    * single index.
     */
   private def traceAllTxsInBlock(block: Block, config: TraceConfig): Either[JsonRpcError, Seq[TxTraceResult]] =
     blockchainReader

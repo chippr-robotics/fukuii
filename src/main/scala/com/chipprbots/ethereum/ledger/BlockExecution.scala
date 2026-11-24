@@ -1150,14 +1150,20 @@ object BlockExecution:
     * from Amsterdam, the EIP-4788 / EIP-2935 system calls (EIP-7928 block access index 0), and before it the direct
     * storage writes of EIP-4788 (ETH from Cancun) and EIP-2935 (ETH from Prague, ETC from Olympia).
     *
-    * One function for block import (`executeBlockTransactions`) and block building (`BlockPreparator.prepareBlock`), so
-    * the state a miner builds a block on is the state import executes it on.
+    * One function for block import (`executeBlockTransactions`), block building (`BlockPreparator.prepareBlock`),
+    * eth_simulateV1 (`SimulatedBlockSystemCalls.preamble`) and the trace replays (`StxLedger.advanceWorldToTx`), so the
+    * state a miner builds a block on, a simulation runs its calls on and a trace replays a transaction on is the state
+    * import executes the block on.
+    *
+    * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); it reaches only the Amsterdam system
+    * calls, the one part of the preamble that runs the EVM. Every other caller leaves it empty.
     */
   private[ethereum] def applyBlockPreamble(
       block: Block,
       blockHeaderNumber: BigInt,
       initialWorld: InMemoryWorldStateProxy,
-      accessList: Option[BlockAccessListBuilder]
+      accessList: Option[BlockAccessListBuilder],
+      precompileRelocations: Map[Address, Address] = Map.empty
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     val worldAfterDao = blockchainConfig.daoForkConfig match
       case Some(daoForkConfig) if daoForkConfig.isDaoForkBlock(blockHeaderNumber) =>
@@ -1168,7 +1174,8 @@ object BlockExecution:
       // Amsterdam: EIP-4788 and EIP-2935 run as real system calls (see `applyAmsterdamPreambleSystemCalls`), which
       // share EIP-7928 block access index 0.
       val preambleReads = accessList.map(_ => new BlockAccessRecorder)
-      val afterPreamble = applyAmsterdamPreambleSystemCalls(block.header, worldAfterDao, preambleReads)
+      val afterPreamble =
+        applyAmsterdamPreambleSystemCalls(block.header, worldAfterDao, preambleReads, precompileRelocations)
       for
         builder <- accessList
         reads <- preambleReads

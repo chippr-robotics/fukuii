@@ -12,6 +12,8 @@ import com.chipprbots.ethereum.db.storage.MptStorageDecorator
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlobTransaction
+import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.GasAmount
@@ -25,6 +27,7 @@ import com.chipprbots.ethereum.domain.UInt256
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.transactions.TxTypeGate
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.vm.CodeStoreOutOfGas
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ExecutionTracer
@@ -172,7 +175,11 @@ class StxLedger(
     val result = blockPreparator.runVMWithTracer(tx, senderAddress, blockHeader, worldForTx, tracer)
     val totalGasToRefund = blockPreparator.calcTotalGasToRefund(tx, result, blockHeader.number.value)
     val gasUsed = tx.tx.gasLimit.value - totalGasToRefund
-    tracer.onTxEnd(gasUsed, result.returnData, result.error.map(ProgramErrorText.vmErrorMessage))
+    tracer.onTxEnd(
+      gasUsed,
+      result.returnData,
+      ProgramErrorText.frameErrorMessage(result.error, result.codeDepositShortfall)
+    )
 
     TxResult(result.world, gasUsed, result.logs, result.returnData, result.error)
 
@@ -185,9 +192,16 @@ class StxLedger(
     * @param blockHeader
     *   block header containing the transactions
     * @param txs
-    *   all transactions in the block with recovered sender addresses
+    *   all transactions in the block with recovered sender addresses Every block, on every fork and both chains, starts
+    *   from the parent's state with the block's preamble applied, by the code block import runs
+    *   ([[BlockExecution.applyBlockPreamble]]): the DAO fork block's drain, then EIP-4788 and EIP-2935 (direct storage
+    *   writes before Amsterdam, system calls from it; ETC writes EIP-2935 from Olympia). Before B-180 only an Amsterdam
+    *   replay ran it, so a traced transaction of a Cancun, Prague or Osaka block, of ETH's DAO fork block or of an ETC
+    *   Olympia block saw the parent's beacon-root and history slots (and balances), not the block's. ETC declares no
+    *   DAO refund contract, so on ETC the drain moves nothing.
+    *
     * @param txIndex
-    *   index of the target transaction (0-based); returns parent state if 0
+    *   index of the target transaction (0-based); 0 gives the parent's state with the block's preamble applied
     * @param parentHeader
     *   the parent block: the replay starts from its state, taken as a scratch state of that block (not of
     *   `blockHeader`, whose state is the one the replay arrives at)
@@ -200,22 +214,27 @@ class StxLedger(
       txIndex: Int,
       parentHeader: BlockHeader
   ): InMemoryWorldStateProxy =
+    val preambleBlock = Block(blockHeader, BlockBody.empty) // the preamble reads the header alone
     if !blockchainConfig.isAmsterdamTimestamp(blockHeader.unixTimestamp) then
       val world0 = InMemoryWorldStateProxy(
         evmCodeStorage = evmCodeStorage,
         mptStorage = blockchainReader.scratchStateAt(parentHeader),
-        getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+        // BLOCKHASH walks the block's own ancestry, as block import does (BlockExecution.buildInitialWorld), not the
+        // canonical index, which names another chain above the fork point of a traced side-chain block.
+        getBlockHashByNumber = AncestorBlockHashes.forBlock(blockHeader, blockchainReader),
         accountStartNonce = blockchainConfig.accountStartNonce,
         stateRootHash = parentHeader.stateRoot.value,
         noEmptyAccounts = EvmConfig.forBlock(blockHeader.number.value, blockchainConfig).noEmptyAccounts,
         ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
       )
-      (0 until txIndex).foldLeft(world0) { (world, i) =>
+      val afterPreamble =
+        BlockExecution.applyBlockPreamble(preambleBlock, blockHeader.number.value, world0, accessList = None)
+      (0 until txIndex).foldLeft(afterPreamble) { (world, i) =>
         simulateTransaction(txs(i), blockHeader, world).worldState
       }
     else
-      // Amsterdam: the state block execution had before `txs(txIndex)`. The parent's state, then the block's EIP-4788 /
-      // EIP-2935 preamble (system calls from Amsterdam, as BlockExecution runs them), then each earlier transaction
+      // Amsterdam: the state block execution had before `txs(txIndex)`. The parent's state, then the block's preamble
+      // (the EIP-4788 / EIP-2935 system calls from Amsterdam, as BlockExecution runs them), then each earlier transaction
       // replayed as block import executed it. BLOCKHASH walks the block's own ancestry, as in block execution
       // (BlockExecution.buildInitialWorld), which matters when the block being traced is not canonical.
       val world0 = InMemoryWorldStateProxy(
@@ -227,7 +246,8 @@ class StxLedger(
         noEmptyAccounts = EvmConfig.forBlock(blockHeader.number.value, blockchainConfig).noEmptyAccounts,
         ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
       )
-      val afterPreamble = BlockExecution.applyAmsterdamPreambleSystemCalls(blockHeader, world0, accessRecorder = None)
+      val afterPreamble =
+        BlockExecution.applyBlockPreamble(preambleBlock, blockHeader.number.value, world0, accessList = None)
       (0 until txIndex).foldLeft(afterPreamble) { (world, i) =>
         replayTransaction(txs(i), blockHeader, world, tracer = None).worldState
       }
@@ -296,7 +316,13 @@ class StxLedger(
     callPreCheck(stx, blockHeader, world1, options).map { _ =>
       val (result, authRefund) = runCallFrame(stx, blockHeader, world1, options, tracer)
       val gasUsed = callGasUsed(stx, blockHeader, result, authRefund)
-      tracer.foreach(_.onTxEnd(gasUsed, result.returnData, result.error.map(ProgramErrorText.vmErrorMessage)))
+      tracer.foreach(
+        _.onTxEnd(
+          gasUsed,
+          result.returnData,
+          ProgramErrorText.frameErrorMessage(result.error, result.codeDepositShortfall)
+        )
+      )
       StxLedger.CallOutcome(
         TxResult(result.world, gasUsed, result.logs, result.returnData, result.error),
         codeDepositShortfall = result.codeDepositShortfall
@@ -520,7 +546,7 @@ class StxLedger(
         else
           floor match
             case Some(f) if gas < f =>
-              Left(E(s"insufficient gas for floor data gas cost: have $gas, want $f"))
+              Left(E(StxLedger.floorDataGasError(gas, f)))
             case _ => Right(())
       // execute's top-frame transfer check (state_transition.go:765-773): after buyGas has taken the upfront charge,
       // gas * effective price + blob gas * blob base fee, the sender must still cover the value. buyGas reserved at
@@ -529,8 +555,10 @@ class StxLedger(
       _ <-
         if tx.value == 0 then Right(())
         else
-          val upfront =
-            tx.gasLimit.value * Transaction.effectiveGasPrice(tx, blockHeader.baseFee) + blobGas * blobBaseFee
+          // the blob base fee is derived only for a message with blob gas (B-173): a `def`, and on a header with an
+          // absurd excessBlobGas its exponential is not free
+          val blobCharge = if blobGas == 0 then BigInt(0) else blobGas * blobBaseFee
+          val upfront = tx.gasLimit.value * Transaction.effectiveGasPrice(tx, blockHeader.baseFee) + blobCharge
           if world.getBalance(sender).toBigInt - upfront < tx.value then
             Left(E(s"insufficient funds for transfer: address $address"))
           else Right(())
@@ -543,42 +571,9 @@ class StxLedger(
   def callFloorGas(stx: SignedTransactionWithSender, blockHeader: BlockHeader): Option[BigInt] =
     intrinsicAndFloor(stx, blockHeader)._2
 
-  /** The intrinsic gas of `stx` and, where a calldata floor is a validity rule, the floor; the same functions
-    * [[estimationLowerBound]] and the validator use.
-    */
+  /** [[StxLedger.intrinsicAndFloor]] of `stx`. */
   private def intrinsicAndFloor(stx: SignedTransactionWithSender, blockHeader: BlockHeader): (BigInt, Option[BigInt]) =
-    val number = blockHeader.number.value
-    val timestamp = blockHeader.unixTimestamp
-    val tx = stx.tx.tx
-    val sender = stx.senderAddress
-    val config = EvmConfig.forBlock(number, timestamp, blockchainConfig)
-    val accessList = Transaction.accessList(tx)
-    val authorizations = tx match
-      case sct: SetCodeTransaction => sct.authorizationList.size
-      case _                       => 0
-    val intrinsic = config.calcTransactionIntrinsicGas(
-      tx.payload,
-      tx.isContractInit,
-      accessList,
-      authorizations,
-      tx.receivingAddress,
-      UInt256(tx.value),
-      sender
-    )
-    val floor =
-      if config.amsterdamEnabled then
-        Some(
-          config.calcAmsterdamCalldataFloorGas(tx.payload, accessList, tx.receivingAddress, UInt256(tx.value), sender)
-        )
-      else if BlockPreparator.eip7623Active(number, timestamp) then
-        Some(
-          BlockPreparator.calcFloorDataGas(
-            tx.payload,
-            config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
-          )
-        )
-      else None
-    (intrinsic, floor)
+    StxLedger.intrinsicAndFloor(stx.tx.tx, stx.senderAddress, blockHeader)
 
   def binarySearchGasEstimation(
       stx: SignedTransactionWithSender,
@@ -666,6 +661,51 @@ class StxLedger(
       intrinsic.max(floor)
 
 object StxLedger:
+
+  /** The intrinsic gas of `tx` sent by `sender` in `blockHeader`'s block and, where a calldata floor is a validity rule
+    * (EIP-7623 from Prague / ETC Olympia, EIP-7976 at Amsterdam), the floor; the same functions `estimationLowerBound`
+    * and the validator use. eth_simulateV1's pre-check reads it too, so that it refuses what the message-call pre-check
+    * refuses (B-161).
+    */
+  def intrinsicAndFloor(tx: Transaction, sender: Address, blockHeader: BlockHeader)(implicit
+      blockchainConfig: BlockchainConfig
+  ): (BigInt, Option[BigInt]) =
+    val number = blockHeader.number.value
+    val timestamp = blockHeader.unixTimestamp
+    val config = EvmConfig.forBlock(number, timestamp, blockchainConfig)
+    val accessList = Transaction.accessList(tx)
+    val authorizations = tx match
+      case sct: SetCodeTransaction => sct.authorizationList.size
+      case _                       => 0
+    val intrinsic = config.calcTransactionIntrinsicGas(
+      tx.payload,
+      tx.isContractInit,
+      accessList,
+      authorizations,
+      tx.receivingAddress,
+      UInt256(tx.value),
+      sender
+    )
+    val floor =
+      if config.amsterdamEnabled then
+        Some(
+          config.calcAmsterdamCalldataFloorGas(tx.payload, accessList, tx.receivingAddress, UInt256(tx.value), sender)
+        )
+      else if BlockPreparator.eip7623Active(number, timestamp) then
+        Some(
+          BlockPreparator.calcFloorDataGas(
+            tx.payload,
+            config.transactionBaseCost(tx.receivingAddress, UInt256(tx.value), sender)
+          )
+        )
+      else None
+    (intrinsic, floor)
+
+  /** go-ethereum `core.ErrFloorDataGas` as `execute` words it: `insufficient gas for floor data gas cost: have %d, want
+    * %d` (core/state_transition.go).
+    */
+  def floorDataGasError(gas: BigInt, floor: BigInt): String =
+    s"insufficient gas for floor data gas cost: have $gas, want $floor"
 
   /** What an RPC message call carries besides its transaction and header (see [[StxLedger.simulateCall]]).
     *

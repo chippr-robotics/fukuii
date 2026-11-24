@@ -6,8 +6,6 @@ import scala.util.boundary
 import scala.util.boundary.break
 
 import org.json4s.JsonAST.*
-import org.json4s.jvalue2extractable
-import org.json4s.jvalue2monadic
 
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.jsonrpc.EthSimulateService.*
@@ -33,12 +31,38 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
             blockTag.flatMap(decodePayload(payload, _))
           case _ => Left(InvalidParams("expected [payload, blockTag]"))
 
+      /** go-ethereum's `simOpts` (internal/ethapi/simulate.go), decoded as encoding/json decodes it:
+        *   - the keys match case-insensitively (`BlockStateCalls`, `VALIDATION`), and of several that match the last in
+        *     document order wins (B-158; they were matched exact-case, so `BlockStateCalls` read as no blocks, "empty
+        *     input");
+        *   - a flag that is not a JSON boolean is -32602 `invalid argument 0: json: cannot unmarshal <kind> into Go
+        *     struct field simOpts.<Field> of type bool`, the field named as Go names it (simOpts has no json tags); it
+        *     was read as false. A null leaves the flag false, as encoding/json leaves a bool untouched.
+        *
+        * Known difference: Go keeps decoding after a type error and reports the first one it met, unless a field's own
+        * decoder fails, which ends the decode at once. Here the blocks are decoded first and then the flags in a fixed
+        * order, so a request with a bad flag and a bad block reports the block's error.
+        */
       private def decodePayload(obj: JObject, blockTag: BlockParam): Either[JsonRpcError, EthSimulateRequest] =
-        val validation = (obj \ "validation").extractOpt[Boolean].getOrElse(false)
-        val returnFullTxs = (obj \ "returnFullTransactions").extractOpt[Boolean].getOrElse(false)
-        val traceTransfers = (obj \ "traceTransfers").extractOpt[Boolean].getOrElse(false)
+        def field(name: String): JValue =
+          obj.obj.reverseIterator.collectFirst { case (k, v) if k.equalsIgnoreCase(name) => v }.getOrElse(JNothing)
 
-        val blockStateCalls = (obj \ "blockStateCalls") match
+        def flag(name: String): Either[JsonRpcError, Boolean] = field(name) match
+          case JBool(b)         => Right(b)
+          case JNothing | JNull => Right(false)
+          case other =>
+            val kind = other match
+              case _: JString                                    => "string"
+              case _: JInt | _: JLong | _: JDouble | _: JDecimal => "number"
+              case _: JArray                                     => "array"
+              case _                                             => "object"
+            Left(
+              InvalidParams(
+                s"invalid argument 0: json: cannot unmarshal $kind into Go struct field simOpts.${name.capitalize} of type bool"
+              )
+            )
+
+        val blockStateCalls = field("blockStateCalls") match
           case JArray(items) =>
             val parsed = items.map {
               case bsc: JObject => decodeBlockStateCall(bsc)
@@ -49,9 +73,12 @@ object EthSimulateJsonMethodsImplicits extends JsonMethodsImplicits:
           case JNothing | JNull => Right(Seq.empty)
           case _                => Left(InvalidParams("blockStateCalls must be array"))
 
-        blockStateCalls.map { bscs =>
-          EthSimulateRequest(bscs, validation, returnFullTxs, traceTransfers, blockTag)
-        }
+        for
+          bscs <- blockStateCalls
+          traceTransfers <- flag("traceTransfers")
+          validation <- flag("validation")
+          returnFullTxs <- flag("returnFullTransactions")
+        yield EthSimulateRequest(bscs, validation, returnFullTxs, traceTransfers, blockTag)
 
       private def decodeBlockStateCall(obj: JObject): Either[JsonRpcError, BlockStateCall] =
         boundary:

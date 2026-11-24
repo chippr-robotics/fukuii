@@ -178,15 +178,51 @@ class EthSimulateSystemContractsSpec extends AnyFlatSpec with Matchers with Amst
     result.requestsHash shouldBe Some(EmptyRequestsHash)
   }
 
-  it should "leave an Osaka block alone: it runs no request system call, and so needs no request contract" taggedAs (
+  // ---- B-163: Prague and Osaka run the request phase too ----
+
+  /** An Osaka block: the base is at 300, so the simulated block lands on 312. */
+  private def osakaNode = new Node(baseTimestamp = 300)
+
+  "eth_simulateV1 at Osaka" should "fail a block whose withdrawal queue has no code, as go-ethereum's PostExecution does" taggedAs (
     UnitTest,
     RPCTest
   ) in {
-    // go-ethereum runs `PostExecution` for every Prague block, so it would refuse this one too. EthSimulateService runs
-    // the request system calls from Amsterdam only, and this change keeps it so; this pins the gap, not the intent.
-    val result = header(new Node(baseTimestamp = 300).simulate(Map.empty))
+    // go-ethereum runs PostExecution for every Prague block (simulate.go:499-502). This block used to be answered with
+    // the empty requests hash, its queues never called.
+    osakaNode.simulate(Map.empty) shouldBe
+      Left(emptyContract("withdrawal queue", "0x00000961Ef480Eb55e80D19ad83579A64c007002"))
+    osakaNode.simulate(Map(WithdrawalQueue -> codeOverride(RequestContractStubs.Stop))) shouldBe
+      Left(emptyContract("consolidation queue", "0x0000BBdDc7CE488642fb579F8B00f3a590007251"))
+  }
+
+  it should "need only the two Prague queues, not Amsterdam's builder queues" taggedAs (UnitTest, RPCTest) in {
+    val pragueQueues = stubs.filter((address, _) => address == WithdrawalQueue || address == ConsolidationQueue)
+    val result = header(osakaNode.simulate(pragueQueues))
     result.extraFields shouldBe a[HefPostPrague]
     result.requestsHash shouldBe Some(EmptyRequestsHash)
+  }
+
+  it should "commit to the requests its queues return in the header's requestsHash" taggedAs (UnitTest, RPCTest) in {
+    val result = header(osakaNode.simulate(stubs.updated(WithdrawalQueue, codeOverride(ProbesIdentity))))
+    result.extraFields shouldBe a[HefPostPrague]
+    result.requestsHash shouldBe Some(requestsHashOf(0x01, word(0x20)))
+  }
+
+  // B-163 / B-166: go-ethereum's PostExecution parses the deposit logs before it calls the queues
+  // (state_processor.go:207-226), so of a malformed deposit event and an empty queue the deposit event is the error.
+  it should "parse the deposit logs before it calls the queues" taggedAs (UnitTest, RPCTest) in {
+    // PUSH32 DepositEvent topic, PUSH1 0, PUSH1 0, LOG1, STOP: a DepositEvent with no data, not the 576-byte layout
+    val emitsBadDeposit =
+      ByteString(0x7f.toByte) ++ BlockExecution.DepositEventSignature ++ ByteString(Hex.decode("600060" + "00a100"))
+    val depositContract = BlockExecution.depositContractFor(amsterdamConfig)
+    val call = TxArgs(to = Some(depositContract))
+    val result = osakaNode.simulateBlocks(
+      BlockStateCall(
+        stateOverrides = Some(Map(depositContract -> codeOverride(emitsBadDeposit))), // and no queue has code
+        calls = Some(Seq(call))
+      )
+    )
+    result shouldBe Left(JsonRpcError.LogicError("INVALID_DEPOSIT_EVENT_LAYOUT: deposit event data length 0 != 576"))
   }
 
   // ---- F15 ----

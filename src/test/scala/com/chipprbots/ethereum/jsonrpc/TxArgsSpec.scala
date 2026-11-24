@@ -115,7 +115,7 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
 
   it should "accept only ASCII hex digits and never throw on Unicode digits" taggedAs (UnitTest) in {
     for bad <- List("0x\u0663\u0663", "0x\uff21\uff22") do
-      decErr(s"""{"value":"$bad"}""") shouldBe gethTypeErr("invalid hex string", "value", "hexutil.Big")
+      decErr(s"""{"value":"$bad"}""") shouldBe gethTypeErr("invalid hex string", "value", "*hexutil.Big")
       decErr(s"""{"nonce":"$bad"}""") shouldBe gethTypeErr("invalid hex string", "nonce", "hexutil.Uint64")
       decErr(s"""{"input":"$bad"}""") shouldBe gethTypeErr("invalid hex string", "input", "hexutil.Bytes")
       ok(s"""{"type":"$bad"}""").txType shouldBe None
@@ -161,7 +161,7 @@ class TxArgsSpec extends AnyFlatSpec with Matchers with EitherValues with TableD
       ("\"0x1" + "0" * 64 + "\"", "hex number > 256 bits"),
       ("1", "non-string")
     )
-    forAll(rejected)((j, reason) => decErr(s"""{"value":$j}""") shouldBe gethTypeErr(reason, "value", "hexutil.Big"))
+    forAll(rejected)((j, reason) => decErr(s"""{"value":$j}""") shouldBe gethTypeErr(reason, "value", "*hexutil.Big"))
   }
 
   it should "bound gas and nonce to 64 bits" taggedAs (UnitTest) in {

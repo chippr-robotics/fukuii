@@ -157,6 +157,10 @@
     <!-- Genesis and checkpoint loading -->
     <logger name="com.chipprbots.ethereum.blockchain.data.GenesisDataLoader" level="INFO" />
     <logger name="com.chipprbots.ethereum.blockchain.data.BootstrapCheckpointLoader" level="INFO" />
+
+    <!-- A precompile failure with no go-ethereum reason (B-176): fukuii rejected an input go-ethereum runs. A divergence
+         signal, at WARN with json.rpc.precompile.unexplained.counter; under ROOT=ERROR it would never show. -->
+    <logger name="com.chipprbots.ethereum.vm.PrecompileDivergence" level="WARN" />
     
     <!-- =================================================================== -->
     <!-- LOW-LEVEL NETWORKING (ERROR only - peer connections)                -->

@@ -471,6 +471,13 @@ class InMemoryWorldStateProxy(
       deployedCode
     )
 
+  /** This world, reading `code` as code it persisted and has not written: for a world built on another world's state
+    * (eth_simulateV1 on the pending block, B-458), whose deployed code is in that world and nowhere else (B-230).
+    * Content-addressed, so code this world already holds under a hash is the same bytes.
+    */
+  def withDeployedCode(code: Map[ByteString, Code]): InMemoryWorldStateProxy =
+    if code.isEmpty then this else copyWith(deployedCode = code ++ deployedCode)
+
   override def getBlockHash(number: UInt256): Option[UInt256] = getBlockByNumber(number).map(UInt256(_))
 
   /** Returns an [[InMemorySimpleMapProxy]] of the contract storage, for `ethCompatibleStorage` defined as "trie as a

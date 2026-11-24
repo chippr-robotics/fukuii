@@ -6,6 +6,7 @@ import scala.collection.mutable
 import scala.util.boundary
 import scala.util.boundary.break
 
+import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
@@ -26,6 +27,7 @@ import com.chipprbots.ethereum.transactions.TxTypeGate
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.utils.NetworkType
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.BlockAccessRecorder
 import com.chipprbots.ethereum.vm.EvmConfig
@@ -159,6 +161,33 @@ object EthSimulateService:
         newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
         removals: MptStorageDecorator.Removals
     ): Option[com.chipprbots.ethereum.mpt.MptNode] = super.update(newRoot, removals.none)
+
+  /** The simulation's trie-node store on the PENDING block (B-458): reads fall through to the pending world's own
+    * store, and every node the simulation writes stays here.
+    *
+    * A pending block's state is in its build's buffer and nowhere else (B-210, B-230), so a store taken by the pending
+    * header does not have it ("State node doesn't exist"). The build's buffer is shared and not thread-safe, so the
+    * simulation must never write into it: it reads it, and keeps its own nodes in this request's map. As
+    * [[RetainingMptStorage]], a removal is ignored (nodes are content-addressed, and the access list reads a world
+    * after the next one persisted) and nothing is ever persisted anywhere.
+    */
+  final private[jsonrpc] class PendingOverlayMptStorage(pending: MptStorage) extends MptStorage:
+    private val written = mutable.HashMap.empty[ByteString, Array[Byte]]
+
+    override def get(nodeId: Array[Byte]): com.chipprbots.ethereum.mpt.MptNode =
+      written.get(ByteString(nodeId)) match
+        case Some(encoded) => MptStorage.decodeNode(encoded, nodeId)
+        case None          => pending.get(nodeId)
+
+    override def updateNodesInStorage(
+        newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
+        toRemove: Seq[com.chipprbots.ethereum.mpt.MptNode]
+    ): Option[com.chipprbots.ethereum.mpt.MptNode] =
+      val (collapsed, toUpsert) = MptStorage.collapseNode(newRoot)
+      toUpsert.foreach((hash, encoded) => written.update(hash, encoded))
+      collapsed
+
+    override def persist(): Unit = ()
 
   /** The address a contract creation by `sender` at account nonce `nonce` deploys to (yellow paper equation 82), as
     * [[com.chipprbots.ethereum.vm.WorldStateProxy.createAddress]] derives it after the nonce increment.
@@ -378,11 +407,12 @@ class EthSimulateService(
         )
 
     // Resolve base block
-    val baseHeader = resolveHeader(req.blockTag) match
-      case Right(resolved) => resolved.header
+    val resolved = resolveHeader(req.blockTag) match
+      case Right(resolved) => resolved
       case Left(_)         =>
         // Return -32000 for block not found (not -32602)
         break(Left(JsonRpcError.LogicError(s"header not found")))
+    val baseHeader = resolved.header
 
     // Pre-validate block number/timestamp ordering
     val validationResult = validateBlockOrdering(req.blockStateCalls, baseHeader)
@@ -395,18 +425,26 @@ class EthSimulateService(
 
     // Create initial world state from base block
     val evmConfig = EvmConfig.forBlock(baseHeader.number.value, baseHeader.unixTimestamp, blockchainConfig)
+    // One store of the base block's state for the whole request: each simulated block reads the root the one before
+    // it persisted, which is no header's root, so the blocks have to share the storage that holds it.
+    //   - A stored block: a scratch state of it.
+    //   - The pending block (B-458): its state is in its build's buffer, not in the stores, so it is read from the
+    //     pending world, as eth_call, eth_estimateGas and the traces read it (`ResolvedHeader.pendingState`), under an
+    //     overlay that keeps the simulation's writes out of that shared buffer; and the code the build deployed is in
+    //     that world alone (B-230). Reading it by the pending header gave "State node doesn't exist".
+    val (baseStorage, baseRoot) = resolved.pendingState match
+      case Some(pending) => (new PendingOverlayMptStorage(pending.stateStorage), pending.stateRootHash)
+      case None => (new RetainingMptStorage(blockchainReader.scratchStateAt(baseHeader)), baseHeader.stateRoot.value)
     var world = InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      // One scratch state of the base block for the whole request: each simulated block reads the root the one
-      // before it persisted, which is no header's root, so the blocks have to share the storage that holds it.
-      mptStorage = new RetainingMptStorage(blockchainReader.scratchStateAt(baseHeader)),
+      mptStorage = baseStorage,
       getBlockHashByNumber =
         (n: BigInt) => simulatedBlockHashes.get(n).orElse(blockchainReader.getBlockHeaderByNumber(n).map(_.hash.value)),
       accountStartNonce = blockchainConfig.accountStartNonce,
-      stateRootHash = baseHeader.stateRoot.value,
+      stateRootHash = baseRoot,
       noEmptyAccounts = evmConfig.noEmptyAccounts,
       ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
-    )
+    ).withDeployedCode(resolved.pendingState.fold(Map.empty)(_.deployedCode))
 
     var parentHeader = baseHeader
     val blockResults = mutable.ArrayBuffer[SimulateBlockResult]()
@@ -533,14 +571,6 @@ class EthSimulateService(
     val amsterdam = blockchainConfig.isAmsterdamTimestamp(simHeader.unixTimestamp)
     val accessList = Option.when(amsterdam)(new BlockAccessListBuilder)
 
-    // Before Amsterdam, unchanged: the EIP-4788 / EIP-2935 direct storage writes, then the state overrides.
-    if !amsterdam then
-      // Apply EIP-4788: store parent beacon block root in system contract
-      if blockchainConfig.isCancunTimestamp(simHeader.unixTimestamp) then world = applyEip4788(simHeader, world)
-
-      // Apply EIP-2935: store parent block hash in history storage
-      if blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp) then world = applyEip2935(simHeader, world)
-
     // Apply state overrides and build precompile relocations. The precompiles are this block's own: go-ethereum builds
     // them per block from the block's header (simulate.go:366), so a move or a deletion lasts for its block only.
     var precompileRelocations = Map.empty[Address, Address]
@@ -552,21 +582,24 @@ class EthSimulateService(
         case Left(err) => break(Left(err))
     }
 
-    // Amsterdam: "State overrides [...] are applied to the pre-state before the pre-execution system calls run. They
-    // are not recorded in the block access list at any index." So the overridden world is index 0's starting point,
-    // and the EIP-4788 / EIP-2935 calls run as the real block's system calls, recording at index 0.
-    if amsterdam then
-      val beforePreamble = InMemoryWorldStateProxy.persistState(world)
-      val preambleReads = new BlockAccessRecorder
-      val afterPreamble =
-        SimulatedBlockSystemCalls.amsterdamPreamble(
-          simHeader,
-          beforePreamble,
-          Some(preambleReads),
-          precompileRelocations
-        )
-      accessList.foreach(_.addIndex(0L, preambleReads, beforePreamble, afterPreamble))
-      world = afterPreamble
+    // The block's preamble, by block import's own code (BlockExecution.applyBlockPreamble, through
+    // SimulatedBlockSystemCalls.preamble; proposer-import-parity.md Rule 2): the DAO fork block's drain, then EIP-4788
+    // and EIP-2935, which are direct storage writes before Amsterdam and system calls from it. Like import, it does
+    // nothing at a system contract with no code: it neither creates the account nor deploys the contract (ETC's Olympia
+    // deploys the history contract, as import does).
+    //
+    // It runs AFTER the state overrides, on the world they left: go-ethereum's processBlock applies
+    // `StateOverrides.Apply` and then runs ProcessBeaconBlockRoot / ProcessParentBlockHash on the EVM it built
+    // (simulate.go), and for Amsterdam execution-apis says "State overrides [...] are applied to the pre-state before
+    // the pre-execution system calls run. They are not recorded in the block access list at any index." So a
+    // `stateDiff` on a slot the preamble writes is overwritten by it, as in geth. On Amsterdam the overridden world is
+    // persisted first: it is block access index 0's starting point, and the system calls record at index 0.
+    world = SimulatedBlockSystemCalls.preamble(
+      simHeader,
+      if amsterdam then InMemoryWorldStateProxy.persistState(world) else world,
+      accessList,
+      precompileRelocations
+    )
 
     // Execute calls (pass through any blob base fee override from blockOverrides)
     val execResult = executeCalls(
@@ -600,27 +633,34 @@ class EthSimulateService(
     val postExecutionReads = new BlockAccessRecorder
     world = creditWithdrawals(world, withdrawals, Option.when(amsterdam)(postExecutionReads))
 
-    // Amsterdam: the post-execution phase of a real block, at block access index n + 1 — the withdrawals and then the
-    // EIP-7002 / EIP-7251 / EIP-8282 request system calls — and the requestsHash computed from what they and the
-    // EIP-6110 deposit logs return. As in go-ethereum's PostExecution (simulate.go:499-502 returns its error as it is), a
-    // request contract with no code ends the whole simulation with -32000 `failed to process <queue>: empty system
-    // contract: no code at <address>`, which a state override that clears its code causes; and the calls run on this
-    // block's precompiles, so a move or a deletion reaches them as it reaches a call.
-    val amsterdamRequestsHash: Option[ByteString] =
-      if !amsterdam then None
+    // From Prague: the EIP-7685 request phase of a real block, and the requestsHash computed from it. go-ethereum's
+    // processBlock runs it for every Prague block (simulate.go:499-502, PostExecution): the EIP-6110 deposit logs are
+    // parsed, then the EIP-7002 / EIP-7251 queues (and from Amsterdam the EIP-8282 builder queues) are called. It used
+    // to run for Amsterdam blocks only, so a simulated Prague or Osaka block kept the queues' per-block slots and
+    // carried the empty requestsHash whatever it held (B-163).
+    //
+    // As in PostExecution, whose error simulate.go returns as it is, a request contract with no code ends the whole
+    // simulation with -32000 `failed to process <queue>: empty system contract: no code at <address>` (a chain that
+    // has not deployed them, or a state override that clears one); and the calls run on this block's precompiles, so a
+    // move or a deletion reaches them as it reaches a call. On Amsterdam the phase, the withdrawals included, records
+    // at block access index n + 1. ETC never reaches it: no ETC chain declares a Prague timestamp.
+    val requestsHash: Option[ByteString] =
+      if !blockchainConfig.isPragueTimestamp(simHeader.unixTimestamp) then None
       else
         SimulatedBlockSystemCalls.requests(
           simHeader,
           world,
           receipts,
-          Some(postExecutionReads),
+          Option.when(amsterdam)(postExecutionReads),
           precompileRelocations
         ) match
           case Left(err) => break(Left(JsonRpcError.LogicError(err)))
           case Right((afterRequests, requests)) =>
-            val persisted = InMemoryWorldStateProxy.persistState(afterRequests)
-            accessList.foreach(_.addIndex(calls.size + 1L, postExecutionReads, worldAfterCalls, persisted))
-            world = persisted
+            if amsterdam then
+              val persisted = InMemoryWorldStateProxy.persistState(afterRequests)
+              accessList.foreach(_.addIndex(calls.size + 1L, postExecutionReads, worldAfterCalls, persisted))
+              world = persisted
+            else world = afterRequests
             Some(BlockExecution.computeRequestsHash(requests))
 
     // EIP-8037: an Amsterdam header's gasUsed is the larger of the block's execution gas and state gas, not the receipts'
@@ -658,14 +698,20 @@ class EthSimulateService(
     val finalExtraFields = simHeader.extraFields match
       case s: HefPostShanghai => s.copy(withdrawalsRoot = withdrawalsRoot)
       case c: HefPostCancun   => c.copy(withdrawalsRoot = withdrawalsRoot)
-      case p: HefPostPrague   => p.copy(withdrawalsRoot = withdrawalsRoot, blobGasUsed = blobGasUsed)
+      // Prague and Osaka: the block's own blobGasUsed and EIP-7685 requestsHash.
+      case p: HefPostPrague =>
+        p.copy(
+          withdrawalsRoot = withdrawalsRoot,
+          blobGasUsed = blobGasUsed,
+          requestsHash = requestsHash.getOrElse(p.requestsHash)
+        )
       // Amsterdam: the simulated block's own blobGasUsed, its EIP-7928 access list hash and its EIP-7685 requestsHash.
       case a: BlockHeader.HeaderExtraFields.HefPostAmsterdam =>
         a.copy(
           withdrawalsRoot = withdrawalsRoot,
           blobGasUsed = blobGasUsed,
           blockAccessListHash = accessList.fold(a.blockAccessListHash)(_.build.hash),
-          requestsHash = amsterdamRequestsHash.getOrElse(a.requestsHash)
+          requestsHash = requestsHash.getOrElse(a.requestsHash)
         )
       case other => other
     val finalHeader = simHeader.copy(
@@ -793,8 +839,17 @@ class EthSimulateService(
     // for the first simulated block, then each simulated block's own, so an override carries forward. (Not zero.)
     val beneficiary = ov.feeRecipient.map(_.bytes).getOrElse(parentHeader.beneficiary)
     val prevRandao = ov.prevRandao.getOrElse(ByteString(new Array[Byte](32)))
+    // ETC: Olympia (ECIP-1111) is a block-number fork, so the header has a base fee from the Olympia block on, whatever
+    // the parent has, and with validation it is import's: BaseFeeCalculator.calcBaseFee, the function the header
+    // validator (validateBaseFee) and the miner (BlockGeneratorSkeleton.baseFeeFields) use, which gives the activation
+    // block InitialBaseFee and floors at baseFeeFloor. Read from the parent's header instead, the activation block had
+    // no base fee at all, and with a pre-Olympia parent the copy below gave it zero.
+    val etcOlympia = blockchainConfig.networkType == NetworkType.ETC &&
+      number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
     val baseFee = ov.baseFeePerGas.getOrElse(
       if !validation then BigInt(0)
+      else if blockchainConfig.networkType == NetworkType.ETC then
+        BaseFeeCalculator.calcBaseFee(parentHeader, blockchainConfig)
       else computeNextBaseFee(parentHeader)
     )
     // go-ethereum makeHeaders (simulate.go:654-660): from Cancun on, the block's parent beacon block root is the
@@ -858,7 +913,9 @@ class EthSimulateService(
           parentBeaconBlockRoot
         )
       else if blockchainConfig.isShanghaiTimestamp(ts) then HefPostShanghai(baseFee, EmptyWithdrawalsRoot)
-      else if parentHeader.baseFee.isDefined then HefPostOlympia(baseFee) // Post-London but pre-Shanghai
+      else if etcOlympia then HefPostOlympia(baseFee) // ETC from Olympia: by block number, as import
+      else if blockchainConfig.networkType == NetworkType.ETC then HefEmpty // ETC before Olympia
+      else if parentHeader.baseFee.isDefined then HefPostOlympia(baseFee) // ETH: post-London but pre-Shanghai
       else HefEmpty // Pre-London
 
     // The difficulty: the `difficulty` override, or the one the block inherits (see inheritedDifficulty).
@@ -1105,23 +1162,20 @@ class EthSimulateService(
             )
           )
         else Right(())
-      // execute: intrinsic gas (state_transition.go:677-682), -38013 (errors.go:141-142)
+      // execute: intrinsic gas (state_transition.go:677-682), -38013 (errors.go:141-142); then, where a calldata floor
+      // is a validity rule (EIP-7623 from Prague, ETC Olympia; EIP-7976 at Amsterdam), the floor: geth's `execute`
+      // refuses a gas limit below it right after the intrinsic check, `ErrFloorDataGas`. txValidationError has no code
+      // of its own for it, so it is -32603 (errors.go default), wrapped as every other pre-check error. Without this a
+      // gas limit between the two reached execution and BlockPreparator's #1438 guard threw IllegalStateException
+      // (B-161). The function and the words are the message-call pre-check's (StxLedger.callPreCheck).
       _ <-
-        val intrinsic = evmConfig.calcTransactionIntrinsicGas(
-          tx.payload,
-          tx.isContractInit,
-          Transaction.accessList(tx),
-          tx match
-            case s: SetCodeTransaction => s.authorizationList.size
-            case _                     => 0
-          ,
-          tx.receivingAddress,
-          UInt256(tx.value),
-          sender
-        )
+        val (intrinsic, floor) = StxLedger.intrinsicAndFloor(tx, sender, header)
         if gas < intrinsic then
           Left(JsonRpcError.SimulateIntrinsicGasTooLow(wrap(s"intrinsic gas too low: have $gas, want $intrinsic")))
-        else Right(())
+        else
+          floor match
+            case Some(f) if gas < f => internal(StxLedger.floorDataGasError(gas, f))
+            case _                  => Right(())
     yield ()
 
   private def executeCalls(
@@ -1421,56 +1475,6 @@ class EthSimulateService(
       )
     )
   }
-
-  /** EIP-4788: Store the parent beacon block root in the beacon root system contract */
-  private def applyEip4788(
-      blockHeader: BlockHeader,
-      world: InMemoryWorldStateProxy
-  ): InMemoryWorldStateProxy =
-    import com.chipprbots.ethereum.ledger.BlockExecution.*
-    blockHeader.parentBeaconBlockRoot match
-      case Some(beaconRoot) =>
-        // Must match BlockExecution.applyEip4788 exactly, or eth_simulateV1 becomes an
-        // oracle that disagrees with real execution. See the note there.
-        val timestamp = blockHeader.unixTimestamp.toUInt256
-        val timestampIdx = timestamp.mod(UInt256(BeaconRootHistoryBufferLength))
-        val rootIdx = timestampIdx + UInt256(BeaconRootHistoryBufferLength)
-        val account = world
-          .getAccount(BeaconRootContractAddress)
-          .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-        val w1 =
-          if !world.getAccount(BeaconRootContractAddress).isDefined then
-            world.saveAccount(BeaconRootContractAddress, account)
-          else world
-        val storage = w1.getStorage(BeaconRootContractAddress)
-        val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
-        val s2 = s1.store(rootIdx.toBigInt, UInt256(beaconRoot.value).toBigInt)
-        w1.saveStorage(BeaconRootContractAddress, s2)
-      case None => world
-
-  /** EIP-2935: Store parent block hash in history storage contract */
-  private def applyEip2935(
-      blockHeader: BlockHeader,
-      world: InMemoryWorldStateProxy
-  ): InMemoryWorldStateProxy =
-    import com.chipprbots.ethereum.ledger.BlockExecution.*
-    val blockNumber = blockHeader.number.value
-    // Deploy history storage contract if not already deployed
-    val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
-      val account = world
-        .getAccount(HistoryStorageAddress)
-        .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-        .copy(nonce = UInt256(1))
-      world
-        .saveAccount(HistoryStorageAddress, account)
-        .saveCode(HistoryStorageAddress, HistoryStorageCode)
-    else world
-    // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
-    val parentHashValue = UInt256(blockHeader.parentHash.value)
-    val slot = (blockNumber - 1) % HistoryServeWindow
-    val storage = w1.getStorage(HistoryStorageAddress)
-    val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
-    w1.saveStorage(HistoryStorageAddress, updatedStorage)
 
   /** EIP-1559: Compute the base fee for the next block */
   private def computeNextBaseFee(parentHeader: BlockHeader): BigInt =
