@@ -1612,12 +1612,24 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
       )
     }
 
+  /** The peers the peer manager maintains, kept from the peer event bus for the snap-peer precondition (B-453). */
+  private lazy val maintainedPeerIds: com.chipprbots.ethereum.network.MaintainedPeerIds =
+    val ids = new com.chipprbots.ethereum.network.MaintainedPeerIds
+    classicSystem.spawn(
+      com.chipprbots.ethereum.network.MaintainedPeerIds.behavior(ids, peerEventBus),
+      "maintained-peer-ids"
+    ): Unit
+    ids
+
   /** What the snap-peer precondition at SNAP's start counts against on the unified layout (spec 018 C6): the shipped
     * `min-snap-peers` and `pow-snap-peer-wait`, and the node ids of the peers the operator declared, in
-    * `static-nodes.json` and `sync.snap-sync.snap-server-peers`. A peer added later over admin RPC is not among them.
+    * `static-nodes.json` and `sync.snap-sync.snap-server-peers` (read here, once), and over `admin_addPeer` (the peer
+    * manager's maintained set, read at each count; B-453).
     */
   private def snapPeerPrecondition: com.chipprbots.ethereum.blockchain.sync.PathLiveSync.SnapPeerPrecondition =
     import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
+    // subscribed now, with the port, not at the first count
+    val added = maintainedPeerIds
     val snapConfig = scala.util
       .Try(SNAPSyncConfig.fromConfig(com.chipprbots.ethereum.utils.Config.config.getConfig("sync")))
       .getOrElse(SNAPSyncConfig())
@@ -1634,7 +1646,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
     com.chipprbots.ethereum.blockchain.sync.PathLiveSync.SnapPeerPrecondition(
       snapConfig.minSnapPeers,
       snapConfig.powSnapPeerWait,
-      declared.filter(_.nonEmpty).toSet
+      declared.filter(_.nonEmpty).toSet,
+      added = () => added.current
     )
 
   lazy val syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command] =

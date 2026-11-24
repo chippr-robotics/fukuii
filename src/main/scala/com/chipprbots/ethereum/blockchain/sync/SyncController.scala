@@ -2565,7 +2565,7 @@ object SyncController:
                 if snapPeers.isDefined =>
               val pending = snapPeers.get
               val count =
-                PathLiveSync.countSnapPeers(peers.map((peer, info) => (peer.nodeId, info)), port.snapPeers.declared)
+                PathLiveSync.countSnapPeers(peers.map((peer, info) => (peer.nodeId, info)), port.snapPeers.declaredNow)
               val counted = pending.copy(count = Some(count))
               snapPeers = Some(counted)
               concluded(

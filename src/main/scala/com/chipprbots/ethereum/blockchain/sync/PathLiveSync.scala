@@ -131,9 +131,19 @@ object PathLiveSync:
     * @param declared
     *   the node ids of the peers the operator declared (`static-nodes.json`, `sync.snap-sync.snap-server-peers`): a
     *   declared peer that advertises snap counts like any other, and the line says how many of the count were declared
-    *   (EG-12, plan open item 3)
+    *   (EG-12, plan open item 3). Read once, at the start.
+    * @param added
+    *   the node ids the peer manager maintains now, read again at each count (B-453): a peer the operator adds over
+    *   `admin_addPeer` while the node waits is declared too, which the files read at the start cannot say
     */
-  final case class SnapPeerPrecondition(minSnapPeers: Int, powWait: FiniteDuration, declared: Set[ByteString])
+  final case class SnapPeerPrecondition(
+      minSnapPeers: Int,
+      powWait: FiniteDuration,
+      declared: Set[ByteString],
+      added: () => Set[ByteString] = () => Set.empty
+  ):
+    /** The peers the operator declared, as of now: the files, and what was added since. */
+    def declaredNow: Set[ByteString] = declared ++ added()
 
   object SnapPeerPrecondition:
     /** The shipped `min-snap-peers` and `pow-snap-peer-wait`, with nothing declared. */
@@ -145,7 +155,7 @@ object PathLiveSync:
   final case class SnapPeerCount(connected: Int, snapCapable: Int, declaredSnapCapable: Int):
     def describe: String =
       s"$snapCapable snap-capable peer(s) on this chain ($declaredSnapCapable of them declared by the operator, " +
-        s"static-nodes.json or sync.snap-sync.snap-server-peers), of $connected connected"
+        s"static-nodes.json, sync.snap-sync.snap-server-peers or admin_addPeer), of $connected connected"
 
   /** The handshaked peers counted: a peer whose fork was not accepted is of another chain, and is not counted. */
   def countSnapPeers(
