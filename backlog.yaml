@@ -4209,12 +4209,17 @@ items:
   - id: B-447
     title: "Decide newHeads semantics on a reorg: core-geth posts ChainEvent only for blocks inserted in that call, not for stored side blocks a reorg makes canonical"
     priority: P3
-    status: open
+    status: claimed
     area: rpc
     opened: 2026-11-23
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T00:05:18Z
+      heartbeat: 2026-11-24T00:05:18Z
     notes: "forge-b344: core-geth core/blockchain.go reorg() writes newChain[1:] with writeHeadBlock and sends no ChainEvent for them; newHeads (eth/filters BlocksSubscription) follows ChainEvent. fukuii (B-344) publishes NewBlockImported for each told block (side parents included, bounded by max-queued-block-number-behind) per the user's decision of 2026-11-23. Confirm or narrow to the executed blocks."
   - id: B-448
     title: "Batch imports (tryImportBlocks) tell no one: no newHeads event, pool removal or announce for BlockImportedToTop or ChainReorganised"
