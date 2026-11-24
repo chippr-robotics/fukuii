@@ -302,6 +302,16 @@ class BlockchainReader(
   /** Whether this node's state came from a completed SNAP sync. */
   def isSnapSyncDone: Boolean = appStateStorage.isSnapSyncDone()
 
+  /** The backfill's three cursors (`AppStateStorage.getBackfillBestHeader`, `getBackfillBestBody`,
+    * `getBackfillBestReceipt`): how far below the SNAP pivot `ChainDownloader` has stored the chain (B-410).
+    */
+  def getBackfillCursors: BackfillCursors =
+    BackfillCursors(
+      header = appStateStorage.getBackfillBestHeader(),
+      body = appStateStorage.getBackfillBestBody(),
+      receipt = appStateStorage.getBackfillBestReceipt()
+    )
+
   /** Bulk bytecode recoveries that finished with the triggering code still missing (see SyncController). */
   def bulkBytecodeRecoveryFailures: Int = appStateStorage.bulkBytecodeRecoveryFailures()
 
@@ -524,6 +534,11 @@ class BlockchainReader(
         source = storage
       )
     }
+
+/** The backfill's cursors, as [[BlockchainReader.getBackfillCursors]] reads them: every block from 1 to `header` has
+  * its header stored by the backfill, and to `body` and `receipt` its body and its receipts. 0 where none is stored.
+  */
+final case class BackfillCursors(header: BigInt, body: BigInt, receipt: BigInt)
 
 object BlockchainReader:
 

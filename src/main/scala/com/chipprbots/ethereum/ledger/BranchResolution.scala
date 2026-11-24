@@ -4,9 +4,12 @@ import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 
+import scala.concurrent.duration.FiniteDuration
+
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.mess.ArtificialFinality
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
+import com.chipprbots.ethereum.domain.BackfillCursors
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -19,10 +22,17 @@ import com.chipprbots.ethereum.utils.Logger
   *   PoS fork choice, or `None`. `None` on every PoW chain: SyncController supplies a `Some` only when
   *   terminal-total-difficulty is configured (see [[DesignatedHead]]). The default is `None` too, so any construction
   *   site that does not explicitly opt in keeps the pre-merge behaviour untouched.
+  * @param backfillStallAfter
+  *   how long the backfill's cursors may stand still before a gap at or below the SNAP pivot is no longer left to it
+  *   ([[acrossAGap]], B-410): `sync.backfill-stall-timeout`
+  * @param nanoTime
+  *   the clock the backfill's progress is timed by
   */
 class BranchResolution(
     blockchainReader: BlockchainReader,
-    designatedHead: Option[DesignatedHead] = None
+    designatedHead: Option[DesignatedHead] = None,
+    backfillStallAfter: FiniteDuration = BranchResolution.DefaultBackfillStallAfter,
+    nanoTime: () => Long = () => System.nanoTime()
 ) extends Logger:
 
   /** Optional MESS config for anti-reorg protection. Set by SyncController when configured. */
@@ -306,16 +316,18 @@ class BranchResolution(
       if blockchainReader.getChainWeightByHash(under).isEmpty
     yield side
 
-  /** Where [[compareBranch]] answers `NoChainSwitch` for a gap in this node's chain above the SNAP pivot (B-395): the
-    * block it found missing, and the headers of `headers` that are not this node's, which the gap leaves unweighed
-    * (B-407). None where there is no gap, where the gap is at or below the SNAP pivot, and where every header is this
-    * node's own.
+  /** Where [[compareBranch]] answers `NoChainSwitch` for a gap in this node's chain that nothing is to fill (B-395):
+    * the block it found missing, and the headers of `headers` that are not this node's, which the gap leaves unweighed
+    * (B-407). None where there is no gap, where the backfill is to fill it, and where every header is this node's own.
     *
     * The gap is found as [[compareBranch]] finds it, by the same reads: the first height whose header or index entry is
     * not stored, else the first block the branch would displace whose body is not stored. Above the pivot every block
     * is to be stored whole, so nothing ends the wait for it, and the importer tells the escalation's feed. At or below
     * it the backfill brings the block; told, a heavier branch over a gap the backfill is to fill would grow past the
-    * escalation's threshold and cost the node its state.
+    * escalation's threshold and cost the node its state. So it is left to the backfill while the backfill may still
+    * fill it: its cursor (of headers, or of bodies for a body) is below the block, and its cursors have moved within
+    * `backfillStallAfter`. Once the cursor has passed the block and it is still not stored, or the backfill has stood
+    * still that long, nothing ends the wait either, and the gap is named as one above the pivot is (B-410).
     *
     * The headers above those matched by header are dropped while the hash index names each as this node's block at its
     * height, up to the head: past a gap where only the header is missing, a branch that stands on that block is named
@@ -334,9 +346,33 @@ class BranchResolution(
       own.firstMissing.map(_ -> false).orElse(own.whole(shared).left.toOption.map(_ -> true))
     for
       (firstMissing, bodyOnly) <- gap
-      if !blockchainReader.getSnapSyncPivotBlock.exists(firstMissing <= _)
+      if !leftToTheBackfill(firstMissing, bodyOnly)
       side <- NonEmptyList.fromList(notOwnByIndex(headersList.drop(shared)))
     yield ChainGap(firstMissing, bodyOnly, side)
+
+  // a gap at or below the SNAP pivot that the backfill may still fill (acrossAGap, B-410). The cursors are read, and
+  // their progress timed, only there
+  private def leftToTheBackfill(firstMissing: BigInt, bodyOnly: Boolean): Boolean =
+    blockchainReader.getSnapSyncPivotBlock.exists(firstMissing <= _) && {
+      val cursors = blockchainReader.getBackfillCursors
+      val stalledFor = backfill.stalledFor(cursors, nanoTime())
+      val cursor = if bodyOnly then cursors.body else cursors.header
+      val passed = cursor >= firstMissing
+      val stalled = stalledFor >= backfillStallAfter.toNanos
+      if passed || stalled then
+        if backfill.sayOnce() then
+          val why =
+            if passed then s"the backfill's ${if bodyOnly then "body" else "header"} cursor is at $cursor, past it"
+            else s"the backfill's cursors have stood still at $cursors for ${stalledFor / 1000000000L}s"
+          log.warn(
+            s"Gap at or below the SNAP pivot no longer left to the backfill: block $firstMissing of this node's chain " +
+              s"is not stored ($why); a heavier branch over it is told to the escalation's watch (B-410)"
+          )
+        false
+      else true
+    }
+
+  private val backfill = new BranchResolution.BackfillProgress
 
   // `headers` less those, from the first, that the hash index names as this node's block at their height, up to the head
   private def notOwnByIndex(headers: List[BlockHeader]): List[BlockHeader] =
@@ -435,6 +471,34 @@ class BranchResolution(
 object BranchResolution:
   private val GapWarnEveryNanos: Long = 60L * 1000L * 1000L * 1000L
 
+  /** `sync.backfill-stall-timeout`'s default: see `sync.conf`. */
+  val DefaultBackfillStallAfter: FiniteDuration = FiniteDuration(30, java.util.concurrent.TimeUnit.MINUTES)
+
+  /** When the backfill's cursors were last seen to move (B-410). The first reading counts as a move: the clock starts
+    * when a gap is first met, never earlier. Any move, of any cursor and either way (a rewind starts the download
+    * again), restarts it.
+    */
+  final private class BackfillProgress:
+    private var seen: Option[BackfillCursors] = None
+    private var movedAt: Long = 0L
+    private var said: Boolean = false
+
+    /** How long, in nanoseconds, the cursors have stood at `cursors` as of `now`. */
+    def stalledFor(cursors: BackfillCursors, now: Long): Long = synchronized {
+      if !seen.contains(cursors) then
+        seen = Some(cursors)
+        movedAt = now
+        said = false
+      now - movedAt
+    }
+
+    /** True the first time it is asked since the cursors last moved: the gap is said once per stall. */
+    def sayOnce(): Boolean = synchronized {
+      val first = !said
+      said = true
+      first
+    }
+
 /** A block of this node's chain as [[BranchResolution]] reads it: its body None where the header is stored and the body
   * is not.
   */
@@ -468,8 +532,8 @@ final private[ledger] case class OwnBlocks(blocks: List[OwnBlock], firstMissing:
       case Some(withoutBody) => Left(withoutBody)
       case None              => Right(displaced.collect { case OwnBlock(header, Some(body)) => Block(header, body) })
 
-/** A gap in this node's chain above the SNAP pivot that left a branch unweighed, as [[BranchResolution.acrossAGap]]
-  * names it (B-407).
+/** A gap in this node's chain that nothing is to fill and that left a branch unweighed, as
+  * [[BranchResolution.acrossAGap]] names it (B-407, B-410).
   *
   * @param firstMissing
   *   the number of the first block of this node's chain found missing
