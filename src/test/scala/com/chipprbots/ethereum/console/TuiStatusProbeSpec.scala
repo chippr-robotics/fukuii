@@ -320,6 +320,21 @@ class TuiStatusProbeSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     finally release.countDown()
   }
 
+  // prism, B-192 review: with a pool that refused a second task while its one thread was busy, a read started right
+  // after the last one completed could be refused, and poll() then threw.
+  it should "start reads back to back, each right after the last completed, and never refuse one" taggedAs (
+    UnitTest
+  ) in {
+    val reads = new java.util.concurrent.atomic.AtomicLong(0L)
+    val slow = new TuiStatusProbe.SlowReads(
+      () => TuiStatusProbe.SlowReading(Some(reads.incrementAndGet()), None, None),
+      now
+    )
+    (1 to 2000).foreach { i =>
+      slow.latest(slow.start(), 5.seconds, now).diskFree shouldBe Some(i.toLong)
+    }
+  }
+
   it should "read the disk as unknown once its read has hung past SlowReadMaxAge" taggedAs (UnitTest) in {
     val reading = new java.util.concurrent.atomic.AtomicLong(0L)
     val release = new java.util.concurrent.CountDownLatch(1)

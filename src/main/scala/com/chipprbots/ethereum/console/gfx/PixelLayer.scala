@@ -127,7 +127,6 @@ object PixelLayer:
           bytes = layer.bytes.updated(id, image.width.toLong * image.height * 4),
           nextId = if known.isEmpty then layer.nextId + 1 else layer.nextId
         )
-      layer = layer.copy(shownAt = layer.shownAt.updated(id, layer.frame))
       val placement = layer.placements.getOrElse(region.id, layer.placements.size + 1)
       // The image, centred in its region: whole cells of margin move the cursor, the rest is a pixel offset.
       val marginX = ((region.cols * cell.width - image.width) / 2).max(0)
@@ -149,6 +148,9 @@ object PixelLayer:
           placed = layer.placed.updated(region.id, shown),
           placements = layer.placements.updated(region.id, placement)
         )
+    // When each image shown this frame was last shown: one update for the frame, not one a region.
+    val shownNow = wanted.flatMap((_, image) => layer.images.get(image.key))
+    if shownNow.nonEmpty then layer = layer.copy(shownAt = layer.shownAt ++ shownNow.map(_ -> layer.frame))
     val kept = wanted.map(_._1.id).toSet
     for (regionId, old) <- layer.placed.toSeq.sortBy(_._1) if !kept.contains(regionId) do
       out.append(Kitty.remove(old.image, old.placement))

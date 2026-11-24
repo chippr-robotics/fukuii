@@ -341,30 +341,36 @@ object TuiStatusProbe:
     * when idle and is made again by the next read.
     */
   final private[console] class SlowReads(read: () => SlowReading, now: => Instant) extends Logger:
-    private val executor = new java.util.concurrent.ThreadPoolExecutor(
-      0,
-      1,
-      30L,
-      java.util.concurrent.TimeUnit.SECONDS,
-      new java.util.concurrent.SynchronousQueue[Runnable](),
-      (r: Runnable) =>
-        val t = new Thread(r, "TuiDiskReader")
-        t.setDaemon(true)
-        t
-    )
-    private val running = new java.util.concurrent.atomic.AtomicReference[Option[Future[Unit]]](None)
+    // One thread, ended when idle. The queue is unbounded so a submit is never refused: a read's promise completes
+    // inside its task, so the next poll can submit while the worker is still finishing it (prism, B-192 review). At
+    // most one read is queued or running at a time ([[start]]).
+    private val executor =
+      val pool = new java.util.concurrent.ThreadPoolExecutor(
+        1,
+        1,
+        30L,
+        java.util.concurrent.TimeUnit.SECONDS,
+        new java.util.concurrent.LinkedBlockingQueue[Runnable](),
+        (r: Runnable) =>
+          val t = new Thread(r, "TuiDiskReader")
+          t.setDaemon(true)
+          t
+      )
+      pool.allowCoreThreadTimeOut(true)
+      pool
+    private var running: Option[Future[Unit]] = None // guarded by `this`
     @volatile private var newest: Option[(SlowReading, Instant)] = None
     @volatile private var startedAt: Instant = Instant.EPOCH
     @volatile private var warnedHung = false
 
     /** Start a read, unless one is running: the running one is returned instead. */
-    def start(): Future[Unit] =
-      running.get match
+    def start(): Future[Unit] = synchronized {
+      running match
         case Some(inFlight) if !inFlight.isCompleted => inFlight
         case _ =>
           val promise = scala.concurrent.Promise[Unit]()
-          running.set(Some(promise.future))
           startedAt = now
+          running = Some(promise.future)
           executor.execute { () =>
             try
               val reading = read()
@@ -373,6 +379,7 @@ object TuiStatusProbe:
             finally promise.success(()): Unit
           }
           promise.future
+    }
 
     /** The newest reading, waiting up to `wait` for `read` to finish; empty when the newest is older than
       * [[SlowReadMaxAge]] at `at`.
