@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.consensus.engine
 
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.util.ByteString
 
@@ -21,6 +22,7 @@ import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
 import com.chipprbots.ethereum.rlp.encode as rlpEncode
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
+import com.chipprbots.ethereum.transactions.TxPoolReset
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 
@@ -76,6 +78,9 @@ class EngineApiService(
   import org.apache.pekko.util.Timeout
   import scala.concurrent.duration.*
   implicit private val askTimeout: Timeout = Timeout(3.seconds)
+
+  // The head the tx pool was last reset to by a fork choice (B-253, TxPoolReset.between): None until the first
+  private val poolHead = new AtomicReference[Option[BlockHeader]](None)
 
   // spec 022 FR-014: what `newPayload` could not execute a block over. Says so and changes nothing.
   private val stateHoles = new EngineStateHoles(message => log.warn(message))
@@ -1209,14 +1214,15 @@ class EngineApiService(
             // The head is set: go-ethereum's `api.eth.SetSynced()`, which opens tx gossip from peers (eth/catalyst/api.go,
             // after SetCanonical and before the finalized/safe updates and payload building).
             txGossipGate.foreach(_.markSynced("forkchoiceUpdated set the head"))
-            // FCU has advanced best-block; purge the head block's txs from the mempool
-            // so the next proposer build doesn't re-queue them (would cause
-            // NONCE_MISMATCH_TOO_LOW).
+            // The pool is reset from the head it was last told of to this one (B-253): go-ethereum's LegacyPool.reset.
+            // Every block moved onto leaves the pool, so the next build does not re-queue its txs (NONCE_MISMATCH_TOO_LOW),
+            // and the txs of the blocks moved off that the new chain lacks go back to it. From the pool's head, not
+            // from the best block before this fork choice: on the unified layout a commit in place or a recovery may
+            // have moved the head since the last fork choice, and its blocks are told here.
             pendingTransactionsManager.foreach { ptm =>
-              blockchainReader.getBlockByHash(BlockHash(forkChoiceState.headBlockHash)).foreach { headBlock =>
-                if headBlock.body.transactionList.nonEmpty then
-                  ptm ! com.chipprbots.ethereum.transactions.PendingTransactionsManager
-                    .RemoveTransactions(headBlock.body.transactionList)
+              blockchainReader.getBlockHeaderByHash(BlockHash(forkChoiceState.headBlockHash)).foreach { newHead =>
+                val from = poolHead.getAndSet(Some(newHead))
+                TxPoolReset.tell(ptm, TxPoolReset.between(from, newHead, blockchainReader))
               }
             }
 

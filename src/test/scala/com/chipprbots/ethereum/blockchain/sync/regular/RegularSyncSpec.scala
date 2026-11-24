@@ -3667,6 +3667,26 @@ class RegularSyncSpec
           noneTold()
       )
 
+      // B-253: go-ethereum's pool reset takes back `types.TxDifference(discarded, included)`, not every moved-off tx
+      "take back none of the moved-off txs the new chain includes" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("batch-reorg-shared"):
+          val sideParent: Block = testBlocks.head
+          val executed: List[Block] = testBlocks.slice(1, 3)
+          val onto: List[Block] = sideParent :: executed
+          val shared: SignedTransaction = executed.head.body.transactionList.head
+          val ownBlock: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val movedOff: Block =
+            BlockHelpers.withTransactions(ownBlock, shared :: ownBlock.body.transactionList.toList)
+          answer.set(ChainReorganised(List(movedOff), onto, onto.map(weighed).map(_.weight), branchBlocks = 2))
+
+          importBatch(executed)
+
+          newHeads.receiveMessages(2, 5.seconds) shouldBe executed.map(b => Topic.Publish(NewBlockImported(b)))
+          removedFromThePool() shouldBe onto.map(_.body.transactionList)
+          takenBackByThePool() shouldBe List(ownBlock.body.transactionList)
+          noneTold()
+      )
+
       // B-336: a fault of this node's own state after a prefix of the batch became the head. The prefix is told as
       // imported blocks are; the failing block and those after it are not on the chain and are not told.
       "tell of the imported prefix only when this node's state fails a later block of the batch" taggedAs (

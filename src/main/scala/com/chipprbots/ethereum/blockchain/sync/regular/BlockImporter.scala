@@ -71,8 +71,7 @@ import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions
+import com.chipprbots.ethereum.transactions.TxPoolReset
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.FunctorOps.*
@@ -1966,9 +1965,10 @@ final private class BlockImporterLogic(
     val newBlocks = blocks.zip(weights).map((block, weight) => BlockToBroadcast(block, weight))
     broadcaster ! BroadcastBlocks(newBlocks)
 
+  // go-ethereum's pool reset (B-253): the blocks moved onto leave the pool, and the transactions of those moved off
+  // that the new chain does not include go back, unless the heads are more than 64 blocks apart (TxPoolReset)
   private def updateTxPool(blocksAdded: Seq[Block], blocksRemoved: Seq[Block]): Unit =
-    blocksRemoved.foreach(block => pendingTransactionsManager ! AddUncheckedTransactions(block.body.transactionList))
-    blocksAdded.foreach(block => pendingTransactionsManager ! RemoveTransactions(block.body.transactionList))
+    TxPoolReset.tell(pendingTransactionsManager, TxPoolReset.ofBranches(blocksAdded, blocksRemoved))
 
   private def importWith(importTask: IO[NewBehavior], blockImportType: BlockImportType)(
       state: ImporterState
