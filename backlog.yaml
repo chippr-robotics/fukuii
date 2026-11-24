@@ -5091,3 +5091,14 @@ items:
     refs: []
     links: {}
     notes: forge, found during B-299; harmless (ancestor filter) but uses a slot.
+  - id: B-502
+    title: StorageRecoveryActor StorageSlotProgress(_) ignores n and adds 1 per message to the downloaded gauge (same shape as B-494)
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: Found during B-494; check what n means at the sender before fixing.
