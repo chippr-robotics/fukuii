@@ -173,7 +173,7 @@ items:
       by: cloud-dc960fdc
       agent: vault-b014
       since: 2026-11-23T21:24:00Z
-      heartbeat: 2026-11-23T21:24:17Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       beacon + vault. Liveness, not loss. Check first whether Track C C8a makes it moot.
       2026-11-17 priority P3: liveness, not loss; C8a likely moots it
@@ -490,7 +490,7 @@ items:
       by: cloud-dc960fdc
       agent: dev-node
       since: 2026-11-22T19:33:05Z
-      heartbeat: 2026-11-23T04:04:02Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       Then T003 ranges (user, beacon, forge), T004-T007 runs on the jar (live host), T011, T017 (user).
       Gates B-203, B-207, B-212 and C7's exit (Track C).
@@ -650,7 +650,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-15T17:59:02Z
-      heartbeat: 2026-11-23T04:04:06Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       cloud-dc960fdc: heartbeat or release by 11-17 17:06 UTC; C5a code merged (#1855-#1880), T209 + Sepolia fresh sync + 24 h remain.
       2026-11-18 blocked: C5a code merged (#1855-#1880 and follow-ups). Remaining gates need a live host: T209, a fresh Sepolia sync and 24 h following the head. Not doable in the cloud container.
@@ -2005,7 +2005,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b230b
       since: 2026-11-24T00:17:11Z
-      heartbeat: 2026-11-24T01:04:23Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       Found by beacon in the spec 018 C4a part 4b consult. Content-addressed, so not wrong, but unbounded growth by RPC.
       2026-11-24 review: Merge after vault review (code write order).
@@ -2063,7 +2063,7 @@ items:
       by: cloud-dc960fdc
       agent: beacon-b239
       since: 2026-11-23T21:03:01Z
-      heartbeat: 2026-11-24T00:17:00Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       EngineApiService.executableAtParent reads accountAt(parent), which is the anchor-chain seam and refuses a forward-layer parent, while proposerStateOn serves one. No node flow makes a layer today. Route it through the proposer's door with C4d; also refuse layers before building an index in viewBehind. Found by beacon, C4a part 4b-2
       2026-11-23 claimed: forge triage: premise outdated (newPayload already keeps forward layers); catch only MPTException at EngineApiService:1548 so StateUnavailable fails the build; fix: proposerStateOn(parent) + catch StateFault. Path-live+ETH only.
@@ -2477,7 +2477,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-23T21:03:09Z
-      heartbeat: 2026-11-23T21:03:09Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: "forge, C4e part 4 pre-code: refuse with ask-again, not wait (BlockImportGate deadlock); needs beacon; C4e part 5 or C5a"
   - id: B-295
     title: "T183 remainder: a node killed during reverse-then-commit restarts on a valid head and adopts the heavier chain when offered again"
@@ -2566,7 +2566,7 @@ items:
       by: cloud-dc960fdc
       agent: hive-b314
       since: 2026-11-18T00:57:40Z
-      heartbeat: 2026-11-23T04:04:02Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       hive client has no switch for fukuii.state.path-live; needs one, and a host
       2026-11-18 blocked: The hive client switch for path-live landed (#1910). Remaining: the gate run itself, which needs a hive host or a dispatch: gh workflow run hive-engine.yml --ref staging -f path_live=true -f sim_limit='/re-?org' (or scripts/hive/local.sh ethereum/engine --limit '/re-?org' --path-live).
@@ -2761,7 +2761,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b336
       since: 2026-11-23T22:32:09Z
-      heartbeat: 2026-11-24T00:29:25Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       forge F1 on B-291's review: ConsensusImpl ~:341 and adapter ExtendedCurrentBestBranchPartially arm call removeSubtree and answer BlockImportedToTop for an MPTError too; the importer never sees the [LOCAL-STATE-FAULT] text (T062). Keep a local fault on the BranchExecutionFailure path, as B-291 does for reorgs.
       2026-11-24 review: Merge after #2015.
@@ -2780,7 +2780,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b336
       since: 2026-11-23T22:32:27Z
-      heartbeat: 2026-11-24T00:29:28Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       forge F2 on B-291's review: ConsensusImpl reorganised's MissingNode arm (~:1190) answers ConsensusErrorDueToMissingNode(executed, reason) with imported = Nil after settleHead adopted; the hash-layout stateFault arm ignores adopted too (assert it). The B-291 hole for the missing-node answer.
       2026-11-24 in-progress: Branch fix/b337-reorg-missing-node-prefix (01a61b096) stacked on B-336; PR after #2016 merges.
@@ -2848,7 +2848,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-23T21:03:14Z
-      heartbeat: 2026-11-23T21:03:14Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: "B-296 follow-up (forge): ConsensusImpl.reorganiseOnLayers loads every side parent whose state is not held (all of them after a restart) and commitInPlaceAtTheCap runs them with the branch as one List[Block]; load lazily and execute in chunks carrying the weight"
   - id: B-344
     title: "Bound the side parents a reorg tells as of its new branch: a deep side chain is broadcast, published and sent to the pool block by block"
@@ -3247,7 +3247,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-18T16:08:42Z
-      heartbeat: 2026-11-23T04:04:02Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       Seen 2026-11-18 on #1916 (LookupsSpec) and #1921 (both), unrelated diffs; both pass locally 2/2 on the same heads. LookupsSpec uses PatienceConfig(5 s) eventually throughout. Synchronise on the event instead of a timeout; never skip.
       2026-11-18 in-progress: LookupsSpec race fixed in #1927 (waited on a count true part-way). Left: EngineApiHttpServerObservationSpec and JsonRpcHttpServerLifecycleSpec each failed once on CI 2026-11-18 (#1921); capture their failure text from the full job log (logs_url, not the 5000-line tail) when they recur.
@@ -3426,7 +3426,7 @@ items:
       by: cloud-dc960fdc
       agent: herald-b386
       since: 2026-11-24T00:29:37Z
-      heartbeat: 2026-11-24T00:37:30Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: "After the C6 PR-C fallback, do-snap-sync=true restarts go precondition -> beforeSnap -> Refused (state above genesis) -> log.error. Correct, but noisy: say once at INFO that the node regular-syncs on the state it holds. Also: declared peers come from static-nodes.json and snap-server-peers at start only; admin_addPeer peers are not counted."
   - id: B-387
     title: "JwtAuthenticatorSpec: audit Engine API specs for clock-boundary races (iat at the 60 s skew edge)"
@@ -3758,7 +3758,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b410
       since: 2026-11-24T00:37:34Z
-      heartbeat: 2026-11-24T00:43:38Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: B-407 tells the feed only above the pivot, since a backfill gap there would trip the 64-block threshold. If the backfill stalls, nothing ends the wait. Needs a backfill-done signal or a pivot-clear check.
   - id: B-411
     title: "After a checkpoint import the archive's own block N is not served over RPC: the archive carries no body for N and nothing fetches it"
@@ -4067,7 +4067,7 @@ items:
       by: cloud-dc960fdc
       agent: herald-b434b
       since: 2026-11-23T00:30:45Z
-      heartbeat: 2026-11-23T05:30:30Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       2026-11-23 in-progress: Round 2 (branch head 107ea73d19): blacklist/selection paths hold in code+tests; 60s-vs-90s theory wrong, reverted. Remaining hypotheses: PeerDisconnected clears blacklist on a live peer; ask timeout (92s) beats request failure so no BlacklistPeer. Waiting on dev-node greps (B-437).
       2026-11-23 blocked: dev-node greps: blacklist lines are DEBUG (not in INFO log). Two of the 7 requests left 2.4 s / 19.9 s after a failure (new fetches, not retries) and still chose e514276e with 13 peers up. DEBUG repro run requested on dev-node.
@@ -4184,7 +4184,7 @@ items:
       by: cloud-dc960fdc
       agent: beacon-b443b
       since: 2026-11-24T00:39:36Z
-      heartbeat: 2026-11-24T01:04:08Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       From B-432. BlobSchedule.fromConfig refuses bpo3+ by design (BlobSchedule.scala:60,119); ForkTimestamps, BlockchainConfigForEvm.paramsAt, ForkId, SignedTransaction, EngineApiController carry BPO1/BPO2 only. Harness-only option: remap BPO2ToBPO3 to BPO1@0/BPO2@15k with the fixture's params (blob-only forks), test-only. Real support is a consensus change (beacon). 25+23 cases x 2 formats (+engine_x).
       2026-11-24 claimed: User 2026-11-24: option (a) real BPO3/BPO4 support (ETH consensus, beacon). Then replay the 48+48 EEST v21.0.0 BPO2->BPO3 / BPO3->BPO4 fixtures. Queued for next free clone.
@@ -4222,7 +4222,7 @@ items:
       by: cloud-dc960fdc
       agent: eye-b446
       since: 2026-11-23T23:46:02Z
-      heartbeat: 2026-11-24T00:29:21Z
+      heartbeat: 2026-11-24T01:04:29Z
     notes: |-
       forge-b344: failed 3 of 5 full-spec runs on a loaded host (5 s fishForSpecificMessage at RegularSyncSpec:2844), passed alone every time and in the full spec once load dropped; seen with and without B-344's change.
       2026-11-23 claimed: Pre-existing: RegularSyncSpec 'ask again for ancestor bodies... deadline' timed out 1/3 on plain staging (2026-11-23). Not caused by B-344. Needs a deterministic fix (test uses a 5 s real deadline).
