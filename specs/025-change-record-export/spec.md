@@ -54,6 +54,8 @@ genesis only).
   promise. The ETC family never emits one.
 - Q: New schema version? → A: No. GT-1 has not frozen `0x01` (T018 open), so the four types join v1 and the golden
   vectors cover them before the freeze.
+- Q: Pool defaults (OQ-8, OQ-9)? → A: **Accepted**: one partition and 24 hours retention for the pool topic, the
+  first 8 bytes of the node ID as the default `nodeId`, and best-effort delivery for pool records (DC-10).
 
 ## Problem
 
@@ -432,11 +434,11 @@ iteration end and the new one start, with no fault.
 - **OQ-6** *(resolved 2026-10-31)*: reserved optional `witness` record type, off by default (FR-012).
 - **OQ-7 (new)**: the concrete buffer bounds per chain (blocks and bytes) and the retention figure per chain, to be set
   from the 023 harness's outage tests in `plan.md`.
-- **OQ-8 (amendment 2026-11-24)**: pool topic sizing: partition count (default 1; any count keeps per-sender order
-  because the key is the sender), retention (default guidance 24 hours) and the queue bound, from a mainnet-scale
-  gossip measurement. Default accepted for now: 1 partition, 24 hours, 65,536 records.
-- **OQ-9 (amendment 2026-11-24)**: the default `nodeId`: the node's enode ID (stable across restarts) or an operator
-  label. Default accepted for now: the first 8 bytes of the node ID, overridable by `fukuii.export.node-id`.
+- **OQ-8** *(resolved 2026-11-24)*: pool topic sizing: 1 partition and 24 hours retention by default (any partition
+  count still keeps per-sender order, because the key is the sender). The queue bound keeps its 65,536-record default
+  until a mainnet-scale gossip measurement says otherwise (DC-10, FR-016).
+- **OQ-9** *(resolved 2026-11-24)*: the default `nodeId` is the first 8 bytes of the node ID (stable across restarts),
+  overridable by an operator label in `fukuii.export.node-id`.
 
 ---
 

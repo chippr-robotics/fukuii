@@ -178,7 +178,7 @@ Published on `fukuii.<chainKey>.txpool.v1` (`topic.md` §8), never on the record
 poolAdd body    := [ nodeId, session, seq, observedAt, txHash, sender, tx, source ]
 poolRemove body := [ nodeId, session, seq, observedAt, txHash, sender, nonce, reason, replacedBy ]
 
-nodeId     := bytes   -- the publishing node (default: first 8 bytes of its node ID; spec OQ-9)
+nodeId     := bytes   -- the publishing node (default: first 8 bytes of its node ID; spec OQ-9, resolved)
 session    := uint    -- the node process's start time, milliseconds since the Unix epoch
 seq        := uint    -- 0, 1, 2, ... per (nodeId, session), across both pool types; contiguous unless records were
                       -- dropped (spec FR-016)

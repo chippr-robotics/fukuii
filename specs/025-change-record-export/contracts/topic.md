@@ -91,11 +91,11 @@ the record topic. Off unless `fukuii.export.pool.enabled = true`.
 | Aspect | Record topic | Pool topic |
 |--------|--------------|------------|
 | Delivery | at-least-once, no gaps (durable buffer, position) | **best-effort**: in-memory queue; dropped records counted and visible as `seq` gaps |
-| Partitions | exactly 1 | 1 by default; any count allowed (OQ-8) |
+| Partitions | exactly 1 | 1 by default; any count allowed (OQ-8, resolved) |
 | Message key | `blockNumber`, 8 bytes BE | `sender`, 20 bytes: one sender's records share a partition, so nonce order and replacements stay in order |
 | Order | total per chain | per `(nodeId, session)` in `seq` order, per sender on the topic; none against the record topic |
 | `cleanup.policy` | `delete` | `delete` (never `compact`: a removal and a re-admission share a key) |
-| `retention.ms` | ≥ longest tolerated follower outage (7 days guidance) | short; 24 hours guidance (OQ-8). A consumer that falls further behind resynchronises from `txpool_content` |
+| `retention.ms` | ≥ longest tolerated follower outage (7 days guidance) | short; 24 hours default (OQ-8, resolved). A consumer that falls further behind resynchronises from `txpool_content` |
 | Writers | one per chain (the fenced `ingest` process, 023) | any number of nodes; each record names its `nodeId` |
 
 Producer settings: as §4, except `delivery.timeout.ms` is short (operator: `pool.delivery-timeout`, 10 s default) so

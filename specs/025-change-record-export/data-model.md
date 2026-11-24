@@ -132,7 +132,7 @@ pool actor and offered to `PoolQueue`; a separate drain fiber publishes them to 
 
 | # | Field | Type | Notes |
 |---|-------|------|-------|
-| 0 | `nodeId` | bytes | `fukuii.export.node-id`, default the first 8 bytes of the node ID (OQ-9) |
+| 0 | `nodeId` | bytes | `fukuii.export.node-id`, default the first 8 bytes of the node ID (OQ-9, resolved) |
 | 1 | `session` | unsigned integer | process start, ms since the Unix epoch |
 | 2 | `seq` | unsigned integer | per `(nodeId, session)`, both pool types; assigned when the record is **built**, so a drop leaves a hole |
 | 3 | `observedAt` | unsigned integer | node wall clock, ms since the Unix epoch |
@@ -274,12 +274,12 @@ fukuii {
       enabled = false                     # FR-012: reserved type; 017 decides production
     }
 
-    node-id = ""                          # amendment: pool records' nodeId; "" = first 8 bytes of the node ID (OQ-9)
+    node-id = ""                          # amendment: pool records' nodeId; "" = first 8 bytes of the node ID (OQ-9, resolved)
 
     pool {                                # amendment 2026-11-24 (DC-10, FR-013..FR-016); needs sink = "kafka"
       enabled = false
       topic-template = "fukuii.{chainKey}.txpool.v1"   # contracts/topic.md §8
-      queue-size = 65536                  # records; full = drop and count (OQ-8)
+      queue-size = 65536                  # records; full = drop and count (OQ-8, resolved)
       acks = "1"                          # "1" | "all"; durability is not promised either way
       delivery-timeout = 10s
     }
