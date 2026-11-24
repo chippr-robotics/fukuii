@@ -20,7 +20,6 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedAt
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter
-import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ConsensusImpl
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus.*
@@ -262,9 +261,10 @@ class InvalidChainReportingSpec
     UnitTest,
     ConsensusTest
   ) in new ConsensusSetup:
-    // The hive GasUsed P8 shape: blocks before the bad one execute, so this is a PARTIAL batch, which
-    // ConsensusAdapter maps to BlockImportedToTop and BlockImporter never sees. Before this change a gas-used
-    // mismatch here was reported by nobody. With the receipts-proof marker, ConsensusImpl reports it itself.
+    // The hive GasUsed P8 shape: blocks before the bad one execute, so this is a PARTIAL batch, which ConsensusAdapter
+    // then mapped to BlockImportedToTop, so BlockImporter never saw it (ImportedPartially since B-338). Before this
+    // change a gas-used mismatch here was reported by nobody. With the receipts-proof marker, ConsensusImpl reports it
+    // itself.
     val branch: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
     failAt(
       branch(1),
@@ -812,9 +812,9 @@ class InvalidChainReportingSpec
     val p10: ExecutionPayload = payloadOfUnexecutableChild(p9.hash.value)
 
     /** Drive one fetched batch through the production path, then apply BlockImporter's gas-used report rule to the
-      * result exactly as `handleBlocksImport` does on that arm: `importedBlocks` is the prefix a partial import made
-      * the head (B-338), so `notImportedBlocks` starts at the failing block, and `findMissingContractCode` finds
-      * nothing (the hive recipient's code is present).
+      * result exactly as `handleBlocksImport` does on that arm: nothing of the batch became the head (B-505), so
+      * `notImportedBlocks` is the whole batch, and `findMissingContractCode` finds nothing (the hive recipient's code
+      * is present).
       */
     def importBatchThroughTheImporterRule(batch: List[Block]): Unit =
       whenReady(engineApi.newPayload(p10).unsafeToFuture())(_.status shouldBe Accepted)
@@ -826,16 +826,14 @@ class InvalidChainReportingSpec
       val adapter = adapterWith(Some(engineApi.invalidChainReporter))
       val result = adapter.evaluateBranch(NonEmptyList.fromListUnsafe(batch)).unsafeRunSync()
 
-      // The shape BlockImporter sees: the prefix up to P7' made the head (B-338), and a failure it routes to the
-      // gas-used arm, naming P8'. The importer counts the prefix as imported, so P8' heads what was not.
-      result shouldBe a[ImportedPartially]
-      val failingBlockHash = result.asInstanceOf[ImportedPartially].failingBlockHash
-      failingBlockHash shouldBe p8.hash.value
+      // The shape BlockImporter sees: a failure it routes to the gas-used arm, naming P8'. The batch is the consensus
+      // layer's branch, which the hash layout adopts only if all of it is valid (B-505): no prefix became the head, so
+      // this is no partial import (B-338), and nothing of the batch is counted as imported.
+      result shouldBe a[BlockImportFailedAt]
+      result.asInstanceOf[BlockImportFailedAt].failingBlockHash shouldBe p8.hash.value
       result.toString should include(InvalidChainReporter.GasUsedMismatchMarker)
-      val notImportedBlocks = batch.drop(BlockImporter.beforeTheFailing(batch, failingBlockHash).size)
-      notImportedBlocks.headOption shouldBe Some(p8)
 
-      BlockImporter.provenGasUsedFailure(result, notImportedBlocks, adapter.reportsInvalidChains, _ => None).foreach {
+      BlockImporter.provenGasUsedFailure(result, batch, adapter.reportsInvalidChains, _ => None).foreach {
         case (failing, descendants) =>
           val lvh = failing.header.parentHash.value
           adapter.reportInvalidChain(failing.hash.value, lvh)

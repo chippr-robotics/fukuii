@@ -327,6 +327,15 @@ object BlockImporter:
                 case _ => None
           case None => Some(head -> InvalidChainReporter.provenDescendants(head, tail))
 
+  /** The number of the block a partial import ([[ImportedPartially]]) failed on: the one after the head its move left,
+    * as execution stops at the first block that fails. None for a move onto no block.
+    */
+  private[ethereum] def failingBlockNumber(headMove: BlockImportedToTop | ChainReorganised): Option[BigInt] =
+    val head = headMove match
+      case BlockImportedToTop(imported)         => imported.lastOption.map(_.block)
+      case ChainReorganised(_, newBranch, _, _) => newBranch.lastOption
+    head.map(_.number.value + 1)
+
   /** The blocks of `batch` before the one named `failingBlockHash`: what a partial import ([[ImportedPartially]],
     * B-338) made the head of the batch, which the importer counts as imported. None when the batch does not hold it.
     */
@@ -1490,7 +1499,11 @@ final private class BlockImporterLogic(
                           failedBlock.number
                         )
                     val invalidBlockNr = failedBlock.number.value
-                    fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
+                    fetcher ! BlockFetcher.InvalidateBlocksFrom(
+                      invalidBlockNr,
+                      err.toString,
+                      shouldBlacklist = blamesThePeerFor(err)
+                    )
                     RunningAfterFetcherRewind
               case UnknownParent =>
                 // The batch hangs from a block this node does not have (B-007, #1683): a gap on our side, found out while
@@ -1595,7 +1608,12 @@ final private class BlockImporterLogic(
                 // failed. The fetcher goes back to it and the peer that served it is blamed, as for a batch whose first
                 // block failed; the blocks after it, dropped from the queue with it, are fetched again from there. A
                 // gas-used mismatch took the arm above first, which fetches missing code before it blames anyone.
-                fetcher ! BlockFetcher.InvalidateBlocksFrom(notImportedBlocks.head.number.value, partial.error)
+                // Following a consensus layer, no peer is blamed (B-513, `blamesThePeerFor`).
+                fetcher ! BlockFetcher.InvalidateBlocksFrom(
+                  notImportedBlocks.head.number.value,
+                  partial.error,
+                  shouldBlacklist = blamesThePeerFor(partial)
+                )
                 RunningAfterFetcherRewind
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number.value
@@ -1674,6 +1692,15 @@ final private class BlockImporterLogic(
             struck(nel.head, err)
             IO.pure((importedBlocks, Some(err)))
         }
+
+  /** Is the peer that served the block a partial import ([[ImportedPartially]]) failed on blamed for it (B-513)? On a
+    * proof-of-work chain, yes, as core-geth's downloader drops the peer that served the block it could not insert.
+    * Following a consensus layer, no: the branch is the one the consensus layer named, which every peer serves alike,
+    * so blaming the peer that served it drops an honest peer, and the consensus layer is told the verdict instead
+    * (`reportInvalidChain`). Any other result is blamed as before.
+    */
+  private def blamesThePeerFor(err: Any): Boolean =
+    !(branchResolution.followsConsensusLayer && err.isInstanceOf[ImportedPartially])
 
   /** A block of a batch failed, or hangs from a block this node lacks: a strike against it, by its hash. At
     * [[BadBlockEvictionThreshold]] the peer that serves it is evicted; at [[ForkDetectThreshold]] a fork recovery is
@@ -1913,10 +1940,15 @@ final private class BlockImporterLogic(
           case move: ChainReorganised   => headMoved(move)
           // B-338: the queued branch this block topped moved the head part of the way, and a block of it failed: the
           // move is told as above, and the failure as a failed import is (this block stands on the failing one)
-          case ImportedPartially(headMove, _, error) =>
+          // The failing block is the one on the head the move left (B-513, beacon W3): the peer that served it is the
+          // one blamed, not the one that served the announced block; following a consensus layer, no peer is.
+          case partial @ ImportedPartially(headMove, _, error) =>
             headMoved(headMove)
             if informFetcherOnFail then
-              fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
+              val failingNumber = BlockImporter.failingBlockNumber(headMove).getOrElse(block.number.value)
+              if blamesThePeerFor(partial) then
+                fetcher ! BlockFetcher.BlockImportFailed(failingNumber, BlacklistReason.BlockImportError(error))
+              else fetcher ! BlockFetcher.InvalidateBlocksFrom(failingNumber, error, shouldBlacklist = false)
           case BlockImportFailedDueToMissingNode(missingNodeException, adopted)
               if syncConfig.redownloadMissingStateNodes =>
             announceAdopted(adopted, internally)

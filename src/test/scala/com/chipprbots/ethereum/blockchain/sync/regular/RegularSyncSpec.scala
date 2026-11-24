@@ -346,9 +346,16 @@ class RegularSyncSpec
   /** An importer spawned alone, with probes for whom it tells of an import (B-448): new-head subscribers, the pool and
     * the broadcaster to peers. Every batch it is handed is answered `answer`; this node's chain is the genesis block.
     */
-  abstract class BatchImportTells(name: String) extends Fixture:
+  abstract class BatchImportTells(
+      name: String,
+      followsConsensusLayer: Boolean = false,
+      reporting: Boolean = false
+  ) extends Fixture:
     val answer: java.util.concurrent.atomic.AtomicReference[BlockImportResult] =
       new java.util.concurrent.atomic.AtomicReference(BlockEnqueued)
+    // what the importer reported to the consensus layer as invalid, with each block's latest valid hash
+    val reportedInvalid: java.util.concurrent.ConcurrentLinkedQueue[(ByteString, ByteString)] =
+      new java.util.concurrent.ConcurrentLinkedQueue()
     val newHeads: TypedTestProbe[Topic.Command[NewBlockImported]] =
       testKit.createTestProbe[Topic.Command[NewBlockImported]](s"$name-new-heads")
     val pool: TypedTestProbe[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command] =
@@ -365,11 +372,22 @@ class RegularSyncSpec
           blockExecutionScheduler: IORuntime,
           blockchainConfig: BlockchainConfig
       ): IO[BlockImportResult] = IO { evaluations.incrementAndGet(); answer.get() }
+      // an announced block is answered the same
+      override def evaluateBranchBlock(block: Block)(implicit
+          blockExecutionScheduler: IORuntime,
+          blockchainConfig: BlockchainConfig
+      ): IO[BlockImportResult] = IO { evaluations.incrementAndGet(); answer.get() }
+      override def reportsInvalidChains: Boolean = reporting
+      override def reportInvalidChain(blockHash: ByteString, latestValidHash: ByteString): Unit =
+        reportedInvalid.add(blockHash -> latestValidHash): Unit
 
     // how many branches were handed to the consensus: a batch whose rest is dropped is not evaluated again
     val evaluations: java.util.concurrent.atomic.AtomicInteger = new java.util.concurrent.atomic.AtomicInteger(0)
 
-    override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
+    override lazy val branchResolution: BranchResolution = new BranchResolution(
+      blockchainReader,
+      Option.when(followsConsensusLayer)(com.chipprbots.ethereum.consensus.engine.DesignatedHead(() => None))
+    ):
       override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult = NewBetterBranch(Nil)
 
     val importer: TypedActorRef[BlockImporter.Command] = testKit.spawn(
@@ -3881,6 +3899,83 @@ class RegularSyncSpec
           evaluations.get shouldBe 1
           noneTold()
       )
+
+      // beacon N2 (hive "Invalid P9", B-338): a gas-used mismatch at the batch's last block, after the blocks before it
+      // extended the head, following a consensus layer. The gas-used arm reads the failing block from the partial
+      // result and reports it, with its parent as the latest valid block, exactly once: the importer counts the
+      // prefix as imported, so the failing block heads what was not, and nothing behind it is reported
+      "report the block a gas-used mismatch failed on once, with its parent as latest valid, after a partial extension" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("batch-partial-gas-used", followsConsensusLayer = true, reporting = true):
+          val batch: List[Block] = testBlocks.take(9)
+          val p8: Block = batch(7)
+          val p9: Block = batch(8)
+          val gasUsed: String =
+            BlockExecutionError
+              .ValidationAfterExecError("Block has invalid gas used, expected 21000 but got 0")
+              .toString
+          answer.set(ImportedPartially(BlockImportedToTop(batch.take(8).map(weighed)), p9.hash.value, gasUsed))
+
+          importBatch(batch)
+
+          newHeads.receiveMessages(8, 5.seconds) shouldBe batch.take(8).map(b => Topic.Publish(NewBlockImported(b)))
+          val rewound: InvalidateBlocksFrom = fetcherRewound()
+          rewound.fromBlock shouldBe p9.number.value
+          withClue("following a consensus layer, the peer that served the branch is not blamed (B-513): ") {
+            rewound.toBlacklist shouldBe None
+          }
+          noneTold()
+          reportedInvalid.toArray.toList shouldBe List(p9.hash.value -> p8.hash.value)
+      )
+
+      // B-513 (beacon W2): following a consensus layer, the branch is the one it named, which every peer serves alike:
+      // the failing block's peer is not blamed; the fetcher still goes back to the failing block
+      "blame no peer for a partial import when it follows a consensus layer" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("batch-partial-follows-cl", followsConsensusLayer = true):
+          val batch: List[Block] = testBlocks.take(4)
+          val failing: Block = batch(2)
+          val invalid: String = BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString
+          answer.set(ImportedPartially(BlockImportedToTop(batch.take(2).map(weighed)), failing.hash.value, invalid))
+
+          importBatch(batch)
+
+          val rewound: InvalidateBlocksFrom = fetcherRewound()
+          rewound.fromBlock shouldBe failing.number.value
+          rewound.toBlacklist shouldBe None
+          resetsOfThePool() shouldBe 1
+      )
+
+      // B-513 (beacon W3): an announced block on a queued branch whose block 2 failed after block 1 became the head.
+      // The fetcher is told of the failing block, whose peer served it, not of the announced block
+      for follows <- Seq(false, true) do
+        s"tell the fetcher of the failing block, not the announced one, after a partial import (follows a consensus layer: $follows)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new BatchImportTells(s"announce-partial-$follows", followsConsensusLayer = follows):
+            val branch: List[Block] = testBlocks.take(4)
+            val failing: Block = branch(1)
+            val invalid: String = BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString
+            answer.set(ImportedPartially(BlockImportedToTop(List(weighed(branch.head))), failing.hash.value, invalid))
+
+            importer ! BlockImporter.ImportNewBlock(branch.last, PeerId("announcer"))
+
+            importerFetcher.fishForMessage(5.seconds) {
+              case BlockFetcher.BlockImportFailed(number, _) if !follows =>
+                number shouldBe failing.number.value
+                true
+              case InvalidateBlocksFrom(number, _, toBlacklist) if follows =>
+                number shouldBe failing.number.value
+                toBlacklist shouldBe None
+                true
+              case _: BlockFetcher.BlockImportFailed | _: InvalidateBlocksFrom =>
+                fail("the fetcher was told of the failure in the other chain's way")
+              case _ => false
+            }
+            resetsOfThePool() shouldBe 1
+        )
 
       // Spec 018 C4b: the same for a state fault, which carries the adopted prefix itself
       "tell of the adopted prefix only when this node's state could not take a later block" taggedAs (
