@@ -4641,20 +4641,17 @@ items:
   - id: B-469
     title: "Refresh stale spec headers: 021 (S0 merged), 022 (slice 6 merged, T063 by 018 C7), 027 (slice 5 merged)"
     priority: P3
-    status: review
+    status: done
     area: docs
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2029]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T03:42:27Z
-      heartbeat: 2026-11-24T04:00:58Z
-      branch: ccr-719c6644-afp6qz
-    notes: "Found in the 2026-11-24 backlog validation (PR #2029)."
+    notes: |-
+      Found in the 2026-11-24 backlog validation (PR #2029).
+      2026-11-24 done: merged as 002090316
   - id: B-470
     title: "replySyncing reports target 0: the health checker reads SYNCED (not STARTING) before Start and in the B-435 states; importChain refusal reads 'block N of 0'"
     priority: P3
