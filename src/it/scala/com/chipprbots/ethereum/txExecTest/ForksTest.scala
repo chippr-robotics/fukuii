@@ -41,7 +41,6 @@ class ForksTest extends AnyFlatSpec with Matchers:
       customGenesisJsonOpt = None,
       accountStartNonce = UInt256.Zero,
       daoForkConfig = None,
-      gasTieBreaker = false,
       ethCompatibleStorage = true
     )
     val noErrors: ResultOfATypeInvocation[Right[?, Seq[Receipt]]] = a[Right[?, Seq[Receipt]]]

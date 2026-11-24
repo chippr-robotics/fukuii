@@ -33,12 +33,14 @@ import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolvedSuccessful
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.StartBranchResolver
 import com.chipprbots.ethereum.blockchain.sync.regular.DeepForkWeight
+import com.chipprbots.ethereum.consensus.PowForkChoice
+import com.chipprbots.ethereum.consensus.PowForkChoiceSpec
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.Difficulty
 import com.chipprbots.ethereum.ledger.BranchResolution
-import com.chipprbots.ethereum.ledger.NewBetterBranch
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.*
 import com.chipprbots.ethereum.network.Peer
@@ -310,6 +312,50 @@ class FastSyncBranchResolverActorSpec
         blockchainReader.getBestBlockNumber shouldBe BigInt(20)
         blacklist.isBlacklisted(onePeer.id) shouldBe false
 
+      // B-284: the guard asks the import's fork choice by its rule (`BranchResolution.discardsFor`). A branch of this
+      // node's weight and height is a tie only a coin decides: a coin moves a head, it takes no blocks of this node's
+      // off the chain, so nothing is discarded whatever it would say, and it is never tossed (forge B1, W1)
+      for landing <- Seq(0.0, 0.5) do
+        s"a branch of our weight and height: nothing is discarded, and no coin is tossed (the coin at $landing)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in new HashLayoutSetup:
+          val common: List[Block] = BlockHelpers.generateChain(20, BlockHelpers.genesis)
+          val ours: List[Block] = common :++ BlockHelpers.generateChain(4, common.last)
+          val theirs: List[Block] = common :++ BlockHelpers.generateChain(4, common.last)
+          theirs.last.hash should not be ours.last.hash
+          saveBlocks(ours)
+
+          val coin = new PowForkChoiceSpec.Coins(landing)
+          val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+            start(Map(onePeer -> theirs), guard(deepestCommonBlock = 10, coin = coin))
+          sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(BranchNotHeavier(20)))
+          stopController(resolver)
+          coin.tossed shouldBe 0
+          blockchainReader.getBestBlockNumber shouldBe BigInt(24)
+          blockchainReader.getBlockHeaderByNumber(24).map(_.hash) shouldBe Some(ours.last.hash)
+
+      // the same tie, the peer's block this node's miner's: the rule's own reorg, discarded as a heavier branch is
+      "a branch of our weight and height whose tip this node's miner sealed: discarded, with no coin" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(20, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(4, common.last)
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(4, common.last)
+        saveBlocks(ours)
+
+        val theirHashes: Set[BlockHash] = theirs.map(_.hash).toSet
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), guard(deepestCommonBlock = 10, preserve = h => theirHashes(h.hash)))
+        val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout) {
+          case r: BranchResolvedSuccessful => r
+        }
+        stopController(resolver)
+        response.highestCommonBlockNumber shouldBe BigInt(20)
+        response.discarded.map(_._1) shouldBe Seq(24, 23, 22, 21).map(BigInt(_))
+        blockchainReader.getBestBlockNumber shouldBe BigInt(20)
+
       "a lighter branch, longer than ours: nothing is discarded and the peer is blacklisted" taggedAs (
         UnitTest,
         SyncTest
@@ -504,18 +550,21 @@ class FastSyncBranchResolverActorSpec
       tallPeer -> peerInfo(tallPeer, weight = 10, maxBlock = 9)
     )
 
-    def guard(deepestCommonBlock: BigInt): Option[FastSyncBranchResolverActor.DiscardGuard] =
-      val resolution = new BranchResolution(blockchainReader)
-      Some(
-        FastSyncBranchResolverActor.DiscardGuard(
-          deepestCommonBlock,
-          heavier = Some(headers =>
-            resolution.resolveBranch(headers) match
-              case NewBetterBranch(_) => true
-              case _                  => false
-          )
-        )
-      )
+    /** The hash layout's guard as the importer builds it: `BranchResolution.discardsFor`.
+      *
+      * @param coin
+      *   the coin of the import's tie rule (B-284). The guard never tosses it: by default one that fails the case if it
+      *   is
+      * @param preserve
+      *   the blocks of this node's miner, which the tie rule keeps or takes without a coin
+      */
+    def guard(
+        deepestCommonBlock: BigInt,
+        coin: () => Double = PowForkChoiceSpec.NoCoin,
+        preserve: BlockHeader => Boolean = _ => false
+    ): Option[FastSyncBranchResolverActor.DiscardGuard] =
+      val resolution = new BranchResolution(blockchainReader, powForkChoice = new PowForkChoice(preserve, coin))
+      Some(FastSyncBranchResolverActor.DiscardGuard(deepestCommonBlock, heavier = Some(resolution.discardsFor)))
 
     /** Saved as the best chain with each block's weight the sum of the difficulties up to it, as an import stores it.
       */

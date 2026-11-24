@@ -94,6 +94,12 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
   private class FixtureNode(bc: BlockchainConfig, variant: Variant) extends EphemBlockchainTestSetup:
     implicit override lazy val blockchainConfig: BlockchainConfig = bc
 
+    // Deterministic (forge W3): a tie of total difficulty keeps the head, and no coin is tossed. No vector here depends
+    // on how a tie is broken: none has a tie the lower block would win, and those with a tie at one height reach the
+    // same `lastblockhash` whichever block it goes to (as retesteth's test mode, `TestModeComponentsProvider`)
+    override lazy val powForkChoice: com.chipprbots.ethereum.consensus.PowForkChoice =
+      com.chipprbots.ethereum.consensus.PowForkChoice.HeavierOnly
+
     // mixed in before Storages.DefaultStorages, so the storages are built with this mode
     private trait VariantPruning extends LocalPruningConfigBuilder:
       override val pruningMode: PruningMode = variant.pruning
@@ -229,7 +235,7 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
             file,
             blocks.flatMap(b => com.chipprbots.ethereum.blockchain.data.ChainFile.encode(b).toSeq).toArray
           )
-          val (_, _, failed) = chainImporter.importChainFile(file.toString)(using bc)
+          val (_, _, failed) = chainImporter.importChainFile(file.toString)(using bc).counts
           (Option.when(failed > 0)(s"the chain file import counted $failed failed block(s)").toSeq, 0)
         finally java.nio.file.Files.delete(file)
       else

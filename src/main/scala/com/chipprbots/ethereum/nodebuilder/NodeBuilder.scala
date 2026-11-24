@@ -423,6 +423,21 @@ trait ConsensusBuilder:
   lazy val branchHandOff: com.chipprbots.ethereum.consensus.engine.BranchHandOff.LateBound =
     new com.chipprbots.ethereum.consensus.engine.BranchHandOff.LateBound
 
+  /** The node's proof-of-work fork choice (B-284): core-geth's `ForkChoice.ReorgNeeded` with its tie rule, a block of
+    * this node's miner kept or taken on a tie at its height (`shouldPreserve`: the beneficiary is the etherbase, read
+    * as `miner_setEtherbase` leaves it), a coin from a real random source otherwise. One instance for every weighing of
+    * the node (the consensus, the importer's branch resolution and fork recovery, the escalation's feed), so that a
+    * coin is tossed once for a pair of blocks. On a chain that declares a terminal total difficulty (the ETH family) a
+    * tie keeps the head, as before: the consensus layer names the head there.
+    */
+  lazy val powForkChoice: com.chipprbots.ethereum.consensus.PowForkChoice =
+    if blockchainConfig.terminalTotalDifficulty.isEmpty then
+      // this node's own blocks: the etherbase an operator chose, or the coinbase it mines to (forge N-c)
+      com.chipprbots.ethereum.consensus.PowForkChoice.ofEtherbase(() =>
+        coinbaseProvider.ownBlocksEtherbase(mining.config.generic.miningEnabled)
+      )
+    else com.chipprbots.ethereum.consensus.PowForkChoice.HeavierOnly
+
   lazy val consensus: Consensus =
     new ConsensusImpl(
       blockchainReader,
@@ -433,7 +448,8 @@ trait ConsensusBuilder:
       blockchain,
       Some(branchHandOff),
       // what of a reorganisation is told is what the block queue keeps behind the head (B-345)
-      oldBranchToldAtMost = syncConfig.maxQueuedBlockNumberBehind
+      oldBranchToldAtMost = syncConfig.maxQueuedBlockNumberBehind,
+      powForkChoice = powForkChoice
     )
 
   lazy val chainImporter: ChainImporter =
@@ -515,7 +531,9 @@ trait ConsensusBuilder:
         // a block whose header is not stored is the node's own when the hash index names it (B-383)
         blockchainReader.getCanonicalHashByNumber,
         // the head `headWeight` weighs: a block whose weight is not stored is weighed from it (B-385)
-        () => blockchainReader.getBestBlockHeader
+        () => blockchainReader.getBestBlockHeader,
+        // a branch is counted by the rule the import takes branches by, its ties included (B-284)
+        powForkChoice
       )
     }
 

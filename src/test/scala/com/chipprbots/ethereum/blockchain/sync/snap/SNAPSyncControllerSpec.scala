@@ -1405,7 +1405,6 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
       firstEraBlockReward = BigInt(0),
       firstEraReducedBlockReward = BigInt(0)
     ),
-    gasTieBreaker = false,
     ethCompatibleStorage = true,
     bootstrapNodes = Set.empty,
     networkType = NetworkType.ETH,

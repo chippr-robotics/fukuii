@@ -105,7 +105,6 @@ class EtcStorageDeletionOnPositionsSpec extends AnyFlatSpec with Matchers:
       accountStartNonce = UInt256.Zero,
       daoForkConfig = None,
       bootstrapNodes = Set(),
-      gasTieBreaker = false,
       ethCompatibleStorage = true
     )
     private trait Shared extends EphemDataSourceComponent:

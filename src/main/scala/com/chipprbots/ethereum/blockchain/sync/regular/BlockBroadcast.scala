@@ -153,9 +153,23 @@ class BlockBroadcast(
     // ETH/69 peers: chainWeight may be actual TD (local lookup) or a block-number proxy (peer
     // ahead of us). The proxy case makes the TD comparison always true, spamming every ETH69 peer.
     // Use block-number comparison only for ETH69 — maxBlockNumber is now correct (from latestBlock).
-    val heavierChain = !Capability.isEth69Plus(peerInfo.remoteStatus.capability) &&
-      newBlock.chainWeight > peerInfo.chainWeight
-    blockAhead || heavierChain
+    //
+    // A peer of the block's own weight is sent it too when its head is another block (B-284): core-geth sends a block
+    // to every peer that does not have it (`eth/handler.go` BroadcastBlock, `peersWithoutBlock`), with no weight test,
+    // and a block that won a tie of total difficulty is what the peers on the block it beat need to follow it. Not
+    // wider: fukuii keeps no set of the blocks each peer knows, and the weight a peer reported is what stands for it
+    // here. A peer whose head is this block already has it; one heavier has a chain that outweighs it.
+    val eth69 = Capability.isEth69Plus(peerInfo.remoteStatus.capability)
+    val otherHead = peerInfo.bestBlockHash != newBlock.block.header.hash.value
+    val heavierChain = !eth69 &&
+      (newBlock.chainWeight > peerInfo.chainWeight || (newBlock.chainWeight == peerInfo.chainWeight && otherHead))
+    // An ETH69+ peer reports no total difficulty, so a tie of weight is not seen here. On proof of work, a block at the
+    // peer's own height whose head is another block is the sibling it does not have: sent, as to an ETH68 peer on the
+    // other block of a tie (B-284, forge N-d). Height and hash only, never the weight proxy that once sent every block
+    // to every ETH69 peer; on proof of stake no NewBlock goes to these peers, and nothing changes there.
+    val siblingOfItsHead =
+      eth69 && isPoWChain && newBlock.block.header.number.value == peerInfo.maxBlockNumber && otherHead
+    blockAhead || heavierChain || siblingOfItsHead
 
   private def broadcastNewBlock(blockToBroadcast: BlockToBroadcast, peers: Map[PeerId, PeerWithInfo]): Unit =
     obtainRandomPeerSubset(peers.values.map(_.peer).toSet).foreach { peer =>

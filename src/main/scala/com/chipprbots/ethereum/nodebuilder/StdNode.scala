@@ -375,8 +375,16 @@ abstract class BaseNode extends Node:
     val chainFile = scala.util.Try(instanceConfig.config.getString("import-chain-file")).toOption
     chainFile.foreach { path =>
       log.info(s"Importing chain data from: $path")
-      val (imported, skipped, failed) = chainImporter.importChainFile(path)
-      log.info(s"Chain import: $imported imported, $skipped skipped, $failed failed")
+      val summary = chainImporter.importChainFile(path)
+      summary.busy match
+        // another writer held the head: the import stopped there, nothing of that block written (B-487)
+        case Some(busy) =>
+          log.warn(
+            s"[STATE-BUSY] Chain import: ${summary.imported} imported, ${summary.skipped} skipped, " +
+              s"${summary.failed} failed, then stopped: ${busy.getMessage}. Restart to import the rest"
+          )
+        case None =>
+          log.info(s"Chain import: ${summary.imported} imported, ${summary.skipped} skipped, ${summary.failed} failed")
     }
 
   private def runDBConsistencyCheck(): Unit =

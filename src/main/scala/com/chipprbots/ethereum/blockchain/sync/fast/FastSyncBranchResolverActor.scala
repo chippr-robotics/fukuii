@@ -183,9 +183,10 @@ object FastSyncBranchResolverActor:
     *   the lowest common block a discard may go down to: a chain that leaves this node's below it is never rewound to
     * @param heavier
     *   whether a branch, given by its headers from the child of the common block up, is to be taken over this node's
-    *   blocks above the common block: the fork choice the import applies (`BranchResolution.resolveBranch`, weight and
-    *   MESS). `None` where the import does not choose by weight (a chain that follows a consensus layer): the branch is
-    *   then not weighed here, as before
+    *   blocks above the common block: the fork choice the import applies, by its rule alone
+    *   (`BranchResolution.discardsFor`: weight, a tie the rule itself breaks, and MESS; never a tie only a coin would
+    *   decide, B-284). `None` where the import does not choose by weight (a chain that follows a consensus layer): the
+    *   branch is then not weighed here, as before
     * @param beyondReach
     *   how a chain that leaves this node's below `deepestCommonBlock` is weighed (B-346): the search goes on below the
     *   floor to find the common block, and a heavier branch is answered with [[BranchHeavierBeyondReach]]. `None`: such

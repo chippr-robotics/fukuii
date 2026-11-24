@@ -232,7 +232,6 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger:
       accountStartNonce = UInt256.Zero,
       daoForkConfig = None,
       bootstrapNodes = Set(),
-      gasTieBreaker = false,
       ethCompatibleStorage = true,
       forkBlockNumbers = ForkBlockNumbers.Empty.copy(
         frontierBlockNumber = 0,
@@ -309,7 +308,6 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger:
       accountStartNonce = UInt256.Zero,
       daoForkConfig = None,
       bootstrapNodes = Set(),
-      gasTieBreaker = false,
       ethCompatibleStorage = true
     )
 
@@ -621,7 +619,6 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger:
       accountStartNonce = UInt256.Zero,
       daoForkConfig = None,
       bootstrapNodes = Set(),
-      gasTieBreaker = false,
       ethCompatibleStorage = true
     )
     implicit override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig

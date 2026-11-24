@@ -217,7 +217,6 @@ CHAIN_CONF=$(
     era-duration = $ERA_DURATION
     reward-reduction-rate = 0.2
   }
-  gas-tie-breaker = false
   eth-compatible-storage = true
   dns-discovery-domains = []
   bootstrap-nodes = []

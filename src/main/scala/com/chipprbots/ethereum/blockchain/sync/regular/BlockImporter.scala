@@ -2710,9 +2710,10 @@ final private class BlockImporterLogic(
     *   - the common block lies no deeper than the floor the blind rewind goes to, `MaxForkAncestryDepth` below the head
     *     and never below the SNAP pivot, where this node has no state to execute a branch on. One bound for both ways a
     *     fork recovery rewinds on this layout; core-geth refuses an ancestor below its own floor in the same way;
-    *   - the peer's branch is the one the import would take: `BranchResolution.resolveBranch`, weight and MESS. Not on
-    *     a chain that follows a consensus layer, whose branches all weigh the same: there the branch is not weighed
-    *     here, as before.
+    *   - the peer's branch is the one the import would take by the fork choice's rule:
+    *     `BranchResolution.resolveBranchByTheRule`, weight and MESS. A tie only a coin would decide discards nothing
+    *     (forge B1): a coin is worth a head move, not this node's blocks. Not on a chain that follows a consensus
+    *     layer, whose branches all weigh the same: there the branch is not weighed here, as before.
     */
   private def hashLayoutDiscardGuard(
       capturedBest: BigInt,
@@ -2721,11 +2722,9 @@ final private class BlockImporterLogic(
     val weighsByWork = !branchResolution.followsConsensusLayer
     FastSyncBranchResolverActor.DiscardGuard(
       deepestCommonBlock = (capturedBest - MaxForkAncestryDepth).max(snapPivot),
-      heavier = Option.when(weighsByWork) { (headers: NonEmptyList[BlockHeader]) =>
-        branchResolution.resolveBranch(headers) match
-          case NewBetterBranch(_) => true
-          case _                  => false
-      },
+      // by the rule alone: a tie a coin would decide takes none of this node's blocks off the chain, and no coin is
+      // tossed for headers the resolver has not validated (forge B1, W1)
+      heavier = Option.when(weighsByWork)(branchResolution.discardsFor),
       // below the floor (B-346; the user's decision of 2026-11-18): weighed from the common block, and escalated to a
       // SNAP re-sync if it is the heavier. Proof of work only, as the weighing above
       beyondReach = Option.when(weighsByWork)(
@@ -2755,7 +2754,9 @@ final private class BlockImporterLogic(
         },
       messActiveAt = Option.when(mess.enabled)(mess.isActiveAtBlock),
       messRefuses = ArtificialFinality.shouldRejectReorg,
-      firstInvalidHeader = headers => consensus.firstInvalidHeaderOf(headers)
+      firstInvalidHeader = headers => consensus.firstInvalidHeaderOf(headers),
+      // the import's own fork choice: a tie is weighed as the import weighs it, a coin's once (B-284)
+      forkChoice = consensus.powForkChoice
     )
 
   /** The common block a heavier branch below the floor was escalated for (B-346), by hash: the escalation is asked for

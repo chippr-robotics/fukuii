@@ -493,7 +493,6 @@ object GetChainConfigTool:
       |  Chain ID: ${cfg.chainId}
       |  Network ID: ${cfg.networkId}
       |  Account Start Nonce: ${cfg.accountStartNonce}
-      |  Gas Tie Breaker: ${cfg.gasTieBreaker}
       |  ETH Compatible Storage: ${cfg.ethCompatibleStorage}
       |  Max Code Size: ${cfg.maxCodeSize.getOrElse("unlimited")}
       |  Monetary Policy:

@@ -80,7 +80,12 @@ class ConsensusImpl(
     reorgChunkBlocks: Int = ConsensusImpl.ReorgChunkBlocks,
     // How long a batch onto the head holds the head's lock on the hash layout before it lets it go between two blocks
     // (B-511): what a fork choice waits behind it, besides one block. Tests give a zero, a hold per block.
-    importHoldBudget: scala.concurrent.duration.FiniteDuration = CanonicalHeadLock.ImportHoldBudget
+    importHoldBudget: scala.concurrent.duration.FiniteDuration = CanonicalHeadLock.ImportHoldBudget,
+    // The proof-of-work fork choice, core-geth's `ReorgNeeded` with its tie rule (B-284): asked only on a chain that
+    // declares no terminal total difficulty (every ETC network). A node passes the one it shares with its other
+    // weighings, with its miner's etherbase; tests give a coin of their own. The default breaks no tie and tosses no
+    // coin (forge W3, W4): a construction that names none is deterministic, test mode and the specs among them
+    override val powForkChoice: PowForkChoice = PowForkChoice.HeavierOnly
 ) extends Consensus
     with Logger:
 
@@ -199,15 +204,7 @@ class ConsensusImpl(
         else
           // on the unified layout a branch that is adopted moves the head with the state, under the state lock and
           // behind any move under way: on a thread that may block (spec 018 C4e; forge)
-          IO.blocking(
-            importToNewBranch(
-              branch,
-              currentBestHeader.number.value,
-              currentBestBlockWeight,
-              accessLists,
-              currentBestHeader.hash
-            )
-          )
+          IO.blocking(importToNewBranch(branch, currentBestHeader, currentBestBlockWeight, accessLists))
       else
         // On the hash layout a branch is executed and settled under the head's lock, as go-ethereum's insertChain holds
         // `chainmu`, and a batch onto the head is executed under it a hold at a time (B-511): a fork choice or a
@@ -274,7 +271,7 @@ class ConsensusImpl(
             case Some(weight) if now.hash == branch.head.header.parentHash =>
               ontoTheHeadForAHold(branch, branch, Nil, weight, accessLists)
             case Some(weight) =>
-              HashStep.Done(importToNewBranch(branch, now.number.value, weight, accessLists, now.hash))
+              HashStep.Done(importToNewBranch(branch, now, weight, accessLists))
 
     def next(remaining: NonEmptyList[Block], executed: List[BlockData], weight: ChainWeight): HashStep =
       blockchainReader.getBestBlockHeader match
@@ -344,14 +341,15 @@ class ConsensusImpl(
 
   private def importToNewBranch(
       branch: NonEmptyList[Block],
-      currentBestBlockNumber: BigInt,
+      currentBestHeader: BlockHeader,
       currentBestBlockWeight: ChainWeight,
-      accessLists: Map[ByteString, BlockAccessList],
-      currentBestBlockHash: BlockHash
+      accessLists: Map[ByteString, BlockAccessList]
   )(implicit
       blockchainConfig: BlockchainConfig
   ) =
     val parentHash = branch.head.header.parentHash
+    val currentBestBlockNumber = currentBestHeader.number.value
+    val currentBestBlockHash = currentBestHeader.hash
 
     blockchainReader.getChainWeightByHash(parentHash) match
       case Some(parentWeight) =>
@@ -376,7 +374,17 @@ class ConsensusImpl(
         // `selectedByWeight` is carried into `reorganise`: only a branch chosen by the PoW rule gets the core-geth
         // head/index handling there. A branch chosen solely by the designated head (post-merge, where no branch is
         // ever heavier) keeps its pre-existing handling exactly.
-        val selectedByWeight = newBranchWeight(branch, parentWeight) > currentBestBlockWeight
+        //
+        // The PoW rule is core-geth's `ReorgNeeded` (B-284): heavier, or of the same weight and lower, or of the same
+        // weight and height and this node's own or the coin's ([[outweighs]]). On a chain with a terminal total
+        // difficulty, strictly heavier, as before.
+        val selectedByWeight =
+          outweighs(
+            currentBestHeader,
+            currentBestBlockWeight,
+            branch.last.header,
+            newBranchWeight(branch, parentWeight)
+          )
         if selectedByWeight || leadsToDesignatedHead(branch)
         then
           reorganise(
@@ -704,7 +712,8 @@ class ConsensusImpl(
         parentWeight,
         parentHash,
         selectedByWeight,
-        accessLists
+        accessLists,
+        bestBlockHash
       )
 
   /** The reorganisation on the unified state layout (spec 018 C4e; the user's decision of 2026-11-12, plan.md "C4a part
@@ -864,6 +873,7 @@ class ConsensusImpl(
                         pinned,
                         remaining,
                         newBranch,
+                        parentWeight,
                         fork,
                         forkBlock,
                         bestBlockNumber,
@@ -1078,6 +1088,7 @@ class ConsensusImpl(
       pinned: List[BlockData],
       remaining: ToRun,
       newBranch: NonEmptyList[Block],
+      parentWeight: ChainWeight,
       fork: ForkPoint,
       forkBlock: BlockHeader,
       bestBlockNumber: BigInt,
@@ -1096,8 +1107,8 @@ class ConsensusImpl(
       yield (on, weight)
     // The head as it is now, which must be the one the branch was weighed against: that block, by its hash (B-315). A
     // head at the same height that is another block (moved back and a sibling committed) has another weight, and
-    // `weight > bestBlockWeight` below would compare the branch with a head the node no longer holds. A block committed
-    // on it, or a move of it, from here to the hold is refused by the hold itself (B-463).
+    // the weighing of the branch against `bestBlockWeight` below would be against a head the node no longer holds. A
+    // block committed on it, or a move of it, from here to the hold is refused by the hold itself (B-463).
     // Its number is that block's by its hash; the index must name it at that height.
     val headNow = blockchainReader.getBestBlockHeader.filter { head =>
       head.hash == bestBlockHash && blockchainReader.getBlockHeaderByNumber(bestBlockNumber).exists(_.hash == head.hash)
@@ -1230,7 +1241,15 @@ class ConsensusImpl(
                   val diverged = divergedParent(failing, error)
                   if backToTheOldHead() then diverged
                   else whereTheHeadIsLeft(all, s"block ${failing.number}, which the branch stands on, failed")
-                case _ if weight > bestBlockWeight =>
+                case _
+                    if executedTakesTheHead(
+                      newBranch,
+                      parentWeight,
+                      oldHead.hash,
+                      bestBlockWeight,
+                      all.lastOption.fold(on)(_.block.header),
+                      weight
+                    ) =>
                   log.info(
                     "REORG-SETTLE: fork={} oldHead={} tip={} committedInPlace={}",
                     forkBlock.number,
@@ -1442,7 +1461,7 @@ class ConsensusImpl(
       sideParents: List[BlockData],
       selectedByWeight: Boolean,
       notJudged: StateFault => ConsensusResult
-  ): ConsensusResult =
+  )(implicit blockchainConfig: BlockchainConfig): ConsensusResult =
     val executed = outcome.executed
     // a trie error on this layout is the node's own state's, never the block's: a fault like any other
     val fault: Option[StateFault] = outcome.stateFault.orElse(outcome.error.collect { case MPTError(reason) =>
@@ -1462,7 +1481,17 @@ class ConsensusImpl(
         val namedAt = if selectedByWeight then None else designatedHead.flatMap(_.headBlockHash)
         val stillNamed = selectedByWeight || leadsToDesignatedHead(newBranch)
         val adopted =
-          if selectedByWeight then executedWeight > bestBlockWeight
+          if selectedByWeight then
+            executed.lastOption.fold(executedWeight > bestBlockWeight)(last =>
+              executedTakesTheHead(
+                newBranch,
+                parentWeight,
+                bestBlockHash,
+                bestBlockWeight,
+                last.block.header,
+                executedWeight
+              )
+            )
           else outcome.error.isEmpty && stillNamed
         // The consensus layer has named another head while its branch was executed: nothing is wrong with this node
         // or with the branch, whose blocks are valid and stay beside the head. Not a fault (beacon).
@@ -1593,7 +1622,8 @@ class ConsensusImpl(
       parentWeight: ChainWeight,
       parentHash: BlockHash,
       selectedByWeight: Boolean,
-      accessLists: Map[ByteString, BlockAccessList]
+      accessLists: Map[ByteString, BlockAccessList],
+      bestBlockHash: BlockHash
   )(implicit
       blockchainConfig: BlockchainConfig
   ): ConsensusResult =
@@ -1627,10 +1657,12 @@ class ConsensusImpl(
       !selectedByWeight && maybeError.isEmpty && outcome.stateFault.isEmpty && leadsToDesignatedHead(newBranch)
     val adopted =
       settleHead(
+        newBranch,
         executedBlocks,
         parentWeight,
         bestBlockNumber,
         bestBlockWeight,
+        bestBlockHash,
         fork,
         oldCanonical,
         aheadOfTheHead,
@@ -1764,6 +1796,73 @@ class ConsensusImpl(
   private def newBranchWeight(newBranch: NonEmptyList[Block], parentWeight: ChainWeight) =
     newBranch.foldLeft(parentWeight)((w, b) => w.increase(b.header))
 
+  /** Whether `tip`, of weight `tipWeight`, takes the head from `head`, of weight `headWeight`, by weight: the weight
+    * arm's one question, asked when a branch is selected and again of what was executed of it.
+    *
+    * On a chain that declares no terminal total difficulty (every ETC network), core-geth's `ForkChoice.ReorgNeeded`
+    * with its tie rule ([[PowForkChoice]], B-284): a tie goes to the lower block, at the same height to this node's own
+    * block or else to a coin, tossed once for the pair, so that the whole branch executed is answered as it was
+    * selected. On a chain that declares one (the ETH family), and while a consensus layer names the head, strictly
+    * heavier, unchanged: after the merge every block weighs nothing, and the consensus layer names the head.
+    */
+  private def outweighs(head: BlockHeader, headWeight: ChainWeight, tip: BlockHeader, tipWeight: ChainWeight)(implicit
+      blockchainConfig: BlockchainConfig
+  ): Boolean =
+    if strictlyHeavier then tipWeight > headWeight
+    else powForkChoice.reorgNeeded(head, headWeight, tip, tipWeight)
+
+  // where the tie rule is not asked: a chain that declares a terminal total difficulty, or one whose head a consensus
+  // layer names (never on ETC: no ETC configuration declares one, and the holder is bound only where one does)
+  private def strictlyHeavier(implicit blockchainConfig: BlockchainConfig): Boolean =
+    blockchainConfig.terminalTotalDifficulty.isDefined || followsConsensusLayer
+
+  /** [[outweighs]] against a head known by its hash, after its branch was executed: its header is read only for a tie,
+    * the one case the rule reads it in. Not stored, which no head this node held can be, the tie keeps the head, said
+    * at ERROR.
+    */
+  private def outweighsTheHead(headHash: BlockHash, headWeight: ChainWeight, tip: BlockHeader, tipWeight: ChainWeight)(
+      implicit blockchainConfig: BlockchainConfig
+  ): Boolean =
+    if strictlyHeavier || tipWeight != headWeight then tipWeight > headWeight
+    else
+      blockchainReader.getBlockHeaderByHash(headHash) match
+        case Some(head) => outweighs(head, headWeight, tip, tipWeight)
+        case None =>
+          log.error(
+            "REORG: block {} ties the old head {} by weight, whose header is not stored: the tie rule cannot be asked, " +
+              "and the old head is kept",
+            tip.number,
+            headHash.toHexString
+          )
+          false
+
+  /** The weight arm's question asked again of what was executed of a branch it selected over the head `headHash`, of
+    * weight `headWeight`: whether the executed tip `tip`, of weight `tipWeight`, still takes it.
+    *
+    * When the whole branch was executed, its tip and its weight are those it was selected by (`selected` from the
+    * weight `parentWeight` of the block it stands on), against the same head: the question is the one the selection
+    * answered, and its answer, a reorg, is carried through rather than asked again (forge W2). Asked again, a tie a
+    * coin decided is tossed again where the memo has forgotten the pair since (an eviction while the branch ran), and a
+    * block of this node's own is judged by an etherbase `miner_setEtherbase` may have changed since: a "keep" then
+    * would be taken for weights stored that disagree with the selection, a false `[STATE-FAULT]`. Where the executed
+    * weight is not the selection's, that disagreement is real and is asked as before. A prefix (a block of the branch
+    * failed) is another tip, and is weighed ([[outweighsTheHead]]).
+    *
+    * Chosen over pinning the memo's entry while the decision is in flight: a pin must be released on every way out of
+    * an execution (a fault, a throw, a hand-off, the hash layout's holds), and one missed holds its pair for good; this
+    * needs no state, and answers the same question once whatever the memo holds.
+    */
+  private def executedTakesTheHead(
+      selected: NonEmptyList[Block],
+      parentWeight: ChainWeight,
+      headHash: BlockHash,
+      headWeight: ChainWeight,
+      tip: BlockHeader,
+      tipWeight: ChainWeight
+  )(implicit blockchainConfig: BlockchainConfig): Boolean =
+    if tip.hash == selected.last.header.hash && tipWeight == newBranchWeight(selected, parentWeight) then true
+    else outweighsTheHead(headHash, headWeight, tip, tipWeight)
+
   private def returnNoTotalDifficultyForHeader(bestHeader: BlockHeader): IO[ConsensusError] =
     IO.pure(noTotalDifficultyForHeader(bestHeader))
 
@@ -1829,17 +1928,19 @@ class ConsensusImpl(
     * lighter head with an index mixing two chains; see ReorgBlockhashParitySpec.
     */
   private def settleHead(
+      newBranch: NonEmptyList[Block],
       executedBlocks: List[BlockData],
       parentWeight: ChainWeight,
       oldBestNumber: BigInt,
       oldBestWeight: ChainWeight,
+      oldBestHash: BlockHash,
       fork: ForkPoint,
       oldCanonical: List[(BigInt, BlockHash)],
       aheadOfTheHead: List[(BigInt, BlockHash)],
       selectedByWeight: Boolean,
       designatedAdopts: Boolean,
       stillNamed: () => Boolean
-  ): Boolean =
+  )(implicit blockchainConfig: BlockchainConfig): Boolean =
     var adopted = false
     executedBlocks.lastOption.foreach { last =>
       val tip = last.block
@@ -1915,10 +2016,17 @@ class ConsensusImpl(
       // and still leading to the head the consensus layer names (B-505), and it still does as the index is written
       // (B-511). The weight arm: when they outweigh the old head, recomputed from the headers rather than read from
       // BlockData: it is exactly what BlockExecution computes, and it does not depend on the executor having filled
-      // the weight in.
+      // the weight in. By core-geth's tie rule (B-284), as the branch was selected.
       val adopt =
         if selectedByWeight then
-          executedBlocks.foldLeft(parentWeight)((w, b) => w.increase(b.block.header)) > oldBestWeight
+          executedTakesTheHead(
+            newBranch,
+            parentWeight,
+            oldBestHash,
+            oldBestWeight,
+            tip.header,
+            executedBlocks.foldLeft(parentWeight)((w, b) => w.increase(b.block.header))
+          )
         else designatedAdopts
       // The post-merge arm writes what the weight arm writes when it adopts (B-088): it used to move only the best
       // block, leaving the old chain's entries above the tip and below it at the side blocks' heights, and the

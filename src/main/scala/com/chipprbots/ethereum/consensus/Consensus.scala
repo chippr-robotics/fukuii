@@ -42,6 +42,12 @@ trait Consensus:
     val _ = blocks
     false
 
+  /** The proof-of-work fork choice this consensus weighs branches by (B-284): the one instance every other weighing of
+    * the node shares (`BranchResolution`, the fork recovery's guard, the escalation's), so that a tie a coin decides is
+    * decided once. [[ConsensusImpl]] holds the node's; any other consensus keeps a tie's head.
+    */
+  def powForkChoice: PowForkChoice = PowForkChoice.HeavierOnly
+
 object Consensus:
   /* This return type for consensus is probably overcomplicated for now because some information is needed
    * to keep the compatibility with the current code (particularly for the block queue handling), and be able

@@ -64,7 +64,7 @@ A `finality-rule` key in an entry is an unknown field (`UnknownField`).
 | `mess` | `MESSConfig` | `mess { enabled, ecbp1100-block-number, ecbp1100-deactivate-block-number, ecbp1100-reactivate-block-number }` | **required for `etc`, forbidden for `eth`** (DC-2) | etc | `enabled` required inside the block; the three window keys optional. Tuning keys nobody reads (`decay-constant`, `max-time-delta`, `min-weight-multiplier`, `gorgoroth-chain.conf:221-230`) are `UnknownField`. |
 | `resourceProfiles` | `Map[Role, ResourceProfile]` (§4) | `resources { ingest replica archive sim }` | no | both | Defaults fukuii never enforces (FR-007). |
 | `blockchainConfig` | `BlockchainConfig` | the whole entry | derived | both | `BlockchainConfig.fromRawConfig(entry)` unchanged (R-1). |
-| other `fromRawConfig` keys | as today | `pow-target-time`, `max-code-size`, `dao {...}`, `account-start-nonce`, `monetary-policy {...}`, `gas-tie-breaker`, `eth-compatible-storage`, `allowed-miners`, `treasury-address`, `base-fee-floor`, `min-tip`, `deposit-contract-address`, `gpo-default-price`, `spiral-gas-target`, `olympia-gas-target`, `olympia-gas-limit-elasticity` | per §5 | both | Every key `fromRawConfig` reads is a known key; nothing else is. |
+| other `fromRawConfig` keys | as today | `pow-target-time`, `max-code-size`, `dao {...}`, `account-start-nonce`, `monetary-policy {...}`, `eth-compatible-storage`, `allowed-miners`, `treasury-address`, `base-fee-floor`, `min-tip`, `deposit-contract-address`, `gpo-default-price`, `spiral-gas-target`, `olympia-gas-target`, `olympia-gas-limit-elasticity` | per §5 | both | Every key `fromRawConfig` reads is a known key; nothing else is, but `gas-tie-breaker`, removed (B-284) and accepted and ignored for one release. |
 
 **Deployment keys that MUST NOT appear in an entry** (FR-007, `DeploymentKeyInChainSpec`): anything under
 `network.*` except nothing (ports, `server-address`, `rpc`, `engine-api`, `peer`, `discovery`), `datadir`,
@@ -127,7 +127,7 @@ Unknown keys inside a profile are `UnknownField`. Absent profiles are `Map.empty
 - **both**: `consensus`, `chain-id`, `network-id`, `custom-genesis-file` *(or* absent → default genesis, `etc` only;
   the validator requires it for every entry whose `chainKey != "etc"`)*, `sync.do-snap-sync`, `bootstrap-nodes`,
   `account-start-nonce`, `monetary-policy.{first-era-block-reward, first-era-reduced-block-reward,
-  first-era-constantinople-reduced-block-reward, era-duration, reward-reduction-rate}`, `gas-tie-breaker`,
+  first-era-constantinople-reduced-block-reward, era-duration, reward-reduction-rate}`,
   `eth-compatible-storage`, and every block-number key `fromRawConfig` reads without a `Try`
   (`BlockchainConfig.scala:242-301`): `frontier`, `homestead`, `eip106`, `eip150`, `eip155`, `eip160`, `eip161`,
   `byzantium`, `constantinople`, `istanbul`, `atlantis`, `agharta`, `phoenix`, `petersburg`,

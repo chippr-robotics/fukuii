@@ -13,7 +13,6 @@
     "bootstrap-nodes",
     "account-start-nonce",
     "monetary-policy",
-    "gas-tie-breaker",
     "eth-compatible-storage",
     "frontier-block-number",
     "homestead-block-number",
@@ -144,7 +143,11 @@
     "olympia-gas-limit-elasticity": { "type": "integer", "minimum": 1 },
     "max-code-size": { "$ref": "#/$defs/uintOrDecimalString" },
     "account-start-nonce": { "$ref": "#/$defs/uintOrDecimalString" },
-    "gas-tie-breaker": { "type": "boolean" },
+    "gas-tie-breaker": {
+      "description": "Removed (B-284): no fork choice read it since 2020, and BlockchainConfig no longer does. Not required; accepted and ignored for one release, so that a chain file that still sets it loads, then rejected.",
+      "type": "boolean",
+      "deprecated": true
+    },
     "eth-compatible-storage": { "type": "boolean" },
     "treasury-address": {
       "description": "Olympia treasury (ECIP-1112). Address without or with 0x prefix; built-ins reference ${fukuii.olympia.treasury-address}.",

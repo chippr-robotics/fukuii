@@ -256,7 +256,6 @@ trait DaoForkTestSetup extends TestSetup:
       customGenesisFileOpt = None,
       maxCodeSize = None,
       bootstrapNodes = Set(),
-      gasTieBreaker = false,
       ethCompatibleStorage = true
     )
 

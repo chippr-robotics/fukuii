@@ -126,6 +126,35 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
       PeerInfoResponse(Some(peer1Info.withBestBlockData(peer1Info.maxBlockNumber + 5, secondBlockHash.hash)))
     )
 
+  // forge W-a (B-284): a peer that told of A at a height and then sent B whole at that height holds B: its head is
+  // recorded as B, so a block this node takes on a tie is not sent back to the peer that sent it. An announcement at
+  // the same height moves nothing
+  it should "record a block a peer sent whole at its known height as its head, and not an announcement at that height" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+
+    val height: BigInt = peer1Info.maxBlockNumber + 3
+    val announced: BlockHash = BlockHash(ByteString(Hex.decode("0a" * 32)), height)
+    val sent: BlockHeader = baseBlockHeader.copy(number = BlockNumber(height), extraData = ByteString("B"))
+    val weight: ChainWeight = ChainWeight.totalDifficultyOnly(300)
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(NewBlockHashes(Seq(announced)), peer1.id))
+    peersInfoHolder ! PeerEventCmd(
+      MessageFromPeer(NewBlock(Block(sent, BlockBody(Nil, Nil)), weight.totalDifficulty.value), peer1.id)
+    )
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    val afterBlock: PeerInfo = requestSender.expectMsgType[PeerInfoResponse].peerInfo.get
+    afterBlock.maxBlockNumber shouldBe height
+    afterBlock.bestBlockHash shouldBe sent.hash.value
+
+    // another announcement at that height: the head stays the block it sent
+    val other: BlockHash = BlockHash(ByteString(Hex.decode("0b" * 32)), height)
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(NewBlockHashes(Seq(other)), peer1.id))
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    requestSender.expectMsgType[PeerInfoResponse].peerInfo.get.bestBlockHash shouldBe sent.hash.value
+
   it should "update max peer block when receiving ETH69 BlockRangeUpdate" taggedAs (
     UnitTest,
     NetworkTest

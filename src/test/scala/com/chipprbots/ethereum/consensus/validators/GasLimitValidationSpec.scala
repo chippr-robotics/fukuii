@@ -63,7 +63,6 @@ class GasLimitValidationSpec extends AnyFlatSpec with Matchers:
     customGenesisJsonOpt = None,
     accountStartNonce = UInt256.Zero,
     bootstrapNodes = Set(),
-    gasTieBreaker = false,
     ethCompatibleStorage = true
   )
 

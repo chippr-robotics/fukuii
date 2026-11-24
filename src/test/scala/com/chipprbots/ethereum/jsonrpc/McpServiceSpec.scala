@@ -45,7 +45,6 @@ class McpServiceSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with
       MonetaryPolicyConfig(5000000, 0.2, BigInt("5000000000000000000"), BigInt("4000000000000000000")),
     daoForkConfig = None,
     bootstrapNodes = Set(),
-    gasTieBreaker = false,
     ethCompatibleStorage = true
   )
 

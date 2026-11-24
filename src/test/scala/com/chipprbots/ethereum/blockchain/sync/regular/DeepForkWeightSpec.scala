@@ -7,6 +7,8 @@ import org.scalatest.wordspec.AnyWordSpec
 
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BeyondReachVerdict
+import com.chipprbots.ethereum.consensus.PowForkChoice
+import com.chipprbots.ethereum.consensus.PowForkChoiceSpec
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -45,7 +47,8 @@ class DeepForkWeightSpec extends AnyWordSpec with Matchers:
       onTheChain: BlockHeader => Boolean = h => canonical.contains(h.hash),
       messActiveAt: Option[BigInt => Boolean] = None,
       messRefuses: (Long, BigInt, BigInt) => Boolean = (_, _, _) => false,
-      firstInvalid: List[BlockHeader] => Option[(BlockHeader, String)] = _ => None
+      firstInvalid: List[BlockHeader] => Option[(BlockHeader, String)] = _ => None,
+      forkChoice: PowForkChoice = PowForkChoice.HeavierOnly
   ): DeepForkWeight =
     new DeepForkWeight(
       weightOf = weights.get,
@@ -54,7 +57,8 @@ class DeepForkWeightSpec extends AnyWordSpec with Matchers:
       head = () => Option.when(headExact)(ours.last.header -> weights(ours.last.hash)),
       messActiveAt = messActiveAt,
       messRefuses = messRefuses,
-      firstInvalidHeader = firstInvalid
+      firstInvalidHeader = firstInvalid,
+      forkChoice = forkChoice
     )
 
   "DeepForkWeight.verdict" should {
@@ -66,6 +70,53 @@ class DeepForkWeightSpec extends AnyWordSpec with Matchers:
     "say NotHeavier for a lighter branch, and for one as heavy as the head" taggedAs (UnitTest, SyncTest) in {
       weigher().verdict(lighter) shouldBe BeyondReachVerdict.NotHeavier
       weigher().verdict(NonEmptyList.fromListUnsafe(theirs.toList.take(5))) shouldBe BeyondReachVerdict.NotHeavier
+    }
+
+    "weigh a branch of the head's weight by the import's tie rule: lower is the heavier, at the head's height never, and with no coin (B-284)" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in {
+      val perBlock = common.last.header.difficulty.value
+      // four blocks above the common one with the difficulty of this node's five: block 14 against the head's 15
+      val three = BlockHelpers.generateChain(3, common.last)
+      val lower: NonEmptyList[BlockHeader] = NonEmptyList.fromListUnsafe(
+        (three ++ BlockHelpers.generateChain(
+          1,
+          three.last,
+          b => BlockHelpers.updateHeader(b, _.copy(difficulty = Difficulty(perBlock * 2)))
+        )).map(_.header)
+      )
+      lower.toList.map(_.difficulty.value).sum shouldBe perBlock * 5
+      weigher(forkChoice = new PowForkChoice(_ => false, PowForkChoiceSpec.NoCoin)).verdict(lower) shouldBe
+        BeyondReachVerdict.Heavier
+      // as before B-284
+      weigher().verdict(lower) shouldBe BeyondReachVerdict.NotHeavier
+      // Five blocks: the head's weight and height, a tie only a coin decides. Never the heavier, whatever the coin
+      // would say, and the coin is not tossed: a coin gives no node's state up for a SNAP re-sync, and its headers
+      // are not validated (forge B1, W1)
+      val even = NonEmptyList.fromListUnsafe(theirs.toList.take(5))
+      var validated = 0
+      val coinFree = new PowForkChoice(_ => false, PowForkChoiceSpec.NoCoin)
+      weigher(
+        forkChoice = coinFree,
+        firstInvalid = _ =>
+          validated += 1; None
+      ).verdict(even) shouldBe
+        BeyondReachVerdict.NotHeavier
+      validated shouldBe 0
+      // and a coin that would take it changes nothing, nor is it remembered: it was never tossed
+      val taking = new PowForkChoiceSpec.Coins(0.0)
+      weigher(forkChoice = new PowForkChoice(_ => false, taking)).verdict(even) shouldBe BeyondReachVerdict.NotHeavier
+      taking.tossed shouldBe 0
+      // this node's miner's block on the other side is the rule's own reorg: escalated, validated first
+      val theirsMined = new PowForkChoice(h => even.toList.contains(h), PowForkChoiceSpec.NoCoin)
+      weigher(
+        forkChoice = theirsMined,
+        firstInvalid = _ =>
+          validated += 1; None
+      ).verdict(even) shouldBe
+        BeyondReachVerdict.Heavier
+      validated shouldBe 1
     }
 
     "say NotHeavier where the head's weight is not exact" taggedAs (UnitTest, SyncTest) in {

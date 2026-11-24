@@ -42,6 +42,7 @@ import com.chipprbots.ethereum.ledger.NewBetterBranch
 import com.chipprbots.ethereum.ledger.NoChainSwitch
 import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** Spec 018 Track C, C6, T237 (forge): the ETC proof-of-work reorganisation matrix, in process, on the unified state
   * layout and on the hash layout side by side.
@@ -290,11 +291,154 @@ class EtcPowReorgMatrixSpec extends AnyFlatSpec with Matchers:
       }
     }
 
-  /** One case of the matrix: an oracle, and a node on each layout. */
-  class Matrix(tune: StateConfig => StateConfig = identity):
+  // B-284: core-geth's tie rule, `ForkChoice.ReorgNeeded` (core/forkchoice.go). On equal total difficulty the lower
+  // block wins; at the same height the node's own block is kept or taken, and otherwise a coin decides. The strictly
+  // heavier cases above run with a coin that fails them if it is tossed: the rule decides them without it.
+  "A fork of the head's weight that ends lower" should "be adopted on both layouts, to the same state, and be the branch the headers are resolved to" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Matrix():
+    val h: List[Block] = oracle.extend(oracle.genesis, 10, difficulty = 1000)
+    importAll(h) shouldBe BothImported
+    // s9 on h8 at 2000: h9 h10's weight, one block lower
+    val s9: List[Block] = oracle.side(h(7), 1, difficulty = 2000, tag = 0xa1)
+    val headers: NonEmptyList[BlockHeader] = NonEmptyList.fromListUnsafe(s9.map(_.header))
+    nodes.foreach { node =>
+      withClue(s"${node.layout}: ") {
+        new BranchResolution(node.blockchainReader, powForkChoice = node.powForkChoice).resolveBranch(headers) shouldBe
+          NewBetterBranch(h.drop(8))
+        // as before B-284: strictly heavier only
+        new BranchResolution(node.blockchainReader, powForkChoice = PowForkChoice.HeavierOnly)
+          .resolveBranch(headers) shouldBe NoChainSwitch
+        // where a consensus layer is followed, unchanged: not weighed by the tie rule
+        new BranchResolution(
+          node.blockchainReader,
+          Some(com.chipprbots.ethereum.consensus.engine.DesignatedHead(() => None)),
+          powForkChoice = node.powForkChoice
+        ).resolveBranch(headers) shouldBe NoChainSwitch
+      }
+    }
+    importAll(s9) shouldBe BothReorganised
+    headIs(s9.last, canonical = h.take(8) ++ s9)
+    val next: List[Block] = oracle.side(s9.last, 1, difficulty = 1000, tag = 0xa2)
+    importOne(next.head) shouldBe BothImported
+    headIs(next.head, canonical = h.take(8) ++ s9 ++ next)
+
+  "A branch not taken that grows to the head's weight and ends lower" should "be taken when it is weighed again, on both layouts" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Matrix():
+    val h: List[Block] = oracle.extend(oracle.genesis, 10, difficulty = 1000)
+    importAll(h) shouldBe BothImported
+    // s8 on h7 at 500: lighter, not taken; with s9 at 2500, h8 h9 h10's weight and one block lower
+    val s8: List[Block] = oracle.side(h(6), 1, difficulty = 500, tag = 0xa9)
+    val s9: List[Block] = oracle.side(s8.last, 1, difficulty = 2500, tag = 0xaa)
+    nodes.foreach { node =>
+      withClue(s"${node.layout}: ") {
+        def resolution(choice: PowForkChoice) = new BranchResolution(node.blockchainReader, powForkChoice = choice)
+        val notTaken = resolution(node.powForkChoice).notTaken(NonEmptyList.fromListUnsafe(s8.map(_.header))).get
+        resolution(node.powForkChoice)
+          .extended(notTaken, NonEmptyList.fromListUnsafe(s9.map(_.header)))
+          .map(_._2) shouldBe
+          Some(true)
+        // as before B-284: strictly heavier only
+        resolution(PowForkChoice.HeavierOnly)
+          .extended(notTaken, NonEmptyList.fromListUnsafe(s9.map(_.header)))
+          .map(_._2) shouldBe Some(false)
+      }
+    }
+
+  "A fork of the head's weight that ends higher" should "be kept beside the head on both layouts, with no coin" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Matrix():
+    val h: List[Block] = oracle.extend(oracle.genesis, 10, difficulty = 1000)
+    importAll(h) shouldBe BothImported
+    // s9 s10 s11 on h8: 500 + 500 + 1000, h9 h10's weight, one block higher
+    val s: List[Block] = oracle.side(h(7), 2, difficulty = 500, tag = 0xa3)
+    val s11: List[Block] = oracle.side(s.last, 1, difficulty = 1000, tag = 0xa4)
+    both(_.importAll(s ++ s11)) shouldBe (BlockEnqueued, BlockEnqueued)
+    headIs(h.last, canonical = h)
+
+  "A fork of the head's weight and height" should "go the coin's way on both layouts: taken below one half, kept from one half" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    for (landing, taken) <- Seq(0.0 -> true, 0.4999 -> true, 0.5 -> false, 0.99 -> false) do
+      withClue(s"the coin at $landing: ") {
+        val coins = scala.collection.mutable.ArrayBuffer.empty[PowForkChoiceSpec.Coins]
+        def tossingOnce(): PowForkChoice =
+          val coin = new PowForkChoiceSpec.Coins(landing)
+          coins += coin
+          new PowForkChoice(_ => false, coin)
+        new Matrix(forkChoice = () => tossingOnce()):
+          val h: List[Block] = oracle.extend(oracle.genesis, 10, difficulty = 1000)
+          importAll(h) shouldBe BothImported
+          // s10 on h9 at 1000: h10's weight and height
+          val s10: List[Block] = oracle.side(h(8), 1, difficulty = 1000, tag = 0xa5)
+          if taken then
+            importAll(s10) shouldBe BothReorganised
+            headIs(s10.last, canonical = h.take(9) ++ s10)
+          else
+            both(_.importAll(s10)) shouldBe (BlockEnqueued, BlockEnqueued)
+            headIs(h.last, canonical = h)
+          // once on each node
+          coins.map(_.tossed).toList shouldBe List(1, 1)
+      }
+  }
+
+  "A fork of the head's weight and height" should "keep the head when it is this node's own, and take the other block when that is, with no coin" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // the canonical chain is sealed by `Miner`, a side block by `OtherMiner`
+    def ownedBy(miner: Address): () => PowForkChoice =
+      () => new PowForkChoice(header => Address(header.beneficiary) == miner, PowForkChoiceSpec.NoCoin)
+    new Matrix(forkChoice = ownedBy(Miner)):
+      val h: List[Block] = oracle.extend(oracle.genesis, 10, difficulty = 1000)
+      importAll(h) shouldBe BothImported
+      val s10: List[Block] = oracle.side(h(8), 1, difficulty = 1000, tag = 0xa6)
+      both(_.importAll(s10)) shouldBe (BlockEnqueued, BlockEnqueued)
+      headIs(h.last, canonical = h)
+    new Matrix(forkChoice = ownedBy(OtherMiner)):
+      val h: List[Block] = oracle.extend(oracle.genesis, 10, difficulty = 1000)
+      importAll(h) shouldBe BothImported
+      val s10: List[Block] = oracle.side(h(8), 1, difficulty = 1000, tag = 0xa7)
+      importAll(s10) shouldBe BothReorganised
+      headIs(s10.last, canonical = h.take(9) ++ s10)
+  }
+
+  "A fork of the head's weight that ends lower, on a chain that declares a terminal total difficulty" should "be kept beside the head on both layouts, as before B-284" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Matrix():
+    val h: List[Block] = oracle.extend(oracle.genesis, 10, difficulty = 1000)
+    importAll(h) shouldBe BothImported
+    val s9: List[Block] = oracle.side(h(7), 1, difficulty = 2000, tag = 0xa8)
+    // a terminal total difficulty not reached: the chain is not past its merge, and no tie is broken (the ETH family)
+    val ethFamily: BlockchainConfig = hashes.blockchainConfig.copy(terminalTotalDifficulty = Some(BigInt(10).pow(30)))
+    val results: Seq[BlockImportResult] = nodes.map { node =>
+      node.offered ++= s9
+      node.consensusAdapter
+        .evaluateBranch(NonEmptyList.fromListUnsafe(s9))(using IORuntime.global, ethFamily)
+        .unsafeRunSync()(using IORuntime.global)
+    }
+    results shouldBe Seq(BlockEnqueued, BlockEnqueued)
+    headIs(h.last, canonical = h)
+
+  /** One case of the matrix: an oracle, and a node on each layout.
+    *
+    * @param forkChoice
+    *   each node's proof-of-work fork choice (B-284), one per node: by default no block is the node's own and the coin
+    *   fails the case if a tie is ever left to it
+    */
+  class Matrix(
+      tune: StateConfig => StateConfig = identity,
+      forkChoice: () => PowForkChoice = () => new PowForkChoice(_ => false, PowForkChoiceSpec.NoCoin)
+  ):
     val oracle = new Oracle
-    val hashes = new Node("the hash layout", guard = false, tune)
-    val unified = new Node("the unified layout", guard = true, tune)
+    val hashes = new Node("the hash layout", guard = false, tune, forkChoice())
+    val unified = new Node("the unified layout", guard = true, tune, forkChoice())
     val nodes: Seq[Node] = Seq(hashes, unified)
     val unifiedRecords = new ChangesetStorage(unified.source)
 
@@ -514,8 +658,14 @@ object EtcPowReorgMatrixSpec:
           throw new IllegalStateException(s"the oracle could not seal block ${template.number}: $error")
 
   /** The node under test, on one layout. Real VM, real `BlockExecution`, `ConsensusImpl` and `ConsensusAdapter`. */
-  final class Node(val layout: String, guard: Boolean, tune: StateConfig => StateConfig) extends Host(guard, tune):
+  final class Node(
+      val layout: String,
+      guard: Boolean,
+      tune: StateConfig => StateConfig,
+      forkChoice: PowForkChoice
+  ) extends Host(guard, tune):
     private val clock = new Clock
+    override lazy val powForkChoice: PowForkChoice = forkChoice
     private lazy val generator: TestBlockGenerator = mining.blockGenerator.withBlockTimestampProvider(clock)
 
     /** Every block offered to this node: the records of these are the ones looked at. */
