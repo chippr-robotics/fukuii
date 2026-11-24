@@ -300,7 +300,18 @@ class ConsensusImpl(
     if displaced.nonEmpty then
       val executed = outcome.executed.map(_.block.number.value).toSet
       reorgState.abandonBlockStates(displaced.collect { case (n, h) if executed(n) => (n, h.value) })
-    outcome.stateFault match
+    // On the unified layout a trie error that is not a missing node is this node's own state's, never the block's, as
+    // the adoption of a branch (`settleOnLayers`) and the commit in place at the cap read it: a fault like any other,
+    // told to the escalation's feed as a branch not judged (B-450). A missing node is left to the adapter, which fetches
+    // one that names its position and answers the others as a fault (C5a part 10, C5b). On the hash layout the text of
+    // the error is what the importer escalates by (spec 022 T062), as before.
+    val fault: Option[StateFault] = outcome.stateFault.orElse(
+      outcome.error.collect {
+        case MPTError(reason) if !reason.isInstanceOf[MissingNodeException] && blockchainReader.holdsStateInPlace =>
+          new StateUnavailable(s"a trie read failed during the execution of the batch: $reason")
+      }
+    )
+    fault match
       case Some(fault) => stateFaulted(fault, outcome.executed, branch.toList)
       case None        => extendedBy(branch, (outcome.executed, outcome.error))
 

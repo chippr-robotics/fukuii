@@ -129,6 +129,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     blockQueue.getBranch.expects(BlockHash(hash), true).returning(List(block))
 
     val mptStorage: MptStorage = mock[MptStorage]
+    // the hash layout: a trie error is answered by its text, which the importer escalates by (B-450)
+    (() => blockchainReader.holdsStateInPlace).expects().anyNumberOfTimes().returning(false)
 
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchainReader.getBlockHeaderByNumber.expects(*).anyNumberOfTimes().returning(Some(block.header))
