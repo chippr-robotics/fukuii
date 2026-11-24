@@ -4038,15 +4038,10 @@ items:
     links:
       prs: [1996]
       spec: specs/018-storage-engine-consolidation
-    claim:
-      by: cloud-dc960fdc
-      agent: herald-b434b
-      since: 2026-11-23T00:30:45Z
-      heartbeat: 2026-11-24T03:12:29Z
     notes: |-
-      2026-11-23 in-progress: Round 2 (branch head 107ea73d19): blacklist/selection paths hold in code+tests; 60s-vs-90s theory wrong, reverted. Remaining hypotheses: PeerDisconnected clears blacklist on a live peer; ask timeout (92s) beats request failure so no BlacklistPeer. Waiting on dev-node greps (B-437).
       2026-11-23 blocked: dev-node greps: blacklist lines are DEBUG (not in INFO log). Two of the 7 requests left 2.4 s / 19.9 s after a failure (new fetches, not retries) and still chose e514276e with 13 peers up. DEBUG repro run requested on dev-node.
       2026-11-23 blocked: DEBUG repro 2026-11-23 on dev-node: no stall (0 regular-sync request timeouts in node B's hour; Mordor at ~1.5 s blocks under one miner). #1996 = failover test + WARN on a dropped blacklisting. Re-repro once Mordor block times are normal.
+      2026-11-24 released by cloud-dc960fdc: blocked until Mordor block times normalise (DEBUG repro needs a live node); open for whoever runs it
   - id: B-435
     title: Miner's sync-status ask times out during SNAP every 2-5 min (SyncController slow to answer GetStatus); flaps the 'Mining waits' reason
     priority: P3
