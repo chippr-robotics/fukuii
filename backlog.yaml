@@ -1516,7 +1516,7 @@ items:
   - id: B-163
     title: "eth_simulateV1: run the request system calls (withdrawal/consolidation queues, deposit logs) for Prague and Osaka blocks, as geth PostExecution does"
     priority: P2
-    status: claimed
+    status: in-progress
     area: rpc
     size: M
     opened: 2026-11-09
@@ -1526,10 +1526,11 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T16:20:55Z
-      heartbeat: 2026-11-24T16:20:55Z
+      heartbeat: 2026-11-24T17:15:26Z
     notes: |-
       From #1727 PR 5 (conduit): EthSimulateService runs request system calls only for Amsterdam blocks; geth runs PostExecution for every Prague block (simulate.go:499). Changes simulated requestsHash and state for Prague/Osaka; RPC only, not import. Many simulate tests on empty state will need the queue stubs (RequestContractStubs).
       2026-11-24 do with B-180 (shared preamble); B-166's ordering fix lands there
+      2026-11-24 in-progress: committed on fix/r4-simulate-parity (local, not pushed); PR pending
   - id: B-164
     title: "EthashUtils.checkDifficulty: difficulty <= 0 is invalid and the target is computed as a BigInt (geth parity)"
     priority: P2
