@@ -2097,11 +2097,18 @@ class EngineApiService(
       BuiltBlock(skeletonBlock.copy(header = updatedHeader), receipts, executionRequests, blockAccessList, deployedCode)
     }
 
-  /** Writes the code a build deployed to the code store, for `testing_commitBlockV1` on the hash store, which keeps the
-    * build's own writes as the block's state instead of importing it. Before the block is stored (B-230).
+  /** Writes the code a build deployed to the code store, in a write of its own: for a replay that keeps the build's own
+    * writes as the block's state and stores the block after it (B-230).
     */
   def writeBuiltCode(built: BuiltBlock): Unit =
     blockExecution.writeDeployedCode(built.deployedCode)
+
+  /** The write of the code a build deployed, not committed: `testing_commitBlockV1` on the hash store, which keeps the
+    * build's own writes as the block's state, writes it in the one batch that stores the block (B-466). None when the
+    * build deployed none.
+    */
+  def builtCodeWrite(built: BuiltBlock): Option[com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate] =
+    blockExecution.deployedCodeWrite(built.deployedCode)
 
   /** The payload currently held for `payloadId`, exactly as stored — nothing is rebuilt. engine_getPayload answers with
     * [[resolvePayload]]; the controller reads this first only to check the method version against the payload's fork.
