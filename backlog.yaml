@@ -5202,7 +5202,7 @@ items:
   - id: B-506
     title: settleHead designated-head arm deletes index entries above the tip only up to the old best; sweep upward like canonicalHeadUpdate
     priority: P3
-    status: claimed
+    status: in-progress
     area: consensus
     size: S
     opened: 2026-11-24
@@ -5213,8 +5213,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:30:35Z
-      heartbeat: 2026-11-24T11:30:35Z
-    notes: "beacon W2 on B-088: newPayload rows above best survive (no stale lookups; storeBlock writes none). Designated-head arm only; forge to confirm before the ETC weight arm. Also tests: side-block lookups re-pointed on the designated arm; re-presented canonical prefix keeps lookups; heldBlockIndex/reconciliation specs."
+      heartbeat: 2026-11-24T11:30:39Z
+    notes: |-
+      beacon W2 on B-088: newPayload rows above best survive (no stale lookups; storeBlock writes none). Designated-head arm only; forge to confirm before the ETC weight arm. Also tests: side-block lookups re-pointed on the designated arm; re-presented canonical prefix keeps lookups; heldBlockIndex/reconciliation specs.
+      2026-11-24 in-progress: one PR with B-506+B-511 (settleHead designated arm), clone-d
   - id: B-507
     title: test_getLogHash and the MCP GetTransactionTool / McpResources tx readers follow a lookup with no canonical check (B-495 leftovers)
     priority: P3
