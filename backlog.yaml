@@ -1249,18 +1249,19 @@ items:
   - id: B-126
     title: "Chain weights: re-derive a block weight when a forkchoiceUpdated reorg promotes a side payload stored by hash during a repair"
     priority: P3
-    status: in-progress
+    status: review
     area: sync
     size: S
     opened: 2026-11-08
     refs: [B-002]
-    links: {}
+    links:
+      prs: [2055]
     depends_on: [B-002]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T06:32:10Z
-      heartbeat: 2026-11-24T07:06:56Z
+      heartbeat: 2026-11-24T07:09:33Z
     notes: |-
       forge, B-002 round 3 (beacon nit): a side payload stored by hash only while ChainWeightReconcile repairs keeps its stale-parent weight when an FCU reorg later makes it canonical. Advertised TD only on PoS; re-derive parent+difficulty at promotion (ForkChoiceManager).
       2026-11-24 in-progress: clone-d lane, chain-weight batch
