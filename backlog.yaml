@@ -5308,7 +5308,7 @@ items:
   - id: B-514
     title: StateFaultAfterAMove for HeadLeftOnSideBlocks resets the pool with ofBranches(Nil, movedOff); pass headOn as the blocks added
     priority: P3
-    status: claimed
+    status: in-progress
     area: consensus
     size: S
     opened: 2026-11-24
@@ -5319,8 +5319,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:15:36Z
-      heartbeat: 2026-11-24T11:15:36Z
-    notes: "beacon W4 on B-460. Also N3: leftBy works by exclusion; pin the producers. W3: announce-path blame uses block.number (ETC)."
+      heartbeat: 2026-11-24T11:15:40Z
+    notes: |-
+      beacon W4 on B-460. Also N3: leftBy works by exclusion; pin the producers. W3: announce-path blame uses block.number (ETC).
+      2026-11-24 in-progress: folded into the B-338/B-460 round 2 (user: fix in the PR, don't split)
   - id: B-515
     title: "Pool reset: the Engine API path and the importer don't share the pool's last head; an FCU after an importer reorg leaves the pool stale"
     priority: P3
