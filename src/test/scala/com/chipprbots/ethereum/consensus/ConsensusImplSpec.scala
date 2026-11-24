@@ -290,28 +290,29 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       _ shouldBe a[SelectedNewBestBranch]
     }
 
-  it should "leave the PoS designated-head arm's partial-failure handling as it was (best -> last executed)" taggedAs (
+  it should "keep the old head when the PoS designated-head arm's branch fails after a valid prefix (B-505)" taggedAs (
     UnitTest,
     ConsensusTest
   ) in new ConsensusSetup:
-    // Guard for the ETC BLOCKHASH/index parity change: only a branch selected BY WEIGHT gets the core-geth head rule.
     // Equal-TD branch b3'..b4' (same height, same TD as b3..b4, so NOT heavier) is selected solely because the bound
-    // holder names b4'; b4' fails, so only b3' executes. b3' is lighter than the old head b4 — the weight rule would
-    // keep b4, but this arm is ETH's and must still move best to b3', exactly as before.
+    // holder names b4'; b4' fails, so only b3' executes. Until B-505 this arm moved best to b3' on the hash layout. The
+    // unified layout (`settleOnLayers`, the user's decision of 2026-11-14) and go-ethereum (SetCanonical only on a head
+    // inserted whole) keep b4: the consensus layer's branch becomes the head whole or not at all.
     val equalTdBranch: List[Block] = BlockHelpers.generateChain(2, initialChain(2))
     val holder = new DesignatedHead.LateBound
     holder.bind(DesignatedHead(() => Some(equalTdBranch.last.hash.value)))
     setFailingBlock(equalTdBranch(1))
 
-    // B-291: the prefix that became the head is told as the reorganisation it is, with the blocks it replaced
     whenReady(consensusWith(Some(holder)).evaluateBranch(NonEmptyList.fromListUnsafe(equalTdBranch)).unsafeToFuture()) {
-      case SelectedNewBestBranchPartially(oldBranch, newBranch, _, BranchExecutionFailure(Nil, failing, _)) =>
-        oldBranch shouldBe List(initialChain(3), initialChain(4))
-        newBranch shouldBe List(equalTdBranch.head)
+      case BranchExecutionFailure(toEnqueue, failing, _) =>
+        // the executed prefix is queued again, as a lighter prefix of the weight arm is
+        toEnqueue shouldBe List(equalTdBranch.head)
         failing shouldBe equalTdBranch(1).hash.value
-      case other => fail(s"not a partial reorganisation: $other")
+      case other => fail(s"not a failure of the branch: $other")
     }
-    blockchainReader.getBestBlock shouldBe Some(equalTdBranch.head)
+    blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
+    blockchainReader.getBlockHeaderByNumber(initialChain(3).number.value).map(_.hash) shouldBe
+      Some(initialChain(3).hash)
 
   it should "keep the heavier old head when a weight-selected reorg executes only a lighter prefix (core-geth)" taggedAs (
     UnitTest,
