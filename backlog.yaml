@@ -2023,12 +2023,17 @@ items:
   - id: B-214
     title: "Delete the requesting side of GetNodeData: no eth version this node speaks carries it"
     priority: P3
-    status: open
+    status: claimed
     area: p2p
     size: M
     opened: 2026-11-11
     refs: []
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T20:10:44Z
+      heartbeat: 2026-11-24T20:10:44Z
     notes: "EIP-4938 removed GetNodeData/NodeData; every decoder (eth/68..72) rejects 0x0d/0x0e, and spec 018 C2b deleted the serving handler. Still there and dead: StateNodeFetcher's fallback and handleNodeDataValues, PeersClient's BestNodeDataPeer / BestNodeDataPeerExcluding / RecordNodeDataFailure, the NodeData references in BlockImporter and BlockFetcher, the two codes in PeerStatisticsActor, and the message classes in ETHPackets (herald, C2b review). Apply dead-code-review.md first."
   - id: B-215
     title: SubscriptionManagerSpec 'push newHeads notification' times out under full-suite load (a 5 s Await on a pub/sub delivery)
