@@ -169,15 +169,10 @@ items:
     refs: [10g, "#1692 N3 review"]
     links: {}
     depends_on: [B-069]
-    claim:
-      by: cloud-dc960fdc
-      agent: vault-b014
-      since: 2026-11-23T21:24:00Z
-      heartbeat: 2026-11-24T03:12:29Z
     notes: |-
-      beacon + vault. Liveness, not loss. Check first whether Track C C8a makes it moot.
       2026-11-17 priority P3: liveness, not loss; C8a likely moots it
       2026-11-23 blocked: Deferred to after C8a: the hash-store copy is retired there; re-check then whether path recovery still needs to republish.
+      2026-11-24 released by cloud-dc960fdc: not being worked: deferred until C8a retires the hash-store copy; re-check then
   - id: B-015
     title: "#1705 follow-up: SyncController leaks its peers client when the pipeline is replaced"
     priority: P2
