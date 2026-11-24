@@ -35,10 +35,16 @@ case class DiscoveryConfig(
 object DiscoveryConfig extends Logger:
   val DefaultComputeThreads: Int = 1
 
-  // Whether bootstrap nodes (and DNS seeding) are used at all; controlled by modifiers like 'enterprise'.
-  // Default to true if not specified to maintain backward compatibility.
+  /** The config key that says whether bootstrap nodes (and DNS seeding) are used at all. */
+  val UseBootstrapNodesPath: String = "fukuii.network.discovery.use-bootstrap-nodes"
+
+  // Whether bootstrap nodes (and DNS seeding) are used at all: the operator's config (a config file, or a -D property,
+  // which overrides it) and else true. The `enterprise` modifier sets it false only when the operator has not (B-401);
+  // this used to read the system property alone, so a config file could not set it.
   private def bootstrapNodesEnabled: Boolean =
-    try System.getProperty("fukuii.network.discovery.use-bootstrap-nodes", "true").toBoolean
+    try
+      val config = com.typesafe.config.ConfigFactory.load()
+      if config.hasPath(UseBootstrapNodesPath) then config.getBoolean(UseBootstrapNodesPath) else true
     catch case _: Exception => true
 
   def apply(

@@ -28,11 +28,12 @@ When you launch Fukuii with the `enterprise` modifier, it automatically configur
 
 1. **Disabled Public Discovery**: `network.discovery.discovery-enabled = false`
 2. **Static-Nodes-Only Peering**: the node dials only the nodes in `<datadir>/static-nodes.json`; the chain's
-   `bootstrap-nodes` and DNS discovery are ignored
+   `bootstrap-nodes` and DNS discovery are ignored, unless your configuration sets
+   `fukuii.network.discovery.use-bootstrap-nodes`, which the modifier then leaves as you set it
 3. **Disabled Port Forwarding**: No UPnP/NAT-PMP (unnecessary in enterprise LANs)
-4. **Localhost RPC Binding**: JSON-RPC HTTP is bound to `localhost`. The modifier sets
-   `fukuii.network.rpc.http.interface` as a JVM system property, which takes precedence over your configuration file
-   (see [Exposing RPC](#exposing-rpc-beyond-the-host))
+4. **Localhost RPC Binding**: JSON-RPC HTTP is bound to `localhost`, the built-in default. The modifier does not
+   pin it: set `fukuii.network.rpc.http.interface` in your configuration to serve other hosts (see
+   [Exposing RPC](#exposing-rpc-beyond-the-host))
 5. **Disabled Sync Blacklisting**: `sync.blacklist-duration = 0`, so peers are retried at once in a controlled network
 
 The modifier sets nothing else. Security for traffic between services and organizations is configured explicitly:
@@ -148,7 +149,7 @@ fukuii {
       # Local administration (admin_nodeInfo, admin_addPeer, the allowlist methods) over the IPC socket,
       # which file permissions protect; IPC serves the admin namespace by default
       ipc.enabled = true
-      # JSON-RPC HTTP stays on localhost under the enterprise modifier; see "Exposing RPC beyond the host"
+      # JSON-RPC HTTP is on localhost unless rpc.http.interface says otherwise; see "Exposing RPC beyond the host"
     }
   }
 }
@@ -394,30 +395,24 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
 
 ### Exposing RPC Beyond the Host
 
-The `enterprise` modifier sets `fukuii.network.rpc.http.interface = localhost` as a JVM system property at launch,
-which overrides the configuration file and any earlier `-D`. To serve JSON-RPC HTTP to application servers on other
-hosts, launch **without** the modifier and set what it would have set yourself, then add the interface and TLS:
+JSON-RPC HTTP listens on `localhost` by default, with or without the `enterprise` modifier. To serve it to
+application servers on other hosts, set the interface and TLS in your configuration, and launch with the modifier as
+usual (`fukuii enterprise -Dconfig.file=...`):
 
 ```hocon
 fukuii {
   network {
-    discovery {
-      discovery-enabled = false
-      reuse-known-nodes = true
-    }
-    automatic-port-forwarding = false
     rpc.http {
       interface = "192.168.2.10"
       tls { enabled = true, profile = "rpc", client-auth = "need" }
     }
   }
-  sync.blacklist-duration = 0.seconds
 }
 ```
 
-Without the modifier the node also dials the chain's `bootstrap-nodes`, not only `static-nodes.json`; with the node
-allowlist on, every bootstrap node and static node must be listed anyway. The WebSocket listener
-(`network.rpc.ws.interface`) is not pinned by the modifier.
+Before B-401 the modifier set the interface as a JVM system property, which overrode this setting, and this
+section said to launch without the modifier; that is no longer needed. The WebSocket listener
+(`network.rpc.ws.interface`) is set the same way.
 
 On a non-loopback interface, TLS is required: without `tls.enabled = true` the node refuses to start unless
 `allow-insecure-bind = true` is set for that listener, which accepts plaintext deliberately (and logs a WARN line at

@@ -127,7 +127,8 @@ class AppSpec extends AnyFlatSpec with Matchers:
     System.getProperty("fukuii.network.discovery.reuse-known-nodes") shouldBe "true"
     System.getProperty("fukuii.network.discovery.use-bootstrap-nodes") shouldBe "false"
     System.getProperty("fukuii.sync.blacklist-duration") shouldBe "0.seconds"
-    System.getProperty("fukuii.network.rpc.http.interface") shouldBe "localhost"
+    // B-401: the RPC interface is left to the config (its default is already localhost); a property overrode it
+    System.getProperty("fukuii.network.rpc.http.interface") shouldBe null
 
     // Cleanup
     System.clearProperty("fukuii.network.discovery.discovery-enabled")
@@ -136,6 +137,26 @@ class AppSpec extends AnyFlatSpec with Matchers:
     System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
     System.clearProperty("fukuii.sync.blacklist-duration")
     System.clearProperty("fukuii.network.rpc.http.interface")
+  }
+
+  // B-401: a system property overrides every config file, so the modifier's unconditional `use-bootstrap-nodes=false`
+  // overrode an operator who set it, contrary to its comment and the enterprise template.
+  it should "leave use-bootstrap-nodes to the operator who set it (B-401)" taggedAs (UnitTest) in {
+    System.clearProperty("fukuii.network.discovery.use-bootstrap-nodes")
+    System.setProperty("fukuii.network.discovery.use-bootstrap-nodes", "true") // as an operator's -D sets it
+    com.typesafe.config.ConfigFactory.invalidateCaches()
+    try
+      getApplyModifiersMethod.invoke(App, Set("enterprise"))
+      System.getProperty("fukuii.network.discovery.use-bootstrap-nodes") shouldBe "true"
+    finally
+      Seq(
+        "fukuii.network.discovery.discovery-enabled",
+        "fukuii.network.automatic-port-forwarding",
+        "fukuii.network.discovery.reuse-known-nodes",
+        "fukuii.network.discovery.use-bootstrap-nodes",
+        "fukuii.sync.blacklist-duration"
+      ).foreach(System.clearProperty)
+      com.typesafe.config.ConfigFactory.invalidateCaches()
   }
 
   behavior.of("App argument filtering")
