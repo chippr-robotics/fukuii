@@ -1911,11 +1911,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T05:14:33Z
-      heartbeat: 2026-11-24T05:14:37Z
+      heartbeat: 2026-11-24T06:00:58Z
     notes: |-
-      beacon and conduit, review of C2b PR B (2026-11-11). Old behaviour (the tip check of getAccount(BestBranch, address, n)), kept on purpose by BlockchainReader.accountIn / accountProofIn so that C2b changes no RPC answer. It is also what answers the pending block with the empty account. Better: answer from the held state, or with an error. Decide with conduit; hive rpc-compat does not exercise it.
       2026-11-24 user 2026-11-24: follow core-geth's answers for a held block above best (by number and by hash); conduit + beacon
       2026-11-24 in-progress: clone-e lane batch 3
+      2026-11-24 in-progress: Pushed fix/b210-rpc-reads-above-best (c734f955ee); PR not opened yet. Follow-ups B-484, B-485.
   - id: B-211
     title: "RPC: GraphQL call and estimateGas reach EthInfoService without the controller, so without the stale-view retry (StateRead.request)"
     priority: P3
