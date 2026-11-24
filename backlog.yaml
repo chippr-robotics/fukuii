@@ -5199,7 +5199,7 @@ items:
   - id: B-501
     title: BlockImporter offers NewBetterBranch's oldBranch.head to the ommer pool before the reorg runs (offer after success instead)
     priority: P3
-    status: claimed
+    status: in-progress
     area: consensus
     size: S
     opened: 2026-11-24
@@ -5209,7 +5209,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T15:02:11Z
-      heartbeat: 2026-11-24T15:02:11Z
+      heartbeat: 2026-11-24T15:02:43Z
     notes: |-
       forge, found during B-299; harmless (ancestor filter) but uses a slot.
       2026-11-24 released by cloud-dc960fdc: conflicts with B-338/B-460 in BlockImporter.resolveBranch; pick up after they merge
