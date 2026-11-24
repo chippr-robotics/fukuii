@@ -1580,6 +1580,49 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.holds(branch(4).header, chain ++ branch)
     }
 
+  /** An attempt that holds the records above the head, open on a thread of its own until what is returned is called: an
+    * adoption on another thread, as an import's reverse-then-commit is (B-294).
+    */
+  private def anotherAttempt(on: Node): () => Unit =
+    val opened = new java.util.concurrent.CountDownLatch(1)
+    val done = new java.util.concurrent.CountDownLatch(1)
+    val anchor = on.pathState.anchor.get
+    val thread = new Thread(() =>
+      on.pathState.withRecordsHeld(anchor) {
+        opened.countDown()
+        done.await()
+      }
+    )
+    thread.start()
+    opened.await()
+    () =>
+      done.countDown()
+      thread.join()
+
+  // B-294 (beacon W1): while another thread's adoption holds the records, the hold is refused, asking again. No fault
+  // of this node and no verdict on the branch: superseded, so that it is asked for again at once and not counted
+  it should "be superseded, not failed, while another thread's adoption is open, and committed in place once it ends" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = tightNode
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val recovery = new on.Recovery(maxBlocks = 1)
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      val branch = blocks.slice(39, 44)
+      branch.take(4).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      newPayload(branch(4)).status shouldBe PayloadStatus.Accepted
+      val release = anotherAttempt(on)
+      try
+        statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+        recovery.outcomes.last shouldBe StateRecovery.Outcome.Superseded
+        recovery.adoptedBlocks shouldBe empty
+        on.holds(chain.last.header, chain)
+      finally release()
+      statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(2)
+      on.holds(branch(4).header, chain ++ branch)
+    }
+
   /** A branch from block 39: 40' to 44', the chain's blocks but for their extra data (before Prague a block's state
     * does not depend on its parent's hash).
     */
@@ -1938,6 +1981,30 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       val chosen = choose(bad).toOption.get.payloadStatus
       chosen.status shouldBe PayloadStatus.Invalid
       chosen.latestValidHash shouldBe Some(blocks(29).header.hash.value)
+    }
+
+  // B-294 (beacon W1): the move up the executed blocks kept, which a catch-up makes first, is refused, asking again,
+  // while another thread's adoption is open: superseded, as a commit refused on the way up is, and not a fault
+  it should "be superseded, not failed, when its first move is refused while another thread's adoption is open" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      blocks.take(39).foreach(on.imports)
+      val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 2, catchUp = 30, chunk = 5)
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      // 40 and 41 are kept as layers above the head, and 42 to 44 are stored and never executed: more than a branch is
+      // adopted over, so they are caught up over, and the head is moved up to 41 first
+      blocks.slice(39, 41).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      blocks.slice(41, 44).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+      val release = anotherAttempt(on)
+      try
+        statusOf(choose(blocks(43))) shouldBe PayloadStatus.Syncing
+        recovery.outcomes.last shouldBe StateRecovery.Outcome.Superseded
+        recovery.adoptedBlocks shouldBe empty
+        on.holds(blocks(38).header, blocks.take(39))
+      finally release()
+      statusOf(choose(blocks(43))) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(3)
+      on.holds(blocks(43).header, blocks.take(44))
     }
 
   // spec 018 C5a part 10 (beacon C6): told as the move of the head it made, not as the body it stopped at, so that the

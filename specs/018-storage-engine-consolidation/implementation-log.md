@@ -2882,7 +2882,9 @@ open and the close are balanced on every path and the monitor is a leaf; the clo
 and the observers are told, and the best block and the index are of the move's own batch, so who is woken reads the
 final head; the generation only grows and is bumped before the first write, so a build is never kept across an attempt.
 **Recorded**: an import onto an intermediate head during an attempt is not excluded (test mode only today; B-294,
-with beacon); a deep reorganisation loads the whole old chain with its receipts before it runs (**B-296, a gate before
+with beacon; **fixed 2026-11-24**: while an attempt that holds the records is open, a commit or a promotion onto the
+head, a move that is no fork choice, and a second attempt on another thread are refused under the state lock with
+`StateUnavailable(askAgain)`, nothing written; the attempt's own thread and the fork choice are not); a deep reorganisation loads the whole old chain with its receipts before it runs (**B-296, a gate before
 the guard is on for an archive node**).
 
 **T183 as it stands**: a reorganisation of **4,000 blocks** in the archive mode, with views that reach 2 blocks and

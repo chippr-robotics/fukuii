@@ -876,7 +876,8 @@ final class PathStateStorage(
     * @param block
     *   the block being committed, with the state root its header carries
     * @throws StateUnavailable
-    *   when the block does not extend the anchor, or there is no anchor
+    *   when the block does not extend the anchor, or there is no anchor; and, asking again, while another thread's
+    *   attempt that holds the records is open ([[withRecordsHeld]]): nothing is written
     */
   def commitCanonical(
       staged: Option[PathStagedState],
@@ -890,6 +891,7 @@ final class PathStateStorage(
     // names the finalized block is not this class's.
     val finalized = finalizedNow().map(_.number)
     val outcome = adopting(s"canonical commit of block ${block.show}") {
+      refuseInAnotherAttempt(s"the commit of block ${block.show}")
       // Every in-place writer holds this lock, so the clock is at rest and the anchor is the disk's.
       clock.anchor match
         case None =>
@@ -1544,7 +1546,7 @@ final class PathStateStorage(
     *
     * @throws StateUnavailable
     *   when `block` has no forward layer, or its parent is not the anchor, or its layer was not built on the state the
-    *   disk holds
+    *   disk holds; and, asking again, while another thread's attempt that holds the records is open
     */
   def promote(block: BlockRef, extra: Option[DataSourceBatchUpdate]): CommitOutcome =
     extra.foreach(other =>
@@ -1552,6 +1554,7 @@ final class PathStateStorage(
     )
     val finalized = finalizedNow().map(_.number)
     val outcome = adopting(s"promotion of block ${block.show}") {
+      refuseInAnotherAttempt(s"the promotion of block ${block.show}")
       (clock.anchor, overlay.layerOf(block)) match
         case (None, _) =>
           throw new StateUnavailable(s"block ${block.show} cannot be committed: there is no state anchor")
@@ -1664,9 +1667,34 @@ final class PathStateStorage(
     */
   private val recordHolds = new ConcurrentHashMap[Object, BigInt]()
 
+  /** The thread of each attempt that holds the records, by the attempt (B-294). An attempt adopts its branch on the
+    * thread that opened it: its moves and its commits are made there, one after another.
+    */
+  private val attemptThreads = new ConcurrentHashMap[Object, Thread]()
+
   /** The lowest height an attempt holds the records of, if any does. */
   private def heldFrom: Option[BigInt] =
     recordHolds.values().iterator().asScala.minOption
+
+  /** '''No block is adopted, and no attempt begins, while another thread's attempt is open''' (spec 018 C4e part 4,
+    * B-294). Such an attempt moves the head to a branch and commits its blocks in place, and may move it back: in the
+    * meantime the head stands on blocks it may not stay on, and a block committed on one of them would be moved off by
+    * the attempt's next write, or would take its place. The writer is refused, with nothing written, and asks again
+    * once the attempt has ended. It does not wait for the attempt, which may be waiting for what that writer holds (the
+    * gate of a block it executes; forge). A commit or a promotion may still wait before it gets here, as any adopter
+    * does ([[adopting]]): for one move of the head under way on another thread, which takes no gate, and is then
+    * refused. Asked under the state lock, where an attempt is opened: a writer that passes it finds the head settled,
+    * or its own attempt's.
+    */
+  private def refuseInAnotherAttempt(what: String)(using StateLockHeld): Unit =
+    val self = Thread.currentThread()
+    attemptThreads.values().iterator().asScala.find(_ ne self).foreach { other =>
+      throw new StateUnavailable(
+        s"$what was not made: an adoption on thread '${other.getName}' is moving the head, which stands on a block it " +
+          "may not stay on until the adoption ends. Ask again then",
+        askAgain = true
+      )
+    }
 
   /** `body`, with the changeset records of every block above `above` kept from retention for as long as it runs.
     *
@@ -1675,12 +1703,19 @@ final class PathStateStorage(
     * block of it fails the head is moved back to the old head by the records. Every in-place commit prunes, so without
     * this a branch longer than what is retained would delete the old branch's records, which are the way back, and its
     * own first ones. Nothing is pruned while it runs that the hold covers; the commit after it catches up.
+    *
+    * '''The attempt is the calling thread's''' (B-294): while it runs, no other thread adopts a block, moves the head
+    * (but a fork choice) or begins an attempt ([[refuseInAnotherAttempt]]). So `body` must run synchronously on the
+    * calling thread, its moves and commits included: one it hands to another thread, or makes on one (an `IO` shifted
+    * off this thread, a future), is refused as another thread's write, asking again.
     */
   @throws[ReorgTooDeep]("when the records above `above` are not all kept already: the way back is not there")
+  @throws[StateUnavailable]("asking again, when another thread's attempt is open: nothing was held")
   def withRecordsHeld[A](above: BlockRef)(body: => A): A =
     val hold = new Object
     // under the lock, so that no commit prunes between the look at what is kept and the hold
     lock.locked(s"a hold of the records above block ${above.show}") {
+      refuseInAnotherAttempt(s"the hold of the records above block ${above.show}")
       appState.getChangesetPrunedTo().filter(_ > above.number + 1).foreach { prunedTo =>
         throw new ReorgTooDeep(
           ReorgRefusal.Deep,
@@ -1688,12 +1723,16 @@ final class PathStateStorage(
         )
       }
       recordHolds.put(hold, above.number + 1)
+      attemptThreads.put(hold, Thread.currentThread())
     }
-    // the hold is the attempt: the head is not settled until it ends, whatever moves and commits it makes
-    openAttempt()
-    try body
+    // the hold is the attempt: the head is not settled until it ends, whatever moves and commits it makes. Opened
+    // inside the `try`, so that nothing between the hold and its release can leave the hold, or its thread, behind
+    try
+      openAttempt()
+      body
     finally
       recordHolds.remove(hold)
+      attemptThreads.remove(hold)
       closeAttempt()
 
   /** Whether a move of the head is under way: from its plan to its last batch, the time between two batches included.
@@ -1766,6 +1805,10 @@ final class PathStateStorage(
     *   why the move as planned is not to be made, when it is not: asked of each plan before anything of it is written
     *   or counted, and a refusal ends the move with a [[StateUnavailable]] and nothing written (a fork choice moves the
     *   head up or across, never down to an ancestor of the head: C4d part 2b)
+    * @param forkChoice
+    *   a move a consensus client's fork choice asks for, which is made while another thread's attempt is open: the
+    *   attempt follows the head the consensus client names, and stops when another is named (`StateRecovery`). Any
+    *   other move is refused then, before its first batch, asking again ([[refuseInAnotherAttempt]], B-294)
     * @param extraFor
     *   the caller's rows for the batch that ends on a block. It is called with no lock of this store held but the one
     *   that keeps other moves and commits out, once for each batch, and again if the move is planned again; what it
@@ -1778,14 +1821,16 @@ final class PathStateStorage(
     *   when the move is refused: nothing was changed
     * @throws StateUnavailable
     *   when a block on the way up has neither record nor layer (`heldTo` says how far a move could be made), when the
-    *   target's chain does not lead to this node's state, or when a layer was found not to stand and was dropped
+    *   target's chain does not lead to this node's state, or when a layer was found not to stand and was dropped; and,
+    *   asking again, when it is no fork choice and another thread's attempt is open: nothing was written
     */
   def moveHead(
       target: BlockRef,
       link: ByteString => Option[HeadMovePlan.Link],
       extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate],
       finalized: Option[FinalizedBlock] = None,
-      admit: HeadMovePlan => Option[String] = _ => None
+      admit: HeadMovePlan => Option[String] = _ => None,
+      forkChoice: Boolean = false
   ): MoveOutcome =
     if moves.isHeldByCurrentThread then
       throw new IllegalStateException(s"A move of the head to ${target.show} cannot start inside another")
@@ -1797,7 +1842,7 @@ final class PathStateStorage(
     val pin = new BranchPin(s"the move of the head to ${target.show}")
     try
       val outcome =
-        try move(target, link, extraFor, finalized, admit, pin, MoveReplans)
+        try move(target, link, extraFor, finalized, admit, forkChoice, pin, MoveReplans)
         catch
           case NonFatal(failed) =>
             // A move that stopped part of the way kept the layers its later batches were to apply. Those of the
@@ -1828,6 +1873,7 @@ final class PathStateStorage(
       extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate],
       namesFinalized: Option[FinalizedBlock],
       admit: HeadMovePlan => Option[String],
+      forkChoice: Boolean,
       pin: BranchPin,
       replansLeft: Int
   ): MoveOutcome =
@@ -1883,6 +1929,9 @@ final class PathStateStorage(
           nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
         ) {
           refuseIfFaulted()
+          // before anything of it is written: a move under way is not stopped part of the way by an attempt opened
+          // between two of its batches, whose own moves and commits wait for it to end
+          if at == 0 && !forkChoice then refuseInAnotherAttempt(s"the move of the head to ${target.show}")
           val layersStand = chunk.forward.forall { step =>
             step.source match
               case HeadMovePlan.Source.Layer(layer) => overlay.layerOf(step.block).exists(_ eq layer)
@@ -1935,7 +1984,7 @@ final class PathStateStorage(
           batches = chunks.size,
           nanos = System.nanoTime() - started
         )
-    else if replansLeft > 0 then move(target, link, extraFor, namesFinalized, admit, pin, replansLeft - 1)
+    else if replansLeft > 0 then move(target, link, extraFor, namesFinalized, admit, forkChoice, pin, replansLeft - 1)
     else
       throw new StateUnavailable(
         s"no move of the head to ${target.show} could be made: the state, or an executed block of the plan, changed " +

@@ -192,6 +192,9 @@ class ForkChoiceManager(
         header,
         blockchainReader,
         finalized = finalized,
+        // made while the fork choice's recovery adopts a branch in place: that adoption follows the head named, and
+        // stops when another is (B-294)
+        forkChoice = true,
         // up a chain of executed blocks, or across a fork along the records and the executed blocks of the other
         // branch; never down to an ancestor of the head, which go-ethereum skips too ("Ignoring beacon update to old
         // head"): the Engine API answers that one VALID, and moves nothing (C4d part 2b)

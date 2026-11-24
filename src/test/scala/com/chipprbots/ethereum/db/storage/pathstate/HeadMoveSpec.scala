@@ -1058,6 +1058,76 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
       result.get.failed.get shouldBe a[StateUnavailable]
     }
 
+  // B-294 (spec 018 C4e part 4; forge): an attempt moves the head to a branch and commits the branch's blocks in place,
+  // on its own thread, and may move it back. Meanwhile the head stands on blocks it may not stay on. A writer on another
+  // thread is refused, asking again, and does not wait: the attempt may be waiting for what that writer holds.
+  "A writer on another thread while an attempt holds the records" should "be refused, asking again, with nothing written; and be made on the head the attempt ends on" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val net = new Net(CommitSettings(maxBlocksPerMove = 2))
+      val ours = grown(net.chain.first, fourBlocks)((p, txs) => net.inPlace(p, txs*))
+      val fork = ours(0)
+      val state = net.chain.state
+      // run on a thread of its own, and waited for
+      def elsewhere[A](body: => A): scala.util.Try[A] =
+        val result = new java.util.concurrent.atomic.AtomicReference[scala.util.Try[A]]()
+        val thread = new Thread(() => result.set(scala.util.Try(body)))
+        thread.start()
+        thread.join()
+        result.get
+      def askedAgain(attempt: scala.util.Try[?]): Unit = attempt.failed.toOption match
+        case Some(refused: StateUnavailable) =>
+          refused.askAgain shouldBe true
+          refused.getMessage should include("is moving the head")
+        case other => fail(s"not refused, asking again: $other")
+
+      var onTheTip: Option[net.chain.Executed] = None
+      val theirs = state.withRecordsHeld(fork) {
+        // the head down at the fork, which the attempt does not stay on
+        net.moved(fork)
+        val generation = state.headGeneration
+        val untouched = net.chain.everything
+        val onTheFork = net.chain.on(fork)(slots(carol, 9 -> 9))
+        askedAgain(elsewhere(onTheFork.inPlace()))
+        // a move that is no fork choice, and a second attempt
+        askedAgain(elsewhere(net.move(ours.last)))
+        askedAgain(elsewhere(state.withRecordsHeld(fork)(fail("a second attempt ran"))))
+        net.chain.everything shouldBe untouched
+        net.holds(fork)
+        state.headGeneration shouldBe generation
+
+        // the attempt's own commits are made on its thread
+        val theirs = grown(fork, branch.take(2))((p, txs) => net.inPlace(p, txs*))
+        // a fork choice is made meanwhile, as the consensus client's recovery expects; the attempt follows it back
+        elsewhere(state.moveHead(fork, net.links.get, net.pointers, forkChoice = true)).get shouldBe a[
+          MoveOutcome.Moved
+        ]
+        net.holds(fork)
+        net.moved(theirs.last)
+        state.headGeneration shouldBe generation
+
+        // a block on the head the attempt ends on: refused while it is open
+        val block = net.chain.on(theirs.last)(slots(carol, 8 -> 8))
+        net.links(block.ref.hash) = Link(block.ref, theirs.last.hash)
+        onTheTip = Some(block)
+        val before = net.chain.everything
+        askedAgain(elsewhere(block.inPlace()))
+        net.chain.everything shouldBe before
+        net.holds(theirs.last)
+        theirs
+      }
+      // once the attempt has ended, the same commit is made, on the head it ended on
+      state.headGeneration % 2 shouldBe 0
+      net.anchor shouldBe theirs.last
+      val block = onTheTip.get
+      elsewhere(block.inPlace()).get
+      net.holds(block.ref)
+      // and a move, and an attempt, from any thread
+      elsewhere(net.moved(theirs.last)).get
+      net.holds(theirs.last)
+      elsewhere(state.withRecordsHeld(fork)(net.moved(block.ref))).get
+      net.holds(block.ref)
+    }
+
   "A store that wrote other bytes than it was given" should "take no further write, by a move or by a commit" taggedAs
     (UnitTest, ConsensusTest) in {
       // an in-memory source that, when told to, stores every row of a batch with its last byte flipped

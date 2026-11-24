@@ -377,6 +377,9 @@ class BlockchainWriter(
     * @param admit
     *   why the move as planned is not to be made ([[PathStateStorage.moveHead]]'s `admit`): asked before anything is
     *   written
+    * @param forkChoice
+    *   a consensus client's fork choice, which is made while another thread's adoption is open; any other move is
+    *   refused then ([[PathStateStorage.moveHead]]'s `forkChoice`, B-294)
     * @throws IllegalStateException
     *   on the hash layout, which holds the state of every block and has no head of the state to move
     * @throws com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
@@ -389,7 +392,8 @@ class BlockchainWriter(
       reader: BlockchainReader,
       refuse: HeadMovePlan.Chunk => Option[String] = _ => None,
       finalized: Option[FinalizedBlock] = None,
-      admit: HeadMovePlan => Option[String] = _ => None
+      admit: HeadMovePlan => Option[String] = _ => None,
+      forkChoice: Boolean = false
   ): PathStateStorage.MoveOutcome =
     val state = pathState.getOrElse(
       throw new IllegalStateException(
@@ -414,7 +418,8 @@ class BlockchainWriter(
         Some(canonicalHeadUpdate(head, reader).batch)
       ,
       finalized,
-      admit
+      admit,
+      forkChoice
     )
 
   /** '''START only''': the batch that makes the index of blocks by number the ancestry of `held`, the block whose state
