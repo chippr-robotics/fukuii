@@ -5406,20 +5406,18 @@ items:
   - id: B-512
     title: "AddUncheckedTransactions has no sender in main code after B-460: dead-code review"
     priority: P3
-    status: review
+    status: done
     area: sync
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2097]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T15:02:18Z
-      heartbeat: 2026-11-24T15:53:30Z
-    notes: "forge, B-460. Also: resolveBranch still offers the predicted old branch's first header as an ommer before the import (see B-501); B-461 side blocks' own txs not removed from the pool; importBlock IO.raiseError inside .tap on non-redownload missing-node does nothing (pre-existing)."
+    notes: |-
+      forge, B-460. Also: resolveBranch still offers the predicted old branch's first header as an ommer before the import (see B-501); B-461 side blocks' own txs not removed from the pool; importBlock IO.raiseError inside .tap on non-redownload missing-node does nothing (pre-existing).
+      2026-11-24 done: merged 14d19a7603
   - id: B-513
     title: Post-merge, an invalid block on a branch the CL names is not the serving peer's fault; don't blacklist (followsConsensusLayer)
     priority: P3
