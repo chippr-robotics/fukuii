@@ -1897,6 +1897,9 @@ trait Node
     with TransactionHistoryServiceBuilder.Default
     with PortForwardingBuilder
     with BlacklistBuilder:
+  // The node's own `secure-random-algo`, not the process's (B-339).
+  override protected def secureRandomAlgo: Option[String] = instanceConfig.secureRandomAlgo
+
   // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
   implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
