@@ -1775,6 +1775,9 @@ final class PathStateStorage(
     * passes through, and is the anchor still until its next batch.
     */
   @throws[ReorgTooDeep]("when the records above `above` are not all kept already: the way back is not there")
+  @throws[IllegalStateException](
+    "when the best block is not the anchor, on a store that keeps the best block beside it: nothing was held"
+  )
   @throws[StateBusy](
     "when another thread's attempt is open, a move of the head is under way on another thread, or the head is not " +
       "`expectedAnchor` any more: nothing was held, and the caller asks again"
@@ -1783,6 +1786,13 @@ final class PathStateStorage(
     val hold = new Object
     // under the lock, so that no commit prunes between the look at what is kept and the hold
     lock.locked(s"a hold of the records above block ${above.show}") {
+      // First, the best block is the anchor (data-model 5.1, I1). Every writer moves the two in one batch under this
+      // lock (a commit, each batch of a move, the genesis, a hand-off), so here, between two batches of another
+      // thread's move included, they agree; and with no anchor yet there is nothing to hold. One that does not is a
+      // writer that moved one without the other: a defect, said at ERROR and thrown, as before any batch. Asked before
+      // the refusals below, which answer a head that moved with its state: without it, the head read as the anchor
+      // that is not would be refused as busy at every attempt, and never said (forge, B-315 W1 on the cap path)
+      clock.anchor.foreach(anchor => bestIsTheAnchor(anchor, s"the hold of the records above block ${above.show}"))
       refuseInAnotherAttempt(s"the hold of the records above block ${above.show}")
       // Nor while a move of the head is under way on another thread (B-504): between two of its batches the anchor is
       // a block the move is passing through, and the next batch takes it on. A caller that read the head then would

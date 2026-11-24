@@ -783,6 +783,48 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     said.exists(_.getFormattedMessage.contains("[STATE-BUSY]")) shouldBe false
   )
 
+  // The same broken invariant on the proof-of-work rule's way at the cap (forge, after B-315 W1): the head read again
+  // there is the head the branch was weighed against, by the best block and the index, and the state is held at another
+  // block. The hold of the records is where it is met: refused as busy (B-463), it would be refused again at every
+  // offer and never be said. It fails as `bestIsTheAnchor` fails before a batch is written: at ERROR, with an
+  // IllegalStateException, and nothing held or written.
+  it should "fail at ERROR, with nothing held, the hold at the cap when the state moved without the best block" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new HeadRacedReorg(pinnedCap(1L), atThePin = true):
+    val before = new java.util.concurrent.atomic.AtomicReference[Map[java.nio.ByteBuffer, Array[Byte]]]()
+    meanwhile = () =>
+      // the state moved back to block 10, the best block and the index with it; then the rows of a move to block 12,
+      // the best block and the index, written alone: the anchor is block 10, and the head reads as block 12
+      movedBackTo(oldChain(9))
+      node.blockchainWriter.canonicalHeadUpdate(oldChain.last.header, node.blockchainReader).batch.commit()
+      before.set(datadir.storage)
+    val (thrown, said) =
+      com.chipprbots.ethereum.testing.LogCapture.capture("com.chipprbots.ethereum")(scala.util.Try(offer()))
+    ranMeanwhile shouldBe true
+    thrown.failed.toOption match
+      case Some(failed: IllegalStateException) =>
+        failed.getMessage should include("the hold of the records above block")
+        failed.getMessage should include("is not the block the state is held at")
+      case _ => fail(s"not failed as a broken invariant: $thrown")
+    // nothing held, and nothing of the head written (the branch was executed under its pin, by its blocks' hashes)
+    state.recordsHeld shouldBe false
+    state.headGeneration % 2 shouldBe 0
+    state.anchor.map(_.hash) shouldBe Some(oldChain(9).hash.value)
+    node.bestHash shouldBe oldChain.last.hash
+    val written = (datadir.storage.keySet ++ before.get.keySet).filterNot(key =>
+      java.util.Arrays.equals(datadir.storage.getOrElse(key, null), before.get.getOrElse(key, null))
+    )
+    written.map(_.get(0)) should contain noneOf (
+      Namespaces.HeightsNamespace.head,
+      Namespaces.AppStateNamespace.head
+    )
+    said.exists(e =>
+      e.getLevel == ch.qos.logback.classic.Level.ERROR && e.getFormattedMessage.startsWith("[STATE-MOVE]")
+    ) shouldBe true
+    said.exists(_.getFormattedMessage.contains("[STATE-BUSY]")) shouldBe false
+  )
+
   // B-504 on the proof-of-work rule's way at the cap (forge's review, N4): the branch is weighed against a head that a
   // move of the head on another thread is passing through, paused between two of its batches. The head read again at the
   // cap is that block, and so is the anchor, so neither B-315's check nor B-463's refuses the hold; the move under way
