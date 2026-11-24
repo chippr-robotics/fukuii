@@ -530,10 +530,16 @@ class EngineApiController(
     val nullBlobs = hashes.map(_ => JNull)
     IO.pure(JsonRpcResponse("2.0", Some(JArray(nullBlobs)), None, reqId(request)))
 
+  /** engine_getBlobsV2 (execution-apis osaka.md, EIP-7594 / PeerDAS) answers `Array of BlobAndProofV2` or `null`: all
+    * or nothing. The client "MUST return `null` in case of any missing or older version blobs", so a missing blob makes
+    * the whole result `null`, never a `null` element; per-element nulls are V1's (and V3's) shape. A consensus client
+    * rejects a `null` inside the array (Lighthouse: "invalid type: null, expected struct BlobAndProofV2", B-198).
+    *
+    * Fukuii does not index pool blobs by versioned hash, so any non-empty request has a missing blob and is answered
+    * `null`; the CL falls back to fetching the cells from its peers. An empty request has nothing missing and is
+    * answered `[]`, as go-ethereum does (GetBlobsV2: `available != len(hashes)` is false for zero hashes).
+    */
   private def handleGetBlobsV2(request: JsonRpcRequest): IO[JsonRpcResponse] =
-    // engine_getBlobsV2: returns BlobAndProofV2 | null per versioned hash (EIP-7594 / PeerDAS).
-    // Fukuii does not index mempool blobs by versioned hash, so null is returned for every entry;
-    // the CL (Lighthouse/Prysm) will fall back to fetching cell proofs from CL peers.
     val hashes = request.params
       .map(_.arr)
       .getOrElse(Nil)
@@ -542,8 +548,8 @@ class EngineApiController(
         items
       }
       .getOrElse(Nil)
-    val nullEntries = hashes.map(_ => JNull)
-    IO.pure(JsonRpcResponse("2.0", Some(JArray(nullEntries)), None, reqId(request)))
+    val result = if hashes.isEmpty then JArray(Nil) else JNull
+    IO.pure(JsonRpcResponse("2.0", Some(result), None, reqId(request)))
 
   /** engine_getPayloadBodiesByHashV1 (execution-apis shanghai.md) and engine_getPayloadBodiesByHashV2 (amsterdam.md),
     * which "follows the same specification as engine_getPayloadBodiesByHashV1": one entry per requested hash, "in the
