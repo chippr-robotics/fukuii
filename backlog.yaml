@@ -3427,7 +3427,7 @@ items:
       by: cloud-dc960fdc
       agent: herald-b386
       since: 2026-11-24T00:29:37Z
-      heartbeat: 2026-11-24T00:29:37Z
+      heartbeat: 2026-11-24T00:29:48Z
     notes: "After the C6 PR-C fallback, do-snap-sync=true restarts go precondition -> beforeSnap -> Refused (state above genesis) -> log.error. Correct, but noisy: say once at INFO that the node regular-syncs on the state it holds. Also: declared peers come from static-nodes.json and snap-server-peers at start only; admin_addPeer peers are not counted."
   - id: B-387
     title: "JwtAuthenticatorSpec: audit Engine API specs for clock-boundary races (iat at the 60 s skew edge)"
