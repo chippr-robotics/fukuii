@@ -4376,3 +4376,13 @@ items:
     links:
       spec: 018
     notes: "forge-b448: since B-448 a batch ChainReorganised re-adds the moved-off blocks' txs after the import (as importBlock). The pre-import AddUncheckedTransactions(oldBranch) in resolveBranch is then a duplicate for full reorgs, validated against the old head's state (where those txs are included), and sent even on KeptCurrentBestBranch/failure. Retire it once B-338 reports a partial reorg's old branch."
+  - id: B-461
+    title: whereTheHeadIsLeft calls a head left on a reorg's lost side parents 'on the chain it left' and tells none of them as imported
+    priority: P3
+    status: open
+    area: consensus
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "forge B-343: commitInPlaceAtTheCap, fault at a side parent then a move back that fails before it wrote leaves the head on the committed side parents (e.g. a6); the answer labels it the old chain and imported=Nil (only branch blocks are checked). Pinned by ReorgBlockhashParitySpec 'middle chunk meets a fault'. Decide wording and whether those side parents are told as the head."
