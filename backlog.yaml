@@ -4848,19 +4848,14 @@ items:
   - id: B-477
     title: "engine_getBlobsV1/V2: refuse > 128 hashes with -38004 (geth) and malformed params with -32602 (today answered [])"
     priority: P3
-    status: review
+    status: done
     area: engine-api
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: [B-198]
     links:
       prs: [2079]
-    claim:
-      by: cloud-719c6644
-      agent: beacon
-      since: 2026-11-24T12:42:05Z
-      heartbeat: 2026-11-24T13:09:36Z
-      branch: fix/b419-engine-api-parity
     notes: "beacon review of B-198: cancun.md/osaka.md MUST -38004 if too large; check whether V2 pre-Osaka must answer -38005 before adding it."
   - id: B-478
     title: "ConsensusImpl: hand the CL's branch that forks below the view reach to StateRecovery now that its walk reaches the fork"
