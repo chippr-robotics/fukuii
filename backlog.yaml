@@ -1993,23 +1993,19 @@ items:
   - id: B-230
     title: "An execution that is thrown away writes its contract code durably (InMemoryWorldStateProxy.persistState, :111): an eth_call that deploys writes code to disk"
     priority: P3
-    status: in-progress
+    status: done
     area: evm
     size: S
     opened: 2026-11-12
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2018]
       spec: specs/018-storage-engine-consolidation
-    claim:
-      by: cloud-dc960fdc
-      agent: forge-b230b
-      since: 2026-11-24T00:17:11Z
-      heartbeat: 2026-11-24T01:10:32Z
     notes: |-
-      Found by beacon in the spec 018 C4a part 4b consult. Content-addressed, so not wrong, but unbounded growth by RPC.
       2026-11-24 review: Merge after vault review (code write order).
       2026-11-24 review: vault APPROVE; fix pending-block eth_call regression + WAL comment before merge (scratchpad b230-vault-fix.md).
+      2026-11-24 done: merged cb188dfcf
   - id: B-236
     title: "028 S5: live checks (24 h follow, 166 reset under a supervisor, Hoodi peers) and closure"
     priority: P2
