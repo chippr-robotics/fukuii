@@ -4572,7 +4572,7 @@ items:
   - id: B-466
     title: testing_commitBlockV1 (hash store) writes code, block, receipts and access list as four commits; fold into one batch
     priority: P3
-    status: claimed
+    status: in-progress
     area: storage
     opened: 2026-11-24
     refs: []
@@ -4582,8 +4582,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:45:55Z
-      heartbeat: 2026-11-24T03:45:55Z
-    notes: "Follow-up of B-454. TestingService.commitBlock importInPlace=None path: writeBuiltCode then storeBlock/storeReceipts/storeBlockAccessList each .commit(). State is written straight through by the build, so only the block records + code can share a batch. Test-mode only."
+      heartbeat: 2026-11-24T03:45:59Z
+    notes: |-
+      Follow-up of B-454. TestingService.commitBlock importInPlace=None path: writeBuiltCode then storeBlock/storeReceipts/storeBlockAccessList each .commit(). State is written straight through by the build, so only the block records + code can share a batch. Test-mode only.
+      2026-11-24 in-progress: clone-e lane batch 2
   - id: B-467
     title: "stopThenExit catches only NonFatal: a fatal error in the stop leaves the q/Ephemery/SIGTERM thread dead and the process running"
     priority: P3
