@@ -103,6 +103,10 @@ class JwtAuthenticatorSpec extends AnyFlatSpec with Matchers with ScalatestRoute
     expectOk(signed(HeaderJson, s"""{"iat":$now,"exp":${now + 3600}}"""))
   }
 
+  it should "refuse a token whose exp has passed, as go-ethereum does (B-419)" taggedAs (UnitTest, RPCTest) in {
+    expectUnauthorized(signed(HeaderJson, s"""{"iat":$now,"exp":${now - 10}}"""), s"JWT expired: exp=${now - 10}")
+  }
+
   it should "answer 401 to a signature that is not base64url" taggedAs (UnitTest, RPCTest) in {
     val signingInput = valid.split('.').take(2).mkString(".")
     expectUnauthorized(s"$signingInput.!!!!", "Invalid JWT signature encoding")
