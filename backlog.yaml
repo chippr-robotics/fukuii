@@ -1498,7 +1498,8 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T16:21:03Z
-      heartbeat: 2026-11-24T16:21:03Z
+      heartbeat: 2026-11-24T16:21:23Z
+      branch: fix/r4-simulate-parity
     notes: "From #1727 PR 4 (conduit), read from code, not reproduced: EthSimulateService.preCheck checks intrinsic gas only; a call with gas in [intrinsic, floor) on Prague/Olympia reaches executeTransactionWithOverrides and hits the #1438 guard. Also: the StxLedger estimator ignores maxUsedGas (geth gasestimator.go:155 uses it)."
   - id: B-162
     title: "maxUsedGas tests: add an Amsterdam case with non-zero EIP-8037 state gas; mark TxResultMaxUsedGasSpec:155 zero-state-gas-only"
