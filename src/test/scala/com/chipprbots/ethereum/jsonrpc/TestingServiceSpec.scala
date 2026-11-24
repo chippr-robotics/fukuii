@@ -261,7 +261,6 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
         blockchainReader,
         blockchainWriter,
         forkChoiceManager,
-        Some(pendingTxManager),
         blockTopic = None,
         gasLimitTarget = GasLimitTarget,
         importInPlace = Some(_ =>
@@ -275,6 +274,27 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
         .commitBlock(CommitBlockRequest(attrs(), Some(Nil), Some(ByteString.empty)))
         .unsafeRunSync() shouldBe Left(JsonRpcError.HeadBusy)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+
+    // B-498: the commit resets the pool as engine_forkchoiceUpdated does (B-253), from the node's one record of the
+    // pool's head (B-515), and records the block it committed there. A bare removal of the block's transactions left
+    // the record where it was, and the next fork choice or import reset the pool from a head the chain had left.
+    "reset the pool onto the committed head as a fork choice does, and record it as the pool's head" taggedAs UnitTest in new Setup:
+      txPoolHead.current shouldBe None
+      val res: CommitBlockResponse = service
+        .commitBlock(CommitBlockRequest(attrs(), Some(Seq(rawTx(nonce = 0))), Some(ByteString.empty)))
+        .unsafeRunSync()
+        .getOrElse(fail("commit failed"))
+      val committed: Block = blockchainReader.getBlockByHash(BlockHash(res.blockHash)).getOrElse(fail("not stored"))
+      committed.body.transactionList should have size 1
+
+      txPoolHead.current.map(_.hash.value) shouldBe Some(res.blockHash)
+      val deadline: Long = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+      while resetsTold.isEmpty && System.nanoTime() < deadline do Thread.onSpinWait()
+      resetsTold.peek() shouldBe
+        com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset(
+          Seq(committed.body.transactionList),
+          Nil
+        )
 
     "NOT move the head when a transaction cannot be applied" taggedAs UnitTest in new Setup:
       val res: Either[JsonRpcError, CommitBlockResponse] = service
@@ -510,6 +530,13 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
     )
     lazy val forkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter)
 
+    // the pool's resets, as the stub was told them, and the node's one record of the pool's head (B-498)
+    val resetsTold: java.util.concurrent.ConcurrentLinkedQueue[
+      com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset
+    ] = new java.util.concurrent.ConcurrentLinkedQueue()
+    lazy val txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead =
+      new com.chipprbots.ethereum.transactions.TxPoolHead
+
     lazy val pendingTxManager: org.apache.pekko.actor.typed.ActorRef[
       com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command
     ] = classicSystem.spawn(
@@ -518,6 +545,9 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
           case com.chipprbots.ethereum.transactions.PendingTransactionsManager.GetPendingTransactionsReq(replyTo) =>
             replyTo ! com.chipprbots.ethereum.transactions.PendingTransactionsManager
               .PendingTransactionsResponse(Nil)
+            org.apache.pekko.actor.typed.scaladsl.Behaviors.same
+          case reset: com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset =>
+            resetsTold.add(reset)
             org.apache.pekko.actor.typed.scaladsl.Behaviors.same
           case _ => org.apache.pekko.actor.typed.scaladsl.Behaviors.same
         },
@@ -530,7 +560,8 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       blockchainWriter,
       blockExec,
       forkChoiceManager,
-      Some(pendingTxManager)
+      Some(pendingTxManager),
+      txPoolHead = txPoolHead
     )(using blockchainConfig, typedScheduler)
 
     lazy val service = new TestingService(
@@ -538,7 +569,6 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       blockchainReader,
       blockchainWriter,
       forkChoiceManager,
-      Some(pendingTxManager),
       blockTopic = None,
       gasLimitTarget = GasLimitTarget
     )(using blockchainConfig)

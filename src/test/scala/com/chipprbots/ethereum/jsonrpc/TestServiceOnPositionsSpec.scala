@@ -214,6 +214,11 @@ class TestServiceOnPositionsSpec
     /** How long a block that is mined waits for the head to be settled: the service's own when none. */
     val settleWait = new AtomicReference[Option[FiniteDuration]](None)
     private val orders = new AtomicInteger(0)
+
+    /** The node's one record of the head the pool was last reset to (B-498), and the resets the manager was told. */
+    val txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead =
+      new com.chipprbots.ethereum.transactions.TxPoolHead
+    val resetsTold = new java.util.concurrent.ConcurrentLinkedQueue[PendingTransactionsManager.HeadReset]()
     private val asked = testKit.createTestProbe[PendingTransactionsResponse]()
 
     /** How many times the manager was told to forget its transactions. The orders are messages: one more is sent and
@@ -233,6 +238,9 @@ class TestServiceOnPositionsSpec
           Behaviors.same
         case ClearPendingTransactions =>
           orders.incrementAndGet()
+          Behaviors.same
+        case reset: PendingTransactionsManager.HeadReset =>
+          resetsTold.add(reset)
           Behaviors.same
         case _ => Behaviors.same
       }
@@ -259,7 +267,8 @@ class TestServiceOnPositionsSpec
       provider,
       storagesInstance.storages.transactionMappingStorage,
       node,
-      system.scheduler
+      system.scheduler,
+      txPoolHead = txPoolHead
     )(using IORuntime.global):
       override protected def headSettleWait: FiniteDuration = settleWait.get().getOrElse(super.headSettleWait)
     val service: TestService = newService()
@@ -1101,6 +1110,48 @@ class TestServiceOnPositionsSpec
       // the hash store holds the state of every block: it rewinds to any
       onHashes.rewind(1) shouldBe Right(RewindToBlockResponse())
       onHashes.head.header.hash shouldBe firstBlock.header.hash
+    }
+
+  // B-498: test mode moves the head by setting a chain, mining, importing and rewinding. Each move resets the pool from
+  // the node's one record of the pool's head, as regular sync's importer and the fork choice do (B-253, B-515), so
+  // that the record follows the head and their next reset starts where the pool stands. On both layouts.
+  it should "keep the pool's head on its own head through a chain set, a block mined, a rewind and a block imported" taggedAs
+    UnitTest in {
+      val pair = new Pair(chainA)
+      import pair.*
+      def poolOnTheHead(what: String): Unit = Seq(onHashes, onPositions).foreach { rig =>
+        withClue(s"after $what, guard=${rig.blockchainReader.holdsStateInPlace}: ") {
+          rig.txPoolHead.current.map(_.hash) shouldBe Some(rig.head.header.hash)
+        }
+      }
+      poolOnTheHead("the chain was set")
+      step(Seq(transfer(0, Address(42), 9000)))
+      poolOnTheHead("a block was mined")
+      val secondBlock = step(Seq(transfer(1, Address(42), 9000)))
+      poolOnTheHead("a second block was mined")
+
+      Seq(onHashes, onPositions).foreach(_.rewind(1) shouldBe Right(RewindToBlockResponse()))
+      poolOnTheHead("a rewind")
+      onHashes.head.header.number.value shouldBe 1
+
+      // a block imported onto the head: the second block again, sealed as a block handed over as bytes is (a mix hash and
+      // a nonce of their lengths; test mode checks neither). It is the head, and the pool is told its transactions leave
+      // it, as the importer tells it
+      val resealed = secondBlock.copy(header =
+        secondBlock.header.copy(
+          mixHash = BlockHash(ByteString(new Array[Byte](32))),
+          nonce = ByteString(new Array[Byte](8))
+        )
+      )
+      Seq(onHashes, onPositions).foreach { rig =>
+        rig.resetsTold.clear()
+        rig.importRaw(resealed).isRight shouldBe true
+        rig.head.header.hash shouldBe resealed.header.hash
+        rig.cleared // the reset was told before this is answered
+        rig.resetsTold.toArray.toList shouldBe
+          List(PendingTransactionsManager.HeadReset(Seq(resealed.body.transactionList), Nil))
+      }
+      poolOnTheHead("a block was imported")
     }
 
   // C4d part 0 (beacon): a state that failed closed takes no write, a new genesis included, until test mode destroys it;

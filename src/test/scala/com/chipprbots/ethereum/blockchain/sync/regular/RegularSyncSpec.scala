@@ -458,24 +458,39 @@ class RegularSyncSpec
       case _                                                                                       => Nil
     }
 
-    /** The transactions handed back to the pool, by a reset or by a hand-back of their own (the branch resolution's,
-      * which B-460 retired: one would show here as a second entry).
-      */
+    /** The transactions handed back to the pool by its resets, one entry per reset that hands any back. */
     def takenBackByThePool(): Seq[Seq[SignedTransaction]] = toThePool.collect {
-      case com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions(txs)
-          if txs.nonEmpty =>
-        txs
       case com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset(_, txs) if txs.nonEmpty =>
         txs
     }
 
-    /** Whether the pool was sent anything that hands transactions back besides a reset (B-460: nothing is). */
+    /** Whether the pool was sent anything besides its resets (B-460: the branch resolution's hand-back ahead of the
+      * import is retired, and B-512 deleted the message it was sent as; anything else told here is a new one).
+      */
     def handedBackAheadOfAReset(): Boolean = toThePool.exists(
-      _.isInstanceOf[com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions]
+      !_.isInstanceOf[com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset]
     )
 
     /** The pool is sent nothing for this import (asked once the import is known to be done). */
     def poolToldNothing(): Unit = pool.expectNoMessage(1.second)
+
+    /** The headers the next offer to the ommer pool held (B-501), and that no other offer follows it. */
+    def offeredAsOmmers(): Seq[BlockHeader] =
+      val offered = ommersPool
+        .fishForMessage(5.seconds) {
+          case _: com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers => true
+          case _                                                      => false
+        }
+        .asInstanceOf[com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers]
+        .ommers
+      noOmmerOffered()
+      offered
+
+    /** Nothing is offered to the ommer pool (asked once the import is known to be done). */
+    def noOmmerOffered(): Unit =
+      ommersPool.receiveWhile(max = 1.second, idle = 1.second) {
+        case com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers(headers) => headers
+      } shouldBe empty
 
     /** The pool's resets: one per move of the head. */
     def resetsOfThePool(): Int =
@@ -4184,6 +4199,197 @@ class RegularSyncSpec
           takenBackByThePool() shouldBe List(movedOff.body.transactionList)
           handedBackAheadOfAReset() shouldBe false
           resetsOfThePool() shouldBe 1
+      )
+
+      // B-501: the branch resolution offered its prediction's first old block to the ommer pool ahead of the import,
+      // whether or not the import then moved the head off it. core-geth's `reorg` sends a side event for each block of
+      // the old chain once the new one is written, and its miner keeps them as uncle candidates; only the lowest has a
+      // parent on the new chain. The offer follows the import's own answer: the lowest block it says the head left.
+      "offer the lowest block the import moved the head off as an ommer, not the one predicted" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b501-full"):
+          val predicted: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(predicted))
+          val movedOff: List[Block] = BlockHelpers.generateChain(2, BlockHelpers.genesis)
+          val executed: List[Block] = testBlocks.take(2)
+          answer.set(ChainReorganised(movedOff, executed, executed.map(weighed).map(_.weight), branchBlocks = 2))
+
+          importBatch(executed)
+
+          offeredAsOmmers() shouldBe List(movedOff.head.header)
+      )
+
+      "offer the lowest block a partial reorganisation moved the head off as an ommer (B-338)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b501-partial"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(movedOff))
+          val batch: List[Block] = testBlocks.take(3)
+          val executed: List[Block] = batch.take(2)
+          val invalid: String =
+            s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.ValidationAfterExecError("Block has invalid state root")}"
+          answer.set(
+            ImportedPartially(
+              ChainReorganised(List(movedOff), executed, executed.map(weighed).map(_.weight), branchBlocks = 2),
+              batch(2).hash.value,
+              invalid
+            )
+          )
+
+          importBatch(batch)
+
+          offeredAsOmmers() shouldBe List(movedOff.header)
+      )
+
+      "offer the block moved off as an ommer when this node's state failed after a reorganisation's prefix" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b501-local-fault"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(movedOff))
+          val batch: List[Block] = testBlocks.take(3)
+          val localFault: String =
+            s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.MPTError(new MPTException("Invalid Node"))}"
+          answer.set(
+            new BlockImportFailedAt(localFault, batch(1).hash.value, List(weighed(batch.head)), List(movedOff))
+          )
+
+          importBatch(batch)
+
+          offeredAsOmmers() shouldBe List(movedOff.header)
+      )
+
+      "offer no ommer when the reorganisation failed and the head stayed" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("b501-failed"):
+          predictedOldBranch.set(List(BlockHelpers.generateBlock(BlockHelpers.genesis)))
+          val batch: List[Block] = testBlocks.take(3)
+          val invalid: String =
+            s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.ValidationAfterExecError("Block has invalid state root")}"
+          answer.set(new BlockImportFailedAt(invalid, batch(1).hash.value))
+
+          importBatch(batch)
+
+          // the import is done once the fetcher is sent back
+          fetcherRewound()
+          noOmmerOffered()
+      )
+
+      "offer no ommer when the branch was not the heavier and the head was kept" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("b501-kept"):
+          predictedOldBranch.set(List(BlockHelpers.generateBlock(BlockHelpers.genesis)))
+          answer.set(BlockEnqueued)
+
+          importBatch(testBlocks.take(2))
+
+          importerFetcher.awaitCond(evaluations.get == 1, 5.seconds)
+          noOmmerOffered()
+      )
+
+      // an announced block that reorganised the chain offers the block it moved off as well, as core-geth's reorg does
+      // whatever inserted the block (before B-501 only a fetched batch's prediction offered one)
+      "offer the block an announced block's reorganisation moved the head off as an ommer" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b501-announced"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val executed: List[Block] = testBlocks.take(2)
+          answer.set(ChainReorganised(List(movedOff), executed, executed.map(weighed).map(_.weight), branchBlocks = 2))
+
+          importer ! BlockImporter.ImportNewBlock(executed.last, PeerId("announcer"))
+
+          offeredAsOmmers() shouldBe List(movedOff.header)
+      )
+
+      // B-512: a reorganisation onto a branch that stands on side blocks stored before makes them canonical with it.
+      // The hash layout's answer lists the branch alone, so their transactions stayed in the pool though the chain now
+      // includes them. go-ethereum's pool reset walks the new chain down to the fork, on proof of work and proof of stake
+      // alike: the importer reads them from the store, down to the parent of the lowest block moved off, and they leave
+      // the pool with the branch, oldest first, on either chain.
+      for follows <- Seq(false, true) do
+        s"drop the transactions of the side blocks a reorganisation made canonical (follows a consensus layer: $follows)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new BatchImportTells(s"b512-side-blocks-$follows", followsConsensusLayer = follows):
+            val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+            val side: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+            blockchainWriter.storeBlock(side).commit()
+            val branch: Block = BlockHelpers.generateBlock(side)
+            answer.set(ChainReorganised(List(movedOff), List(branch), List(weighed(branch).weight), branchBlocks = 1))
+
+            importBatch(List(branch))
+
+            removedFromThePool() shouldBe List(side.body.transactionList, branch.body.transactionList)
+            takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+            resetsOfThePool() shouldBe 1
+        )
+
+      "drop the transactions of the side blocks under the branch a fault stopped the head on" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b512-fault-on-branch"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val sides: List[Block] = BlockHelpers.generateChain(2, BlockHelpers.genesis)
+          sides.foreach(blockchainWriter.storeBlock(_).commit())
+          val branch: List[Block] = BlockHelpers.generateChain(2, sides.last)
+          // the head stopped on the branch's first block (whereTheHeadIsLeft), off the chain it left
+          answer.set(
+            new StateFaultAfterAMove(
+              new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the move back failed"),
+              List(weighed(branch.head)),
+              List(movedOff)
+            )
+          )
+
+          importBatch(branch)
+
+          removedFromThePool() shouldBe (sides ++ branch.take(1)).map(_.body.transactionList)
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+          resetsOfThePool() shouldBe 1
+      )
+
+      // go-ethereum's cap: a side chain of more than 64 blocks under the branch is not walked (warned of), and the reset
+      // is what the result lists; at 64 it is walked whole
+      val MaxDepth: Int = com.chipprbots.ethereum.transactions.TxPoolReset.MaxReorgDepth
+      for (sides, walked) <- Seq(MaxDepth -> true, (MaxDepth + 1) -> false) do
+        s"drop the transactions of $sides side blocks under the branch only within the 64-block cap" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new BatchImportTells(s"b512-cap-$sides"):
+            val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+            val side: List[Block] = BlockHelpers.generateChain(sides, BlockHelpers.genesis)
+            side.foreach(blockchainWriter.storeBlock(_).commit())
+            val branch: Block = BlockHelpers.generateBlock(side.last)
+            answer.set(ChainReorganised(List(movedOff), List(branch), List(weighed(branch).weight), branchBlocks = 1))
+
+            importBatch(List(branch))
+
+            removedFromThePool() shouldBe
+              (if walked then (side :+ branch).map(_.body.transactionList) else List(branch.body.transactionList))
+        )
+
+      "drop no more than the result lists when a block between it and the fork is not stored" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b512-side-not-stored"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val side: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val branch: Block = BlockHelpers.generateBlock(side)
+          answer.set(ChainReorganised(List(movedOff), List(branch), List(weighed(branch).weight), branchBlocks = 1))
+
+          importBatch(List(branch))
+
+          removedFromThePool() shouldBe List(branch.body.transactionList)
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
       )
 
       // B-514 (beacon W4): a move back that failed left the head on side blocks the branch stands on, off the chain it

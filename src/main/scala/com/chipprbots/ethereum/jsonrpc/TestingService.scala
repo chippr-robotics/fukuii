@@ -26,7 +26,6 @@ import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.ledger.BlockExecutionError
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 
@@ -101,7 +100,6 @@ class TestingService(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
     forkChoiceManager: ForkChoiceManager,
-    pendingTransactionsManager: Option[ActorRef[PendingTransactionsManager.Command]],
     blockTopic: Option[ActorRef[Topic.Command[NewBlockImported]]],
     gasLimitTarget: BigInt,
     // On the unified state layout a build writes no state, so a block that was built is committed by importing it:
@@ -199,13 +197,12 @@ class TestingService(
                 log.error("testing_commitBlockV1: fork choice rejected freshly stored head: {}", err.describe)
               case Right(()) => ()
 
-            // Drop the committed transactions from the pool so the next build does not re-queue
-            // them (they would fail with NONCE_MISMATCH_TOO_LOW). engine_forkchoiceUpdated does
-            // the same on head advance.
-            if block.body.transactionList.nonEmpty then
-              pendingTransactionsManager.foreach(
-                _ ! PendingTransactionsManager.RemoveTransactions(block.body.transactionList)
-              )
+            // The pool is reset onto the new head as engine_forkchoiceUpdated resets it (B-253, B-498): the committed
+            // transactions leave it, so the next build does not re-queue them (they would fail with
+            // NONCE_MISMATCH_TOO_LOW), and the head is recorded as the pool's in the node's one record of it (B-515).
+            // A bare removal left that record on the head before, and the next fork choice or import reset the pool
+            // from there, taking back the transactions of the blocks committed here.
+            engineApiService.resetThePoolOnto(hash.value)
 
             // "emit the same chain events it would for any new head" — BlockImporter publishes
             // NewBlockImported on the same topic; eth_subscribe newHeads/logs read it from there.

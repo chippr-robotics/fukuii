@@ -556,8 +556,7 @@ trait RegularSyncFixtures:
     )
 
     // Set up AutoPilot for pendingTransactionsManager to respond to pending transaction asks.
-    // RegularSync/BlockImporter only send fire-and-forget commands (AddUncheckedTransactions,
-    // RemoveTransactions); this autopilot handles both Classic and Typed ask variants defensively.
+    // RegularSync/BlockImporter only send fire-and-forget commands (HeadReset); this autopilot handles both Classic and Typed ask variants defensively.
     pendingTransactionsManager.setAutoPilot(
       new AutoPilot:
         def run(sender: ActorRef, msg: Any): AutoPilot = msg match

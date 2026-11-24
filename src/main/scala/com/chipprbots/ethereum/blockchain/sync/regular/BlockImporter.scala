@@ -15,6 +15,7 @@ import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
+import scala.annotation.tailrec
 import scala.compiletime.asMatchable
 import scala.concurrent.duration.*
 import scala.util.Failure
@@ -1927,6 +1928,7 @@ final private class BlockImporterLogic(
     */
   private def tellBatchImported(onto: List[Block], off: List[Block], executed: List[Block]): Unit =
     updateTxPool(onto, off)
+    offerMovedOffAsOmmer(off)
     executed.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
 
   /** The consensus call of an import, timed: when it put blocks on the chain, how many and how long it took go to
@@ -1965,6 +1967,7 @@ final private class BlockImporterLogic(
         supervisor ! ProgressProtocol.ImportedBlock(blocks.lastOption.fold(block.number)(_.number).value, internally)
       case ChainReorganised(oldBranch, newBranch, weights, branchBlocks) =>
         updateTxPool(newBranch, oldBranch)
+        offerMovedOffAsOmmer(oldBranch)
         // Peers are told of the new head only, as core-geth announces only the block it imported (NewBlock to a
         // square root of the peers, its hash to the rest), not the side blocks it stands on (B-344). The pool is
         // told of every block the consensus told, which it bounds. New-head subscribers are told of the blocks this
@@ -2000,9 +2003,13 @@ final private class BlockImporterLogic(
             announceAdopted(adopted, internally, missing)
             // state node re-download will be handled when downloading headers
             doLog(importMessages.missingStateNode(missingNodeException))
-          case missing @ BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
+          // Without the re-download the block is dropped, and the prefix adopted before it announced. The import's
+          // log line above says it, at error level (`missingStateNode`: "Ignoring broadcast block" / "Ignoring mined
+          // block"). An `IO.raiseError` stood here from Mantis on, built inside `tap`, whose callback's value is
+          // discarded, so it never ran (B-512); raised, it would only have logged the same failure again in
+          // `importWith` and ended in the same `Running`.
+          case missing @ BlockImportFailedDueToMissingNode(_, adopted) =>
             announceAdopted(adopted, internally, missing)
-            IO.raiseError(missingNodeException)
           case BlockImportFailed(error) if informFetcherOnFail && !Consensus.isLocalStateFault(error) =>
             // following a consensus layer the peer that served it is not blamed (B-513)
             if blamesTheServingPeer then
@@ -2128,10 +2135,24 @@ final private class BlockImporterLogic(
   private def announceAdopted(adopted: List[BlockData], internally: Boolean, result: BlockImportResult): Unit =
     val (blocks, weights) = adopted.map(data => (data.block, data.weight)).unzip
     updateTxPool(MovedOff.onto(result) ++ blocks, MovedOff.by(result))
+    offerMovedOffAsOmmer(MovedOff.by(result))
     if adopted.nonEmpty then
       broadcastBlocks(blocks, weights)
       blocks.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
       supervisor ! ProgressProtocol.ImportedBlock(blocks.last.number.value, internally)
+
+  /** The blocks a move of the head left, as the import says it left them (`movedOff`: [[ChainReorganised]], a partial
+    * one, or [[MovedOff]]), offered to the ommer pool once the move is made (B-501). core-geth's `reorg` sends a
+    * `ChainSideEvent` for every block of the old chain after the new one is written, and its miner keeps each as an
+    * uncle candidate (`worker.go`, `chainSideCh`); `commitUncle` then takes only one whose parent is among the new
+    * head's ancestors. Of the blocks left, only the lowest stands on a block of the chain the head is on: its parent is
+    * the fork block. The others stand on blocks that left with them, so the pool's ancestry filter ([[OmmersPool]]'s
+    * `GetOmmers`) never hands them out, and offered they would only take slots of a bounded pool. So the lowest is
+    * offered alone. Before B-501 the branch resolution offered the first block of its prediction ahead of the import,
+    * whether or not the import then moved the head off it.
+    */
+  private def offerMovedOffAsOmmer(movedOff: Seq[Block]): Unit =
+    movedOff.minByOption(_.header.number.value).foreach(block => ommersPool ! AddOmmers(block.header))
 
   private def broadcastBlocks(blocks: List[Block], weights: List[ChainWeight]): Unit =
     // each block with its own weight: `mapN` on two lists is every pairing of the two, which sent a NewBlock with another
@@ -2150,18 +2171,76 @@ final private class BlockImporterLogic(
   // one did (a fork choice between this import's commit and this tell), the reset is from the head it left onto the
   // head the store holds now, read from the chain as the fork choice reads it (`TxPoolReset.between`): the two resets
   // agree, and the pool and its recorded head end on the final head.
+  //
+  // The blocks moved onto are completed with the side blocks the branch stands on that the result does not list
+  // (B-512, `sideBlocksUnder`): canonical with the move, their transactions leave the pool too. On every chain, as
+  // go-ethereum's `LegacyPool.reset` walks the new chain whatever the consensus.
   private def updateTxPool(blocksAdded: Seq[Block], blocksRemoved: Seq[Block]): Unit =
     txPoolHead.resetFrom(pendingTransactionsManager) { (poolHead, resets) =>
       val moveHead = headTheMoveLeft(blocksAdded, blocksRemoved)
       val inStep = poolResetsAtImport.get.forall(_ == resets)
       // the next tell of this import follows this one
       poolResetsAtImport.set(Some(resets + 1))
-      if inStep then (moveHead, TxPoolReset.ofBranches(blocksAdded, blocksRemoved))
+      if inStep then
+        val under = sideBlocksUnder(blocksAdded, blocksRemoved, poolHead)
+        (moveHead, TxPoolReset.ofBranches(under ++ blocksAdded, blocksRemoved))
       else
         Try(blockchainReader.getBestBlockHeader).toOption.flatten.orElse(moveHead) match
           case Some(now) => (Some(now), TxPoolReset.between(poolHead, now, blockchainReader))
           case None      => (None, TxPoolReset.Reset.empty)
     }
+
+  /** The side blocks a move made canonical below the lowest block `added`, down to the block the move left the old
+    * chain at, that the import's result does not list, oldest first (B-512). go-ethereum's pool reset walks the new
+    * chain from the new head down to the common ancestor (`LegacyPool.reset`), so every block made canonical leaves the
+    * pool, the side blocks the branch stands on among them. The results list them only on some paths: a reorganisation
+    * on the unified layout lists them (B-297, B-344), and a move back that failed and left the head on them (B-461,
+    * B-514); the hash layout's reorganisation lists the branch alone, and so does a fault that stopped the head on the
+    * branch above them. Their transactions stayed in the pool, though the chain now includes them.
+    *
+    * The fork is the parent of the lowest block `removed` (the old chain above the fork, ascending), or with nothing
+    * removed the head the pool stood on (`poolHead`): the move started there, and it is an ancestor of the new head.
+    * Read from the store by parent hash, not by the index (`ancestry-not-index.md`), from the parent of the lowest
+    * block added down to the fork's height. Nothing when the walk does not meet the fork there (the old chain listed
+    * only in part), when a block on the way is not stored, or when more than [[TxPoolReset.MaxReorgDepth]] blocks lie
+    * between: a pool reset reads no more than go-ethereum's would, and that last is warned of, as go-ethereum warns of
+    * a reorganisation too deep for its pool ("Skipping deep transaction reorg"). One walk for proof of work and for a
+    * chain that follows a consensus layer: go-ethereum's reset is the same for both. It runs under the lock of the
+    * node's one record of the pool's head ([[TxPoolHead]], B-515), from that head, and the reset it completes is told
+    * before the importer answers, so before any build that follows asks the pool (#2066).
+    */
+  private def sideBlocksUnder(
+      added: Seq[Block],
+      removed: Seq[Block],
+      poolHead: Option[BlockHeader]
+  ): List[Block] =
+    val fork: Option[(BigInt, BlockHash)] =
+      removed
+        .minByOption(_.number.value)
+        .map(lowest => (lowest.number.value - 1, lowest.header.parentHash))
+        .orElse(poolHead.map(head => (head.number.value, head.hash)))
+    (added.minByOption(_.number.value), fork) match
+      case (Some(lowest), Some((forkNumber, forkHash)))
+          if lowest.number.value - 1 > forkNumber && lowest.number.value - 1 - forkNumber <= TxPoolReset.MaxReorgDepth =>
+        @tailrec
+        def down(hash: BlockHash, acc: List[Block]): List[Block] =
+          blockchainReader.getBlockByHash(hash) match
+            case Some(block) if block.number.value > forkNumber + 1 => down(block.header.parentHash, block :: acc)
+            case Some(block) if block.number.value == forkNumber + 1 && block.header.parentHash == forkHash =>
+              block :: acc
+            case _ => Nil
+        down(lowest.header.parentHash, Nil)
+      case (Some(lowest), Some((forkNumber, _))) if lowest.number.value - 1 - forkNumber > TxPoolReset.MaxReorgDepth =>
+        log.warning(
+          "Skipping deep transaction reorg: {} side block(s) between block {} and the fork at block {}, more than {}: " +
+            "their transactions are not taken out of the pool",
+          lowest.number.value - 1 - forkNumber,
+          lowest.number.value,
+          forkNumber,
+          TxPoolReset.MaxReorgDepth
+        )
+        Nil
+      case _ => Nil
 
   /** The count of the pool's resets ([[TxPoolHead.resets]]) as this import's evaluation began, read again after each of
     * its own tells: a count that moved meanwhile is another writer's reset (B-515). None before the first import.
@@ -2255,12 +2334,11 @@ final private class BlockImporterLogic(
           )
           RegularSyncMetrics.incrementReorgTotal()
           RegularSyncMetrics.setLastReorgDepth(depth)
-        // Nothing goes to the pool here (B-460): this is a prediction, made against the head before the import, and the
-        // import may fail or keep the head. The pool is reset by what the import did, as go-ethereum's is on the new
-        // head: a reorganisation, whole or partial, or a fault after its prefix replaced the head, tells the blocks
-        // moved off (ChainReorganised, ImportedPartially, MovedOff); a failure that kept the head tells nothing.
-        // Add first block from branch as an ommer
-        oldBranch.headOption.map(_.header).foreach(ommersPool ! AddOmmers(_))
+        // Nothing goes to the pool here (B-460), nor to the ommer pool (B-501): this is a prediction, made against the
+        // head before the import, and the import may fail or keep the head. Both are told by what the import did, as
+        // go-ethereum's are on the new head: a reorganisation, whole or partial, or a fault after its prefix replaced
+        // the head, tells the blocks moved off (ChainReorganised, ImportedPartially, MovedOff), and the lowest of them
+        // is offered as an ommer (`offerMovedOffAsOmmer`); a failure that kept the head tells nothing.
         Right(toImport)
       case ExtendsCanonicalHead(alreadyCanonical) =>
         // Post-merge only (BranchResolution.followsConsensusLayer). The first `alreadyCanonical` blocks ARE our

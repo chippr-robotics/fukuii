@@ -70,8 +70,6 @@ object PendingTransactionsManager:
   object AddTransactions:
     def apply(txs: SignedTransactionWithSender*): AddTransactions = AddTransactions(txs.toSet)
 
-  case class AddUncheckedTransactions(signedTransactions: Seq[SignedTransaction]) extends Command
-
   case class AnnounceTransactions(signedTransactions: Seq[SignedTransaction], peerId: PeerId) extends Command
 
   /** Put a transaction in the pool, replacing any pooled transaction from the same sender with the same nonce, with no
@@ -136,7 +134,7 @@ object PendingTransactionsManager:
     * other message sees half of it. The transactions of the blocks moved onto (`included`, one entry per block) leave
     * the pool; the nonce gate of every sender concerned is rebuilt from what the pool still holds, as go-ethereum
     * rebuilds its noncer from the new head's state; then `reinject`, the moved-off transactions the new chain does not
-    * include, is admitted as any unchecked add is, against the new head's state.
+    * include, is admitted against the new head's state, as a peer's transactions are.
     */
   case class HeadReset(included: Seq[Seq[SignedTransaction]], reinject: Seq[SignedTransaction]) extends Command
 
@@ -767,11 +765,6 @@ object PendingTransactionsManager:
         if fetchWhenGossipResumes.nonEmpty && txGossipGate.acceptTxs then
           fetchFrom(fetchWhenGossipResumes, "tx gossip resumed")
           fetchWhenGossipResumes = Set.empty
-        Behaviors.same
-
-      case AddUncheckedTransactions(transactions) =>
-        val validTxs = SignedTransactionWithSender.getSignedTransactions(transactions, headTimestamp())
-        context.self ! AddTransactions(validTxs.toSet)
         Behaviors.same
 
       case AnnounceTransactions(signedTransactions, peerId) =>

@@ -63,7 +63,9 @@ class TestNode(
         testModeComponentsProvider,
         storagesInstance.storages.transactionMappingStorage,
         this,
-        classicSystem.toTyped.scheduler
+        classicSystem.toTyped.scheduler,
+        // the node's one record of the pool's head, shared with the importer and the fork choice (B-498)
+        txPoolHead = txPoolHead
       )(using ioRuntime)
     )
 

@@ -104,6 +104,13 @@ class EngineApiService(
       case NonFatal(e) =>
         log.error(s"[ENGINE-API] the tx pool was not reset onto ${hexOf(head)}: ${e.getMessage}", e)
 
+  /** The pool reset of a fork choice ([[resetThePool]]), for a head this service's pool follows that was set without
+    * one: `testing_commitBlockV1`, which commits the block it built and makes it the head through the fork choice
+    * manager directly (B-498). From the head the pool was last reset to, recorded in the node's one record of it, so
+    * that the fork choice or the importer that moves the head next resets the pool from where it stands.
+    */
+  def resetThePoolOnto(head: ByteString): Unit = pendingTransactionsManager.foreach(resetThePool(_, head))
+
   /** What the pool is told on a move of the head from `from` to `to` ([[TxPoolReset.between]]). */
   protected def poolReset(from: Option[BlockHeader], to: BlockHeader): TxPoolReset.Reset =
     TxPoolReset.between(from, to, blockchainReader)

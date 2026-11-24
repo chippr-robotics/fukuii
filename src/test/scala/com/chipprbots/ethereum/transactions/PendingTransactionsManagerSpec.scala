@@ -1215,15 +1215,17 @@ class PendingTransactionsManagerSpec
     }
 
   // WI-14 (#1430): the stateless filter admits under the fork active at the chain head, read from the best block header.
-  // A 12,000-gas self-transfer is valid from Amsterdam (EIP-2780) and invalid before it (21,000).
+  // A 12,000-gas self-transfer is valid from Amsterdam (EIP-2780) and invalid before it (21,000). Driven through a
+  // head reset's reinjection, which recovers senders and filters as a peer's transactions are (B-512: the unchecked add
+  // these cases used had no sender left in the node, and was deleted).
 
-  it should "filter a peer's transactions under the fork active at the head: Osaka's rules before Amsterdam" taggedAs (
+  it should "filter the transactions it takes back under the fork active at the head: Osaka's rules before Amsterdam" taggedAs (
     UnitTest
   ) in new TestSetupWithHead(headTimestamp = 300L):
     val amsterdamOnly: SignedTransaction = selfTransfer(12000)
     val valid: SignedTransaction = selfTransfer(21000)
     // One message, one filter pass: once `valid` is pooled, `amsterdamOnly` has been judged too.
-    pendingTransactionsManager ! AddUncheckedTransactions(Seq(amsterdamOnly, valid))
+    pendingTransactionsManager ! HeadReset(Nil, Seq(amsterdamOnly, valid))
     eventually {
       val resp =
         pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
@@ -1233,7 +1235,7 @@ class PendingTransactionsManagerSpec
   it should "admit a transaction valid only from Amsterdam once the head is at Amsterdam" taggedAs (UnitTest) in
     new TestSetupWithHead(headTimestamp = 460L):
       val amsterdamOnly: SignedTransaction = selfTransfer(12000)
-      pendingTransactionsManager ! AddUncheckedTransactions(Seq(amsterdamOnly))
+      pendingTransactionsManager ! HeadReset(Nil, Seq(amsterdamOnly))
       eventually {
         val resp =
           pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
