@@ -2297,11 +2297,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T07:27:46Z
-      heartbeat: 2026-11-24T07:57:24Z
+      heartbeat: 2026-11-24T08:01:01Z
     notes: |-
-      beacon, C4d part 2b's read; pre-existing on both layouts (promoteToCanonicalHead too). go-ethereum's txpool reset purges every block moved onto and re-injects the reversed blocks' transactions. Builds stay correct (executableAtParent filters stale ones).
       2026-11-24 in-progress: agent in clone-e, fix/b253-pool-reset-on-head-move
       2026-11-24 in-progress: pushed 21b2b3607d; beacon review. B-088 verified still applies (settleHead rewriteCanonicalIndex keeps stale lookups)
+      2026-11-24 in-progress: beacon CHANGES: blob tx reinjection (must), pendingNonces high-water mark, FCU guard; round 2 queued for clone-e
   - id: B-255
     title: "Spec 018 T156: child-JVM kill -9 between newPayload and forkchoiceUpdated on RocksDB, restart with no peers, real consensus client reaches VALID"
     priority: P2
