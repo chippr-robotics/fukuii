@@ -4160,7 +4160,7 @@ items:
   - id: B-430
     title: Recovery scans don't detect a lost node below a storage-trie root (only the root's presence is checked); same in v0.12.1
     priority: P3
-    status: claimed
+    status: in-progress
     area: storage
     size: M
     opened: 2026-11-22
@@ -4171,8 +4171,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T07:30:34Z
-      heartbeat: 2026-11-24T07:30:34Z
-    notes: "Seen by the B-375 oracle (#1988). Decide: walk storage tries in the full scan, or leave to the background audit (spec 022 slice 5)."
+      heartbeat: 2026-11-24T07:30:54Z
+    notes: |-
+      Seen by the B-375 oracle (#1988). Decide: walk storage tries in the full scan, or leave to the background audit (spec 022 slice 5).
+      2026-11-24 in-progress: vault ruling: walk vs background audit (spec 022 slice 5)
   - id: B-431
     title: "EIP-7934 8 MiB block cap has no Osaka gate: rejects valid pre-Osaka blocks in EEST PragueToOsakaAtTime15k (go-ethereum gates it)"
     priority: P2
