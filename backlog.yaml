@@ -4650,3 +4650,13 @@ items:
     refs: [B-374]
     links: {}
     notes: "Split from B-374 (closes with #2029: LookupsSpec #1927, ObservationSpec cherry-pick). Failed once on #1921 (2026-11-18). Synchronise on events; never skip."
+  - id: B-472
+    title: "NewBlock path (evaluateBranchBlock): a store failure thrown out of the import drops the block dequeued from BlockQueue; map it as B-440 does"
+    priority: P3
+    status: open
+    area: consensus
+    opened: 2026-11-24
+    refs: [B-440]
+    links:
+      spec: 018
+    notes: B-440 maps a thrown store failure to ConsensusStateFault on regular sync's batch path only. evaluateBranchBlock (NewBlock, test mode, chain-file import) still throws; the importer logs and goes Running with the branch already dequeued (getBranch dequeue=true).
