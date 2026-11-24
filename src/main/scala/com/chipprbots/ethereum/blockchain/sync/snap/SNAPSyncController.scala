@@ -1442,7 +1442,8 @@ object SNAPSyncController:
   private[snap] def sweepTaskFiles(
       dir: java.nio.file.Path,
       keep: Set[String],
-      onError: (java.nio.file.Path, String) => Unit = (_, _) => ()
+      onError: (java.nio.file.Path, String) => Unit = (_, _) => (),
+      prefixes: Seq[String] = SweepableTaskFilePrefixes
   ): Seq[java.nio.file.Path] =
     import scala.jdk.CollectionConverters.*
     def norm(p: java.nio.file.Path): String = p.toAbsolutePath.normalize.toString
@@ -1454,7 +1455,7 @@ object SNAPSyncController:
         stream.iterator.asScala.toList
           .filter { p =>
             val name = p.getFileName.toString
-            java.nio.file.Files.isRegularFile(p) && SweepableTaskFilePrefixes.exists(name.startsWith) &&
+            java.nio.file.Files.isRegularFile(p) && prefixes.exists(name.startsWith) &&
             !keepNorm.contains(norm(p))
           }
           .filter { p =>

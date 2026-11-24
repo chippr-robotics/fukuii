@@ -29,6 +29,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.PivotBoot
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartPivotAncestryBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrapByHash
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapTaskFileCleanup
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
@@ -2434,6 +2435,17 @@ object SyncController:
       if syncConfig.doSnapSync && System.getProperty("fukuii.snap.clearDoneOnStart", "false").toBoolean then
         if HealInvariant.clearDoneOnStart(appStateStorage) then
           log.warn("fukuii.snap.clearDoneOnStart=true: clearing SnapSyncDone to re-enter SNAP healing")
+
+      // B-523: a SNAP that was killed between its done marker and the task-file clean-up left the files (about 4.4 GB on
+      // ETC mainnet) and their paths. Nothing reads them once done; finish the job. A no-op unless SnapSyncDone is set.
+      SnapTaskFileCleanup.discardFinishedTaskFiles(
+        appStateStorage,
+        scala.util
+          .Try(Config.config.getString("datadir"))
+          .toOption
+          .map(d => StorageTaskFile.dirUnder(java.nio.file.Paths.get(d))),
+        (p, e) => log.warn("Could not delete SNAP task file {}: {}", p, e)
+      )
 
       // #1692: pruning on a store SNAP or a checkpoint filled could delete a trie node another position still used, and
       // a clean audit pass finished before this version says nothing of a hole that came after it. One more full pass
