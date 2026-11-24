@@ -5573,3 +5573,15 @@ items:
       SnapFinalization:226 header-hold is expected on a genesis start, so INFO not WARN; SyncProgressMonitor:369 completion rates divide by total elapsed, use each phase's own time.
       ByteCodeCoordinator:520-531 logs BYTECODE-COORD 100% on every pulse after completion, log once; SyncController:2441 says an audit pass is 'owed' on a brand-new datadir, reword.
       AccountRangeCoordinator:429-433 calls the storage-file count 'storage-task entries', and :284 still says ~20% of ~67M; both mislead on ETC, where ~85% of accounts are contracts.
+  - id: B-525
+    title: "'Finalising 1 uncommitted task StackTries (unexpected)' on both Mordor and ETC mainnet at the end of the account phase: find the missed per-task commit"
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-24
+    refs: ["sync reports v0.12.117, 2026-11-23/24"]
+    links: {}
+    notes: |-
+      AccountTrieAssembly.scala:359 logs it when a task's StackTrie is still open at assembly; it appeared once in each run, and both syncs completed with a matching root.
+      Find which completion path skips the per-task commit (last task, or a task finished during a pivot move) and either commit it there or document why the late commit is fine.
