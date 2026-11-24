@@ -1206,13 +1206,18 @@ items:
   - id: B-122
     title: "EngineApiService test: newPayload weight write waits for the chain-weight finish (ChainInsertLock.shared)"
     priority: P3
-    status: open
+    status: claimed
     area: consensus
     size: S
     opened: 2026-11-08
     refs: ["#1654-B"]
     links: {}
     depends_on: [B-002]
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T06:32:02Z
+      heartbeat: 2026-11-24T06:32:02Z
     notes: "forge, B-002: the shared-lock wrap of storeChainWeightFor is covered only by a simulation in ChainWeightReconcileSpec; pin it at EngineApiService level (beacon)."
   - id: B-123
     title: "backlog.py: a note command for unclaimed items (status only takes held states)"
