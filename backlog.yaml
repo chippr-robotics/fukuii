@@ -4976,18 +4976,19 @@ items:
   - id: B-493
     title: "B-217 follow-up: remove the retired parallel-recovery-scan key from conf/base/sync.conf (chore/ branch), then warn on any setting of it"
     priority: P3
-    status: in-progress
+    status: review
     area: sync
     size: S
     opened: 2026-11-24
     refs: []
-    links: {}
+    links:
+      prs: [2062]
     depends_on: [B-217]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T08:00:04Z
-      heartbeat: 2026-11-24T08:00:08Z
+      heartbeat: 2026-11-24T08:19:49Z
     notes: |-
       fix/b217-legacy-recovery-scans retires the legacy recovery scans and stops reading the key; a fix/ branch may not touch src/main/resources. Remove the key and its comment from sync.conf, and widen ConfigValidator.legacyRecoveryScanWarning from 'false' to hasPath.
       2026-11-24 in-progress: agent in clone-e
