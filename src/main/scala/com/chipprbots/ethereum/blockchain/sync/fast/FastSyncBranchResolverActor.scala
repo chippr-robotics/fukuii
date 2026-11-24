@@ -70,8 +70,20 @@ object FastSyncBranchResolverActor:
   /** Periodic timer fire: poll `networkPeerManager` for handshaked peers. */
   private case object ScanPeers extends Command
 
-  /** A watched PeerRequestHandler child terminated. */
+  /** A watched PeerRequestHandler child terminated: what `watchWith` delivers, as the death-watch notification is
+    * processed. It is re-posted to self as [[HandlerGone]] before anything reads it (B-350).
+    */
   final private case class HandlerTerminated(ref: TypedActorRef[PeerRequestHandler.Command]) extends Command
+
+  /** [[HandlerTerminated]], re-posted to self, so it is read after every message the child sent before it stopped.
+    *
+    * A death-watch notification is a system message, processed ahead of the mailbox: a PeerRequestHandler that tells
+    * its `ResponseReceived` and stops can have its termination read before its response. The resolver then took a peer
+    * that had answered for one that had not, and restarted the resolution (B-350: the scripted spec's replies then ran
+    * one request ahead, ~1 run in 3). Re-posted, it queues behind the response; by then the state has moved to the next
+    * request, whose handler is another, and the stale termination is ignored.
+    */
+  final private case class HandlerGone(ref: TypedActorRef[PeerRequestHandler.Command]) extends Command
 
   /** Wraps the `HandshakedPeers` reply from `NetworkPeerManagerActor` (Classic tell → adapter). */
   final private case class HandshakedPeersMsg(msg: NetworkPeerManagerActor.HandshakedPeers) extends Command
@@ -328,6 +340,9 @@ object FastSyncBranchResolverActor:
       case PeerDisconnectedMsg(PeerDisconnected(peerId)) =>
         peerListHelper.handlePeerDisconnected(peerId)
         Some(Behaviors.same)
+      case HandlerTerminated(ref) =>
+        context.self ! HandlerGone(ref)
+        Some(Behaviors.same)
       case _ => None
 
     def waitingForPeerWithHighestBlock(): Behavior[Command] =
@@ -372,7 +387,7 @@ object FastSyncBranchResolverActor:
               else handleInvalidResponse(peer, requestHandler)
             case PeerRequestResult(RequestFailed(_, peer, reason)) =>
               handleRequestFailure(peer, requestHandler, reason)
-            case HandlerTerminated(ref) if ref == requestHandler =>
+            case HandlerGone(ref) if ref == requestHandler =>
               handlePeerTermination(masterPeer, ref)
             case _ => Behaviors.same
         }
@@ -400,10 +415,10 @@ object FastSyncBranchResolverActor:
                   handleInvalidResponse(peer, requestHandler)
             case PeerRequestResult(RequestFailed(_, peer, reason)) =>
               handleRequestFailure(peer, requestHandler, reason)
-            case HandlerTerminated(ref) if ref == requestHandler =>
+            case HandlerGone(ref) if ref == requestHandler =>
               handlePeerTermination(searchState.masterPeer, ref)
-            case HandlerTerminated(_) => Behaviors.same // ignore stale death-watch
-            case _                    => Behaviors.same
+            case HandlerGone(_) => Behaviors.same // ignore stale death-watch
+            case _              => Behaviors.same
         }
       }
 
@@ -483,7 +498,7 @@ object FastSyncBranchResolverActor:
                   handleInvalidResponse(peer, requestHandler)
             case PeerRequestResult(RequestFailed(_, peer, reason)) =>
               handleRequestFailure(peer, requestHandler, reason)
-            case HandlerTerminated(ref) if ref == requestHandler =>
+            case HandlerGone(ref) if ref == requestHandler =>
               handlePeerTermination(masterPeer, ref)
             case _ => Behaviors.same
         }
@@ -663,7 +678,7 @@ object FastSyncBranchResolverActor:
                         if ended then refuseBeyondReach(masterPeer, deepest) else more
             case PeerRequestResult(RequestFailed(_, peer, reason)) =>
               handleRequestFailure(peer, requestHandler, reason)
-            case HandlerTerminated(ref) if ref == requestHandler =>
+            case HandlerGone(ref) if ref == requestHandler =>
               handlePeerTermination(masterPeer, ref)
             case _ => Behaviors.same
         }

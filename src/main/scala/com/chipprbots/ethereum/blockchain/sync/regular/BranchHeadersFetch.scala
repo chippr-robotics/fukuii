@@ -42,6 +42,12 @@ object BranchHeadersFetch:
   sealed trait Command
   final private case class Answer(result: PeerRequestHandler.Result) extends Command
   final private case class RequestStopped(handler: TypedActorRef[PeerRequestHandler.Command]) extends Command
+
+  /** [[RequestStopped]], re-posted to self so it is read after the answer the handler sent before it stopped: a
+    * death-watch notification is processed ahead of the mailbox, so the stop of a handler that answered could be read
+    * first, and the answer taken for none (B-350, as in FastSyncBranchResolverActor).
+    */
+  final private case class RequestGone(handler: TypedActorRef[PeerRequestHandler.Command]) extends Command
   final private case class Told(result: Try[Unit]) extends Command
 
   /** @param commonBlock
@@ -165,7 +171,10 @@ final private class BranchHeadersFetch(
           reason
         )
         Behaviors.stopped
-      case RequestStopped(stopped) if stopped == handler =>
+      case RequestStopped(stopped) =>
+        ctx.self ! RequestGone(stopped)
+        Behaviors.same
+      case RequestGone(stopped) if stopped == handler =>
         log.warn(
           "[STATE-ESCALATION] The request for the headers of the branch {} to peer {} stopped without an answer: " +
             "nothing is escalated",

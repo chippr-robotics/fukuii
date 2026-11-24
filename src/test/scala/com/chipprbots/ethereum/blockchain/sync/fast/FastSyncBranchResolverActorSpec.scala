@@ -12,7 +12,6 @@ import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
-import cats.effect.Deferred
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.implicits.*
@@ -577,7 +576,9 @@ class FastSyncBranchResolverActorSpec
 
   trait TestSetup extends EphemBlockchainTestSetup with TestSyncConfig with TestSyncPeers:
 
-    protected val branchResolutionTimeout: FiniteDuration = syncConfig.peerResponseTimeout + 2.seconds
+    // The whole resolution, not one request: a cold JVM's first resolution (class loading, the first logger, the
+    // first IO runtime) can take most of 7 s (B-350). A longer wait only bounds a failing test.
+    protected val branchResolutionTimeout: FiniteDuration = syncConfig.peerResponseTimeout + 25.seconds
 
     def peerId(number: Int): PeerId = PeerId(s"peer_$number")
     def getPeer(id: PeerId): Peer =
@@ -612,13 +613,10 @@ class FastSyncBranchResolverActorSpec
         blockchainWriter.save(block, Nil, ChainWeight.totalDifficultyOnly(1), saveAsBestBlock = true)
       )
 
-    def createNetworkPeerManager(peers: Map[Peer, PeerInfo], blocks: Map[Int, List[Block]])(implicit
-        ioRuntime: IORuntime
-    ): ActorRef =
+    def createNetworkPeerManager(peers: Map[Peer, PeerInfo], blocks: Map[Int, List[Block]]): ActorRef =
       val networkPeerManager = TestProbe("network_peer_manager")
       val autoPilot =
         new NetworkPeerManagerAutoPilot(
-          peersConnectedDeferred,
           peers,
           blocks,
           peerEventBus
@@ -660,8 +658,6 @@ object FastSyncBranchResolverActorSpec extends Logger:
 
   private val BlacklistMaxElements: Int = 100
 
-  private val peersConnectedDeferred = Deferred.unsafe[IO, Unit]
-
   /** Answers a request for headers with those of the asking peer's chain from the number asked for, as a peer does. */
   class ChainServingAutoPilot(
       peers: Map[Peer, PeerInfo],
@@ -684,12 +680,10 @@ object FastSyncBranchResolverActorSpec extends Logger:
       this
 
   class NetworkPeerManagerAutoPilot(
-      peersConnected: Deferred[IO, Unit],
       peers: Map[Peer, PeerInfo],
       blocks: Map[Int, List[Block]],
       peerEventBus: TypedActorRef[PeerEventBusActor.Command]
-  )(implicit ioRuntime: IORuntime)
-      extends AutoPilot:
+  ) extends AutoPilot:
 
     var blockIndex = 0
     lazy val blocksSetSize = blocks.size
@@ -697,8 +691,10 @@ object FastSyncBranchResolverActorSpec extends Logger:
     def run(sender: ActorRef, msg: Any): NetworkPeerManagerAutoPilot =
       msg match
         case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) =>
+          // Nothing more: a TestProbe's autopilot runs on the sender's thread, here the resolver's. It also completed a
+          // Deferred no test awaited, with unsafeRunSync, which on a cold JVM held the resolver's thread past the
+          // test's whole wait (B-350).
           replyTo ! NetworkPeerManagerActor.HandshakedPeers(peers)
-          peersConnected.complete(()).handleError(_ => ()).unsafeRunSync()
         case NetworkPeerManagerActor.SendMessageCmd(rawMsg, peerId) =>
           val response = rawMsg.underlyingMsg match
             case req: ETHGetBlockHeaders if !req.reverse =>
