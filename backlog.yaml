@@ -4179,7 +4179,7 @@ items:
   - id: B-443
     title: "BPO3/BPO4 blob-parameter forks: fukuii refuses them, so 96 EEST v21 BPO2ToBPO3/BPO3ToBPO4 fixtures cannot replay (decide: support or record as not modelled)"
     priority: P3
-    status: claimed
+    status: in-progress
     area: consensus
     opened: 2026-11-23
     refs: []
@@ -4189,7 +4189,7 @@ items:
       by: cloud-dc960fdc
       agent: beacon-b443
       since: 2026-11-24T00:39:36Z
-      heartbeat: 2026-11-24T00:44:06Z
+      heartbeat: 2026-11-24T00:44:12Z
     notes: |-
       From B-432. BlobSchedule.fromConfig refuses bpo3+ by design (BlobSchedule.scala:60,119); ForkTimestamps, BlockchainConfigForEvm.paramsAt, ForkId, SignedTransaction, EngineApiController carry BPO1/BPO2 only. Harness-only option: remap BPO2ToBPO3 to BPO1@0/BPO2@15k with the fixture's params (blob-only forks), test-only. Real support is a consensus change (beacon). 25+23 cases x 2 formats (+engine_x).
       2026-11-24 claimed: User 2026-11-24: option (a) real BPO3/BPO4 support (ETH consensus, beacon). Then replay the 48+48 EEST v21.0.0 BPO2->BPO3 / BPO3->BPO4 fixtures. Queued for next free clone.
