@@ -4804,12 +4804,17 @@ items:
   - id: B-468
     title: Test log captures that attach an appender (testing/LogCapture, ad-hoc ListAppenders) can lose it to logback's COWArrayList race
     priority: P3
-    status: open
+    status: claimed
     area: test
     opened: 2026-11-24
     refs: []
     links:
       spec: "016"
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T16:59:05Z
+      heartbeat: 2026-11-24T16:59:05Z
     notes: "B-256 root cause: logback 1.5.34 COWArrayList lost update; an appender added while another thread logs through the logger can receive nothing. SnapLogCapture now uses a turbo filter (fix/b256-snap-log-capture). testing/LogCapture.capture and ~15 specs attaching ListAppenders to shared loggers (network, sync, jsonrpc) have the same latent race when actors log during attach; move them onto a shared turbo-filter capture."
   - id: B-469
     title: "Refresh stale spec headers: 021 (S0 merged), 022 (slice 6 merged, T063 by 018 C7), 027 (slice 5 merged)"
