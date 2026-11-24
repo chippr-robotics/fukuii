@@ -230,6 +230,21 @@ class ChainConfigMatrixSpec extends AnyFlatSpec with Matchers:
     }
   }
 
+  // B-398: conf/gorgoroth.conf named the miner "ethash", which the node refuses at start ('pow', 'mocked',
+  // 'restricted-pow', 'engine-api'), so a Gorgoroth node did not start.
+  "every shipped network config" should "name a mining protocol the node knows" taggedAs (UnitTest) in {
+    val confs = Seq("etc", "mordor", "gorgoroth", "eth", "sepolia", "hoodi", "ephemery", "plataberget")
+    confs.foreach { name =>
+      val conf = ConfigFactory.parseResources(s"conf/$name.conf")
+      if conf.hasPath("fukuii.mining.protocol") then
+        withClue(s"conf/$name.conf: ") {
+          com.chipprbots.ethereum.consensus.mining.Protocol
+            .find(conf.getString("fukuii.mining.protocol")) should not be empty
+        }
+    }
+    ConfigFactory.parseResources("conf/gorgoroth.conf").getString("fukuii.mining.protocol") shouldBe "pow"
+  }
+
   "the enterprise network template" should "leave Olympia unscheduled" taggedAs (UnitTest) in {
     // conf/enterprise-template.conf is the ETC-type starting point for private networks; it set
     // Olympia at genesis until the deferral. Read at the HOCON level: the template declares no
