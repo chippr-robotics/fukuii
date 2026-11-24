@@ -294,7 +294,7 @@
       "value":"0x0",
       "input":"0x",
       "output":"0x",
-      "error":"InvalidOpCode(0xfe)"
+      "error":"invalid opcode: INVALID"
     }]
   },
   "prestateTracer":{

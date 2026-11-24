@@ -28,6 +28,7 @@ import com.chipprbots.ethereum.transactions.TxTypeGate
 import com.chipprbots.ethereum.vm.CodeStoreOutOfGas
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ExecutionTracer
+import com.chipprbots.ethereum.vm.ProgramErrorText
 import com.chipprbots.ethereum.vm.OutOfGas
 import com.chipprbots.ethereum.vm.ProgramError
 import com.chipprbots.ethereum.vm.RevertOccurs
@@ -93,7 +94,9 @@ class StxLedger(
         world.saveAccount(sender, world.getAccount(sender).getOrElse(Account.empty(blockchainConfig.accountStartNonce)))
       tracer.foreach(_.onTxStart(sender, tx.receivingAddress, tx.gasLimit.value, tx.value, tx.payload))
       val result = blockPreparator.executeTransaction(stx.tx, sender, blockHeader, worldWithSender, tracer = tracer)
-      tracer.foreach(_.onTxEnd(result.gasUsed, result.vmReturnData, result.vmError.map(_.toString)))
+      tracer.foreach(
+        _.onTxEnd(result.gasUsed, result.vmReturnData, result.vmError.map(ProgramErrorText.vmErrorMessage))
+      )
       result
 
   /** Like `simulateTransaction` but threads an optional EVM tracer into the run. Used by `debug_traceTransaction` /
@@ -169,7 +172,7 @@ class StxLedger(
     val result = blockPreparator.runVMWithTracer(tx, senderAddress, blockHeader, worldForTx, tracer)
     val totalGasToRefund = blockPreparator.calcTotalGasToRefund(tx, result, blockHeader.number.value)
     val gasUsed = tx.tx.gasLimit.value - totalGasToRefund
-    tracer.onTxEnd(gasUsed, result.returnData, result.error.map(_.toString))
+    tracer.onTxEnd(gasUsed, result.returnData, result.error.map(ProgramErrorText.vmErrorMessage))
 
     TxResult(result.world, gasUsed, result.logs, result.returnData, result.error)
 
@@ -293,7 +296,7 @@ class StxLedger(
     callPreCheck(stx, blockHeader, world1, options).map { _ =>
       val (result, authRefund) = runCallFrame(stx, blockHeader, world1, options, tracer)
       val gasUsed = callGasUsed(stx, blockHeader, result, authRefund)
-      tracer.foreach(_.onTxEnd(gasUsed, result.returnData, result.error.map(_.toString)))
+      tracer.foreach(_.onTxEnd(gasUsed, result.returnData, result.error.map(ProgramErrorText.vmErrorMessage)))
       StxLedger.CallOutcome(
         TxResult(result.world, gasUsed, result.logs, result.returnData, result.error),
         codeDepositShortfall = result.codeDepositShortfall

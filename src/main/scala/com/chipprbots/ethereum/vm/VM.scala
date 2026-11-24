@@ -138,7 +138,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
             _.onCallExit(
               context.startGas - exitResult.gasRemaining,
               exitResult.returnData,
-              exitResult.error.map(_.toString)
+              exitResult.error.map(ProgramErrorText.vmErrorMessage)
             )
           )
     result
@@ -288,7 +288,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
             _.onCallExit(
               context.startGas - exitResult.gasRemaining,
               exitResult.returnData,
-              exitResult.error.map(_.toString)
+              exitResult.error.map(ProgramErrorText.vmErrorMessage)
             )
           )
     (result, newAddress)
