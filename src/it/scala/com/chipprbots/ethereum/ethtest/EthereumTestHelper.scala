@@ -87,6 +87,134 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup:
       blocks: Seq[TestBlock],
       genesisBlockHeader: Option[TestBlockHeader]
   ): Either[String, InMemoryWorldStateProxy] =
+    if unified then
+      mirror = None
+      onTheUnifiedLayout(preState, blocks, genesisBlockHeader)
+    else onTheHashLayout(preState, blocks, genesisBlockHeader)
+
+  /** Whether the fixture runs on the unified state layout, the guard on (spec 018 T117, B-220), and not on this
+    * helper's hash store: `FUKUII_ETHTEST_LAYOUT=unified`, or a subclass that says so.
+    */
+  protected def unified: Boolean = EthereumTestHelper.unifiedByDefault
+
+  /** The sequential runner on the unified state layout (spec 018 T117).
+    *
+    * The pre-state is committed as the node commits a genesis, as rows, by its own loader, and the block the loader
+    * stores must be the fixture's genesis. Then each block, in file order, as the hash runner executes it on its
+    * parent: one built on the head is committed in place with its state ([[BlockExecution.executeAndAdoptBlockIf]]);
+    * one built on another block is executed on its parent's state, on layers, and made the head by one move
+    * ([[com.chipprbots.ethereum.blockchain.data.ChainImporter.adoptingOnLayers]]). A block that fails ends the run, as
+    * on the hash store. The post-state is read from the state of the last block, which is the one held.
+    */
+  private def onTheUnifiedLayout(
+      preState: Map[String, AccountState],
+      blocks: Seq[TestBlock],
+      genesisBlockHeader: Option[TestBlockHeader]
+  ): Either[String, InMemoryWorldStateProxy] =
+    import com.chipprbots.ethereum.blockchain.data.ChainImporter
+    import com.chipprbots.ethereum.blockchain.data.GenesisAccount
+    import com.chipprbots.ethereum.blockchain.data.GenesisData
+    import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
+    import com.chipprbots.ethereum.consensus.Consensus
+    try
+      genesisBlockHeader.map(TestConverter.toBlockHeader) match
+        case None => Left("the unified layout runs a fixture from its genesis header, and this one has none")
+        case Some(gh) =>
+          val node = new EthereumTestHelper.UnifiedNode(bc)
+          val storages = node.storagesInstance.storages
+          val loader = new GenesisDataLoader(
+            node.blockchainReader,
+            node.blockchainWriter,
+            storages.evmCodeStorage,
+            storages.stateStorage,
+            countsExact => storages.appStateStorage.markDatadirCreated(countsExact).commitSync(),
+            storages.pathStateStorage,
+            () => storages.appStateStorage.getStateLayout()
+          ):
+            // the fixture's own header, when the pre-state commits to its root: the fields of a later fork's genesis
+            // (base fee, withdrawals, blob gas, requests) are the fixture's, not what the loader would derive
+            override protected def prepareHeader(data: GenesisData, root: Array[Byte])(implicit
+                blockchainConfig: BlockchainConfig
+            ): BlockHeader =
+              if ByteString(root) == gh.stateRoot.value then gh else super.prepareHeader(data, root)
+          val alloc = preState.map { case (addressHex, account) =>
+            val code = ByteString(parseHex(account.code))
+            val storage = account.storage.map { case (k, v) => UInt256(parseBigInt(k)) -> UInt256(parseBigInt(v)) }
+            (if addressHex.startsWith("0x") then addressHex.substring(2) else addressHex) -> GenesisAccount(
+              precompiled = None,
+              balance = UInt256(parseBigInt(account.balance)),
+              code = Option.when(code.nonEmpty)(code),
+              nonce = Some(UInt256(parseBigInt(account.nonce))),
+              storage = Option.when(storage.nonEmpty)(storage)
+            )
+          }
+          def quantity(value: BigInt): String = "0x" + value.toString(16)
+          val genesisData = GenesisData(
+            nonce = gh.nonce,
+            mixHash = Some(gh.mixHash.value),
+            difficulty = quantity(gh.difficulty.value),
+            extraData = gh.extraData,
+            gasLimit = quantity(gh.gasLimit.value),
+            coinbase = gh.beneficiary,
+            timestamp = quantity(BigInt(gh.unixTimestamp.toLong)),
+            alloc = alloc
+          )
+          val loaded =
+            loader.loadGenesisData(genesisData)(using bc).toEither.left.map(e => s"the genesis was not loaded: $e")
+          val genesisStored = loaded.flatMap { _ =>
+            node.blockchainReader.getBlockHeaderByNumber(0) match
+              case Some(stored) if stored.hash == gh.hash => Right(())
+              case Some(stored) => Left(s"genesis state root ${stored.stateRoot} != ${gh.stateRoot}")
+              case None         => Left("no genesis block was stored")
+          }
+          genesisStored.flatMap { _ =>
+            val adopt = ChainImporter.adoptingOnLayers(
+              node.blockchainReader,
+              node.blockchainWriter,
+              node.blockExecution,
+              node.blockchain
+            )
+            val executed = blocks.foldLeft[Either[String, Unit]](Right(())) { (soFar, testBlock) =>
+              soFar.flatMap { _ =>
+                val block = convertTestBlockToBlock(testBlock)
+                val onHead = node.blockchainReader.getBestBlockHeader.exists(_.hash == block.header.parentHash)
+                if onHead then
+                  val parentWeight =
+                    node.blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)
+                  node.blockExecution
+                    .executeAndAdoptBlockIf(block, parentWeight, () => None)(using bc)
+                    .left
+                    .map(error => s"Block execution failed: block ${block.number}: ${error.describe}")
+                    .map(_ => ())
+                else
+                  adopt(block, bc) match
+                    case _: Consensus.SelectedNewBestBranch | _: Consensus.ExtendedCurrentBestBranch => Right(())
+                    case other => Left(s"Block execution failed: block ${block.number} was not adopted: $other")
+              }
+            }
+            executed.map { _ =>
+              val last = node.blockchainReader.getBestBlockHeader.get
+              InMemoryWorldStateProxy(
+                evmCodeStorage = storages.evmCodeStorage,
+                mptStorage = node.blockchainReader.stateAt(last),
+                getBlockHashByNumber =
+                  (num: BigInt) => node.blockchainReader.getBlockHeaderByNumber(num).map(_.hash.value),
+                accountStartNonce = blockchainConfig.accountStartNonce,
+                stateRootHash = last.stateRoot.value,
+                noEmptyAccounts = false,
+                ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
+              )
+            }
+          }
+    catch
+      case e: Exception =>
+        Left(s"Failed to setup and execute test: ${e.getMessage}\n${e.getStackTrace.take(10).mkString("\n")}")
+
+  private def onTheHashLayout(
+      preState: Map[String, AccountState],
+      blocks: Seq[TestBlock],
+      genesisBlockHeader: Option[TestBlockHeader]
+  ): Either[String, InMemoryWorldStateProxy] =
     try
       if blocks.isEmpty then
         Right(
@@ -326,3 +454,23 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup:
   private def parseBigInt(value: String): BigInt =
     if value.startsWith("0x") then BigInt(value.substring(2), 16)
     else BigInt(value)
+
+object EthereumTestHelper:
+
+  /** `FUKUII_ETHTEST_LAYOUT=unified` runs every fixture of the sequential runner on the unified state layout, the guard
+    * on (spec 018 T117, EG-2); anything else, or nothing, on the hash store.
+    */
+  def unifiedByDefault: Boolean = sys.env.get("FUKUII_ETHTEST_LAYOUT").exists(_.trim.equalsIgnoreCase("unified"))
+
+  /** The node a fixture runs on with the unified layout's guard on: the node's own storages, built path-live. */
+  final private[ethtest] class UnifiedNode(bc: BlockchainConfig)
+      extends com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup:
+    implicit override lazy val blockchainConfig: BlockchainConfig = bc
+    override lazy val vm: com.chipprbots.ethereum.ledger.VMImpl = new com.chipprbots.ethereum.ledger.VMImpl
+    override lazy val storagesInstance
+        : com.chipprbots.ethereum.db.components.EphemDataSourceComponent & LocalPruningConfigBuilder & com.chipprbots.ethereum.db.components.Storages.DefaultStorages =
+      new EphemDataSourceComponent
+        with LocalPruningConfigBuilder
+        with com.chipprbots.ethereum.db.components.Storages.DefaultStorages
+        with com.chipprbots.ethereum.TestInstanceConfigProvider:
+        override protected def statePathLive: Boolean = true

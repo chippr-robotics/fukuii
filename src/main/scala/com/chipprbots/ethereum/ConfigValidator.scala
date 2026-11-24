@@ -88,14 +88,14 @@ object ConfigValidator extends Logger:
     * included); the hash scheme writes the hash-keyed store, which this layout never reads, so every hand-off would
     * stop.
     *
-    * The chain file imported at start is taken since C3c: block by block onto the head, with a block that is not built
-    * on the head refused until the overlay. So a file that ends on a side chain (the multi-chain and uncle-race vectors
-    * of ethereum/tests) ends on another head there: taking the key is not parity with the hash store on such files.
+    * The chain file imported at start is taken since C3c, and with parity since B-220: a block built on the head is
+    * committed in place, a block before the merge that is not goes through the node's fork choice (queued, executed on
+    * layers and moved to once its branch outweighs the head), and one after the merge is adopted as the head when it is
+    * valid, as on the hash store and in go-ethereum.
     *
-    * Test mode is taken since C3c too, and it is not parity either. A block beside the head is queued and never
-    * reorganised to (`test_importRawBlock` of the block that makes a branch the heavier one is answered with an error);
-    * `test_rewindToBlock` goes to the head or to the genesis and no block between them; and `debug_storageRangeAt` and
-    * `debug_accountRange` answer at the head alone. Each waits for the overlay and the head move (C4a, C4b).
+    * Test mode is taken since C3c too, and since C4b and B-220 with parity but for a fork deeper than the changeset
+    * records reach: a heavier branch is reorganised to on layers, `test_rewindToBlock` moves the head back to any block
+    * of its chain, and `debug_storageRangeAt` and `debug_accountRange` read a block behind the head from the records.
     * `test_setChainParams` destroys the state the chain before it left: a node in test mode is the only one whose
     * position store can do that.
     */

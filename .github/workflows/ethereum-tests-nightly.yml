@@ -88,6 +88,16 @@ jobs:
         env:
           FUKUII_DEV: true
         continue-on-error: true
+
+      # Spec 018 T117 (B-220): the sequential runner with the unified layout's guard on, over the same vectors
+      - name: Run the sequential BlockchainTests on the unified state layout
+        run: |
+          sbt "IntegrationTest / testOnly com.chipprbots.ethereum.ethtest.ComprehensiveBlockchainTestsSpec" 2>&1 | tee ethereum-tests-unified-output.log
+          grep -E "(Tests: succeeded|All tests passed|TESTS FAILED)" ethereum-tests-unified-output.log || true
+        env:
+          FUKUII_DEV: true
+          FUKUII_ETHTEST_LAYOUT: unified
+        continue-on-error: true
       
       - name: Generate Test Report
         if: always()
@@ -132,6 +142,7 @@ jobs:
           name: ethereum-tests-nightly-logs-${{ github.run_number }}
           path: |
             ethereum-tests-output.log
+            ethereum-tests-unified-output.log
             ethereum-tests-summary.md
             /tmp/fukuii-it-test/**/*.log
           retention-days: 30

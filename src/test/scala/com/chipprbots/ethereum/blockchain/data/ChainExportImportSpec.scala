@@ -188,8 +188,7 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
 
     lazy val importer: ChainImporter =
       val blockValidation = new BlockValidation(mining, blockchainReader, blockQueue)
-      new ChainImporter(
-        blockchainReader,
+      val execution =
         new BlockExecution(
           blockchain,
           blockchainReader,
@@ -207,12 +206,17 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
             beforeExecution = None
             hook.foreach(_())
             super.executeAndAdoptBlockIf(block, parentWeight, beforeCommit)
-        ,
-        // On the unified layout no block reaches the fork choice: a block that is not built on the head is refused
-        // before it. On the hash store this spec's importer has none, as it had.
-        Option.when(guard)((block, _) =>
-          cats.effect.IO(fail(s"block ${block.header.number} reached the fork choice on the unified layout"))
-        )
+      new ChainImporter(
+        blockchainReader,
+        execution,
+        // On the unified layout the node's own fork choice and adoption on layers, as the node wires them (B-220). On
+        // the hash store this spec's importer has none, as it had.
+        Option.when(guard)((block, config) =>
+          consensusAdapter.evaluateBranchBlock(block)(using cats.effect.unsafe.IORuntime.global, config)
+        ),
+        Option.when(guard)(ChainImporter.adoptingOnLayers(blockchainReader, blockchainWriter, execution, blockchain)),
+        // on the hash store, go-ethereum's writeKnownBlock, as the node wires it (N1)
+        Option.when(!guard)(ChainImporter.knownBlockAsHead(blockchainReader, blockchainWriter, blockchain))
       )
 
     def importStrict(file: Path): Either[ChainImporter.ImportFailure, ChainImporter.ImportSummary] =
@@ -678,33 +682,65 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     // twenty blocks, the one that is invalid, and thirty-nine that follow the block it stands in for
     lenient(node, fixtureBlocks.take(20) ++ (tampered +: fixtureBlocks.drop(21))) shouldBe (20, 0, 40)
     // one that execution found invalid; the next, whose parent is not here; and the rest, each on a block before it
-    // that was not taken
-    (node.importer.sideBlocksRefused, node.importer.orphanBlocksRefused) shouldBe (0, 39)
+    // that was not taken. A block with no parent here has no weight to place it either side of the merge, so it goes
+    // to the fork choice, which answers that its parent is unknown, as on the hash layout (B-220): nothing is refused
+    // for the layout
+    (node.importer.sideBlocksRefused, node.importer.orphanBlocksRefused) shouldBe (0, 0)
     holdsExactly(node, fixtureBlocks(19).header)
   }
 
-  it should "refuse a side block, before the merge and after it, and leave the datadir as it was" taggedAs UnitTest in {
+  // B-220: core-geth's `import` (InsertChain -> writeBlockAndSetHead): before the merge a block beside the head is kept
+  // until its branch outweighs the head; after it, every valid block becomes the head (ForkChoice.ReorgNeeded).
+  it should "keep a side block before the merge, and adopt one after it as the head, on its parent's state" taggedAs UnitTest in {
     // heads at block 20, which is proof of work, and at block 50, which is after the merge
     Seq(20, 50).foreach { height =>
       withClue(s"head at block $height: ") {
         val node = new Node(guard = true)
         lenient(node, fixtureBlocks.take(height)) shouldBe (height, 0, 0)
         val head = fixtureBlocks(height - 1)
-        (head.header.difficulty == Difficulty.Zero) shouldBe (height == 50)
-        // a block beside the head: the same parent, another header
+        val postMerge = head.header.difficulty == Difficulty.Zero
+        postMerge shouldBe (height == 50)
+        // a block beside the head: the same parent, the same body, another header
         val beside = head.copy(header = head.header.copy(extraData = ByteString("beside the head")))
         beside.header.parentHash shouldBe head.header.parentHash
-        val keys = node.keys
-        lenient(node, Seq(beside)) shouldBe (0, 0, 1)
-        // refused as a side block, and not for anything an execution found
-        (node.importer.sideBlocksRefused, node.importer.orphanBlocksRefused) shouldBe (1, 0)
-        node.keys shouldBe keys
-        holdsExactly(node, head.header)
-        // and the chain goes on from the head
-        lenient(node, Seq(fixtureBlocks(height))) shouldBe (1, 0, 0)
-        holdsExactly(node, fixtureBlocks(height).header)
+        if !postMerge then
+          // of the head's own weight: kept beside it, as a side block, and the head stays
+          lenient(node, Seq(beside)) shouldBe (0, 1, 0)
+          holdsExactly(node, head.header)
+        else
+          // executed on its parent's state, and made the head by one move
+          lenient(node, Seq(beside)) shouldBe (1, 0, 0)
+          holdsExactly(node, beside.header)
+          node.blockchainReader.getChainWeightByHash(beside.hash) shouldBe
+            node.blockchainReader.getChainWeightByHash(head.hash)
+          // and a block of the chain it left is adopted again, the last valid block of the file the head
+          lenient(node, Seq(fixtureBlocks(height))) shouldBe (1, 0, 0)
+          holdsExactly(node, fixtureBlocks(height).header)
+          // the side block's own state is no longer held: the head's is
+          node.blockchainWriter.stateHeldInPlaceOf(beside.header) shouldBe false
+        // nothing was refused for the layout
+        (node.importer.sideBlocksRefused, node.importer.orphanBlocksRefused) shouldBe (0, 0)
+        if !postMerge then
+          // and the chain goes on from the head
+          lenient(node, Seq(fixtureBlocks(height))) shouldBe (1, 0, 0)
+          holdsExactly(node, fixtureBlocks(height).header)
       }
     }
+  }
+
+  it should "leave the head where it was when a block after the merge beside it is invalid" taggedAs UnitTest in {
+    val node = new Node(guard = true)
+    lenient(node, fixtureBlocks.take(50)) shouldBe (50, 0, 0)
+    val head = fixtureBlocks(49)
+    val invalid = head.copy(header =
+      head.header.copy(extraData = ByteString("beside"), stateRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x11))))
+    )
+    lenient(node, Seq(invalid)) shouldBe (0, 0, 1)
+    // the head, the index and the state are the old head's, and the chain goes on from it
+    holdsExactly(node, head.header)
+    node.blockchainReader.getBlockHeaderByNumber(50).map(_.hash) shouldBe Some(head.hash)
+    lenient(node, Seq(fixtureBlocks(50))) shouldBe (1, 0, 0)
+    holdsExactly(node, fixtureBlocks(50).header)
   }
 
   // The head and the state on disk move together, in one batch. A datadir where they have come apart is at fault, and
@@ -729,6 +765,76 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     fault.getMessage should include("is not the block whose state is held")
     node.keys shouldBe keys
     node.storagesInstance.storages.pathStateStorage.get.anchor shouldBe Some(refOf(fixtureBlocks(19).header))
+  }
+
+  // N1: go-ethereum's insertChain ignores a block it has with its state only when it is on the canonical chain at or
+  // below the head; any other such block is written as the head by writeKnownBlock (a reorg when its parent is not the
+  // head), and after the merge every block of the file is the head. The hash store makes that move without executing
+  // the block again; the unified layout adopts it on layers, as it adopts any block after the merge beside the head.
+  "importChainFile on either layout" should "make a block after the merge it has, beside or above the head, the head again" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    Seq((true, false), (false, false), (false, true)).foreach { (guard, basicPruning) =>
+      withClue(s"unified layout $guard, basic pruning $basicPruning: ") {
+        val node = new Node(basicPruning = basicPruning, guard = guard)
+        lenient(node, fixtureBlocks.take(50)) shouldBe (50, 0, 0)
+        val head = fixtureBlocks(49)
+        head.header.difficulty shouldBe Difficulty.Zero
+        val beside = head.copy(header = head.header.copy(extraData = ByteString("beside the head")))
+        lenient(node, Seq(beside)) shouldBe (1, 0, 0)
+        node.head.hash shouldBe beside.hash
+        // the block the head left, again: stored, and no longer canonical
+        @volatile var executed = false
+        if !guard then node.beforeExecution = Some(() => executed = true)
+        lenient(node, Seq(head)) shouldBe (1, 0, 0)
+        if guard then holdsExactly(node, head.header)
+        else
+          // known with its state: made the head by the fork choice's move, not executed again
+          executed shouldBe false
+          node.beforeExecution = None
+          node.head.hash shouldBe head.hash
+          node.blockchainReader.getBlockHeaderByNumber(50).map(_.hash) shouldBe Some(head.hash)
+        // on the canonical chain at or below the head: ignored
+        lenient(node, Seq(head)) shouldBe (0, 1, 0)
+        node.head.hash shouldBe head.hash
+        // and the chain goes on from it
+        lenient(node, fixtureBlocks.drop(50)) shouldBe (10, 0, 0)
+        node.head.hash shouldBe fixtureBlocks.last.hash
+        node.head.stateRoot shouldBe fixtureBlocks.last.header.stateRoot
+        if !guard then
+          // canonical above the head (the best block alone moved back, as only the hash store allows): not ignored,
+          // each made the head in turn without being executed again
+          node.blockchainWriter.saveBestKnownBlocks(head.hash, head.header.number.value)
+          node.beforeExecution = Some(() => executed = true)
+          lenient(node, fixtureBlocks.drop(50)) shouldBe (10, 0, 0)
+          executed shouldBe false
+          node.beforeExecution = None
+          node.head.hash shouldBe fixtureBlocks.last.hash
+      }
+    }
+  }
+
+  // W2: the adoption's unsafeRunSync waits for a thread of the blocking pool that takes the chain insert lock shared:
+  // asked under this thread's hold of it, the import would hang with nothing said. Refused at once instead.
+  "importChainFile's adoption on layers" should "refuse to run while the thread holds the chain insert lock" taggedAs UnitTest in {
+    val node = new Node
+    given BlockchainConfig = node.blockchainConfig
+    val block = fixtureBlocks(50)
+    @volatile var asked = 0
+    val adopt: (Block, BlockchainConfig) => com.chipprbots.ethereum.consensus.Consensus.ConsensusResult = (_, _) =>
+      asked += 1
+      com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch(Nil)
+    val underExclusive = the[IllegalStateException] thrownBy
+      com.chipprbots.ethereum.ledger.ChainInsertLock.exclusive(node.importer.adoptedOnLayers(block, adopt))
+    underExclusive.getMessage should include("holds the chain insert lock")
+    val underShared = the[IllegalStateException] thrownBy
+      com.chipprbots.ethereum.ledger.ChainInsertLock.shared(node.importer.adoptedOnLayers(block, adopt))
+    underShared.getMessage should include("holds the chain insert lock")
+    asked shouldBe 0
+    // and with the lock not held, the adoption is asked
+    node.importer.adoptedOnLayers(block, adopt) shouldBe node.importer.LenientOutcome.Imported(0)
+    asked shouldBe 1
   }
 
   "admin_exportChain / admin_importChain" should "round-trip through the RPC service" taggedAs (UnitTest, RPCTest) in {

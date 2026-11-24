@@ -974,42 +974,47 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       oldChain.drop(2).foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
     )
 
-  "Chain-file import (hive consensus simulator path)" should
-    "apply TD fork choice instead of making the last block in the file the head" taggedAs (
+  // On both layouts: on the unified one the importer's side blocks go through the same fork choice before the merge, and
+  // after it are adopted on layers (B-220).
+  for (layout, guard) <- Seq("the hash layout" -> false, "the unified layout" -> true) do
+    s"Chain-file import (hive consensus simulator path) on $layout" should
+      "apply TD fork choice instead of making the last block in the file the head" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in (new Fixture(guard):
+        // ethereum/tests lotsOfLeafs / sideChainWithMoreTransactions / uncleBlockAtBlock3afterBlock4 shape: the file
+        // lists the canonical chain, then a lighter side block, then (second file) a heavier side branch. core-geth's
+        // `import` (InsertChain -> writeBlockAndSetHead) keeps the heaviest head; ChainImporter used to save every
+        // block as best, so the file's last block won whatever its TD.
+        val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 4, difficulty = 1000)
+        val lighterSide: List[Block] = oracle.extendSide(aChain(1), 1, difficulty = 500, tag = 0x61) // b3 < a3
+        val heavierSide: List[Block] = oracle.extendSide(aChain(1), 3, difficulty = 1000, tag = 0x62) // c3..c5 > a3..a4
+
+        node.importFile(aChain ++ lighterSide) shouldBe (4, 1, 0)
+        node.bestHash shouldBe aChain.last.hash
+        node.indexed(3) shouldBe Some(aChain(2).hash)
+
+        node.importFile(heavierSide) shouldBe (3, 2, 0)
+        node.bestHash shouldBe heavierSide.last.hash
+        (3 to 5).foreach(n => node.indexed(n) shouldBe Some(heavierSide(n - 3).hash))
+        if guard then node.blockchainWriter.stateHeldInPlaceOf(heavierSide.last.header) shouldBe true
+      )
+
+    it should "make the last valid block the head once the terminal total difficulty is reached (core-geth)" taggedAs (
       UnitTest,
       ConsensusTest
-    ) in (new Fixture:
-      // ethereum/tests lotsOfLeafs / sideChainWithMoreTransactions / uncleBlockAtBlock3afterBlock4 shape: the file
-      // lists the canonical chain, then a lighter side block, then (second file) a heavier side branch. core-geth's
-      // `import` (InsertChain -> writeBlockAndSetHead) keeps the heaviest head; ChainImporter used to save every
-      // block as best, so the file's last block won whatever its TD.
-      val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 4, difficulty = 1000)
-      val lighterSide: List[Block] = oracle.extendSide(aChain(1), 1, difficulty = 500, tag = 0x61) // b3 < a3
-      val heavierSide: List[Block] = oracle.extendSide(aChain(1), 3, difficulty = 1000, tag = 0x62) // c3..c5 > a3..a4
+    ) in new PostMergeFixture(guard):
+      // ethereum/tests bcMultiChainTest/UncleFromSideChain_{Cancun,Prague} shape. Post-merge every header has
+      // difficulty 0, so two chains always weigh the same and a TD rule can never choose. core-geth's
+      // ForkChoice.ReorgNeeded returns true for any block at or past the TTD: on import, each valid block becomes the
+      // head. The TD fork choice above kept the FIRST chain in the file instead (hive consensus 1143/0 -> 1143/2).
+      val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 3, difficulty = 0)
+      val bChain: List[Block] = oracle.extendSide(oracle.genesis, 3, difficulty = 0, tag = 0x63)
 
-      node.importFile(aChain ++ lighterSide)
-      node.bestHash shouldBe aChain.last.hash
-      node.indexed(3) shouldBe Some(aChain(2).hash)
-
-      node.importFile(heavierSide)
-      node.bestHash shouldBe heavierSide.last.hash
-      (3 to 5).foreach(n => node.indexed(n) shouldBe Some(heavierSide(n - 3).hash))
-    )
-
-  it should "make the last valid block the head once the terminal total difficulty is reached (core-geth)" taggedAs (
-    UnitTest,
-    ConsensusTest
-  ) in new PostMergeFixture:
-    // ethereum/tests bcMultiChainTest/UncleFromSideChain_{Cancun,Prague} shape. Post-merge every header has
-    // difficulty 0, so two chains always weigh the same and a TD rule can never choose. core-geth's
-    // ForkChoice.ReorgNeeded returns true for any block at or past the TTD: on import, each valid block becomes the
-    // head. The TD fork choice above kept the FIRST chain in the file instead (hive consensus 1143/0 -> 1143/2).
-    val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 3, difficulty = 0)
-    val bChain: List[Block] = oracle.extendSide(oracle.genesis, 3, difficulty = 0, tag = 0x63)
-
-    node.importFile(aChain ++ bChain)
-    node.bestHash shouldBe bChain.last.hash
-    (1 to 3).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 1).hash))
+      node.importFile(aChain ++ bChain) shouldBe (6, 0, 0)
+      node.bestHash shouldBe bChain.last.hash
+      (1 to 3).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 1).hash))
+      if guard then node.blockchainWriter.stateHeldInPlaceOf(bChain.last.header) shouldBe true
 
   // The consensus layer's branch on the unified layout (spec 018 C4e part 5; T159's first half as beacon re-cut it):
   // what regular sync's importer will ask of `ConsensusImpl` once it runs on that layout. After the merge every block
@@ -3143,11 +3148,11 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
 
   /** Both hosts on a chain whose terminal total difficulty is 0, as hive configures post-merge fixtures. */
-  class PostMergeFixture:
+  class PostMergeFixture(guard: Boolean = false):
     val oracle: Oracle = new Oracle:
       implicit override lazy val blockchainConfig: BlockchainConfig =
         super.blockchainConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))
-    val node: Node = new Node:
+    val node: Node = new Node(guard):
       implicit override lazy val blockchainConfig: BlockchainConfig =
         super.blockchainConfig.copy(terminalTotalDifficulty = Some(BigInt(0)))
 
