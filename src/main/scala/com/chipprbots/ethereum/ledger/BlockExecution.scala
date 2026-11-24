@@ -100,7 +100,15 @@ class BlockExecution(
 
   /** [[writeDeployedCode]] of code taken out of its world: a proposer's build, kept as a block's state. */
   def writeDeployedCode(code: Map[ByteString, ByteString]): Unit =
-    InMemoryWorldStateProxy.deployedCodeWrite(code, evmCodeStorage).foreach(_.commit())
+    deployedCodeWrite(code).foreach(_.commit())
+
+  /** The write of code taken out of its world, not committed: for a caller that writes it in the batch of the block
+    * that refers to it (`testing_commitBlockV1` on the hash store, B-466). None when there is no code.
+    */
+  def deployedCodeWrite(
+      code: Map[ByteString, ByteString]
+  ): Option[com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate] =
+    InMemoryWorldStateProxy.deployedCodeWrite(code, evmCodeStorage)
 
   /** Times the block's database commit (one atomic batch since #1465), which `[IMPORT-TIMING]` ends before. */
   private def timedCommit[A](block: Block)(body: => A): A =
