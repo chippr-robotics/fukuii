@@ -463,6 +463,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `.env` files.
 
 ### Added
+- **EIP-7892 BPO3, BPO4 and BPO5 (B-443).** An ETH-family chain conf may now declare `bpo3-timestamp` ..
+  `bpo5-timestamp` with matching `blob-schedule.bpo3` .. `bpo5` entries (go-ethereum's `BPO3Time`..`BPO5Time`); they
+  were refused before. Each one sets the blob target, max and base-fee update fraction from its timestamp, enters the
+  EIP-2124/6122 fork id, and is listed by `eth_config` and the console. The loader keeps go-ethereum's fork order
+  (cancun <= prague <= osaka <= bpo1 <= bpo2 <= amsterdam <= bpo3 <= bpo4 <= bpo5) and refuses `bpo6-timestamp`. On a
+  chain without Amsterdam, BPO3/BPO4 payloads use the Osaka Engine API methods (newPayloadV4, forkchoiceUpdatedV3,
+  getPayloadV5), as execution-specs' `BPO2ToBPO3AtTime15k` / `BPO3ToBPO4AtTime15k` fixtures do. No shipped network
+  schedules BPO3, so mainnet, Sepolia, Hoodi and Platåberget are unchanged. Not yet mapped: Ephemery's `bpo3Time` and
+  hive's `HIVE_BPO3_*` variables (both still refused or ignored).
 - **TLS on the Engine API and the metrics endpoint; metrics binds loopback by default (spec 030 S5, B-358).**
   `network.engine-api.tls { enabled, profile }` serves the authrpc port over server TLS; JWT stays mandatory, the
   listener never asks for a client certificate, and a `client-auth` key there refuses the start. `metrics.tls { enabled,

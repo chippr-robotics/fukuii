@@ -89,6 +89,59 @@ class EngineApiGetPayloadForkWindowSpec extends AnyWordSpec with Matchers:
         yield s"getPayloadV$version ${if refused then "refused" else "served"} a $fork payload"
       wrong shouldBe empty
     }
+
+    "keep BPO3 and BPO4 in the Osaka window on a chain without Amsterdam (B-443)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      // execution-specs tests@v21.0.0 BPO2ToBPO3AtTime15k / BPO3ToBPO4AtTime15k: BPO3/BPO4 payloads go through
+      // newPayloadV4 and forkchoiceUpdatedV3, so their built payloads are served by getPayloadV5.
+      val (bpo2, bpo3, bpo4) = (10000000001L, 10000000002L, 10000000003L)
+      val osakaLine = testConfig.copy(forkTimestamps =
+        testConfig.forkTimestamps.copy(
+          bpo1Timestamp = Some(bpo2),
+          bpo2Timestamp = Some(bpo2),
+          bpo3Timestamp = Some(bpo3),
+          bpo4Timestamp = Some(bpo4)
+        )
+      )
+      Seq(bpo3, bpo4).foreach { ts =>
+        EngineApiController.getPayloadForkError(5, Timestamp(ts), osakaLine) shouldBe None
+        EngineApiController.getPayloadForkError(4, Timestamp(ts), osakaLine) shouldBe defined
+        EngineApiController.getPayloadForkError(6, Timestamp(ts), osakaLine) shouldBe defined
+      }
+      def refusal(ts: Long): String = EngineApiController.getPayloadForkError(6, Timestamp(ts), osakaLine).mkString
+      refusal(bpo3) should include("not a BPO3 payload")
+      refusal(bpo4) should include("not a BPO4 payload")
+      refusal(bpo2) should include("not a BPO2 payload")
+      refusal(OsakaTs) should include("not an Osaka payload")
+      // forkchoiceUpdatedV3 builds BPO3/BPO4 payloads; V4 (Amsterdam's) refuses them with -38005.
+      Seq(bpo3, bpo4).foreach { ts =>
+        val attrs = PayloadAttributes(
+          timestamp = ts,
+          prevRandao = ByteString(new Array[Byte](32)),
+          suggestedFeeRecipient = Address(0),
+          withdrawals = Some(Nil),
+          parentBeaconBlockRoot = Some(ByteString(new Array[Byte](32))),
+          slotNumber = Some(BigInt(1))
+        )
+        EngineApiController.payloadAttributesVersionError(3, attrs.copy(slotNumber = None), osakaLine) shouldBe None
+        EngineApiController.payloadAttributesVersionError(4, attrs, osakaLine).map(_._1) shouldBe Some(-38005)
+      }
+    }
+
+    "serve BPO3 through getPayloadV6 once Amsterdam precedes it, go-ethereum's fork order" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      val (amsterdam, bpo3) = (10000000003L, 10000000004L)
+      val glamsterdam = testConfig.copy(forkTimestamps =
+        testConfig.forkTimestamps.copy(amsterdamTimestamp = Some(amsterdam), bpo3Timestamp = Some(bpo3))
+      )
+      EngineApiController.getPayloadForkError(6, Timestamp(bpo3), glamsterdam) shouldBe None
+      EngineApiController.getPayloadForkError(5, Timestamp(bpo3), glamsterdam).mkString should
+        include("not an Amsterdam payload")
+    }
   }
 
   /** A service whose payload is `block`, counting how often the controller resolves it. Every payload is served with

@@ -26,7 +26,11 @@ object NetworkType:
     case "eth" => ETH
     case other => throw new IllegalArgumentException(s"Unknown network-type: $other (expected 'etc' or 'eth')")
 
-/** Timestamp-based fork activation for post-Merge Ethereum forks. */
+/** Timestamp-based fork activation for post-Merge Ethereum forks.
+  *
+  * The EIP-7892 blob-parameter-only forks are go-ethereum's `BPO1Time`..`BPO5Time` (chain conf `bpo1-timestamp` ..
+  * `bpo5-timestamp`); [[bpoTimestamps]] is the same five in fork order, for code that treats them alike.
+  */
 case class ForkTimestamps(
     shanghaiTimestamp: Option[Long] = None,
     cancunTimestamp: Option[Long] = None,
@@ -34,8 +38,22 @@ case class ForkTimestamps(
     osakaTimestamp: Option[Long] = None,
     amsterdamTimestamp: Option[Long] = None,
     bpo1Timestamp: Option[Long] = None,
-    bpo2Timestamp: Option[Long] = None
-)
+    bpo2Timestamp: Option[Long] = None,
+    bpo3Timestamp: Option[Long] = None,
+    bpo4Timestamp: Option[Long] = None,
+    bpo5Timestamp: Option[Long] = None
+):
+
+  /** BPO1..BPO5 activation timestamps, in fork order (index 0 is BPO1). Always [[ForkTimestamps.BpoForkCount]] long. */
+  def bpoTimestamps: List[Option[Long]] =
+    List(bpo1Timestamp, bpo2Timestamp, bpo3Timestamp, bpo4Timestamp, bpo5Timestamp)
+
+object ForkTimestamps:
+
+  /** go-ethereum's BPO1..BPO5 (`params.ChainConfig.BPO{1..5}Time`): the most blob-parameter-only forks a chain config
+    * can schedule.
+    */
+  val BpoForkCount: Int = 5
 
 case class BlockchainConfig(
     powTargetTime: Option[Long] = None,
@@ -119,6 +137,14 @@ case class BlockchainConfig(
   /** EIP-7892 BPO2: second blob-target bump. Sepolia activated 2025-10-28. */
   def isBpo2Timestamp(timestamp: Timestamp): Boolean =
     forkTimestamps.bpo2Timestamp.exists(ts => timestamp.isAtOrAfter(ts))
+
+  /** The highest EIP-7892 BPO fork (1..5) active at `timestamp`, or `None` before the first scheduled one. Ordered
+    * timestamps (enforced by [[BlobSchedule.validate]] for a chain conf) make this the latest BPO in time as well.
+    */
+  def latestBpoAt(timestamp: Timestamp): Option[Int] =
+    forkTimestamps.bpoTimestamps.zipWithIndex.reverse.collectFirst {
+      case (Some(ts), i) if timestamp.isAtOrAfter(ts) => i + 1
+    }
 
   /** The blob parameters (target, max, base-fee update fraction) in force at `timestamp`: go-ethereum
     * `eip4844.latestBlobConfig` over this chain's `blob-schedule`. `None` before the chain's first blob fork.
@@ -378,11 +404,14 @@ object BlockchainConfig:
       osakaTimestamp = Try(blockchainConfig.getLong("osaka-timestamp")).toOption,
       amsterdamTimestamp = Try(blockchainConfig.getLong("amsterdam-timestamp")).toOption,
       bpo1Timestamp = Try(blockchainConfig.getLong("bpo1-timestamp")).toOption,
-      bpo2Timestamp = Try(blockchainConfig.getLong("bpo2-timestamp")).toOption
+      bpo2Timestamp = Try(blockchainConfig.getLong("bpo2-timestamp")).toOption,
+      bpo3Timestamp = Try(blockchainConfig.getLong("bpo3-timestamp")).toOption,
+      bpo4Timestamp = Try(blockchainConfig.getLong("bpo4-timestamp")).toOption,
+      bpo5Timestamp = Try(blockchainConfig.getLong("bpo5-timestamp")).toOption
     )
 
     // Throws BlobSchedule.InvalidBlobSchedule on a schedule fukuii would mis-execute (missing entry for a declared
-    // blob fork, max < target, zero fraction, unordered blob-fork timestamps, unsupported bpo3+).
+    // blob fork, max < target, zero fraction, unordered blob-fork timestamps, a BPO fork beyond bpo5).
     val blobSchedule: BlobSchedule = BlobSchedule.fromConfig(blockchainConfig, forkTimestamps)
 
     val messConfig: MESSConfig = Try {

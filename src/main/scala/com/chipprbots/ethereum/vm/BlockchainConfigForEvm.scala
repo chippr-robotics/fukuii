@@ -60,8 +60,16 @@ case class BlockchainConfigForEvm(
     // EIP-7840 blob schedule and the Cancun activation it starts at (#1637), for BLOBBASEFEE's update fraction.
     // The default is BlockchainConfig's in-code default (go-ethereum's Default*BlobConfig).
     cancunTimestamp: Option[Long] = None,
-    blobSchedule: BlobSchedule = BlobSchedule.GethDefaults
+    blobSchedule: BlobSchedule = BlobSchedule.GethDefaults,
+    bpo3Timestamp: Option[Long] = None,
+    bpo4Timestamp: Option[Long] = None,
+    bpo5Timestamp: Option[Long] = None
 ):
+
+  /** BPO1..BPO5 activation timestamps in fork order, as [[com.chipprbots.ethereum.utils.ForkTimestamps.bpoTimestamps]].
+    */
+  def bpoTimestamps: List[Option[Long]] =
+    List(bpo1Timestamp, bpo2Timestamp, bpo3Timestamp, bpo4Timestamp, bpo5Timestamp)
 
   /** The chain's blob parameters at `timestamp` ([[BlobSchedule.paramsAt]]), or the EIP-4844 Cancun constants before
     * its first blob fork — the same answer [[com.chipprbots.ethereum.consensus.engine.BlobGasUtils.paramsAt]] gives, so
@@ -69,7 +77,7 @@ case class BlockchainConfigForEvm(
     */
   def blobParamsAt(timestamp: Timestamp): BlobParams =
     blobSchedule
-      .paramsAt(timestamp, cancunTimestamp, pragueTimestamp, bpo1Timestamp, bpo2Timestamp)
+      .paramsAt(timestamp, cancunTimestamp, pragueTimestamp, bpoTimestamps)
       .getOrElse(BlobParams.Cancun)
 
   /** EIP-7623 calldata cost floor — activates at Prague on ETH chains. Note: EIP-7883/EIP-7823 MODEXP changes activate
@@ -196,5 +204,8 @@ object BlockchainConfigForEvm:
       bpo2Timestamp = forkTimestamps.bpo2Timestamp,
       isEthereum = isEth,
       cancunTimestamp = forkTimestamps.cancunTimestamp,
-      blobSchedule = blockchainConfig.blobSchedule
+      blobSchedule = blockchainConfig.blobSchedule,
+      bpo3Timestamp = forkTimestamps.bpo3Timestamp,
+      bpo4Timestamp = forkTimestamps.bpo4Timestamp,
+      bpo5Timestamp = forkTimestamps.bpo5Timestamp
     )

@@ -117,7 +117,11 @@ object ForkId:
       // checksum of [cancun, prague, osaka], and peers wanted 0x5942bfc2, the checksum
       // of all six. 27 of that suite's 34 failures were the resulting
       // `wrong fork ID in status` handshake rejection.
-      config.forkTimestamps.amsterdamTimestamp.map(BigInt(_))
+      config.forkTimestamps.amsterdamTimestamp.map(BigInt(_)),
+      // EIP-7892: every BPO fork is a fork for EIP-2124/6122 (go-ethereum gathers each `BPO{1..5}Time` field).
+      config.forkTimestamps.bpo3Timestamp.map(BigInt(_)),
+      config.forkTimestamps.bpo4Timestamp.map(BigInt(_)),
+      config.forkTimestamps.bpo5Timestamp.map(BigInt(_))
     ).flatten.filterNot(_ <= Timestamp(genesisTimestamp).toUnsignedBigInt).distinct.sorted
 
   extension (forkId: ForkId)
