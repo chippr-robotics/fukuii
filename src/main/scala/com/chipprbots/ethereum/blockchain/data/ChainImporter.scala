@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
 import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
+import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
@@ -36,7 +37,11 @@ class ChainImporter(
     // The node's own fork choice for a block that does NOT extend the current head: queue it as a side branch and
     // reorganise once that branch outweighs the head (ConsensusAdapter.evaluateBranchBlock -> BlockQueue ->
     // ConsensusImpl). `None` keeps the old last-block-wins behaviour and exists only for direct test construction.
-    forkChoice: Option[(Block, BlockchainConfig) => IO[BlockImportResult]] = None
+    forkChoice: Option[(Block, BlockchainConfig) => IO[BlockImportResult]] = None,
+    // On the unified state layout (spec 018 C4), the adoption of a post-merge block that is not built on the head: it is
+    // executed on its parent's state, on layers, and made the head by one move when it is valid
+    // ([[ChainImporter.adoptingOnLayers]]). `None` refuses such a block, and exists only for direct test construction.
+    adoptOnLayers: Option[(Block, BlockchainConfig) => Consensus.ConsensusResult] = None
 ) extends Logger:
 
   /** Import all blocks from an RLP chain file, continuing past invalid blocks — the hive / ethereum/tests loader.
@@ -165,7 +170,11 @@ class ChainImporter(
     }
 
     if alreadyExists then LenientOutcome.Skipped
-    else if blockchainReader.holdsStateInPlace then importInPlace(block)
+    // Before the merge a block that is not built on the head goes to the node's fork choice on both layouts: on the
+    // unified one it is queued and executed on layers, and the head moves to its branch once that outweighs the head
+    // (ConsensusImpl.reorganiseOnLayers, C4e), as core-geth's InsertChain keeps a side chain until it is heavier.
+    else if blockchainReader.holdsStateInPlace && (extendsHead || postMerge || forkChoice.isEmpty) then
+      importInPlace(block)
     else if !extendsHead && !postMerge && forkChoice.isDefined then
       // A side-chain block. Saving it as best — what this loop did for every block — made the LAST block of
       // the file the head whatever its total difficulty, so every ethereum/tests fork/uncle-race vector
@@ -185,8 +194,9 @@ class ChainImporter(
         case BlockEnqueued | DuplicateBlock =>
           LenientOutcome.Skipped // kept as a side block (lighter or not yet rooted), exactly as core-geth writes a side chain
         case BlockImportStateFault(fault, _) =>
-          // Not a verdict on the block: this node's state could not take it. (Not met as the code stands: fork choice
-          // decides here on the hash layout only, where no such fault is thrown.)
+          // Not a verdict on the block: this node's state could not take it (on the unified layout, a branch that leaves
+          // the chain deeper than its changeset records reach, for one). Counted as failed: it was neither imported nor
+          // kept. Never met on the hash layout, where no such fault is thrown.
           log.error(s"Chain import: block $blockNum was not executed on this node's own state: ${fault.getMessage}")
           LenientOutcome.Failed
         case other =>
@@ -214,68 +224,108 @@ class ChainImporter(
           log.error(s"Chain import: block $blockNum failed — ${error.describe}")
           LenientOutcome.Failed
 
-  /** Blocks refused on the unified state layout in the import that is running because they are not built on the head:
-    * side blocks, and blocks whose parent this node does not have. The first of each is said loudly, the rest quietly,
-    * and the import's last line names both counts.
+  /** Blocks refused on the unified state layout in the import that is running because they are not built on the head
+    * and nothing here could take them: side blocks with no fork choice or adoption given (direct test construction
+    * only), and blocks whose parent this node does not have. The first of each is said loudly, the rest quietly, and
+    * the import's last line names both counts.
     */
   private[data] var sideBlocksRefused = 0
   private[data] var orphanBlocksRefused = 0
 
-  /** [[importLenient]] on the unified state layout (spec 018 Track C), before its overlay.
+  /** [[importLenient]] on the unified state layout (spec 018 Track C), for a block built on the head, a block after the
+    * merge, or any block when no fork choice was given.
     *
-    * There a block is committed with its state, in the batch that makes it the head, or not at all. So a block built on
-    * the head goes through the node's own import of one block onto the head, the one an operator's restore uses
-    * ([[BlockExecution.executeAndAdoptBlockIf]]): the same validation before and after execution as the arm below, the
-    * same requests-hash and access-list checks, and one batch for the block, its receipts, its weight, the head and the
-    * state. As there, the whole of it is under the exclusive chain insert lock, and the head is looked at again just
-    * before the commit: this import runs at start, before anything else writes the head, and is right if it ever runs
-    * beside one that does.
+    * A block built on the head goes through the node's own import of one block onto the head, the one an operator's
+    * restore uses ([[BlockExecution.executeAndAdoptBlockIf]]): the same validation before and after execution as the
+    * hash layout's arm, the same requests-hash and access-list checks, and one batch for the block, its receipts, its
+    * weight, the head and the state. The whole of it is under the exclusive chain insert lock, and the head is looked
+    * at again just before the commit.
     *
-    * A block that is not built on the head is refused, whichever side of the merge it is on: the fork choice would need
-    * the state of a block that is not the head, and so would adopting it outright. Nothing of it is kept, since nothing
-    * could use it before the overlay (C4a) and the head move (C4b). That is a limit of this node's layout and no
-    * verdict on the block; it is counted as failed because it was neither imported nor kept.
+    * A block after the merge that is built on another block this node has is adopted, as on the hash layout and in
+    * core-geth, whose `ForkChoice.ReorgNeeded` takes every block at or past the terminal total difficulty as the head:
+    * executed on its parent's state, on layers, and made the head by one move when it is valid; an invalid one leaves
+    * the head where it was ([[ChainImporter.adoptingOnLayers]]; B-220). Its parent's state is reached through the
+    * changeset records, so a fork deeper than they reach is refused as a fault of this node's state, and counted as
+    * failed, as the hash layout fails on a parent whose state was pruned.
     *
-    * A fault of the node's own state is thrown, as anything thrown by the arm below is: it ends the import, and every
-    * block after it would meet it too.
+    * A block whose parent this node does not have is refused, as the hash layout's arm fails it.
+    *
+    * A fault of the node's own state met on the head is thrown, as anything thrown by the arm below is: it ends the
+    * import, and every block after it would meet it too.
     */
   private def importInPlace(block: Block)(implicit blockchainConfig: BlockchainConfig): LenientOutcome =
-    ChainInsertLock.exclusive {
-      val header = block.header
-      def onHead: Boolean = blockchainReader.getBestBlockHeader.exists(_.hash == header.parentHash)
-      if !onHead then
-        val parent = ByteStringUtils.hash2string(header.parentHash.value)
-        val head =
-          blockchainReader.getBestBlockHeader.map(h => s"#${h.number} (${h.hashAsHexString})").getOrElse("none")
-        val sideBlock = blockchainReader.getBlockHeaderByHash(header.parentHash).isDefined
-        val what =
-          if sideBlock then s"is built on $parent, which is not the head $head: a side block"
-          else s"has parent $parent, which this node does not have (head $head): the chain before it is broken"
-        val message =
-          s"Chain import: block ${header.number} (${header.hashAsHexString}) $what. Not taken: the unified state " +
-            "layout holds the state of the head alone until its overlay (spec 018 C4), so only a block built on " +
-            "the head can be imported. This says nothing about the block."
-        val earlier = if sideBlock then sideBlocksRefused else orphanBlocksRefused
-        if earlier == 0 then log.error(message) else log.debug(message)
-        if sideBlock then sideBlocksRefused += 1 else orphanBlocksRefused += 1
-        LenientOutcome.Failed
-      else if !blockchainReader.isHeldInPlace(header.parentHash.value) then
-        // the head and the state on disk are written in one batch: a head whose state is not the one held is a fault
-        // of this datadir, and no block can be judged against it
-        throw new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable(
-          s"the head ${ByteStringUtils.hash2string(header.parentHash.value)} is not the block whose state is held; " +
-            s"block ${header.number} cannot be imported"
-        )
-      else
-        val parentWeight = blockchainReader.getChainWeightByHash(header.parentHash).getOrElse(ChainWeight.zero)
-        val stillOnHead =
-          () => Option.unless(onHead)(BlockExecutionError.ValidationAfterExecError(ChainImporter.HeadMoved))
-        blockExecution.executeAndAdoptBlockIf(block, parentWeight, stillOnHead) match
-          case Right(_) => LenientOutcome.Imported(1)
-          case Left(error) =>
-            log.error(s"Chain import: block ${header.number} failed — ${error.describe}")
+    val header = block.header
+    def onHead: Boolean = blockchainReader.getBestBlockHeader.exists(_.hash == header.parentHash)
+    val parentKnown = blockchainReader.getBlockHeaderByHash(header.parentHash).isDefined
+    adoptOnLayers match
+      case Some(adopt) if !onHead && parentKnown => adoptedOnLayers(block, adopt)
+      case _ =>
+        ChainInsertLock.exclusive {
+          if !onHead then
+            val parent = ByteStringUtils.hash2string(header.parentHash.value)
+            val head =
+              blockchainReader.getBestBlockHeader.map(h => s"#${h.number} (${h.hashAsHexString})").getOrElse("none")
+            val sideBlock = blockchainReader.getBlockHeaderByHash(header.parentHash).isDefined
+            val what =
+              if sideBlock then
+                s"is built on $parent, which is not the head $head: a side block, and this importer was given no " +
+                  "fork choice to take it to"
+              else s"has parent $parent, which this node does not have (head $head): the chain before it is broken"
+            val message =
+              s"Chain import: block ${header.number} (${header.hashAsHexString}) $what. Not taken on the unified " +
+                "state layout. This says nothing about the block."
+            val earlier = if sideBlock then sideBlocksRefused else orphanBlocksRefused
+            if earlier == 0 then log.error(message) else log.debug(message)
+            if sideBlock then sideBlocksRefused += 1 else orphanBlocksRefused += 1
             LenientOutcome.Failed
-    }
+          else if !blockchainReader.isHeldInPlace(header.parentHash.value) then
+            // the head and the state on disk are written in one batch: a head whose state is not the one held is a
+            // fault of this datadir, and no block can be judged against it
+            throw new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable(
+              s"the head ${ByteStringUtils.hash2string(header.parentHash.value)} is not the block whose state is held; " +
+                s"block ${header.number} cannot be imported"
+            )
+          else
+            val parentWeight = blockchainReader.getChainWeightByHash(header.parentHash).getOrElse(ChainWeight.zero)
+            val stillOnHead =
+              () => Option.unless(onHead)(BlockExecutionError.ValidationAfterExecError(ChainImporter.HeadMoved))
+            blockExecution.executeAndAdoptBlockIf(block, parentWeight, stillOnHead) match
+              case Right(_) => LenientOutcome.Imported(1)
+              case Left(error) =>
+                log.error(s"Chain import: block ${header.number} failed — ${error.describe}")
+                LenientOutcome.Failed
+        }
+
+  /** A block after the merge that is not built on the head, adopted on the unified layout: what the adoption answered,
+    * as the import counts it. Not under the exclusive chain insert lock: the adoption executes and moves the head on
+    * threads of its own, under the state lock, behind any move under way.
+    */
+  private def adoptedOnLayers(
+      block: Block,
+      adopt: (Block, BlockchainConfig) => Consensus.ConsensusResult
+  )(implicit blockchainConfig: BlockchainConfig): LenientOutcome =
+    val number = block.header.number
+    adopt(block, blockchainConfig) match
+      case Consensus.SelectedNewBestBranch(oldBranch, _, _, _) =>
+        log.info(
+          s"Chain import: block $number (${block.header.hashAsHexString}) adopted as the head after the merge, " +
+            s"leaving ${oldBranch.size} block(s)"
+        )
+        LenientOutcome.Imported(1)
+      // the head became its parent meanwhile: it was imported onto it
+      case Consensus.ExtendedCurrentBestBranch(data) => LenientOutcome.Imported(data.size)
+      case fault: Consensus.ConsensusStateFault      =>
+        // Not a verdict on the block: this node's state could not take it (a fork deeper than the records reach)
+        log.error(
+          s"Chain import: block $number was not executed on this node's own state: ${fault.fault.getMessage}"
+        )
+        LenientOutcome.Failed
+      case Consensus.BranchExecutionFailure(_, _, error) =>
+        log.error(s"Chain import: block $number failed — $error")
+        LenientOutcome.Failed
+      case other =>
+        log.error(s"Chain import: block $number was not adopted — $other")
+        LenientOutcome.Failed
 
   /** Import a chain file the way go-ethereum's `geth import` / `admin_importChain` does, stopping at the first problem.
     *
@@ -464,6 +514,39 @@ class ChainImporter(
       (blockchainReader.getBestBlockNumber != header.number.value || blockchainReader.holdsStateOf(header))
 
 object ChainImporter:
+
+  /** The adoption of a block that is not built on the head, on the unified state layout (spec 018 C4; B-220): the
+    * node's own reorganisation on layers ([[com.chipprbots.ethereum.consensus.ConsensusImpl]], the consensus layer's
+    * arm of C4e part 5), with the block itself named as the head to lead to. So the block is executed on its parent's
+    * state, kept as a forward layer, and made the head by one move of the state, the best block and the index when it
+    * is valid; an invalid block leaves the head exactly where it was, and a fork deeper than the changeset records
+    * reach is refused before anything is executed
+    * ([[com.chipprbots.ethereum.consensus.Consensus.ConsensusStateFault]]).
+    *
+    * For an import that takes the block as the head whatever its weight: the chain file after the merge, where
+    * core-geth's `ForkChoice.ReorgNeeded` takes every block as the head, and the sequential ethereum/tests runner,
+    * which executes each block on its parent. A fresh `ConsensusImpl` for each block: what it names and what it
+    * remembers of a refusal are that block's alone. No consensus layer is bound to it and no invalid block is reported.
+    * Inert on the hash layout, where neither caller asks it.
+    */
+  def adoptingOnLayers(
+      blockchainReader: BlockchainReader,
+      blockchainWriter: BlockchainWriter,
+      blockExecution: BlockExecution,
+      reorgState: com.chipprbots.ethereum.consensus.ReorgStateHandler
+  ): (Block, BlockchainConfig) => Consensus.ConsensusResult =
+    (block, blockchainConfig) =>
+      val named = Some(block.hash.value)
+      val consensus = new com.chipprbots.ethereum.consensus.ConsensusImpl(
+        blockchainReader,
+        blockchainWriter,
+        blockExecution,
+        designatedHead = Some(com.chipprbots.ethereum.consensus.engine.DesignatedHead(() => named)),
+        reorgState = reorgState
+      )
+      consensus
+        .evaluateBranch(cats.data.NonEmptyList.one(block))(using IORuntime.global, blockchainConfig)
+        .unsafeRunSync()(using IORuntime.global)
 
   /** Counters a strict import keeps outside its `try`, so a failure part-way reports what was really imported. */
   final private[data] class StrictProgress:

@@ -149,13 +149,13 @@ object TestService:
   case class GetLogHashRequest(transactionHash: ByteString)
   case class GetLogHashResponse(logHash: ByteString)
 
-  /** What a test-mode request that needs the state of a block other than the head is answered with on the unified state
-    * layout, until the head can move to another branch (spec 018 C4b): a reorganisation to a branch that outweighs the
-    * head, above all. Test mode reads in no scope of reads, so it reads the head's state and no other.
+  /** What a test-mode request is answered with on the unified state layout when the state of the block it needs is not
+    * held: a block behind the head deeper than the changeset records reach, a head whose state is not the one the disk
+    * holds, a branch that leaves the chain below what the records reach. A refusal of this node's layout, made before
+    * anything was written, and no verdict on a block.
     */
   val HeadStateOnly: String =
-    "on the unified state layout (fukuii.state.path-live) test mode reads the state of its head alone, and this " +
-      "needs the state of another block"
+    "on the unified state layout (fukuii.state.path-live) the state this needs is not held"
 
   /** What `test_setChainParams` is answered with there when a write of it failed. */
   val ChainNotSet: String = "the chain was not set"
@@ -509,11 +509,11 @@ class TestService(
           .flatMap(handleResult(value))
           .recover(notOnTheUnifiedLayout)
 
-  /** What the unified state layout cannot do before its overlay, said as that and not as a fault of the block: the
-    * state of a block that is not the one held was asked for, and refused before anything was written (a branch that
-    * outweighs the head reaches a reorganisation; a block is to be mined on a head whose state is not the one the disk
-    * holds; a range of the state of a block below the head is read); and a mined block that was not made the head.
-    * Never met on the hash store.
+  /** What the unified state layout refuses, said as that and not as a fault of the block: the state of a block that is
+    * not held was asked for, and refused before anything was written (a heavier branch that leaves the chain below what
+    * the changeset records reach; a block is to be mined on a head whose state is not the one the disk holds; a range
+    * of the state of a block deeper than the records reach); a move of the head that was refused; and a mined block
+    * that was not made the head. Never met on the hash store.
     */
   private def notOnTheUnifiedLayout[A]: PartialFunction[Throwable, Either[JsonRpcError, A]] =
     // refused, with nothing written, while another thread's adoption holds the head: no limit of the layout and no
@@ -619,12 +619,16 @@ class TestService(
   def getAccountsInRange(request: AccountsInRangeRequest): ServiceResponse[AccountsInRangeResponse] =
     ofAStateHeld(accountsInRange(request))
 
-  /** `answer`, which reads the state of a block. On the unified state layout that is the head's alone before the
-    * overlay: for another block the read is refused as it starts, and the refusal is answered as that. On the hash
-    * store `answer` is what it was.
+  /** `answer`, which reads the state of a block. On the unified state layout a block behind the head is read from the
+    * changeset records, as the JSON-RPC reads one ([[StateRead]]): in one scope of reads, run again on a fresh view
+    * when the state moved under it (B-220; geth answers `debug_storageRangeAt` and `debug_accountRange` at any block
+    * whose state it has). Every read `answer` makes is done before it returns its value. A state that is not held is
+    * refused as the read starts, and answered as that. On the hash store `answer` is what it was.
     */
   private def ofAStateHeld[A](answer: => ServiceResponse[A]): ServiceResponse[A] =
-    if blockchainReader.holdsStateInPlace then IO.defer(answer).recover(notOnTheUnifiedLayout) else answer
+    if blockchainReader.holdsStateInPlace then
+      IO.defer(StateRead.attemptingOrThrow(answer)).recover(notOnTheUnifiedLayout)
+    else answer
 
   private def accountsInRange(request: AccountsInRangeRequest): ServiceResponse[AccountsInRangeResponse] =
     // This implementation works by keeping a list of know account from the genesis state

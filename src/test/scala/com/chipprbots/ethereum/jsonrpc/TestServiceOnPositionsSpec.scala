@@ -426,14 +426,18 @@ class TestServiceOnPositionsSpec
       accounts shouldBe onHashes.accountsAtHead
       accounts.addressMap.values.toSet should contain.allOf(sender.bytes, keeper.bytes, squatted.bytes)
 
-      // The state of a block below the head: the hash store holds it, and answers. The unified layout holds the
-      // head's alone, and says so; the answer is an error of the method, and no fault thrown at its caller.
+      // The state of a block below the head: the hash store holds it, and answers; the unified layout reads it from
+      // the changeset records, and answers the same (B-220), at every height
       onHashes.storageAt(contract, 2).map(keysOf) shouldBe Right(Set(slot(1), slot(2)))
       onHashes.accountsAt(2).map(_.addressMap.values.toSet.contains(contract.bytes)) shouldBe Right(false)
-      onPositions.storageAt(contract, 2).left.map(_.message).left.getOrElse("") should include(
-        TestService.HeadStateOnly
-      )
-      onPositions.accountsAt(2).left.map(_.message).left.getOrElse("") should include(TestService.HeadStateOnly)
+      (0 to 4).foreach { height =>
+        withClue(s"block $height: ") {
+          Seq(contract, keeper, squatted).foreach { address =>
+            onPositions.storageAt(address, height) shouldBe onHashes.storageAt(address, height)
+          }
+          onPositions.accountsAt(height) shouldBe onHashes.accountsAt(height)
+        }
+      }
       // a block neither has is no error on either
       Seq(onHashes, onPositions).foreach(
         _.storageAt(contract, 99) shouldBe Right(StorageRangeResponse(false, Map.empty, None))

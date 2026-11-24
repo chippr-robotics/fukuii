@@ -442,7 +442,9 @@ trait ConsensusBuilder:
       blockExecution,
       Some((block: Block, config: BlockchainConfig) =>
         consensusAdapter.evaluateBranchBlock(block)(using IORuntime.global, config)
-      )
+      ),
+      // on the unified layout, a block after the merge that is not built on the head is adopted on layers (B-220)
+      Some(ChainImporter.adoptingOnLayers(blockchainReader, blockchainWriter, blockExecution, blockchain))
     )
 
   /** The count of what the node could not follow, on the unified layout (spec 018 C5a part 6): 64 refused fork choices
