@@ -1770,18 +1770,32 @@ final class PathStateStorage(
     * head, or a move of it, between that read and this hold is a head the attempt knows nothing of: its branch would be
     * weighed against the stale head, and a move back would leave the block committed meanwhile a side block. So the
     * hold is refused unless the anchor is that block still, compared under the state lock where the hold is made: a
-    * [[StateBusy]], with nothing held or written, and the caller reads the head again and asks again.
+    * [[StateBusy]], with nothing held or written, and the caller reads the head again and asks again. Nor while a move
+    * of the head is under way on another thread (B-504): a head read between two of its batches is a block the move
+    * passes through, and is the anchor still until its next batch.
     */
   @throws[ReorgTooDeep]("when the records above `above` are not all kept already: the way back is not there")
   @throws[StateBusy](
-    "when another thread's attempt is open, or the head is not `expectedAnchor` any more: nothing was held, and the " +
-      "caller asks again"
+    "when another thread's attempt is open, a move of the head is under way on another thread, or the head is not " +
+      "`expectedAnchor` any more: nothing was held, and the caller asks again"
   )
   def withRecordsHeld[A](above: BlockRef, expectedAnchor: Option[BlockRef])(body: => A): A =
     val hold = new Object
     // under the lock, so that no commit prunes between the look at what is kept and the hold
     lock.locked(s"a hold of the records above block ${above.show}") {
       refuseInAnotherAttempt(s"the hold of the records above block ${above.show}")
+      // Nor while a move of the head is under way on another thread (B-504): between two of its batches the anchor is
+      // a block the move is passing through, and the next batch takes it on. A caller that read the head then would
+      // pass the check below, and hold the records on a head no writer meant: its way back would lead half-way up a
+      // fork choice's move. Refused as busy, as for a head that moved since it was read; the move ends without waiting
+      // for anything this thread holds (it takes no lock but the state lock, a batch at a time)
+      if moving && !moves.isHeldByCurrentThread then
+        throw new StateBusy(
+          "the move of the head under way on another thread",
+          s"the hold of the records above block ${above.show} was not made: a move of the head is under way, and the " +
+            s"head, at ${clock.anchor.fold("no block")(ref => s"block ${ref.show}")}, is a block it is passing " +
+            "through. Read the head and ask again once it has ended"
+        )
       // and none moved the head since the caller read it (B-463): checked before the records, which are looked at from
       // a head the caller may have read stale
       val anchorNow = clock.anchor

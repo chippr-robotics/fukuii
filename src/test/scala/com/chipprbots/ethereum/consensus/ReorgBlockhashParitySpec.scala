@@ -1255,6 +1255,174 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     finally recovery.close()
   )
 
+  /** A recovery over `f`'s node that adopts a branch of more than two blocks in place, and a sink of it that names what
+    * `f` names and runs `meanwhile` once, the first time the adoption asks for the head it followed: after it read the
+    * head it may move back to (`from`), before it holds the records (B-504).
+    */
+  private def racedRecovery(f: DesignatedFixture, meanwhile: () => Unit): (StateRecovery, Sink) =
+    val recovery = new StateRecovery(
+      f.node.blockchainReader,
+      f.node.blockchainWriter,
+      f.node.blockExecution,
+      f.node.storagesInstance.storages.pathStateStorage.get,
+      maxBlocks = 2
+    )(using f.node.blockchainConfig)
+    val raced = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val sink: Sink = new StateRecovery.Sink:
+      def executed(
+          block: Block,
+          receipts: Seq[Receipt],
+          accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+      ): Unit = ()
+      def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+      override def requestedHead: Option[ByteString] = f.namedNow()
+      override def followedHead: Option[ByteString] =
+        if !raced.getAndSet(true) then meanwhile()
+        Some(f.aChain.last.hash.value)
+    (recovery, sink)
+
+  // B-504 (beacon, after B-463): a consensus client's fork choice moves the head, by a move of it and not by a block
+  // committed on it, between the recovery's read of the head it may move back to and its hold of the records. The
+  // consensus layer names the branch again before the hold, so the adoption is still asked for and the hold itself must
+  // refuse it: as busy, nothing held or written, answered Superseded; the next fork choice adopts the branch from the
+  // head the fork choice left.
+  it should "be superseded, with nothing written, when a fork choice moves the head between the recovery's read of it and its hold" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture(archiveOfShortViews):
+    val state = node.storagesInstance.storages.pathStateStorage.get
+    // the store as the fork choice's move left it
+    val untouched = new java.util.concurrent.atomic.AtomicReference[AnyRef]()
+    val (recovery, sink) = racedRecovery(
+      this,
+      () =>
+        // the move a fork choice makes (ForkChoiceManager.confirmHeldHead): up the head's chain, by its record
+        node.blockchainWriter.moveHeadInPlace(aChain.last.header, node.blockchainReader, forkChoice = true)
+        untouched.set(node.storagesInstance.dataSource.storage)
+    )
+    try
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      // the head the consensus client had last followed: block 4, with block 5 above it by its record
+      node.blockchainWriter.moveHeadInPlace(aChain(3).header, node.blockchainReader)
+      node.bestHash shouldBe aChain(3).hash
+      bChain.foreach(block => node.blockchainWriter.storeBlockByHashOnly(block).commit())
+      named.set(Some(bChain.last.hash.value))
+      recovery
+        .requestFor(bChain.last.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Superseded
+      // nothing of the adoption was written: the head is where the fork choice moved it
+      (node.storagesInstance.dataSource.storage eq untouched.get) shouldBe true
+      node.bestHash shouldBe aChain.last.hash
+      state.anchor.map(_.hash) shouldBe Some(aChain.last.hash.value)
+      state.headGeneration % 2 shouldBe 0
+      state.recordsHeld shouldBe false
+      // the next fork choice: adopted from the head as it is
+      recovery
+        .requestFor(bChain.last.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Adopted(4)
+      node.bestHash shouldBe bChain.last.hash
+      (3 to 6).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 3).hash))
+      reported shouldBe Nil
+    finally recovery.close()
+  )
+
+  // B-504 (beacon, after B-463): the recovery reads the head it may move back to while a fork choice's move of the head
+  // is between two of its batches: `from` is a block the move is passing through, which no fork choice named and no
+  // branch was weighed against. The hold is refused, as busy and with nothing written, whether it is asked once the
+  // move has gone on (the head is not `from` any more), or while the move is still between the same two batches (the
+  // head is `from` still, and the move will take it on): held then, a move back would lead to a block half-way up a
+  // move. Superseded both ways; once the move has ended, the next fork choice adopts the branch from where it left the
+  // head.
+  it should "be superseded, with nothing written, when it read the head between two batches of a fork choice's move" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    for holdWhileMoving <- Seq(false, true) do
+      withClue(s"the hold asked while the move is still between its batches: $holdWhileMoving: ") {
+        new DesignatedFixture(config => archiveOfShortViews(config).copy(maxBlocksPerMoveBatch = 1)):
+          val state = node.storagesInstance.storages.pathStateStorage.get
+          // the fork choice's move: from block 2 up to block 5, a block a batch, paused before its second batch
+          val paused = new java.util.concurrent.CountDownLatch(1)
+          val goOn = new java.util.concurrent.CountDownLatch(1)
+          val batches = new java.util.concurrent.atomic.AtomicInteger(0)
+          val fromRead = new java.util.concurrent.atomic.AtomicReference[Option[BlockRef]](None)
+          @volatile var moving: Thread = null
+          def releaseTheMove(): Unit =
+            goOn.countDown()
+            Option(moving).foreach(_.join(60000))
+          val (recovery, sink) = racedRecovery(
+            this,
+            () =>
+              // the adoption read `from` already: the head as the paused move left it
+              fromRead.set(state.anchor)
+              if !holdWhileMoving then releaseTheMove()
+          )
+          try
+            node.importAll(aChain) shouldBe a[BlockImportedToTop]
+            node.blockchainWriter.moveHeadInPlace(aChain(1).header, node.blockchainReader)
+            node.bestHash shouldBe aChain(1).hash
+            bChain.foreach(block => node.blockchainWriter.storeBlockByHashOnly(block).commit())
+            val moveEnded = new java.util.concurrent.atomic.AtomicReference[scala.util.Try[Any]]()
+            moving = new Thread(() =>
+              moveEnded.set(
+                scala.util.Try(
+                  node.blockchainWriter.moveHeadInPlace(
+                    aChain.last.header,
+                    node.blockchainReader,
+                    refuse = _ =>
+                      if batches.incrementAndGet() == 2 then
+                        paused.countDown()
+                        goOn.await(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+                      None
+                    ,
+                    forkChoice = true
+                  )
+                )
+              )
+            )
+            moving.start()
+            paused.await(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+            // between its first and second batch: the head is block 3, which the move passes through
+            state.anchor.map(_.hash) shouldBe Some(aChain(2).hash.value)
+            named.set(Some(bChain.last.hash.value))
+            val untouched = node.storagesInstance.dataSource.storage
+            // a hold made while the move stands still would wait for it with its own move: said, not hung
+            val first = scala.util.Try(
+              recovery
+                .requestFor(bChain.last.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+                .outcome
+                .get(60, java.util.concurrent.TimeUnit.SECONDS)
+            )
+            first.fold(thrown => fail(s"the adoption did not end: $thrown"), identity) shouldBe
+              StateRecovery.Outcome.Superseded
+            fromRead.get.map(_.hash) shouldBe Some(aChain(2).hash.value)
+            if holdWhileMoving then
+              // nothing was written while the move stood still, by the adoption either
+              (node.storagesInstance.dataSource.storage eq untouched) shouldBe true
+              releaseTheMove()
+            moveEnded.get.isSuccess shouldBe true
+            // the move ended where the fork choice named, and the adoption wrote nothing and holds nothing
+            node.bestHash shouldBe aChain.last.hash
+            state.anchor.map(_.hash) shouldBe Some(aChain.last.hash.value)
+            state.headGeneration % 2 shouldBe 0
+            state.recordsHeld shouldBe false
+            (3 to 5).foreach(n => node.indexed(n) shouldBe Some(aChain(n - 1).hash))
+            // the next fork choice: adopted from the head as it is
+            recovery
+              .requestFor(bChain.last.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+              .outcome
+              .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Adopted(4)
+            node.bestHash shouldBe bChain.last.hash
+            (3 to 6).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 3).hash))
+            reported shouldBe Nil
+          finally
+            releaseTheMove()
+            recovery.close()
+      }
+  }
+
   it should "set what hangs from it aside while the head stays, once it is handed off, and not hand off a fork below the views" taggedAs (
     UnitTest,
     ConsensusTest
