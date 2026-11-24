@@ -1284,7 +1284,10 @@ class ConsensusImpl(
             // (its chain holds the tip) or elsewhere. Without this the move would take the head back down, below a head
             // the consensus client had confirmed (beacon, B-297)
             // The head's chain holds the tip: a move with nothing forward, which would only take the head back down to
-            // the tip. Refused whether the head got there meanwhile or before the branch was weighed (B-516)
+            // the tip. Refused whether the head got there meanwhile or before the branch was weighed (B-516). Both are
+            // answered alike: the head never moves back and nothing is written. Where the head was past the tip before
+            // the branch was weighed, its blocks were told when they became canonical, and the importer tells them once
+            // more (the pool, new-head subscribers): harmless, and accepted so that no other answer is needed (B-516)
             var headAlreadyHoldsIt = false
             val moved =
               try
