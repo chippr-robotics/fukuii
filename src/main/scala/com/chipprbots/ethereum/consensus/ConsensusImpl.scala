@@ -66,7 +66,9 @@ class ConsensusImpl(
     // unbound (every ETC network, the hash layout, and the `None` of tests) such a branch is answered as before.
     branchHandOff: Option[BranchHandOff] = None,
     // How many of the blocks a reorganisation moved the head off are told, the nearest the old head (B-296): queued
-    // again and handed to the pool. A shallower reorganisation tells them all.
+    // again and handed to the pool. A shallower reorganisation tells them all. The same bound holds for the blocks it
+    // moved the head onto, the nearest the new head, at least that head (B-344). A node passes its
+    // `sync.max-queued-block-number-behind` (B-345).
     oldBranchToldAtMost: Int = ConsensusImpl.OldBranchToldAtMost
 ) extends Consensus
     with Logger:
@@ -984,10 +986,13 @@ class ConsensusImpl(
     * it, oldest first, as go-ethereum's new chain runs from the fork up (B-297; beacon): those executed again here from
     * what was kept of them, the others as they are stored. Each with its own weight, so that blocks and weights told
     * stay one to one.
+    *
+    * '''Bounded''' (B-344): only the `oldBranchToldAtMost` nearest the branch are read, as no more of them can be told
+    * ([[newBranchTold]] keeps that many of the new branch, the branch's own blocks included).
     */
   private def sideParentsTold(fork: ForkPoint, executedHere: List[BlockData]): List[BlockData] =
     val byHash = executedHere.iterator.map(data => data.block.header.hash -> data).toMap
-    fork.parentSideChain.flatMap { case (number, hash) =>
+    fork.parentSideChain.takeRight(newBranchToldAtMost).flatMap { case (number, hash) =>
       val told = byHash
         .get(hash)
         .orElse(
@@ -1151,7 +1156,7 @@ class ConsensusImpl(
                   newBranch.head.number,
                   newBranch.last.number
                 )
-                SelectedNewBestBranch(Nil, executed.map(_.block), executed.map(_.weight))
+                SelectedNewBestBranch(Nil, executed.map(_.block), executed.map(_.weight), executed.size)
               case None => superseded()
               case Some(moved) =>
                 log.info(
@@ -1251,8 +1256,14 @@ class ConsensusImpl(
   ): ConsensusResult =
     maybeError match
       case None =>
-        val told = sideParents ++ executedBlocks
-        SelectedNewBestBranch(oldBranchTold(oldCanonical), told.map(_.block), told.map(_.weight))
+        val told = newBranchTold(sideParents ++ executedBlocks)
+        // the branch's own blocks are the last told: the side blocks it stands on come first, and are cut first
+        SelectedNewBestBranch(
+          oldBranchTold(oldCanonical),
+          told.map(_.block),
+          told.map(_.weight),
+          math.min(executedBlocks.size, told.size)
+        )
 
       case Some(MPTError(reason: MissingNodeException)) =>
         log.error(
@@ -1278,7 +1289,7 @@ class ConsensusImpl(
         // Side-chain case. `failingBlock.header.parentHash` is a validated but (until this batch) non-canonical
         // block — precisely the latestValidHash hive's invalid-ancestor tests assert on.
         reportIfProvenInvalid(failingBlock, error, unexecuted.tail)
-        val told = sideParents ++ executedBlocks
+        val told = newBranchTold(sideParents ++ executedBlocks)
         val failure = s"$ReorganiseFailurePrefix$error"
         // B-291 (forge): the valid prefix outweighed the head and is the head now. The blocks it replaced left the
         // canonical chain, and are queued again as a reorganisation's are; whoever follows the head is told of it. Only
@@ -1325,7 +1336,7 @@ class ConsensusImpl(
     importResult match
       case ExtendedCurrentBestBranch(blockImportData) =>
         blockImportData.foreach(blockData => BlockMetrics.measure(blockData.block, blockchainReader.getBlockByHash))
-      case SelectedNewBestBranch(_, newBranch, _) =>
+      case SelectedNewBestBranch(_, newBranch, _, _) =>
         newBranch.foreach(block => BlockMetrics.measure(block, blockchainReader.getBlockByHash))
       case SelectedNewBestBranchPartially(_, newBranch, _, _) =>
         newBranch.foreach(block => BlockMetrics.measure(block, blockchainReader.getBlockByHash))
@@ -1502,6 +1513,35 @@ class ConsensusImpl(
       yield block
     }
 
+  // At least the new head: it is what the importer announces to peers and tells the escalation's feed of, whatever the
+  // bound is configured to.
+  private def newBranchToldAtMost: Int = math.max(1, oldBranchToldAtMost)
+
+  /** What of the blocks that became canonical with a reorganisation is told (oldest first, the new head last): to the
+    * pool, whose copies of their transactions are dropped, and, for those of the branch executed in this call only
+    * (`branchBlocks`), to the subscribers of new heads, one each; a stored side block made canonical gets no new-head
+    * event, as core-geth sends a chain event only for a block it inserts (B-344).
+    *
+    * '''Bounded''' (B-344), as the old branch is ([[oldBranchTold]]): at most the `oldBranchToldAtMost` nearest the new
+    * head, at least the new head itself. A branch that stands on thousands of side blocks is not told block by block;
+    * the blocks below stay canonical and are not touched by this. Peers are told of the new head only (the importer;
+    * core-geth announces only the block it imported). Which head is chosen, and what is executed, is not touched by
+    * this.
+    */
+  private def newBranchTold(newCanonical: List[BlockData]): List[BlockData] =
+    val told = newCanonical.takeRight(newBranchToldAtMost)
+    if told.size < newCanonical.size then
+      log.warn(
+        "REORG: {} block(s) became canonical, {} to {}; the {} nearest the new head are told to the pool (and those " +
+          "executed now to new-head subscribers), the {} below are not",
+        newCanonical.size,
+        newCanonical.head.block.number,
+        newCanonical.last.block.number,
+        told.size,
+        newCanonical.size - told.size
+      )
+    told
+
 object ConsensusImpl:
 
   /** @param number
@@ -1522,8 +1562,8 @@ object ConsensusImpl:
   /** How many refused blocks are remembered, at most. */
   private val RefusedRemembered: Int = 8192
 
-  /** How many of the blocks a reorganisation moved the head off are told, at most (B-296): the default of
-    * `max-queued-block-number-behind`, past which the block queue would not keep them when the new head is at the old
-    * one's height.
+  /** How many of the blocks a reorganisation moved the head off, and of those it moved the head onto, are told, at most
+    * (B-296, B-344), when no bound is given: the default of `max-queued-block-number-behind`, past which the block
+    * queue would not keep them when the new head is at the old one's height. A node is given that setting (B-345).
     */
   val OldBranchToldAtMost: Int = 1000

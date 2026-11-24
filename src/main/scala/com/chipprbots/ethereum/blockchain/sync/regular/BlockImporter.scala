@@ -1596,7 +1596,7 @@ final private class BlockImporterLogic(
               .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
             IO.pure((imported, None))
 
-          case ChainReorganised(_, newBranch, _) =>
+          case ChainReorganised(_, newBranch, _, _) =>
             newBranch.foreach(b => unknownParentStrikes -= b.hash.value)
             newBranch.foreach(b => forkRecoveredFor -= b.hash.value)
             val imported = newBranch.reverse ::: importedBlocks
@@ -1774,9 +1774,9 @@ final private class BlockImporterLogic(
   private def timedImport(evaluate: IO[BlockImportResult]): IO[BlockImportResult] =
     evaluate.timed.flatMap { (took, result) =>
       val blocks = result match
-        case BlockImportedToTop(imported)      => imported.size
-        case ChainReorganised(_, newBranch, _) => newBranch.size
-        case _                                 => 0
+        case BlockImportedToTop(imported)         => imported.size
+        case ChainReorganised(_, newBranch, _, _) => newBranch.size
+        case _                                    => 0
       IO(if blocks > 0 then RegularSyncMetrics.recordLastImport(blocks, took.toNanos)).as(result)
     }
 
@@ -1800,10 +1800,17 @@ final private class BlockImporterLogic(
             updateTxPool(importedBlocksData.map(_.block), Seq.empty)
             blocks.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
             supervisor ! ProgressProtocol.ImportedBlock(block.number.value, internally)
-          case ChainReorganised(oldBranch, newBranch, weights) =>
+          case ChainReorganised(oldBranch, newBranch, weights, branchBlocks) =>
             updateTxPool(newBranch, oldBranch)
-            broadcastBlocks(newBranch, weights)
-            newBranch.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
+            // Peers are told of the new head only, as core-geth announces only the block it imported (NewBlock to a
+            // square root of the peers, its hash to the rest), not the side blocks it stands on (B-344). The pool is
+            // told of every block the consensus told, which it bounds. New-head subscribers are told of the blocks this
+            // import executed, the head always among them: core-geth sends a chain event for each block it inserts,
+            // and none for a stored side block a reorganisation makes canonical (B-344).
+            broadcastBlocks(newBranch.lastOption.toList, weights.lastOption.toList)
+            newBranch
+              .takeRight(math.max(1, branchBlocks))
+              .foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
             newBranch.lastOption.foreach(block =>
               supervisor ! ProgressProtocol.ImportedBlock(block.number.value, internally)
             )
@@ -1829,7 +1836,7 @@ final private class BlockImporterLogic(
         // nothing: after an orphan rewind the next expected block is our own best, so a peer could re-announce that to
         // reset its count for free (forge, B-007). A queued block needed a header that passed validation, PoW included.
         .tap {
-          case BlockImportedToTop(_) | ChainReorganised(_, _, _) | BlockEnqueued =>
+          case BlockImportedToTop(_) | ChainReorganised(_, _, _, _) | BlockEnqueued =>
             announcedBy.foreach(orphanAnnounces.clear)
           case _ => ()
         }

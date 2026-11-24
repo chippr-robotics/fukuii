@@ -35,6 +35,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.Config.SyncConfig
 
 class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with NormalPatience with MockFactory:
   import ConsensusImplSpec.*
@@ -102,6 +103,32 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       _ shouldBe a[SelectedNewBestBranch]
     }
     blockchainReader.getBestBlock shouldBe Some(newBetterBranch.last)
+
+  // B-345: the node's consensus (NodeBuilder's) tells as much of a reorganisation as the block queue keeps behind the
+  // head, `sync.max-queued-block-number-behind`; B-344: of the blocks it moved the head onto too, the nearest it.
+  it should "tell of a reorganisation as many blocks of each branch as the sync setting keeps behind the head" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new ConsensusSetup:
+    override lazy val syncConfig: SyncConfig =
+      SyncConfig(instanceConfig.config).copy(maxQueuedBlockNumberBehind = 2)
+    // b2..b4 leave the canonical chain; b2'..b5', heavier, become it
+    val newBetterBranch: List[Block] =
+      BlockHelpers.generateChain(
+        4,
+        initialChain(1),
+        b => b.copy(header = b.header.copy(difficulty = Difficulty(10000000)))
+      )
+
+    whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(newBetterBranch)).unsafeToFuture()) {
+      case SelectedNewBestBranch(oldBranch, newBranch, weights, _) =>
+        oldBranch shouldBe initialChain.takeRight(2)
+        newBranch shouldBe newBetterBranch.takeRight(2)
+        weights.size shouldBe 2
+      case other => fail(s"expected SelectedNewBestBranch, got $other")
+    }
+    blockchainReader.getBestBlock shouldBe Some(newBetterBranch.last)
+  )
 
   // execute-first: chain advances to the last successfully executed block even on partial failure
   it should "return an error a block execution is failing during a reorganisation" taggedAs (

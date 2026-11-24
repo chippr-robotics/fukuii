@@ -16,10 +16,15 @@ case object BlockEnqueued extends BlockImportResult
 
 case object DuplicateBlock extends BlockImportResult
 
+/** The head moved onto `newBranch` (ascending, the new head last, one to one with `weights`), off `oldBranch`. The last
+  * `branchBlocks` of `newBranch` are the blocks imported and executed by this call; the ones before them are side
+  * blocks stored earlier that the branch stands on, canonical now (B-344).
+  */
 case class ChainReorganised(
     oldBranch: List[Block],
     newBranch: List[Block],
-    weights: List[ChainWeight]
+    weights: List[ChainWeight],
+    branchBlocks: Int
 ) extends BlockImportResult
 
 case class BlockImportFailed(error: String) extends BlockImportResult

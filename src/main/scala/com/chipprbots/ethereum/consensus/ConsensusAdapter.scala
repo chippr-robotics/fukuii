@@ -208,10 +208,10 @@ class ConsensusAdapter(
         case other => other
       }
       .map {
-        case SelectedNewBestBranch(oldBranch, adopted, weights) =>
+        case SelectedNewBestBranch(oldBranch, adopted, weights, branchBlocks) =>
           oldBranch.foreach(blockQueue.enqueueBlock(_))
           toldOfTheHead(adopted.lastOption)
-          ChainReorganised(oldBranch, adopted, weights)
+          ChainReorganised(oldBranch, adopted, weights, branchBlocks)
         case SelectedNewBestBranchPartially(
               oldBranch,
               adopted,

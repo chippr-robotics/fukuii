@@ -369,7 +369,7 @@ trait BlockQueueBuilder:
 
 trait ConsensusBuilder:
   self: BlockchainBuilder & BlockQueueBuilder & MiningBuilder & ActorSystemBuilder & StorageBuilder &
-    BlockchainConfigBuilder & InstanceConfigProvider =>
+    BlockchainConfigBuilder & InstanceConfigProvider & SyncConfigBuilder =>
 
   import com.chipprbots.ethereum.consensus.engine.DesignatedHead
   import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
@@ -424,7 +424,9 @@ trait ConsensusBuilder:
       Some(invalidChainReporter),
       Some(designatedHead),
       blockchain,
-      Some(branchHandOff)
+      Some(branchHandOff),
+      // what of a reorganisation is told is what the block queue keeps behind the head (B-345)
+      oldBranchToldAtMost = syncConfig.maxQueuedBlockNumberBehind
     )
 
   lazy val chainImporter: ChainImporter =

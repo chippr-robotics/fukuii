@@ -492,7 +492,7 @@ class TestService(
       case BlockImportedToTop(blockImportData) =>
         val blockHash = s"0x${ByteStringUtils.hash2string(blockImportData.head.block.header.hash.value)}"
         ImportRawBlockResponse(blockHash).rightNow
-      case BlockEnqueued | ChainReorganised(_, _, _) =>
+      case BlockEnqueued | ChainReorganised(_, _, _, _) =>
         val blockHash = s"0x${ByteStringUtils.hash2string(block.hash.value)}"
         ImportRawBlockResponse(blockHash).rightNow
       // Not a verdict on the block: answered as the state fault it is, as when it was thrown
