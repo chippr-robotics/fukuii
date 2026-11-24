@@ -85,7 +85,7 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
       // - `backfillStallTimeout`: how long the backfill's cursors may stand still before a gap at or below the SNAP
       //   pivot is no longer left to it, and a heavier proof-of-work branch over the gap is told to the escalation's
       //   feed as one over a gap above the pivot is (B-410; `BranchResolution.acrossAGap`). Key
-      //   `sync.backfill-stall-timeout`, not in sync.conf (a fix branch leaves src/main/resources alone): 30 minutes,
+      //   `sync.backfill-stall-timeout` (sync.conf; this default applies when the key is absent): 30 minutes,
       //   twenty times the longest wait of one backfill request (peer-response-timeout, 90 s), so a peer drought or a
       //   restart of the download is not taken for a stall; the watch then still needs the branch to grow past its
       //   threshold.
