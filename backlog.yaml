@@ -2762,19 +2762,20 @@ items:
   - id: B-337
     title: "Hash layout: a MissingNode (or state fault) after a reorganisation's adopted prefix re-queues the canonical prefix, loses the old branch, tells no head"
     priority: P2
-    status: in-progress
+    status: review
     area: sync
     size: S
     opened: 2026-11-17
     refs: []
     links:
+      prs: [2020]
       spec: 018
     depends_on: [B-242]
     claim:
       by: cloud-dc960fdc
       agent: forge-b336
       since: 2026-11-23T22:32:27Z
-      heartbeat: 2026-11-24T01:04:29Z
+      heartbeat: 2026-11-24T01:11:21Z
     notes: |-
       forge F2 on B-291's review: ConsensusImpl reorganised's MissingNode arm (~:1190) answers ConsensusErrorDueToMissingNode(executed, reason) with imported = Nil after settleHead adopted; the hash-layout stateFault arm ignores adopted too (assert it). The B-291 hole for the missing-node answer.
       2026-11-24 in-progress: Branch fix/b337-reorg-missing-node-prefix (01a61b096) stacked on B-336; PR after #2016 merges.
