@@ -21,6 +21,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.ReexecutionDiverged
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
@@ -315,6 +316,12 @@ class ConsensusImpl(
       case Some(fault) => stateFaulted(fault, outcome.executed, branch.toList)
       case None        => extendedBy(branch, (outcome.executed, outcome.error))
 
+  /** The tag a refusal is logged with: another thread's adoption holding the head is no fault of this node's state
+    * (B-462).
+    */
+  private def tagOf(fault: StateFault): String =
+    if fault.isInstanceOf[StateBusy] then "[STATE-BUSY]" else "[STATE-FAULT]"
+
   /** A batch that stopped on a fault of this node's own state (spec 018 Track C, C4b): the blocks before it are
     * adopted, as a shorter batch would have left them, and the rest are handed back to be tried again. No block is
     * reported invalid and no peer is blamed: the block the fault was met at was not judged.
@@ -323,7 +330,7 @@ class ConsensusImpl(
     saveLastBlock(imported)
     val notExecuted = branch.drop(imported.length)
     log.warn(
-      "[STATE-FAULT] the import stopped at block {} on this node's own state, after {} block(s) of the batch: {}",
+      s"${tagOf(fault)} the import stopped at block {} on this node's own state, after {} block(s) of the batch: {}",
       notExecuted.headOption.fold("?")(_.number.value.toString),
       imported.length,
       fault.getMessage
@@ -602,7 +609,7 @@ class ConsensusImpl(
   )(implicit blockchainConfig: BlockchainConfig): ConsensusResult =
     def notJudged(fault: StateFault): ConsensusResult =
       log.warn(
-        "[STATE-FAULT] REORG blocks [{}-{}] not judged, this node's own state could not take them: {}",
+        s"${tagOf(fault)} REORG blocks [{}-{}] not judged, this node's own state could not take them: {}",
         newBranch.head.number,
         newBranch.last.number,
         fault.getMessage
@@ -1299,7 +1306,17 @@ class ConsensusImpl(
               catch
                 // refused as it was admitted: nothing was written
                 case _: StateFault if refusedAsSuperseded => None
-                case failed: StateFault                   =>
+                // refused before its first batch, with nothing written, because another thread's adoption holds the
+                // head (B-294): no fault of this node, and the branch is asked for again once it ends (B-462)
+                case busy: StateBusy =>
+                  log.warn(
+                    "[STATE-BUSY] REORG: the move of the head to block {} was not made, and the best block is still {}: {}",
+                    tip.block.number,
+                    blockchainReader.getBestBlockNumber,
+                    busy.getMessage
+                  )
+                  throw busy
+                case failed: StateFault =>
                   // a move of several batches may have written some: where the head is now is said, and the
                   // next attempt moves on from it
                   log.error(
@@ -1379,7 +1396,7 @@ class ConsensusImpl(
         // This node's state could not take a block of the branch: the branch was not judged. What of it was executed
         // is settled above as any executed prefix is; the rest is handed back, and nothing is reported invalid.
         log.warn(
-          "[STATE-FAULT] REORG blocks [{}-{}] stopped on this node's own state after {} block(s): {}",
+          s"${tagOf(fault)} REORG blocks [{}-{}] stopped on this node's own state after {} block(s): {}",
           newBranch.head.number,
           newBranch.last.number,
           executedBlocks.length,

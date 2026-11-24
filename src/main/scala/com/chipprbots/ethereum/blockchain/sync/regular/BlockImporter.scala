@@ -52,6 +52,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.jsonrpc.NewBlockImported
@@ -1539,23 +1540,43 @@ final private class BlockImporterLogic(
                 // A head that moved under the batch is gone at the next try. A fault that stays (a branch this layout
                 // cannot execute yet, a state that is not held) would otherwise be met again at every round trip of
                 // the fetcher, for good: from the third in a row on the same block the tries are spaced out.
+                // Refused because another thread's adoption holds the head (B-294): no fault of this node's state, and
+                // said at WARN as busy, never at ERROR; spaced out the same way while it lasts (B-462)
+                val busy = fault.isInstanceOf[StateBusy]
                 if streak < BlockImporter.StateFaultBackoffAfter then
-                  log.warning(
-                    "[LOCAL-STATE-FAULT] block {} was not executed on this node's own state, no peer blamed: {}",
-                    failedBlock.number,
-                    fault.getMessage
-                  )
+                  if busy then
+                    log.warning(
+                      "[STATE-BUSY] block {} was not executed: another adoption holds the head, no peer blamed: {}",
+                      failedBlock.number,
+                      fault.getMessage
+                    )
+                  else
+                    log.warning(
+                      "[LOCAL-STATE-FAULT] block {} was not executed on this node's own state, no peer blamed: {}",
+                      failedBlock.number,
+                      fault.getMessage
+                    )
                   RunningAfterFetcherRewind
                 else
                   if streak == BlockImporter.StateFaultBackoffAfter then
-                    log.error(
-                      "[LOCAL-STATE-FAULT] block {} could not be executed on this node's own state {} times " +
-                        "running; it is tried again every {}s, and no peer is blamed: {}",
-                      failedBlock.number,
-                      streak,
-                      BlockImporter.exhaustBackoff.toSeconds,
-                      fault.getMessage
-                    )
+                    if busy then
+                      log.warning(
+                        "[STATE-BUSY] block {} was refused {} times running while another adoption holds the head; " +
+                          "it is tried again every {}s, and no peer is blamed: {}",
+                        failedBlock.number,
+                        streak,
+                        BlockImporter.exhaustBackoff.toSeconds,
+                        fault.getMessage
+                      )
+                    else
+                      log.error(
+                        "[LOCAL-STATE-FAULT] block {} could not be executed on this node's own state {} times " +
+                          "running; it is tried again every {}s, and no peer is blamed: {}",
+                        failedBlock.number,
+                        streak,
+                        BlockImporter.exhaustBackoff.toSeconds,
+                        fault.getMessage
+                      )
                   BackingOffAfterStateFault
               case _ =>
                 val invalidBlockNr = notImportedBlocks.head.number.value

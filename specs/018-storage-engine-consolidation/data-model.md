@@ -659,7 +659,16 @@ final class StaleStateViewException(...)  extends StateFault(...)   // a view ol
 final class StateUnavailable(...)         extends StateFault(...)   // no layer, record or anchor path for the state asked for
 final class ReorgTooDeep(reason: ReorgRefusal) extends StateFault(...)  // refused move: Deep, Incomplete, Pivot
 final class BranchTooLarge(...)           extends StateFault(...)   // a branch above the pinned cap, with no reverse-then-commit fallback (6.4)
+final class StateBusy(holder, reason)     extends StateFault(...)   // another thread's adoption holds the head (B-294, B-462)
 ```
+
+`StateBusy` (B-462, forge 2026-11-24) is thrown only where a writer of the head (a commit, a promotion, a move that is no
+fork choice, the hold of an attempt) finds another thread's adoption open, with nothing written. It is no fault of this
+node: the escalation never counts it and the proof-of-work feed takes no weight from it (no bound); it is logged at WARN as
+`[STATE-BUSY]`, never at ERROR; the RPC answers it as `StateBusy` (-32005, ask again); `StateRecovery` answers it as
+superseded. A move the state moved under between two of its batches, and one whose replans ran out, stay
+`StateUnavailable` asking again, and are counted. An attempt older than ten minutes is said once at WARN by the first writer
+it refuses, and its age is the gauge `app.db.state.attempt.age.seconds`.
 
 `CorruptNodeException` keeps its existing type: by spec 022 T062's design it is a `MissingNodeException` (the stored entry is
 not the node, so it is treated as missing), handled as a missing node everywhere and never as INVALID. The record-size guard
@@ -1203,8 +1212,9 @@ them fails at start with a message naming the deleted key. `pruning.history` kee
 | `app.db.state.recovery.escalations.suppressed` | counter | escalations not taken, by cause (cool-down, loop guard, below the hysteresis count) (Part 2, D) |
 | `app.db.state.overlay.pinned.layers`, `.bytes` | gauge | layers pinned by a branch under execution (6.4) |
 | `app.db.state.checkpoint.import.nodes` | counter | nodes written by the position-assigning importer (C5c), by trie (account, storage) |
+| `app.db.state.attempt.age.seconds` | gauge | how long the oldest adoption that holds the records has been open, 0 for none; writers it refuses get `StateBusy` (B-462) |
 
-Log tags: `[STATE-ANCHOR]`, `[STATE-MOVE]`, `[STATE-REORG-TOO-DEEP]`, `[STATE-STALE-VIEW]`, `[STATE-LAYOUT]`.
+Log tags: `[STATE-ANCHOR]`, `[STATE-MOVE]`, `[STATE-REORG-TOO-DEEP]`, `[STATE-STALE-VIEW]`, `[STATE-LAYOUT]`, `[STATE-BUSY]`.
 
 **In code (2026-11-21, `pathstate/StateMetrics.scala` and its neighbours, under the `app` prefix).** Registered by these
 names: the anchor number, `commit.*`, `changeset.records`, `overlay.*` (forward, reverse, pinned, evictions),

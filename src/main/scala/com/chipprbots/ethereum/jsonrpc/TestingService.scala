@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.consensus.engine.EngineApiService
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.consensus.engine.PayloadAttributes
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -150,15 +151,26 @@ class TestingService(
               // The unified state layout: the block, its receipts, its access list, the head and its state are one
               // batch, written by the import that executes it. A block the builder made and import refuses is a
               // difference between the two, which is this node's fault and never the caller's.
-              importBlock(block).left.map { refused =>
-                log.error(
-                  "testing_commitBlockV1: the block that was built ({}, number={}) was refused by import: {}",
-                  hex(hash.value),
-                  block.header.number,
-                  refused
-                )
-                JsonRpcError.LogicError(s"the block that was built was refused by import: $refused")
-              }
+              // Refused, with nothing written, because another thread's adoption holds the head (B-294): no fault
+              // of this node and no difference between builder and import. Answered as a state to ask for again
+              // (B-462); any other state fault is thrown, and answered by the controllers' backstop
+              try
+                importBlock(block).left.map { refused =>
+                  log.error(
+                    "testing_commitBlockV1: the block that was built ({}, number={}) was refused by import: {}",
+                    hex(hash.value),
+                    block.header.number,
+                    refused
+                  )
+                  JsonRpcError.LogicError(s"the block that was built was refused by import: $refused")
+                }
+              catch
+                case busy: StateBusy =>
+                  log.warn(
+                    "[STATE-BUSY] testing_commitBlockV1: the block that was built was not committed: {}",
+                    busy.getMessage
+                  )
+                  Left(JsonRpcError.StateBusy)
             case None =>
               // The block and its receipts are stored, then the head is promoted, as engine_newPayload and
               // engine_forkchoiceUpdated do for a canonical-extending payload. The world state is already persisted:

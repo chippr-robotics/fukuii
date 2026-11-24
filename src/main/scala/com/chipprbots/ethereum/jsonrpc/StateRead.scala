@@ -9,6 +9,7 @@ import scala.annotation.tailrec
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.pathstate.ReadScope
 import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -131,6 +132,8 @@ object StateRead extends Logger:
     // the client is told which of the three; why is said here
     log.debug(s"A read of the state is answered as unavailable after $attempts attempt(s): ${fault.getMessage}")
     fault match
-      case _: StaleStateViewException                    => JsonRpcError.StateMoved
+      case _: StaleStateViewException => JsonRpcError.StateMoved
+      // another thread's adoption holds the head (B-462): held, and not handed out right now
+      case _: StateBusy                                  => JsonRpcError.StateBusy
       case refused: StateUnavailable if refused.askAgain => JsonRpcError.StateBusy
       case _                                             => JsonRpcError.StateNotHeld

@@ -433,6 +433,8 @@ class TestService(
           pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
           Right(RewindToBlockResponse())
         catch
+          // refused, with nothing written, while another thread's adoption holds the head: ask again (B-462)
+          case busy: com.chipprbots.ethereum.db.storage.pathstate.StateBusy => answeredBusy(busy)
           // a block on the way that is held nowhere: said as what it is, a rewind that could not be made
           case unavailable: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable =>
             log.warn("Test mode on the unified state layout: {}", unavailable.getMessage)
@@ -467,6 +469,9 @@ class TestService(
     * Never met on the hash store.
     */
   private def notOnTheUnifiedLayout[A]: PartialFunction[Throwable, Either[JsonRpcError, A]] =
+    // refused, with nothing written, while another thread's adoption holds the head: no limit of the layout and no
+    // fault of the block, but a state to ask for again (B-462)
+    case busy: com.chipprbots.ethereum.db.storage.pathstate.StateBusy => answeredBusy(busy)
     case fault: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable if blockchainReader.holdsStateInPlace =>
       log.warn("Test mode on the unified state layout: {}", fault.getMessage)
       Left(JsonRpcError.LogicError(s"${TestService.HeadStateOnly} (${fault.getMessage})"))
@@ -484,6 +489,10 @@ class TestService(
     case notImported: TestService.NotImportedToTheHead =>
       log.warn("Test mode on the unified state layout: {}", notImported.getMessage)
       Left(JsonRpcError.LogicError(notImported.getMessage))
+
+  private def answeredBusy[A](busy: com.chipprbots.ethereum.db.storage.pathstate.StateBusy): Either[JsonRpcError, A] =
+    log.warn("[STATE-BUSY] Test mode: {}", busy.getMessage)
+    Left(JsonRpcError.StateBusy)
 
   private def handleResult(
       block: Block

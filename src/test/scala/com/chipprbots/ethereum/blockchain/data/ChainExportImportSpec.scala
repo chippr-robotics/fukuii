@@ -42,6 +42,7 @@ import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.jsonrpc.AdminService
+import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.conformance.RpcCompatNode
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
@@ -437,6 +438,56 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     // Only the moved head pointer changed; block 21's staged state was discarded, not committed.
     val changed = (node.keys -- keysBefore) ++ (keysBefore -- node.keys)
     withClue(s"changed=$changed")(changed.forall(_.startsWith("73")) shouldBe true)
+  }
+
+  // B-462: a block refused because another thread's adoption holds the head (B-294) stops the import with nothing of
+  // it written, carried by its type and said at WARN; admin_importChain answers it as a state to ask for again
+  it should "stop on a block refused while another adoption holds the head, carrying the refusal by its type" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val node = new Node
+    node.importStrict(write(concat(fixtureBlocks.take(20)))).map(_.imported) shouldBe Right(20L)
+    def busy(): Unit = throw new com.chipprbots.ethereum.db.storage.pathstate.StateBusy(
+      "the adoption on thread 'adopter'",
+      "the commit of block 21 was not made: an adoption is moving the head"
+    )
+    node.beforeExecution = Some(() => busy())
+    val keysBefore = node.keys
+    val file = write(concat(fixtureBlocks.take(21)))
+    val (result, said) = com.chipprbots.ethereum.testing.LogCapture.capture(classOf[ChainImporter]) {
+      node.importStrict(file)
+    }
+    val failure = result.left.toOption.get
+    failure.fault.get shouldBe a[com.chipprbots.ethereum.db.storage.pathstate.StateBusy]
+    failure.progress.imported shouldBe 0
+    node.keys shouldBe keysBefore
+    node.head.number.value shouldBe 20
+    said.filter(_.getLevel == ch.qos.logback.classic.Level.ERROR) shouldBe empty
+    said.filter(_.getFormattedMessage.startsWith("[STATE-BUSY]")).map(_.getLevel) shouldBe List(
+      ch.qos.logback.classic.Level.WARN
+    )
+
+    // through the RPC: answered as busy, with what was done
+    node.beforeExecution = Some(() => busy())
+    val answer = new AdminService(
+      null,
+      null,
+      node.blockchainReader,
+      node.blockchainConfig,
+      scala.concurrent.duration.DurationInt(5).seconds,
+      "/tmp",
+      new BlockedIPRegistry(Set.empty),
+      node.importer,
+      () => cats.effect.IO.pure(SyncProtocol.Status.SyncDone)
+    )(using system.scheduler)
+      .importChain(AdminService.AdminImportChainRequest(file.toString))
+      .unsafeRunSync()(using cats.effect.unsafe.implicits.global)
+    val error = answer.left.toOption.get
+    (error.code, error.message) shouldBe (JsonRpcError.StateBusy.code, JsonRpcError.StateBusy.message)
+    node.head.number.value shouldBe 20
+    // and once the adoption has ended, the same file is imported
+    node.importStrict(file).map(_.imported) shouldBe Right(1L)
   }
 
   it should "refuse a file with a gap" taggedAs UnitTest in {

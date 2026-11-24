@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
@@ -100,9 +101,19 @@ final class PowEscalationFeed(
       fault: StateFault,
       firstInvalidHeader: List[BlockHeader] => Option[(BlockHeader, String)]
   ): Unit =
+    // A branch refused because another thread's adoption holds the head (`StateBusy`, B-462) is no fault of this node
+    // and no verdict on the branch: it is asked for again once the adoption ends. Never counted, and its weight is not
+    // taken as refused, so that it cannot hold off the end of a run when the head moves (forge, 2026-11-24). No bound:
+    // an adoption that never ends is said by the store ([[com.chipprbots.ethereum.db.storage.pathstate.StateBusy]])
+    if fault.isInstanceOf[StateBusy] then
+      if headers.nonEmpty then
+        note(
+          s"branch [${headers.head.number}-${headers.last.number}] is not counted: another adoption holds the head " +
+            s"(${fault.getMessage})"
+        )
     // A post-merge branch (difficulty 0) is the Engine API's: this filter is also what keeps the consensus layer's
     // refusals (`RefusedForThisHead`, `HandedToRecovery`, B-297) out of the proof-of-work count
-    if headers.nonEmpty && headers.last.difficulty.value > 0 then
+    else if headers.nonEmpty && headers.last.difficulty.value > 0 then
       val name = s"[${headers.head.number}-${headers.last.number}]"
       (weighed(headers, forkWeightOf), headWeight()) match
         case (None, _) | (_, None) => note(s"branch $name is not counted: its weight, or the head's, is not stored")
@@ -331,6 +342,7 @@ object PowEscalationFeed:
     * head moved under the branch) is gone at the next try, and the run with it.
     */
   def classify(fault: StateFault): Refusal = fault match
+    // never met: a `StateBusy` is left out before anything is counted ([[PowEscalationFeed.notJudgedHeaders]], B-462)
     // `Finalized` is Unreachable too, and never met on proof of work, which finalizes nothing. `BeyondTheFetch` is a
     // branch regular sync cannot fetch whole, which no wait mends either (B-300 g)
     case deep: ReorgTooDeep if deep.reason != ReorgRefusal.Corrupt => Refusal.Unreachable

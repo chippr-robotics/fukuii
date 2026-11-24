@@ -185,3 +185,15 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
       registry.get("app.db.state.anchor.number").gauge().value() shouldBe 5d
     }
   }
+
+  // B-462: the age of the oldest attempt that holds the records, 0 when none is open
+  it should "read the age of the open attempt, and 0 once none is" taggedAs UnitTest in {
+    StateMetrics.register()
+    StateMetrics.attemptOpenSince(Some(1000000L))
+    StateMetrics.attemptAgeSeconds(1090000L) shouldBe 90d
+    StateMetrics.attemptAgeSeconds(999000L) shouldBe 0d
+    // exported from the start
+    registry.find(s"$prefix.db.state.attempt.age.seconds").gauge() should not be null
+    StateMetrics.attemptOpenSince(None)
+    StateMetrics.attemptAgeSeconds(1090000L) shouldBe 0d
+  }

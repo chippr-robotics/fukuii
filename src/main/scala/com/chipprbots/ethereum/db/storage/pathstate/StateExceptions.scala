@@ -42,6 +42,22 @@ final class StateUnavailable(
     val heldTo: Option[BlockRef] = None
 ) extends StateFault(s"State unavailable: $reason")
 
+/** A write of the head was refused, with nothing written, because another thread's adoption holds the head (spec 018
+  * C4e part 4, B-294, B-462): it moves the head to a branch and commits the branch in place, and may move it back. It
+  * is no fault of this node's state and no verdict on any block: the writer asks again once the adoption has ended. So
+  * it is never counted by the escalation (forge, 2026-11-24), and it is said at WARN with `[STATE-BUSY]`, not at ERROR.
+  *
+  * Not a [[StateUnavailable]], whose `askAgain` is also said by refusals that are counted: a move of the head that the
+  * state moved under between two of its batches, or that no plan of could be made. Thrown only where another attempt is
+  * found open ([[PathStateStorage]]`.refuseInAnotherAttempt`).
+  *
+  * @param holder
+  *   who holds the head: the thread of the adoption that is open, and what it holds
+  * @param reason
+  *   what was refused, and why
+  */
+final class StateBusy(val holder: String, val reason: String) extends StateFault(s"State busy: $reason")
+
 /** A block of this node's own chain that a rule needs is not stored whole: the ommers of a block are checked against
   * the blocks of its six ancestors, and after a sync that began from a pivot the bodies below the pivot arrive later
   * (spec 018 C5a part 2, B-283). It says nothing of the block being validated: with the ancestors short, a valid ommer

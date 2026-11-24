@@ -40,6 +40,9 @@ import com.chipprbots.ethereum.metrics.Metrics
   *     it reversed and applied, by side; `db.state.move.batches`: how many batches it was written as;
   *   - `db.state.reorg.refused`: moves of the head that were refused, by reason. `Deep` is the one that is answered by
   *     syncing the state again; `Corrupt` means the changeset records do not describe the disk
+  *   - `db.state.attempt.age.seconds`: how long the oldest adoption that holds the changeset records has been open, 0
+  *     when none is (B-462). While one is open every other writer of the head is refused, asking again (`StateBusy`);
+  *     one that stays open for minutes is stuck
   *
   * `db.state.anchor.lag.blocks` and `db.state.commit.degraded` arrive with what gives them a value other than zero: the
   * block importer's wiring and the overlay.
@@ -51,6 +54,8 @@ object StateMetrics extends PathStateStorage.CommitObserver:
   private val recordsKept = new AtomicLong(0L)
   // The overlay (data-model 6.4, 11): what the last change of it left.
   private val overlayNow = new AtomicReference(OverlayUsage(0, 0L, 0, 0L, 0L))
+  // B-462: when the oldest attempt that holds the records was opened, in the wall clock's milliseconds; -1 for none
+  private val attemptOpenedAt = new AtomicLong(-1L)
 
   /** The meters, on the registry that is in use. The object is first touched when the storages are built, before
     * `Metrics.configure` installs the exported registry (B-425, as B-400 for the allowlist), so meters held from first
@@ -61,6 +66,7 @@ object StateMetrics extends PathStateStorage.CommitObserver:
   final private class Meters(val metrics: Metrics):
     metrics.gauge("db.state.anchor.number", () => anchorNumber.get.toDouble)
     metrics.gauge("db.state.changeset.records", () => recordsKept.get.toDouble)
+    metrics.gauge("db.state.attempt.age.seconds", () => attemptAgeSeconds(System.currentTimeMillis()))
 
     val commitTimer: Timer = metrics.timer("db.state.commit.seconds")
     val commitPositions: DistributionSummary = metrics.distribution("db.state.commit.positions")
@@ -174,6 +180,13 @@ object StateMetrics extends PathStateStorage.CommitObserver:
   override def viewStale(): Unit = m.viewsStale.increment()
 
   override def repairOverwrote(): Unit = m.repairOverwrites.increment()
+
+  override def attemptOpenSince(openedAt: Option[Long]): Unit = attemptOpenedAt.set(openedAt.getOrElse(-1L))
+
+  /** What the gauge of the open attempt's age reads at `nowMillis`: 0 when none is open (B-462). */
+  private[pathstate] def attemptAgeSeconds(nowMillis: Long): Double =
+    val opened = attemptOpenedAt.get
+    if opened < 0 then 0.0 else math.max(0L, nowMillis - opened) / 1000.0
 
   override def moved(move: MoveOutcome.Moved): Unit =
     anchorNumber.set(move.to.number.toLong)

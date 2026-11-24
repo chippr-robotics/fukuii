@@ -95,6 +95,22 @@ class StateReadRetrySpec extends AnyFlatSpec with Matchers:
       runs shouldBe 1
     }
 
+  // B-462: refused because another thread's adoption holds the head
+  it should "answer a write refused while another adoption holds the head as one to ask for again, at once" taggedAs
+    UnitTest in {
+      val busy = new com.chipprbots.ethereum.db.storage.pathstate.StateBusy(
+        "the adoption on thread 'adopter'",
+        "the commit of block 9 was not made"
+      )
+      StateRead.unavailable(busy) shouldBe JsonRpcError.StateBusy
+      var runs = 0
+      StateRead.retrying[String](new States().next) { _ =>
+        runs += 1
+        throw busy
+      } shouldBe Left(JsonRpcError.StateBusy)
+      runs shouldBe 1
+    }
+
   it should "tell a client three things apart, and none of them as an execution error" taggedAs UnitTest in {
     val errors = Seq(JsonRpcError.StateNotHeld, JsonRpcError.StateBusy, JsonRpcError.StateMoved)
     errors.distinct should have size 3

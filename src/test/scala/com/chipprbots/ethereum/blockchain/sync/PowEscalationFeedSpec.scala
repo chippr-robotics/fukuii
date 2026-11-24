@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
 import com.chipprbots.ethereum.db.storage.pathstate.ReexecutionDiverged
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
@@ -250,6 +251,42 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
     rig.refused(branch(5, 5), corrupt)
     rig.escalated.toList shouldBe List(EscalationKind.LocalFault)
     rig.said.head._2 should include("a record is not what it should be")
+  }
+
+  // B-462 (forge, 2026-11-24): a branch refused because another thread's adoption holds the head is no fault of this
+  // node: not counted, however far it grows, by its blocks or by its headers, and its weight is never taken as refused
+  it should "count nothing, and take no weight as refused, for a branch refused because another adoption holds the head" taggedAs UnitTest in {
+    val busy: StateFault = new StateBusy("the adoption on thread 'adopter'", "the commit of block 5 was not made")
+    val rig = new Rig(refusals = 2)
+    (1 to 8).foreach { blocks =>
+      rig.refused(branch(5, blocks, difficulty = 400), busy)
+      rig.refusedHeaders(branch(5, blocks, difficulty = 400).map(_.header), busy)
+    }
+    rig.escalated shouldBe empty
+    rig.said shouldBe empty
+    refusedAt(rig) shouldBe None
+    // nothing is validated for it: it is left out before it is weighed
+    rig.validated shouldBe 0
+    rig.left.last should (include("[5-12]").and(include("another adoption holds the head")))
+    // so a head that moves, lighter than that branch, ends the run
+    val counted = new Rig(refusals = 4)
+    counted.refused(branch(5, 1, difficulty = 400), corrupt)
+    counted.refused(branch(5, 8, difficulty = 400), busy)
+    refusedAt(counted) shouldBe Some(BigInt(1400))
+    counted.head = Some(ChainWeight.totalDifficultyOnly(1400))
+    counted.feed.headMoved(branch(9, 1).head)
+    refusedAt(counted) shouldBe None
+    counted.escalated shouldBe empty
+  }
+
+  it should "still count a move that the state moved under between two of its batches, which asks again too" taggedAs UnitTest in {
+    // the partial move (`StateUnavailable` asking again) and the replans that ran out are counted as before (forge)
+    val askAgain: StateFault = new StateUnavailable("the move stopped between two batches", askAgain = true)
+    val rig = new Rig(refusals = 2)
+    rig.refused(branch(5, 1), askAgain)
+    rig.refused(branch(5, 3), askAgain)
+    rig.escalated.toList shouldBe List(EscalationKind.LocalFault)
+    refusedAt(rig) shouldBe Some(BigInt(1300))
   }
 
   it should "keep the run when the head moves and is still lighter than the branch refused" taggedAs UnitTest in {
