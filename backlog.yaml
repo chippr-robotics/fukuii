@@ -1310,12 +1310,17 @@ items:
   - id: B-140
     title: "handleOrphanAnnounce: check the header seal before a strike; respect the maintained-peer exemption"
     priority: P3
-    status: open
+    status: claimed
     area: p2p
     size: S
     opened: 2026-11-08
     refs: [B-007, B-143]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: forge
+      since: 2026-11-24T13:54:12Z
+      heartbeat: 2026-11-24T13:54:12Z
     notes: |-
       Consensus-adjacent (what counts as a valid header): needs forge review, and a cost check for Ethash on ETC.
       2026-11-24: absorbs B-143 (validation of 2026-11-24)
