@@ -2569,18 +2569,19 @@ items:
   - id: B-288
     title: "Operator IP block: read the blocked-ips config at start, and enforce the block in discovery (UDP)"
     priority: P3
-    status: claimed
+    status: review
     area: p2p
     size: M
     opened: 2026-11-15
     refs: [B-286]
     links:
+      prs: [2091]
       spec: specs/029-tui-command-center
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T13:52:56Z
-      heartbeat: 2026-11-24T13:52:56Z
+      heartbeat: 2026-11-24T13:53:18Z
     notes: |-
       B-277 blocks RLPx dial and accept through OperatorBlockingBlacklist. Discovery (scalanet) has no hook for it.
       The TUI's peer block preview says so.
