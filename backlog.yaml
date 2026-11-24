@@ -3820,18 +3820,19 @@ items:
   - id: B-398
     title: "conf/gorgoroth.conf sets mining.protocol = ethash, which the node refuses ('pow','mocked','restricted-pow','engine-api'): a Gorgoroth node does not start"
     priority: P2
-    status: claimed
+    status: review
     area: ops
     size: S
     opened: 2026-11-19
     refs: []
     links:
+      prs: [2113]
       spec: "030"
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T22:28:09Z
-      heartbeat: 2026-11-24T22:28:09Z
+      heartbeat: 2026-11-24T22:28:36Z
     notes: Found running spec 030 quickstart (S11 T099) from the dist; quickstart now uses Mordor.
   - id: B-399
     title: A start refused before tuiProbe is set logs an NPE (this.tuiProbe is null) from BaseNode.shutDownOnce
