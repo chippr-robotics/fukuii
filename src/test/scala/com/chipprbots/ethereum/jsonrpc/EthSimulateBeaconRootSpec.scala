@@ -9,6 +9,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.jsonrpc.EthSimulateService.*
@@ -90,7 +91,8 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
         number: Option[Int] = None,
         systemContracts: Boolean = true,
         extra: Map[Address, StateOverride] = Map.empty,
-        calls: Seq[TxArgs] = Nil
+        calls: Seq[TxArgs] = Nil,
+        validation: Boolean = false
     ): Seq[SimulateBlockResult] =
       val overrides = BlockOverrides(time = Some(BigInt(time)), beaconRoot = beaconRoot, number = number.map(BigInt(_)))
       val preambleContracts =
@@ -105,11 +107,15 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
                 stateOverrides = Option.when(stateOverrides.nonEmpty)(stateOverrides),
                 calls = Option.when(calls.nonEmpty)(calls)
               )
-            )
+            ),
+            validation = validation
           )
         )
         .unsafeRunSync()
         .fold(err => fail(s"eth_simulateV1 failed: $err"), _.blocks)
+
+    /** The base block's header: the simulated block's parent. */
+    def baseHeader: BlockHeader = blockchainReader.getBestBlockHeader.get
 
     /** The base block's hash: the simulated block's parent. */
     def baseHash: ByteString = blockchainReader.getBestBlockHeader.get.hash.value
@@ -272,4 +278,45 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
     val node = new Node(baseTimestamp = 1000, etcConfig(olympia = 31))
     val block = node.simulate(time = 1012, None, systemContracts = false, calls = Seq(readBlockHash(29))).head
     block.calls.map(c => (c.status, c.returnData)) shouldBe Seq((BigInt(1), ByteString.empty))
+  }
+
+  // ECIP-1111: Olympia is a block-number fork, so its activation block carries a base fee although its parent has
+  // none. Import's header validator (validateBaseFee) and miner (BlockGeneratorSkeleton.baseFeeFields) both take it from
+  // BaseFeeCalculator.calcBaseFee: InitialBaseFee at activation, then the EIP-1559 update. The simulation took the
+  // header's shape from the parent, so the activation block had no base fee.
+  it should "give the Olympia activation block import's base fee, and the next block the EIP-1559 update" taggedAs (
+    UnitTest,
+    RPCTest,
+    OlympiaTest
+  ) in {
+    val config = etcConfig(olympia = 30)
+    val node = new Node(baseTimestamp = 1000, config)
+    node.baseHeader.baseFee shouldBe None
+    val blocks = node.simulate(time = 1024, None, number = Some(31), validation = true)
+    blocks.map(_.header.number.value) shouldBe Seq(BigInt(30), BigInt(31))
+    val activation = blocks.head.header
+    activation.extraFields shouldBe a[HefPostOlympia]
+    activation.baseFee shouldBe Some(BaseFeeCalculator.calcBaseFee(node.baseHeader, config))
+    activation.baseFee shouldBe Some(BaseFeeCalculator.InitialBaseFee)
+    // block 30 used no gas: the base fee falls by 1/8, floored at the chain's floor
+    val next = blocks(1).header
+    next.baseFee shouldBe Some(BaseFeeCalculator.calcBaseFee(activation, config))
+    next.baseFee shouldBe Some(
+      (BaseFeeCalculator.InitialBaseFee - BaseFeeCalculator.InitialBaseFee / 8).max(config.baseFeeFloor)
+    )
+  }
+
+  it should "give the Olympia activation block a zero base fee without validation, as go-ethereum's simulator does" taggedAs (
+    UnitTest,
+    RPCTest,
+    OlympiaTest
+  ) in {
+    val block = new Node(baseTimestamp = 1000, etcConfig(olympia = 30)).simulate(time = 1012, None).head
+    block.header.extraFields shouldBe HefPostOlympia(BigInt(0))
+  }
+
+  it should "keep an ETC block before Olympia without a base fee" taggedAs (UnitTest, RPCTest, OlympiaTest) in {
+    val block =
+      new Node(baseTimestamp = 1000, etcConfig(olympia = 31)).simulate(time = 1012, None, validation = true).head
+    block.header.extraFields shouldBe HefEmpty
   }

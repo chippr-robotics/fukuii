@@ -6,6 +6,7 @@ import scala.collection.mutable
 import scala.util.boundary
 import scala.util.boundary.break
 
+import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
@@ -26,6 +27,7 @@ import com.chipprbots.ethereum.transactions.TxTypeGate
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils
 import com.chipprbots.ethereum.utils.Logger
+import com.chipprbots.ethereum.utils.NetworkType
 import com.chipprbots.ethereum.vm.AmsterdamGas
 import com.chipprbots.ethereum.vm.BlockAccessRecorder
 import com.chipprbots.ethereum.vm.EvmConfig
@@ -837,8 +839,17 @@ class EthSimulateService(
     // for the first simulated block, then each simulated block's own, so an override carries forward. (Not zero.)
     val beneficiary = ov.feeRecipient.map(_.bytes).getOrElse(parentHeader.beneficiary)
     val prevRandao = ov.prevRandao.getOrElse(ByteString(new Array[Byte](32)))
+    // ETC: Olympia (ECIP-1111) is a block-number fork, so the header has a base fee from the Olympia block on, whatever
+    // the parent has, and with validation it is import's: BaseFeeCalculator.calcBaseFee, the function the header
+    // validator (validateBaseFee) and the miner (BlockGeneratorSkeleton.baseFeeFields) use, which gives the activation
+    // block InitialBaseFee and floors at baseFeeFloor. Read from the parent's header instead, the activation block had
+    // no base fee at all, and with a pre-Olympia parent the copy below gave it zero.
+    val etcOlympia = blockchainConfig.networkType == NetworkType.ETC &&
+      number.value >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
     val baseFee = ov.baseFeePerGas.getOrElse(
       if !validation then BigInt(0)
+      else if blockchainConfig.networkType == NetworkType.ETC then
+        BaseFeeCalculator.calcBaseFee(parentHeader, blockchainConfig)
       else computeNextBaseFee(parentHeader)
     )
     // go-ethereum makeHeaders (simulate.go:654-660): from Cancun on, the block's parent beacon block root is the
@@ -902,7 +913,9 @@ class EthSimulateService(
           parentBeaconBlockRoot
         )
       else if blockchainConfig.isShanghaiTimestamp(ts) then HefPostShanghai(baseFee, EmptyWithdrawalsRoot)
-      else if parentHeader.baseFee.isDefined then HefPostOlympia(baseFee) // Post-London but pre-Shanghai
+      else if etcOlympia then HefPostOlympia(baseFee) // ETC from Olympia: by block number, as import
+      else if blockchainConfig.networkType == NetworkType.ETC then HefEmpty // ETC before Olympia
+      else if parentHeader.baseFee.isDefined then HefPostOlympia(baseFee) // ETH: post-London but pre-Shanghai
       else HefEmpty // Pre-London
 
     // The difficulty: the `difficulty` override, or the one the block inherits (see inheritedDifficulty).
