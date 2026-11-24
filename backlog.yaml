@@ -926,21 +926,22 @@ items:
   - id: B-088
     title: ETC settleHead leaves stale tx lookups after reorgs; also the ConsensusImpl PoS designated-head arm
     priority: P3
-    status: in-progress
+    status: review
     area: sync
     size: M
     opened: 2026-11-07
     refs: [handoff §3]
-    links: {}
+    links:
+      prs: [2064]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T08:33:15Z
-      heartbeat: 2026-11-24T08:52:15Z
+      heartbeat: 2026-11-24T08:56:01Z
     notes: |-
-      Unverified dev-node item (handoff section 3): check it still applies before starting.
       2026-11-24 in-progress: verified still applies (B-253 agent): settleHead rewriteCanonicalIndex never deletes moved-off lookups; PoS designated-head arm saveBestKnownBlocks only. forge agent clone-d
       2026-11-24 in-progress: pushed 89ae45954e (hash layout: all three settleHead arms; unified already correct); beacon review of designated-head arm
+      2026-11-24 review: beacon APPROVE; hive engine (re-org filter) + sync dispatched on the branch; merge after hive
   - id: B-090
     title: engine_getPayloadBodiesByRange V1/V2 should return -38004 for count > 1024
     priority: P3
