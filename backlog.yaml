@@ -5026,22 +5026,19 @@ items:
   - id: B-496
     title: ConsensusAdapter OfTheState logs a StateBusy as [STATE-FAULT] ERROR; tag it [STATE-BUSY] WARN through tagOf (B-440 + B-462 both merged)
     priority: P3
-    status: review
+    status: done
     area: consensus
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2059]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T07:40:10Z
-      heartbeat: 2026-11-24T08:03:10Z
     notes: |-
       Left for whichever of #2045/#2049 merged second (both merged 2026-11-24).
       2026-11-24 in-progress: forge agent, clone-d
+      2026-11-24 done: merged
   - id: B-497
     title: "Flaky: PendingTransactionsManagerSpec 'should override transactions with the same sender and nonce' failed once locally, passed on rerun"
     priority: P3
