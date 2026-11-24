@@ -141,6 +141,21 @@ object BlockImporter:
   // blacklisted for it. Below this, a block whose parent this node lacks is a gap of ours and nobody is blamed.
   val OrphanAnnounceStrikeThreshold: Int = 5
 
+  /** How far from the best block an orphan announce's header may be for its seal to be checked (B-140). An Ethash epoch
+    * is at least 30,000 blocks, so within this the seal is checked with the cache of the best block's epoch or of the
+    * one next to it, which real blocks need too: an announce cannot make the validator build the cache of a far epoch
+    * (seconds of work) and evict the head's. An orphan beyond it is counted as a strike, unchecked, as before.
+    */
+  val OrphanSealCheckDistance: Int = 1024
+
+  /** Why a peer whose orphan announces reached [[OrphanAnnounceStrikeThreshold]] is blamed (B-007). Not a header that
+    * failed validation: the peers client exempts maintained (static and trusted) peers from it (B-143).
+    */
+  def orphanStrikesReason(strikes: Int, lastHash: String): BlacklistReason =
+    BlacklistReason.BlockImportError(
+      s"announced $strikes blocks in a row whose parent never arrived, the last $lastHash"
+    )
+
   // Peers whose orphan announcements are counted at once. Past it the count starts over (see OrphanAnnounceStrikes).
   private val MaxTrackedAnnouncers: Int = 256
 
@@ -2015,8 +2030,47 @@ final private class BlockImporterLogic(
     * unknown, and nobody is blamed. Protection stays, bounded: a peer that announces [[OrphanAnnounceStrikeThreshold]]
     * such blocks in a row, with none of its blocks imported in between, is blacklisted as a peer that does not deliver
     * the parent.
+    *
+    * On a proof-of-work chain the header is first checked by what it says of itself, the Ethash seal with it (B-140). A
+    * header that fails is invalid on any chain, whatever its parent: the peer that announced it is blamed at once, as
+    * core-geth's fetcher drops a peer whose propagated header fails verification (`importBlocks`, "Propagated block
+    * verification failed"). A seal that holds is no excuse: it proves the difficulty the header claims, which without
+    * the parent may be the chain's minimum, so the announce is counted as a strike as before. Not checked on a chain
+    * that follows a consensus layer (no seal), nor far from the best block ([[OrphanSealCheckDistance]]).
+    *
+    * Either blame goes to the peer itself, through the fetcher to the peers client, whose peer list exempts maintained
+    * peers as for every other blacklisting (B-143): from the strikes, not from a header that failed validation.
     */
   private def handleOrphanAnnounce(block: Block, peer: PeerId): Unit =
+    announcedSealError(block) match
+      case Some(error) =>
+        orphanAnnounces.clear(peer)
+        log.warning(
+          "Orphan announce: block {} from peer {} has a header that is invalid by itself ({}): blacklisting the peer",
+          block.idTag,
+          peer,
+          error
+        )
+        RegularSyncMetrics.incrementOrphanBlocks("announce", "invalid-header")
+        fetcher ! BlockFetcher.BlamePeer(peer, BlacklistReason.BlockHeaderValidationFailed)
+        // The fetcher counted the block as its last: back to before it, with no one blamed by the fetcher
+        fetcher ! BlockFetcher.InvalidateBlocksFrom(
+          block.number.value,
+          "announced block has an invalid header",
+          shouldBlacklist = false
+        )
+      case None => countOrphanStrike(block, peer)
+
+  /** Why the header of `block`, an orphan announce, is invalid by itself (B-140), where it is checked: proof of work
+    * only, and near the best block.
+    */
+  private def announcedSealError(block: Block): Option[String] =
+    val header = block.header
+    val checked = !branchResolution.followsConsensusLayer && header.difficulty.value > 0 &&
+      (header.number.value - blockchainReader.getBestBlockNumber).abs <= OrphanSealCheckDistance
+    if checked then consensus.announcedHeaderError(header) else None
+
+  private def countOrphanStrike(block: Block, peer: PeerId): Unit =
     val strikes = orphanAnnounces.strike(peer)
     if strikes >= OrphanAnnounceStrikeThreshold then
       orphanAnnounces.clear(peer)
@@ -2027,16 +2081,9 @@ final private class BlockImporterLogic(
         block.number
       )
       RegularSyncMetrics.incrementOrphanBlocks("announce", "blacklisted")
-      // The peer whose strikes were counted, directly (forge, B-007). The fetcher's BlockImportFailed blames whoever it
-      // recorded for the block's number, and another peer's announce of the same number can have replaced the one counted
-      // here. (PeerListHelper's exemption of maintained peers does not apply on this path.)
-      blacklist.add(
-        peer,
-        syncConfig.blacklistDuration,
-        BlacklistReason.BlockImportError(
-          s"announced $strikes blocks in a row whose parent never arrived, the last ${block.header.hashAsHexString}"
-        )
-      )
+      // The peer whose strikes were counted (forge, B-007). The fetcher's BlockImportFailed blames whoever it recorded
+      // for the block's number, and another peer's announce of the same number can have replaced the one counted here.
+      fetcher ! BlockFetcher.BlamePeer(peer, orphanStrikesReason(strikes, block.header.hashAsHexString))
       // And back to the parent, as below, with no one blamed by the fetcher: the blame is above.
       fetcher ! BlockFetcher.InvalidateBlocksFrom(
         block.number.value,

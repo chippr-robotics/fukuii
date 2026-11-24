@@ -172,6 +172,14 @@ trait RegularSyncFixtures:
       (adapter.refusedWithTheirParent(_: NonEmptyList[Block])).when(*).onCall { (blocks: NonEmptyList[Block]) =>
         refusedWithTheirParent.get()(blocks)
       }
+      // B-140: what an orphan announce's header says of itself; valid unless a test says otherwise
+      (adapter
+        .announcedHeaderError(_: BlockHeader)(using _: BlockchainConfig))
+        .when(*, *)
+        .onCall { case (header: BlockHeader, _) =>
+          checkedHeaders.add(header.hash.value)
+          headerErrors.get(header.hash.value)
+        }
       // Batch path: regular sync blocks via tryImportBlocks
       (adapter
         .evaluateBranch(_: NonEmptyList[Block])(using _: IORuntime, _: BlockchainConfig))
@@ -298,6 +306,11 @@ trait RegularSyncFixtures:
     protected val results: mutable.Map[ByteString, IO[BlockImportResult]] =
       mutable.Map[ByteString, IO[BlockImportResult]]()
     protected val importedBlocksSet: mutable.Set[Block] = mutable.Set[Block]()
+    protected val headerErrors: mutable.Map[ByteString, String] = mutable.Map.empty
+    // The headers whose seal the importer asked the adapter about (B-140); asked on the import's thread.
+    protected val checkedHeaders: java.util.Set[ByteString] = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    def didCheckHeaderOf(block: Block): Boolean = checkedHeaders.contains(block.header.hash.value)
 
     /** What the adapter answers when the importer asks whether a batch hangs from a refused branch (B-297). */
     protected val refusedWithTheirParent =
@@ -316,6 +329,10 @@ trait RegularSyncFixtures:
 
     def setImportResult(block: Block, result: IO[BlockImportResult]): Unit =
       results(block.header.hash.value) = result
+
+    /** Why the adapter calls `block`'s header invalid by itself, the seal with it (B-140); valid if never set. */
+    def setAnnouncedHeaderError(block: Block, error: String): Unit =
+      headerErrors(block.header.hash.value) = error
 
     class PeersClientAutoPilot(blocks: List[Block] = testBlocks) extends AutoPilot:
 
@@ -495,6 +512,14 @@ trait RegularSyncFixtures:
 
     override lazy val branchResolution: BranchResolution = stub[BranchResolution]
     branchResolution.resolveBranch.when(*).returns(NewBetterBranch(Nil))
+
+    /** Why `newBlock`'s header is invalid by itself, the seal with it (B-140): valid unless a test says otherwise. */
+    def newBlockHeaderError: Option[String] = None
+
+    (consensusAdapter
+      .announcedHeaderError(_: BlockHeader)(using _: BlockchainConfig))
+      .when(*, *)
+      .onCall { case (header: BlockHeader, _) => if header == newBlock.header then newBlockHeaderError else None }
 
     (consensusAdapter
       .evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig))

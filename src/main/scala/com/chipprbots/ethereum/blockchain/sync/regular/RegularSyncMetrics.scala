@@ -112,7 +112,9 @@ object RegularSyncMetrics extends MetricsContainer:
     metrics.registry.counter(PipelineRestartsCounter, "component", component).increment()
 
   /** `source`: "announce" (a NewBlock) or "batch" (fetched). `outcome`: "branch-fetch" (the fetcher goes back for the
-    * parent, no one blamed) or "blacklisted" (the peer kept announcing blocks whose parent never arrived).
+    * parent, no one blamed), "blacklisted" (the peer kept announcing blocks whose parent never arrived) or
+    * "invalid-header" (an announced orphan's header failed the checks it can be put to alone, the seal with them,
+    * B-140).
     */
   def incrementOrphanBlocks(source: String, outcome: String): Unit =
     metrics.registry.counter(OrphanBlocksCounter, "source", source, "outcome", outcome).increment()

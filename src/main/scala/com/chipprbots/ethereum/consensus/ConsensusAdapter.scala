@@ -482,6 +482,13 @@ class ConsensusAdapter(
   ): Option[(BlockHeader, String)] =
     blockValidation.firstInvalidHeaderOf(headers)
 
+  /** Why the header of a block a peer announced is invalid by what it says of itself, the Ethash seal with it, or None
+    * if it is not ([[BlockValidation.headerAloneError]]). Reads only; for an announced block whose parent this node
+    * does not have, which no import validated (B-140).
+    */
+  def announcedHeaderError(header: BlockHeader)(implicit blockchainConfig: BlockchainConfig): Option[String] =
+    blockValidation.headerAloneError(header)
+
   /** Whether the branch of `headers` outweighs the head, by the weights the escalation's feed counts a branch by
     * ([[PowEscalationFeed.outweighsTheHead]]). False with no feed, and where the weights cannot be read: a fetch of the
     * branch's headers then goes on to its other ends (B-300 g).

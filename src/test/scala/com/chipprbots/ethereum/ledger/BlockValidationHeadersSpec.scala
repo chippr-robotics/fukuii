@@ -122,3 +122,24 @@ class BlockValidationHeadersSpec extends AnyFlatSpec with Matchers:
     withSeals.found shouldBe Some(BigInt(6))
     withSeals.checks.toList shouldBe List("rules:5", "rules:6", "rules:7", "rules:5", "seal:5", "rules:6", "seal:6")
   }
+
+  // B-140: an orphan announce's header, checked by what it says of itself with the node's real Ethash validator
+  "A header checked alone" should "pass with a seal that was mined, and fail with one that was not" taggedAs (
+    UnitTest,
+    ConsensusTest,
+    SlowTest
+  ) in {
+    import com.chipprbots.ethereum.consensus.pow.validators.PoWBlockHeaderValidator
+    import com.chipprbots.ethereum.consensus.pow.validators.PoWBlockHeaderValidatorSpec
+    class Real extends EphemBlockchainTestSetup:
+      override lazy val validators: Mocks.MockValidatorsAlwaysSucceed = new Mocks.MockValidatorsAlwaysSucceed:
+        override val blockHeaderValidator: BlockHeaderValidator = PoWBlockHeaderValidator
+      val validation = new BlockValidation(mining, blockchainReader, blockQueue)
+    val rig = new Real
+    given BlockchainConfig = PoWBlockHeaderValidatorSpec.blockchainConfig
+    val mined = PoWBlockHeaderValidatorSpec.validEthashBlockHeader
+
+    rig.validation.headerAloneError(mined) shouldBe None
+    rig.validation.headerAloneError(mined.copy(nonce = ByteString(Array.fill[Byte](8)(0)))) shouldBe
+      Some(BlockHeaderError.HeaderPoWError.toString)
+  }
