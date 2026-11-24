@@ -1597,19 +1597,14 @@ items:
   - id: B-173
     title: "PR 7a nits: GraphQL shortfall data 0x; trace endpoints carry no error for the deposit shortfall; guard blobBaseFee when blobGas 0; test defaulted supplied gas"
     priority: P3
-    status: review
+    status: done
     area: rpc
     size: S
     opened: 2026-11-09
+    closed: 2026-11-24
     refs: [B-133]
     links:
       prs: [2101]
-    claim:
-      by: cloud-719c6644
-      agent: beacon
-      since: 2026-11-24T16:21:14Z
-      heartbeat: 2026-11-24T17:17:46Z
-      branch: fix/r4-simulate-parity
     notes: |-
       conduit review of #1777.
       2026-11-24 in-progress: 3 of 4 nits committed on fix/r4-simulate-parity; GraphQL shortfall data 0x NOT done: geth graphql Call returns result.ReturnData, which for this case is the init code's output (what fukuii returns). Needs a decision.
