@@ -56,10 +56,8 @@ final class PathLiveSync(
           // asked again: regular sync from the genesis is what a guard node does not run (vault, beacon)
           else Wait("a recovery of the state was executing a block, so the genesis state was not cleared")
         case Some(held) =>
-          Refused(
-            s"this node holds the state of block ${held.show}, which it followed the chain to, and a SNAP sync does " +
-              "not start over it"
-          )
+          // not a fault: the node followed the chain to this state and regular-syncs on it (B-386)
+          HoldsState(held.show)
 
   def handedOff(): Unit = handedOffNow()
 

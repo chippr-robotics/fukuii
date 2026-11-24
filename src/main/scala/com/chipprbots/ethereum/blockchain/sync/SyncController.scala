@@ -167,8 +167,16 @@ object SyncController:
     /** SNAP begins; `clearedGenesis` when the genesis state was cleared for it. */
     case Begin(clearedGenesis: Boolean)
 
-    /** SNAP does not begin, for `why`; regular sync runs on the state that is held. */
+    /** SNAP does not begin, for `why`; regular sync runs on the state that is held. A refusal that is not expected:
+      * logged at ERROR.
+      */
     case Refused(why: String)
+
+    /** SNAP is not needed: the node holds the state of a block above its genesis, which it followed the chain to (a PoW
+      * guard node that fell back to regular sync, B-386), and regular sync runs on it. Every restart with `do-snap-sync
+      * \= true` lands here, so it is said once at INFO, not at ERROR.
+      */
+    case HoldsState(block: String)
 
     /** Not yet, for `why`: the check is asked again in [[SnapStartRecheckDelay]], and nothing else runs meanwhile. */
     case Wait(why: String)
@@ -2589,6 +2597,12 @@ object SyncController:
               log.error(
                 s"[STATE-PATH-LIVE] A SNAP sync does not begin: $why. Regular sync runs on the state that is held; a " +
                   "state this node cannot follow the chain with is given up through the escalation."
+              )
+              waiting.unstashAll(startRegularSync()._2)
+            case SnapStartChecked(_, scala.util.Success(SnapStartOnGuard.HoldsState(block))) =>
+              log.info(
+                s"[STATE-PATH-LIVE] Regular-syncing on the state it holds (block $block); SNAP not needed. A state " +
+                  "this node cannot follow the chain with is given up through the escalation."
               )
               waiting.unstashAll(startRegularSync()._2)
             case SnapStartChecked(_, scala.util.Failure(failed)) =>

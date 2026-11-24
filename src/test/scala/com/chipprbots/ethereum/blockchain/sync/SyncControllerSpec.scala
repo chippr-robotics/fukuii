@@ -1183,6 +1183,29 @@ class SyncControllerSpec
     errors.exists(e => e.contains("[STATE-PATH-LIVE]") && e.contains("block 9")) shouldBe true
   }
 
+  it should "run regular sync on the state it holds and say so at INFO, not ERROR, when the node holds a followed state (B-386)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.HoldsState("9 (0102030405060708)"))
+    pathLiveSync = Some(port)
+    var infos = List.empty[String]
+    val errors = syncControllerErrorsDuring {
+      infos = syncControllerLogsDuring(ch.qos.logback.classic.Level.INFO) {
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+        regularSyncChild(testSetup)
+      }
+    }
+    snapChildren(testSetup) shouldBe empty
+    infos.count(l =>
+      l.contains("[STATE-PATH-LIVE]") && l.contains(
+        "Regular-syncing on the state it holds (block 9 (0102030405060708))"
+      )
+    ) shouldBe 1
+    errors.filter(_.contains("[STATE-PATH-LIVE]")) shouldBe empty
+  }
+
   it should "not re-SNAP a regular sync that is stuck, and leave it running" taggedAs (UnitTest, SyncTest) in
     withRecoveryTestSetup() { testSetup =>
       import testSetup.*

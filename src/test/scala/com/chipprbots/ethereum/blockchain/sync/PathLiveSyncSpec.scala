@@ -103,12 +103,12 @@ class PathLiveSyncSpec extends AnyFlatSpec with Matchers:
     node.cleared shouldBe 0
   }
 
-  it should "refuse a SNAP sync over a state the node followed the chain to, and leave it" taggedAs UnitTest in {
+  it should "not start a SNAP sync over a state the node followed the chain to (HoldsState, not a fault), and leave it" taggedAs UnitTest in {
     val node = new Node
     node.followed()
     val held = node.chain.state.anchor
 
-    node.port.beforeSnap() shouldBe a[SnapStartOnGuard.Refused]
+    node.port.beforeSnap() shouldBe SnapStartOnGuard.HoldsState(held.get.show)
 
     node.chain.state.anchor shouldBe held
     node.cleared shouldBe 0
