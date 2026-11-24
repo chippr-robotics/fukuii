@@ -1761,17 +1761,18 @@ items:
   - id: B-198
     title: engine_getBlobsV2 answer fails Lighthouse parsing (null where BlobAndProofV2 expected); V2 must return null for the whole response if any blob is missing
     priority: P2
-    status: claimed
+    status: review
     area: engine-api
     size: S
     opened: 2026-11-10
     refs: [B-005]
-    links: {}
+    links:
+      prs: [2038]
     claim:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T04:25:46Z
-      heartbeat: 2026-11-24T04:25:46Z
+      heartbeat: 2026-11-24T04:38:51Z
       branch: fix/b198-getblobsv2-null
     notes: "Sepolia gate 2026-11-10, Lighthouse v8.3.2: ERROR Error fetching or processing blobs from EL: invalid type: null, expected struct BlobAndProofV2. execution-apis Osaka getBlobsV2: all-or-nothing (null response if any blob is missing); per-element nulls are V1 (and V3) semantics. Lighthouse falls back to gossip, so not fatal. beacon/conduit."
   - id: B-199
