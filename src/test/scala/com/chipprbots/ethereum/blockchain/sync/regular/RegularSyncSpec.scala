@@ -82,13 +82,12 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies as ETHGetBlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders as ETHGetBlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
+import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 import com.chipprbots.ethereum.testing.LogCapture.Capture
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -615,7 +614,7 @@ class RegularSyncSpec
       importerFetcher.fishForSpecificMessage(10.seconds) { case m: BlockFetcher.FetchStateNode => m }
 
     def deliverNode(): Unit =
-      importer ! BlockImporter.FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(List(node))))
+      importer ! BlockImporter.FetcherResponse(BlockFetcher.FetchedStateNode(List(node)))
 
     def evaluated(count: Int): Unit = awaitCond(evaluations.get() >= count, 10.seconds)
 
@@ -2336,73 +2335,6 @@ class RegularSyncSpec
     )
 
     "fetching state node" should {
-      abstract class MissingStateNodeFixture extends Fixture:
-        val failingBlock: Block = testBlocksChunked.head.head
-        setImportResult(
-          failingBlock,
-          IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash.value)))
-        )
-
-      "blacklist peer which returns empty response" in sync(new MissingStateNodeFixture:
-        val failingPeer: Peer = peerByNumber(1)
-
-        peersClient.setAutoPilot(
-          new PeersClientAutoPilot:
-            override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-              case PeersClient.Request(GetNodeData(_), _, _, replyTo) =>
-                replyTo ! PeersClient.Response(failingPeer, NodeData(Nil))
-                None
-            }
-        )
-
-        regularSync ! SyncProtocol.Start
-
-        fishForBlacklistPeer(failingPeer)
-      )
-
-      "blacklist peer which returns invalid node" in sync(new MissingStateNodeFixture:
-        val failingPeer: Peer = peerByNumber(1)
-        peersClient.setAutoPilot(
-          new PeersClientAutoPilot:
-            override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-              case PeersClient.Request(GetNodeData(_), _, _, replyTo) =>
-                replyTo ! PeersClient.Response(failingPeer, NodeData(List(ByteString("foo"))))
-                None
-            }
-        )
-
-        regularSync ! SyncProtocol.Start
-
-        fishForBlacklistPeer(failingPeer)
-      )
-
-      "retry fetching node if validation failed" taggedAs (UnitTest, SyncTest) in sync(
-        new MissingStateNodeFixture:
-          def fishForFailingBlockNodeRequest(): Boolean = peersClient.fishForSpecificMessage(max = 10.seconds) {
-            case PeersClient.Request(GetNodeData(hash :: Nil), _, _, _) if hash == failingBlock.hash.value => true
-          }
-
-          class WrongNodeDataPeersClientAutoPilot(var handledRequests: Int = 0) extends PeersClientAutoPilot:
-            override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-              case PeersClient.Request(GetNodeData(_), _, _, replyTo) =>
-                val response = handledRequests match
-                  case 0 => Some(PeersClient.Response(peerByNumber(1), NodeData(Nil)))
-                  case 1 => Some(PeersClient.Response(peerByNumber(2), NodeData(List(ByteString("foo")))))
-                  case _ => None
-
-                response.foreach(replyTo ! _)
-                Some(new WrongNodeDataPeersClientAutoPilot(handledRequests + 1))
-            }
-
-          peersClient.setAutoPilot(new WrongNodeDataPeersClientAutoPilot())
-
-          regularSync ! SyncProtocol.Start
-
-          fishForFailingBlockNodeRequest()
-          fishForFailingBlockNodeRequest()
-          fishForFailingBlockNodeRequest()
-      )
-
       // B-327 (forge W3 on #1880): on the unified layout the consensus adapter answers a node missing from the held
       // state as a fault of this node (HeldStateIncomplete; ConsensusAdapterEscalationSpec pins the conversion). The
       // importer must not fetch it: a fetched node is written to the hash-keyed store, which this layout never reads.
@@ -2431,14 +2363,14 @@ class RegularSyncSpec
           // the block is fetched again, as for any fault of this node's state, and no node is asked for
           val requests: Seq[Any] = peersClient.receiveWhile(3.seconds) { case request => request }
           withClue("the sync went on asking peers for blocks: ")(requests should not be empty)
-          requests.collect { case r @ PeersClient.Request(GetNodeData(_), _, _, _) => r } shouldBe empty
+          requests.collect { case r @ PeersClient.Request(_: GetTrieNodes, _, _, _) => r } shouldBe empty
           storagesInstance.storages.nodeStorage.get(missingHash) shouldBe None
       )
 
       // Devnet-8 block 318074: an account the node held had a codeHash and no bytecode, execution ran the call as a
       // call to an EOA, and the block was reported INVALID. Missing code is now a missing-data condition: the importer
-      // asks a snap peer for it (GetNodeData has no peers on ETH68+) and retries the block.
-      "request missing contract code over SNAP GetByteCodes, not GetNodeData, once bulk recovery has been tried" taggedAs (
+      // asks a snap peer for it and retries the block.
+      "request missing contract code over SNAP GetByteCodes once bulk recovery has been tried" taggedAs (
         UnitTest,
         SyncTest
       ) in sync(
@@ -2681,7 +2613,7 @@ class RegularSyncSpec
             // Left unanswered so a request, if one is sent, stays on the probe: the default answer looks the hash up as
             // a block's, throws for a node's, and the probe then never records the request.
             override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-              case PeersClient.Request(GetNodeData(_), _, _, _) => None
+              case PeersClient.Request(_: GetTrieNodes, _, _, _) => None
             }
         )
 
@@ -2689,29 +2621,29 @@ class RegularSyncSpec
 
         awaitCond(exhausts.get == 1, 10.seconds)
         val asked: Seq[Object] = peersClient.receiveWhile(2.seconds) { case m => m }
-        asked.collect {
-          case r @ PeersClient.Request(_: GetNodeData, _, _, _)  => r
-          case r @ PeersClient.Request(_: GetTrieNodes, _, _, _) => r
+        asked.collect { case r @ PeersClient.Request(_: GetTrieNodes, _, _, _) =>
+          r
         } shouldBe empty
       )
 
       // forge, beacon: a retry tick counted as an exhaust made the first real exhaust the third, so a hole no peer served
       // for about 150 s cost a re-SNAP. The user's decision of 2026-11-02: only exhausts count.
       "not count its retries towards the re-SNAP, only exhausted fetches" taggedAs (UnitTest, SyncTest) in sync(
-        new MissingStateNodeFixture:
+        new LocationlessStorageHoleFixture:
           BlockImporter.resolvingRetryInterval = 100.millis
           try
+            holeAt(hole)
             peersClient.setAutoPilot(
               new PeersClientAutoPilot:
                 override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-                  case PeersClient.Request(GetNodeData(_), _, _, _) => None // never answered, so never exhausted here
+                  case PeersClient.Request(_: GetTrieNodes, _, _, _) => None // never answered, so never exhausted here
                 }
             )
 
             regularSync ! SyncProtocol.Start
 
             peersClient.fishForSpecificMessage(max = 10.seconds) {
-              case PeersClient.Request(GetNodeData(hash :: Nil), _, _, _) if hash == failingBlock.hash.value => true
+              case PeersClient.Request(GetTrieNodes(_, root, _, _), _, _, _) if root == stateRoot => true
             }
             TestProbe().expectNoMessage(2.seconds) // twenty retry ticks
             exhausts.get shouldBe 0
@@ -2721,33 +2653,34 @@ class RegularSyncSpec
       // forge, #1694: an exhaust landing while a retry of the blocked import ran was dropped, and the re-import started
       // the fetch again from its first try. With only exhausts counting, that could hold the re-SNAP off.
       "count an exhausted fetch that lands while a retry of the import runs" taggedAs (UnitTest, SyncTest) in sync(
-        new Fixture:
-          val failingBlock: Block = testBlocksChunked.head.head
+        new LocationlessStorageHoleFixture:
           // Slow, so the exhaust below lands inside the retry's import rather than between imports.
           setImportResult(
             failingBlock,
             IO.sleep(2.seconds) *>
-              IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash.value)))
+              IO.pure(
+                BlockImportFailedDueToMissingNode(new MissingStorageNodeException(hole, holder.bytes, None))
+              )
           )
           BlockImporter.resolvingRetryInterval = 100.millis
           try
             peersClient.setAutoPilot(
               new PeersClientAutoPilot:
                 override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-                  case PeersClient.Request(GetNodeData(_), _, _, _) => None // the exhaust comes from the test
+                  case PeersClient.Request(_: GetTrieNodes, _, _, _) => None // the exhaust comes from the test
                 }
             )
 
             regularSync ! SyncProtocol.Start
 
             peersClient.fishForSpecificMessage(max = 10.seconds) {
-              case PeersClient.Request(GetNodeData(hash :: Nil), _, _, _) if hash == failingBlock.hash.value => true
+              case PeersClient.Request(GetTrieNodes(_, root, _, _), _, _, _) if root == stateRoot => true
             }
             // The first import has ended; its retry starts 100 ms later and runs for 2 s.
             TestProbe().expectNoMessage(1.second)
             exhausts.get shouldBe 0
             system.actorSelection(s"${regularSync.path}/block-importer-*") !
-              BlockImporter.FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(Nil)))
+              BlockImporter.FetcherResponse(BlockFetcher.FetchedStateNode(Nil))
 
             awaitCond(exhausts.get == 1, 5.seconds)
             succeed
@@ -2845,18 +2778,12 @@ class RegularSyncSpec
           val hash: ByteString = ByteString(MerklePatriciaTrie.EmptyRootHash)
           storagesInstance.storages.nodeStorage.put(hash, node)
           setImportResult(failingBlock, IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(hash))))
-          peersClient.setAutoPilot(
-            new PeersClientAutoPilot:
-              override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
-                case PeersClient.Request(GetNodeData(_), _, _, _) => None
-              }
-          )
+          peersClient.setAutoPilot(new PeersClientAutoPilot)
 
           regularSync ! SyncProtocol.Start
 
-          peersClient.fishForSpecificMessage(max = 10.seconds) {
-            case PeersClient.Request(GetNodeData(h :: Nil), _, _, _) if h == hash => true
-          }
+          // no position, so no peer is asked and the fetch is exhausted at once, after the importer looked at the node
+          awaitCond(exhausts.get >= 1, 10.seconds)
           storagesInstance.storages.nodeStorage.get(hash).map(_.toSeq) shouldBe Some(node.toSeq)
       )
 
@@ -3359,15 +3286,23 @@ class RegularSyncSpec
           override def getSnapSyncPivotBlock: Option[BigInt] = None
           override def getBlockHeaderByNumber(number: BigInt): Option[BlockHeader] =
             Some(BlockHelpers.genesis.header)
+          // the parent's root, which the fetch is asked at
+          override def getBlockHeaderByHash(hash: com.chipprbots.ethereum.domain.BlockHash): Option[BlockHeader] =
+            if hash == failingBlock.header.parentHash then Some(failingBlock.header)
+            else super.getBlockHeaderByHash(hash)
 
         override lazy val blockchain: BlockchainImpl = BlockchainImpl(storagesInstance.storages, blockchainReader)
+
+        // A node with a position: the fetcher asks for it by SNAP GetTrieNodes (a hash alone is no request).
+        private def missing: MissingNodeException =
+          new MissingNodeException(failingBlock.hash.value).withLocation(ByteString(Array(0x00.toByte)))
 
         override lazy val consensusAdapter: ConsensusAdapter = new ConsensusAdapter(null, null, null, null, null):
           override def evaluateBranchBlock(block: Block)(implicit
               blockExecutionScheduler: IORuntime,
               blockchainConfig: BlockchainConfig
           ): IO[BlockImportResult] =
-            IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash.value)))
+            IO.pure(BlockImportFailedDueToMissingNode(missing))
 
           override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
               blockExecutionScheduler: IORuntime,
@@ -3376,13 +3311,20 @@ class RegularSyncSpec
             if repairNodeWasCalled then
               reimportedAfterSave = true
               IO.pure(BlockImportedToTop(Nil))
-            else IO.pure(BlockImportFailedDueToMissingNode(new MissingNodeException(failingBlock.hash.value)))
+            else IO.pure(BlockImportFailedDueToMissingNode(missing))
 
         override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
           override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
             NewBetterBranch(Nil)
 
-        peersClient.setAutoPilot(new PeersClientAutoPilot)
+        peersClient.setAutoPilot(
+          new PeersClientAutoPilot:
+            override def overrides(sender: ActorRef): PartialFunction[Any, Option[AutoPilot]] = {
+              case PeersClient.Request(GetTrieNodes(id, _, _, _), _, _, replyTo) =>
+                replyTo ! PeersClient.Response(defaultPeer, TrieNodes(id, nodeData))
+                None
+            }
+        )
 
         @volatile var reimportedAfterSave: Boolean = false
         @volatile var repairNodeWasCalled: Boolean = false
@@ -3492,7 +3434,7 @@ class RegularSyncSpec
             evaluated(1)
             (1 to BlockImporter.HeldNodesCapacity).foreach { i =>
               importer ! BlockImporter.FetcherResponse(
-                BlockFetcher.FetchedStateNode(NodeData(List(ByteString(Array.fill[Byte](40)(i.toByte)))))
+                BlockFetcher.FetchedStateNode(List(ByteString(Array.fill[Byte](40)(i.toByte))))
               )
             }
             deliverNode()

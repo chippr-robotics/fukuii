@@ -1654,39 +1654,3 @@ object ETHPackets:
     require(types.size == sizes.size && sizes.size == hashes.size, "types, sizes, and hashes must have same length")
     override def code: Int = Codes.NewPooledTransactionHashesCode
     override def toShortString: String = s"NewPooledTransactionHashes72 { count: ${hashes.size} }"
-
-  // ── LEGACY TYPES: GetNodeData / NodeData (EIP-4938: removed in ETH68) ──────────────────
-  // Retained so BlockchainHostActor can respond to legacy peers and StateNodeFetcher can
-  // attempt fallback requests. ETH68MessageDecoder REJECTS these on inbound — they are
-  // outbound-only on Fukuii's modern peer set (all ETH68/69 peers will reject them).
-
-  object GetNodeData:
-    implicit class GetNodeDataEnc(val underlyingMsg: GetNodeData)
-        extends MessageSerializableImplicit[GetNodeData](underlyingMsg)
-        with RLPSerializable:
-      override def code: Int = Codes.GetNodeDataCode
-      override def toRLPEncodable: RLPEncodeable = toRlpList(msg.mptElementsHashes)
-
-  case class GetNodeData(mptElementsHashes: Seq[ByteString]) extends Message:
-    override def code: Int = Codes.GetNodeDataCode
-    override def toShortString: String = s"GetNodeData{ hashes: <${mptElementsHashes.size} state tree hashes> }"
-
-  object NodeData:
-    implicit class NodeDataEnc(val underlyingMsg: NodeData)
-        extends MessageSerializableImplicit[NodeData](underlyingMsg)
-        with RLPSerializable:
-      override def code: Int = Codes.NodeDataCode
-      override def toRLPEncodable: RLPEncodeable = RLPList(msg.values.map(v => RLPValue(v.toArray[Byte]))*)
-
-    extension (bytes: Array[Byte])
-      def toNodeData: NodeData = rawDecode(bytes) match
-        case rlpList: RLPList =>
-          NodeData(rlpList.items.map {
-            case RLPValue(bytes) => ByteString(bytes)
-            case _               => throw new RuntimeException("Cannot decode NodeData item")
-          })
-        case _ => throw new RuntimeException("Cannot decode NodeData")
-
-  case class NodeData(values: Seq[ByteString]) extends Message:
-    override def code: Int = Codes.NodeDataCode
-    override def toShortString: String = s"NodeData{ values: <${values.size} nodes> }"

@@ -101,14 +101,12 @@ object PeerStatisticsActor:
     Codes.BlockHeadersCode,
     Codes.BlockBodiesCode,
     Codes.BlockHashesFromNumberCode,
-    Codes.NodeDataCode,
     Codes.ReceiptsCode
   )
 
   val RequestCodes: Set[Int] = Set(
     Codes.GetBlockHeadersCode,
     Codes.GetBlockBodiesCode,
-    Codes.GetNodeDataCode,
     Codes.GetReceiptsCode
   )
 
