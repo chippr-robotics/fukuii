@@ -2643,21 +2643,18 @@ items:
   - id: B-299
     title: NoChainSwitch offers the node's own canonical block as an ommer (BlockImporter resolveBranch)
     priority: P3
-    status: review
+    status: done
     area: sync
     size: S
     opened: 2026-11-15
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2060]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T07:40:18Z
-      heartbeat: 2026-11-24T08:03:14Z
     notes: |-
       forge, C4e part 6 pre-code: AddOmmers(blocks.head) on NoChainSwitch after a fetcher reset from the common ancestor; both layouts
       2026-11-24 in-progress: forge agent, clone-d
+      2026-11-24 done: merged
   - id: B-302
     title: "Ommers: read an ancestor's body only where its ommers hash is not the empty one (core-geth VerifyUncles)"
     priority: P2
