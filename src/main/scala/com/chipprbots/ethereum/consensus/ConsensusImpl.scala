@@ -1047,7 +1047,9 @@ class ConsensusImpl(
           if headOn.nonEmpty then new Consensus.HeadLeftOnSideBlocks(fault, queued, headOn)
           else ConsensusStateFault(fault, imported, queued)
         try
-          blockchainWriter.withRecordsHeldAbove(forkBlock) {
+          // on the head read above, which the branch was weighed against and the move back leads to: a block committed
+          // on it since refuses the hold as busy, nothing written, and the branch is weighed again (B-463)
+          blockchainWriter.withRecordsHeldAbove(forkBlock, expectedHead = oldHead) {
             try
               // the layers of what was kept are still the pin's: the move applies them
               blockchainWriter.moveHeadInPlace(on, blockchainReader)

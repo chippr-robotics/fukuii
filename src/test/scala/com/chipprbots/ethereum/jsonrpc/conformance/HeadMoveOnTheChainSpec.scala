@@ -1678,7 +1678,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     val done = new java.util.concurrent.CountDownLatch(1)
     val anchor = on.pathState.anchor.get
     val thread = new Thread(() =>
-      on.pathState.withRecordsHeld(anchor) {
+      on.pathState.withRecordsHeld(anchor, on.pathState.anchor) {
         opened.countDown()
         done.await()
       }

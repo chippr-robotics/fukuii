@@ -197,7 +197,7 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
       settings = CommitSettings(observer = StateMetrics, nowMillis = () => now.get)
     )
     StateMetrics.attemptAgeSeconds shouldBe 0d
-    state.withRecordsHeld(block(5, EmptyRoot)) {
+    state.withRecordsHeld(block(5, EmptyRoot), state.anchor) {
       now.addAndGet(90000L)
       StateMetrics.attemptAgeSeconds shouldBe 90d
       registry.find(s"$prefix.db.state.attempt.age.seconds").gauge().value() shouldBe 90d
