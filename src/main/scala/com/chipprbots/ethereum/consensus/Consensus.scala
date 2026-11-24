@@ -146,6 +146,22 @@ object Consensus:
       blocksToEnqueue: List[Block] = Nil
   ) extends ConsensusResult
 
+  /** A [[ConsensusStateFault]] after which the head was left, by a move back that failed, on side blocks the branch
+    * stands on (`fork.parentSideChain`) and on no block of the branch (B-461). `headOn` are those of them the head's
+    * chain holds, oldest first, the head last, each with its weight (at most as many as a reorganisation tells of a new
+    * branch). They are no part of the batch: `imported` is empty, and the importer counts none of them as imported.
+    * They are told as the head, as a reorganisation tells the side blocks it stands on.
+    *
+    * Equal to, and matched exactly like, the [[ConsensusStateFault]] it extends: only [[headLeftOn]] reads `headOn`.
+    */
+  final class HeadLeftOnSideBlocks(fault: StateFault, blocksToEnqueue: List[Block], val headOn: List[BlockData])
+      extends ConsensusStateFault(fault, Nil, blocksToEnqueue)
+
+  /** The side blocks a result tells as the head ([[HeadLeftOnSideBlocks]]), or none. */
+  def headLeftOn(result: ConsensusResult): List[BlockData] = result match
+    case left: HeadLeftOnSideBlocks => left.headOn
+    case _                          => Nil
+
   /** A block hit a missing state node. `imported` is the prefix of the batch that executed and validated BEFORE it:
     * those blocks are already adopted (state and best block), exactly as a successful shorter batch would have left
     * them, so the caller must account for them and retry from the failing block, not from the head of the batch.

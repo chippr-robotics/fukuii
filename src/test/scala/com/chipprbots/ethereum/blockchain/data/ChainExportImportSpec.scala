@@ -163,6 +163,11 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       .filterNot(_.get(0) == Namespaces.CodeNamespace.head)
       .map(b => org.bouncycastle.util.encoders.Hex.toHexString(b.array()))
 
+    /** Every key of the code store, hex-encoded. */
+    def codeKeys: Set[String] = armed.storage.keySet
+      .filter(_.get(0) == Namespaces.CodeNamespace.head)
+      .map(b => org.bouncycastle.util.encoders.Hex.toHexString(b.array()))
+
     if basicPruning then
       storagesInstance.storages.appStateStorage.markRefCountsExact().commit() // #1692: stamped, as a fresh datadir is
     if guard then
@@ -184,7 +189,6 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       val blockValidation = new BlockValidation(mining, blockchainReader, blockQueue)
       new ChainImporter(
         blockchainReader,
-        blockchainWriter,
         new BlockExecution(
           blockchain,
           blockchainReader,
@@ -203,7 +207,6 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
             hook.foreach(_())
             super.executeAndAdoptBlockIf(block, parentWeight, beforeCommit)
         ,
-        blockValidation,
         // On the unified layout no block reaches the fork choice: a block that is not built on the head is refused
         // before it. On the hash store this spec's importer has none, as it had.
         Option.when(guard)((block, _) =>
@@ -470,6 +473,42 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     given BlockchainConfig = node.blockchainConfig
     node.importer.importChainFile(write(concat(fixtureBlocks.init :+ tampered :+ bad)).toString) shouldBe (60, 0, 1)
     node.head.hash shouldBe bad.hash
+  }
+
+  // B-455: on the hash store a block built on the head goes through the node's own import of one block onto the head,
+  // as on the unified layout: its code and its state are staged, and committed with the block or not at all.
+  it should "leave nothing of a block that fails after execution: no code, trie node, count or record" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // the first block of the fixture that deploys a contract
+    val creates = fixtureBlocks.indexWhere(_.body.transactionList.exists(_.tx.isContractInit))
+    creates should be >= 0
+    val good = fixtureBlocks(creates)
+    val tampered = good.copy(header = good.header.copy(stateRoot = TrieRoot(ByteString(Array.fill[Byte](32)(0x11)))))
+    Seq(true, false).foreach { basicPruning =>
+      withClue(s"basic pruning $basicPruning: ") {
+        val node = new Node(basicPruning = basicPruning)
+        given BlockchainConfig = node.blockchainConfig
+        def lenient(blocks: Seq[Block]) = node.importer.importChainFile(write(concat(blocks)).toString)
+        lenient(fixtureBlocks.take(creates)) shouldBe (creates, 0, 0)
+        val (keys, code) = (node.keys, node.codeKeys)
+        lenient(Seq(tampered)) shouldBe (0, 0, 1)
+        node.codeKeys shouldBe code
+        // an archive store writes trie nodes straight through, by design: a node no block refers to is inert there
+        if basicPruning then
+          withClue(s"added=${node.keys -- keys} removed=${keys -- node.keys}") {
+            node.keys shouldBe keys
+          }
+        node.blockchainReader.getBlockHeaderByHash(tampered.hash) shouldBe None
+        node.head.hash shouldBe good.header.parentHash
+        // the valid block at its height then imports on top, with its code, and so does the rest of the file
+        lenient(fixtureBlocks.drop(creates)) shouldBe (fixtureBlocks.size - creates, 0, 0)
+        node.codeKeys.size should be > code.size
+        node.head.hash shouldBe fixtureBlocks.last.hash
+        node.head.stateRoot shouldBe fixtureBlocks.last.header.stateRoot
+      }
+    }
   }
 
   // ─── Spec 018 Track C, C3c: the same loader on the unified state layout ────────────────────────────────────────────

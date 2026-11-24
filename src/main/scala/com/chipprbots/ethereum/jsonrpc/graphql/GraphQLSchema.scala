@@ -1181,17 +1181,17 @@ object GraphQLSchema:
               val sender = senderOpt.get
               val reader = c.ctx.blockchainReader
               val bestNum = reader.getBestBlockNumber
+              // in a scope of reads (spec 018, B-238): the disk may have moved past the best block read above. The start
+              // nonce is for an account that is not in the state; a state that cannot be read (a missing trie node, a
+              // state not held) is an error of the field from stateRead, never the start nonce (B-442).
               val currentNonce =
-                // in a scope of reads (spec 018, B-238): the disk may have moved past the best block read above
-                try
-                  stateRead(
-                    reader
-                      .getBlockHeaderByNumber(bestNum)
-                      .flatMap(head => reader.accountAt(head, sender))
-                      .map(_.nonce.toBigInt)
-                      .getOrElse(c.ctx.blockchainConfig.accountStartNonce.toBigInt)
-                  )
-                catch case _: MissingNodeException => c.ctx.blockchainConfig.accountStartNonce.toBigInt
+                stateRead(
+                  reader
+                    .getBlockHeaderByNumber(bestNum)
+                    .flatMap(head => reader.accountAt(head, sender))
+                    .map(_.nonce.toBigInt)
+                    .getOrElse(c.ctx.blockchainConfig.accountStartNonce.toBigInt)
+                )
 
               if stx.tx.nonce < currentNonce then throw GraphQLDataFetchingError.nonceTooLow("sendRawTransaction")
 

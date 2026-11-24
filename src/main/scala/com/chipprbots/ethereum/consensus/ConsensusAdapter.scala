@@ -300,12 +300,13 @@ class ConsensusAdapter(
           // the blocks of the batch that became the head before the missing node (B-337): its followers are told
           toldOfTheHead(imported.lastOption.map(_.block))
           BlockImportFailedDueToMissingNode(reason, imported)
-        case ConsensusStateFault(fault, imported, blocksToEnqueue) =>
+        case result @ ConsensusStateFault(fault, imported, blocksToEnqueue) =>
           // The blocks were not judged: they wait in the queue to be tried again, and none of them is dropped from it
           // as an invalid block's descendants are.
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
-          // the blocks of the batch that became the head before the fault moved it, and are no part of what is refused
-          toldOfTheHead(imported.lastOption.map(_.block))
+          // the blocks of the batch that became the head before the fault moved it, and are no part of what is refused;
+          // or the side blocks the branch stands on that a move back that failed left the head on (B-461)
+          toldOfTheHead(imported.lastOption.orElse(Consensus.headLeftOn(result).lastOption).map(_.block))
           toldTheFeed("a branch that was not judged")(
             _.notJudged(newBranch.toList.drop(imported.size), fault, blockValidation.firstInvalidHeaderNotJudged)
           )
