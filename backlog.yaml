@@ -2543,12 +2543,17 @@ items:
   - id: B-284
     title: "PoW tie rule: on equal total difficulty core-geth prefers the lower number then random; fukuii keeps its head (strict >)"
     priority: P2
-    status: open
+    status: claimed
     area: evm
     size: S
     opened: 2026-11-15
     refs: []
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T20:10:16Z
+      heartbeat: 2026-11-24T20:10:16Z
     notes: |-
       Recorded by forge at spec 018 C4e; pre-existing on both layouts; a decision, not a defect to fix silently.
       2026-11-24 user 2026-11-24: adopt core-geth's tie rule (equal TD: lower number, then random); consensus protocol, forge first
