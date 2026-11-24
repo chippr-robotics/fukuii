@@ -49,6 +49,15 @@ private[actors] trait AccountTaskLifecycleState:
 private[actors] trait AccountProgressApi:
   def sendProgressSnapshot(durableRequested: Boolean = false): Unit
 
+/** What `AccountTaskLifecycle` calls in the trie assembly: the commit of a range's StackTrie when the range completes
+  * without a final store (B-525).
+  */
+private[actors] trait AccountTrieCommitApi:
+  /** Commit and drop the range's StackTrie, if it has one. False when the commit failed (the run is stopped and the
+    * range is left with work), true otherwise, including when there was nothing to commit.
+    */
+  def commitCompletedTaskTrie(task: AccountTask): Boolean
+
 /** What `AccountTaskLifecycle` calls in the contract carry: identifying the contract accounts of a response for the
   * storage and bytecode task files. The coordinator core provides it until C-A4 moves it into `ContractWorkCarry`.
   */
@@ -63,7 +72,7 @@ private[actors] trait ContractWorkCarryApi:
   */
 private[actors] trait AccountTaskLifecycle extends AccountTaskLifecycleApi:
   self: AccountTaskLifecycleState & AccountRangeEnv & AccountPeerDispatchApi & AccountProgressApi &
-    ContractWorkCarryApi =>
+    ContractWorkCarryApi & AccountTrieCommitApi =>
 
   /** Drain stale in-flight requests back to the pending queue (#1184). Sends `WorkerRequestCancelled` to each affected
     * worker — the worker is responsible for cancelling its own `SNAPRequestTracker` entry and resetting `currentTask`,
@@ -271,14 +280,19 @@ private[actors] trait AccountTaskLifecycle extends AccountTaskLifecycleApi:
 
   private def completeEmptyTaskRange(task: AccountTask, proofNodes: Int): Unit =
     val range = task.rangeString
-    consumedKeyspace += task.remainingKeyspace
-    completedTasks += task.copy(next = task.last, done = true)
-    log.info(
-      s"Account range COMPLETE: $range by empty proof-of-absence " +
-        s"(proofNodes=$proofNodes, ${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total)"
-    )
-    sendProgressSnapshot(durableRequested = true)
-    ctx.self ! CheckCompletion
+    // B-525: an earlier response of this range may have stored accounts, so its StackTrie is open and holds the
+    // range's right boundary and an unflushed batch. This range's last response carried no accounts, so nothing else
+    // commits it (`handleStoreAccountChunk` commits only after a response with accounts). Commit before the range is
+    // marked complete; a range whose final flush fails is not complete.
+    if commitCompletedTaskTrie(task) then
+      consumedKeyspace += task.remainingKeyspace
+      completedTasks += task.copy(next = task.last, done = true)
+      log.info(
+        s"Account range COMPLETE: $range by empty proof-of-absence " +
+          s"(proofNodes=$proofNodes, ${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total)"
+      )
+      sendProgressSnapshot(durableRequested = true)
+      ctx.self ! CheckCompletion
 
   def handleTaskFailed(requestId: BigInt, reason: String): Unit =
     activeTasks.remove(requestId) match

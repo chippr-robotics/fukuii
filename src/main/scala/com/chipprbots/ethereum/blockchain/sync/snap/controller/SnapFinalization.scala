@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapTaskFileCleanup
 import com.chipprbots.ethereum.db.storage.AncestorWindow
 import com.chipprbots.ethereum.db.storage.PathHandoffSample
 import com.chipprbots.ethereum.db.storage.RefCountTrust
@@ -793,11 +794,18 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     stopSnapOnlySchedules()
     stopStateSyncChildren()
 
-    // SNAP is done: no account resume can follow. Drop the checkpoint and every superseded contract task file,
-    // keeping only the files the accounts-complete recovery path was handed (conservative; they are not re-read).
-    stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
+    // SNAP is done and SnapSyncDone is durable (every route here committed it synced): no account resume can follow
+    // and nothing re-reads the task files. Drop the checkpoint, then every contract task file and its AppState path
+    // (B-523). The files go before the paths are cleared, and only a full success clears them; see
+    // `discardFinishedTaskFiles`. A start that finds the flag with paths still set finishes the job.
+    val appState = stateIngest.appState
+    appState.removeSnapAccountResumeCheckpoint().commit()
     releaseHeldResumeCheckpoint()
-    sweepSupersededTaskFiles(keep = accountsCompleteTaskFilePaths, reason = "SNAP complete")
+    SnapTaskFileCleanup.discardFinishedTaskFiles(
+      appState,
+      snapSyncConfig.taskFileDir,
+      (p, e) => ctx.log.warn(s"Could not delete $p: $e")
+    )
 
     // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.
     syncController ! SnapSyncFinalized(pivot)

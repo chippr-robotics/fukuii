@@ -373,6 +373,63 @@ class AccountTrieAssemblySpec extends ScalaTestWithActorTestKit with AnyFlatSpec
     assertStoppedOnStoreFault(h, t, hash(1))
   }
 
+  it should "leave a straggler after a partial store: the open trie of a range that ends on an empty response (B-525)" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    val t = storedTask(m, 3)
+    m.storingTasks(t.last) = t
+    h.call(_.handleStoreAccountChunk(t, accounts(3), 3, storedSoFar = 0, isTaskRangeComplete = false))
+    // The next response is empty with a proof: the range is complete, but no store follows, so no commit does either.
+    m.taskStackTries.keySet shouldBe Set(t.last)
+    h.mpt.flushed shouldBe empty
+  }
+
+  it should "commit and drop the open trie of a range completed by an empty response (B-525)" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    val t = storedTask(m, 3)
+    m.storingTasks(t.last) = t
+    h.call(_.handleStoreAccountChunk(t, accounts(3), 3, storedSoFar = 0, isTaskRangeComplete = false))
+    h.mpt.flushed shouldBe empty
+
+    m.commitCompletedTaskTrie(t) shouldBe true
+
+    m.taskStackTries shouldBe empty
+    h.mpt.flushed should not be empty
+    // Finalisation then finds nothing to commit late.
+    m.finalizeTrie() shouldBe Right(m.stateRoot)
+  }
+
+  it should "report success for a range with no open trie, and leave the others alone (B-525)" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    val t = storedTask(m, 3)
+    val other = new SnapHashTrie(batch => h.mpt.storeRawNodes(batch))
+    m.taskStackTries(hash(99)) = other
+
+    m.commitCompletedTaskTrie(t) shouldBe true
+
+    m.taskStackTries.keySet shouldBe Set(hash(99))
+  }
+
+  it should "stop the account phase, and not complete the range, when the commit at its empty end fails (B-525)" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    val t = storedTask(m, 3)
+    m.storingTasks(t.last) = t
+    h.call(_.handleStoreAccountChunk(t, accounts(3), 3, storedSoFar = 0, isTaskRangeComplete = false))
+    h.controller.receiveAll()
+    h.mpt.failWrites = true
+
+    m.commitCompletedTaskTrie(t) shouldBe false
+
+    m.taskStackTries shouldBe empty
+    m.completedTasks shouldBe empty
+    m.storingTasks.toMap shouldBe Map(t.last -> t.copy(pending = false, done = false))
+    val failures = h.controller.receiveAll().collect { case f: SNAPSyncController.SnapStoreFaulted => f }
+    failures should have size 1
+  }
+
   it should "commit straggler StackTries on finalisation and report the pivot's root" taggedAs UnitTest in {
     val h = new Harness
     val m = h.module

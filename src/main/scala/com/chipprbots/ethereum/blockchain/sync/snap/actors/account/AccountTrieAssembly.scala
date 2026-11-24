@@ -90,7 +90,7 @@ private[actors] trait ContractTaskFilesApi:
   * left-boundary skip on a resumed range), the range-complete commit, the off-actor trie finalisation and the
   * `finalizing` behaviour that waits for it. The coordinator core keeps the behaviour arms that call it.
   */
-private[actors] trait AccountTrieAssembly:
+private[actors] trait AccountTrieAssembly extends AccountTrieCommitApi:
   self: AccountTrieAssemblyState & AccountRangeEnv & AccountActivePeersApi & AccountTaskLifecycleApi &
     AccountProgressApi & AccountRangeCoreApi & ContractTaskFilesApi =>
 
@@ -258,8 +258,7 @@ private[actors] trait AccountTrieAssembly:
           // partial trie); healing reconciles fragments against the pivot root.
           // The commit comes first, and the trie stays registered until it returns: a range whose final flush fails is
           // not marked complete, and the catch below can still reset its trie (B-190).
-          val fragmentRoot = taskStackTries.get(task.last).map(_.commit())
-          taskStackTries.remove(task.last)
+          val fragmentRoot = commitOpenTrie(task)
           storingTasks.remove(task.last)
           completedTasks += task.copy(done = true)
           fragmentRoot.foreach { root =>
@@ -314,6 +313,44 @@ private[actors] trait AccountTrieAssembly:
           s"account range ${task.rangeString}",
           s"store failed after $storedSoFar of $totalCount accounts: ${e.getMessage}"
         )
+
+  /** Commit the range's StackTrie when the range completes with no final accounts to store (B-525: the last response
+    * was an empty proof of absence). The trie stays registered until the commit returns, as in
+    * `handleStoreAccountChunk`. A failed commit is a local fault handled as there: the range stays in `storingTasks`
+    * with its cursor where it was, its trie is dropped, and the controller is told to stop the run.
+    */
+  /** Commit the range's open trie, if any, and drop it. It stays registered until the commit returns, so a failed
+    * commit leaves it for the caller's fault path (B-190). The one commit site of both completion paths.
+    */
+  private def commitOpenTrie(task: AccountTask): Option[ByteString] =
+    val root = taskStackTries.get(task.last).map(_.commit())
+    taskStackTries.remove(task.last)
+    root
+
+  def commitCompletedTaskTrie(task: AccountTask): Boolean =
+    taskStackTries.get(task.last) match
+      case None => true
+      case Some(_) =>
+        try
+          val root = commitOpenTrie(task).getOrElse(ByteString.empty)
+          log.info(
+            s"Account range ${task.rangeString} trie committed at its empty end " +
+              s"(fragment root ${root.take(4).toArray.map("%02x".format(_)).mkString})"
+          )
+          true
+        catch
+          case NonFatal(e) =>
+            log.error(
+              s"Failed to commit the trie of ${task.rangeString} at its empty end; stopping the account phase",
+              e
+            )
+            storingTasks.update(task.last, task.copy(pending = false, done = false))
+            taskStackTries.remove(task.last).foreach(t => Try(t.reset()))
+            snapSyncController ! SNAPSyncController.SnapStoreFaulted(
+              s"account range ${task.rangeString}",
+              s"trie commit failed at the range's empty end: ${e.getMessage}"
+            )
+            false
 
   /** Get-or-create the per-task [[SnapTrie]] for the StackTrie path. Each task gets its own streaming trie keyed by
     * `task.last` (the end-of-range boundary, unique per task).
