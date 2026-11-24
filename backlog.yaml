@@ -5070,17 +5070,18 @@ items:
   - id: B-499
     title: "OmmersPool.AddOmmers trims before it de-duplicates: re-adding a header already in the pool evicts a real candidate"
     priority: P3
-    status: in-progress
+    status: review
     area: consensus
     size: S
     opened: 2026-11-24
     refs: []
-    links: {}
+    links:
+      prs: [2068]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T08:56:47Z
-      heartbeat: 2026-11-24T08:56:51Z
+      heartbeat: 2026-11-24T09:20:16Z
     notes: |-
       forge, found during B-299.
       2026-11-24 in-progress: agent clone-e
