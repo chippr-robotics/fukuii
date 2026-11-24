@@ -8,7 +8,6 @@ import org.json4s.JValue
 
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
-import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
@@ -150,13 +149,9 @@ class DebugTracingService(
     StateRead
       .reading {
         for
-          location <- transactionMappingStorage
-            .get(req.txHash)
+          found <- CanonicalTxLookup(transactionMappingStorage, blockchainReader, req.txHash)
             .toRight(JsonRpcError.LogicError("Transaction not found"))
-          TransactionLocation(blockHash, txIndex) = location
-          block <- blockchainReader
-            .getBlockByHash(BlockHash(blockHash))
-            .toRight(JsonRpcError.LogicError(s"Block not found for hash ${blockHash.toHex}"))
+          CanonicalTxLookup.Found(block, txIndex) = found
           parentHeader <- blockchainReader
             .getBlockHeaderByHash(block.header.parentHash)
             .toRight(JsonRpcError.LogicError("Parent block not found"))

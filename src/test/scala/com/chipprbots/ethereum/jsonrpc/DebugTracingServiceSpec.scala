@@ -106,6 +106,30 @@ class DebugTracingServiceSpec
       result.isRight shouldBe true
     )
 
+  it should "not trace a transaction whose lookup names a block that is no longer canonical" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in
+    (new TestSetup:
+      val txHash: ByteString = block.body.transactionList.head.hash.value
+      blockchainWriter.storeBlock(block).commit()
+      storagesInstance.storages.blockHeadersStorage
+        .put(block.header.parentHash.value, block.header.copy(number = block.header.number - 1))
+        .commit()
+      // A sibling at the same height takes over the canonical index: the lookup below is stale (a reorg's leftover).
+      blockchainWriter
+        .storeBlock(Block(block.header.copy(extraData = ByteString("sibling")), block.body.copy(transactionList = Nil)))
+        .commit()
+      txMappingStorage.get.expects(txHash).returning(Some(TransactionLocation(block.header.hash.value, 0)))
+      // No ledger call is expected: a stale lookup must not be replayed.
+
+      val result: Either[JsonRpcError, TraceTransactionResponse] = service
+        .traceTransaction(TraceTransactionRequest(txHash))
+        .unsafeRunSync()
+
+      result.isLeft shouldBe true
+    )
+
   // ── traceBlockByHash ─────────────────────────────────────────────────────────
 
   "DebugTracingService.traceBlockByHash" should
