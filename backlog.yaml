@@ -5275,7 +5275,7 @@ items:
   - id: B-504
     title: "B-463 PoS tests: fork-choice move in the read-to-hold window, anchor read between move batches, Engine API-level SYNCING + no escalation"
     priority: P3
-    status: claimed
+    status: in-progress
     area: consensus
     size: S
     opened: 2026-11-24
@@ -5286,7 +5286,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T17:03:02Z
-      heartbeat: 2026-11-24T17:03:02Z
+      heartbeat: 2026-11-24T17:03:07Z
     notes: |-
       beacon, review of B-463 (APPROVE); nice-to-have coverage. Also reword StateRecovery:510/550 comments to 'a block committed on it, or a move of it'.
       2026-11-24 in-progress: beacon agent clone-d (B-463 merged #2063)
