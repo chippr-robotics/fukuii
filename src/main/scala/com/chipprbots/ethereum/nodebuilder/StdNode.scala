@@ -832,8 +832,10 @@ abstract class BaseNode extends Node:
     val ownWait: Budget = Budget.upTo(shutdownTimeoutDuration + StdNode.OwnWaitMargin)
     val steps = Seq(
       Step("TLS reloader", quick, () => tlsReloader.shutdown()),
-      Step("TUI probe", quick, () => tuiProbe.foreach(_.stop())),
-      Step("TUI updater", quick, () => tuiUpdater.foreach(_.stop())),
+      // Option(...).flatten: a start refused while a parent trait initialises runs this stop before BaseNode's
+      // constructor has set these fields, so they are still null, not None (B-399).
+      Step("TUI probe", quick, () => Option(tuiProbe).flatten.foreach(_.stop())),
+      Step("TUI updater", quick, () => Option(tuiUpdater).flatten.foreach(_.stop())),
       Step("TUI", quick, () => Tui.current.foreach(_.shutdown())),
       Step("discovery stop", quick, () => peerDiscoveryManagerTyped ! PeerDiscoveryManager.Stop),
       Step("miner", quick, () => mining.stopProtocol()),
@@ -865,7 +867,7 @@ abstract class BaseNode extends Node:
         "consistency-check actor system",
         Budget.upTo(shutdownTimeoutDuration),
         () =>
-          periodicConsistencyCheckSystem.foreach { s =>
+          Option(periodicConsistencyCheckSystem).flatten.foreach { s => // null before the constructor ran (B-399)
             s.terminate()
             Await.ready(s.whenTerminated, Duration.Inf): Unit
           }
