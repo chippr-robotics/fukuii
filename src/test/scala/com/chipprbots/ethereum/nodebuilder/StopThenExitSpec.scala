@@ -179,6 +179,47 @@ class StopThenExitSpec extends AnyFlatSpec with Matchers:
     exits.asScala.toList shouldBe List((StopSignal.CleanExit, true, true))
   }
 
+  // B-520: every exit path asked from a daemon thread (the TUI's quitter, the JVM's SIGTERM handler, the Ephemery reset
+  // watchdog), and the stop ran on it, so the JVM exited mid-stop once the actor system's threads ended, before the
+  // database closed. The stop runs on a thread that is no daemon, whoever asks.
+  "StopSignal.stopThenExit" should "run the stop on a thread that is no daemon, though asked from a daemon (B-520)" taggedAs UnitTest in {
+    val stopRanOnDaemon = new java.util.concurrent.atomic.AtomicReference[Option[Boolean]](None)
+    val exits = new ConcurrentLinkedQueue[Int]()
+    val asker = daemon("b520-asker") {
+      StopSignal.stopThenExit(
+        "test",
+        () =>
+          stopRanOnDaemon.set(Some(Thread.currentThread().isDaemon))
+          true
+        ,
+        code => exits.add(code): Unit
+      )
+    }
+    asker.isDaemon shouldBe true
+    asker.start()
+    asker.join(10000)
+    stopRanOnDaemon.get shouldBe Some(false)
+    exits.asScala.toList shouldBe List(StopSignal.CleanExit)
+  }
+
+  it should "start the stop aside on a thread that is no daemon, though asked from a daemon (B-520)" taggedAs UnitTest in {
+    val stopRanOnDaemon = new java.util.concurrent.atomic.AtomicReference[Option[Boolean]](None)
+    val done = new java.util.concurrent.CountDownLatch(1)
+    val asker = daemon("b520-aside-asker") {
+      StopSignal.stopThenExitAside(
+        "test",
+        () =>
+          stopRanOnDaemon.set(Some(Thread.currentThread().isDaemon))
+          true
+        ,
+        _ => done.countDown()
+      )()
+    }
+    asker.start()
+    done.await(10, TimeUnit.SECONDS) shouldBe true
+    stopRanOnDaemon.get shouldBe Some(false)
+  }
+
   // B-440: the store failing during an import stops the node. The import holds what the database's close
   // waits for, so the stop runs on a thread of its own and the call returns at once; the exit is unclean whatever the
   // stop ends in, and a second failure starts no second stop
