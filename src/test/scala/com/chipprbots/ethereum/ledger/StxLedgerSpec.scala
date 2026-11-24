@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import org.bouncycastle.util.encoders.Hex
 import org.json4s.JsonAST.*
 import org.json4s.jvalue2monadic
+import org.scalatest.EitherValues
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -18,7 +19,7 @@ import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.*
 import com.chipprbots.ethereum.vm.CallTracer
 
-class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
+class StxLedgerSpec extends AnyFlatSpec with Matchers with EitherValues with Logger:
 
   "StxLedger" should "correctly estimate minimum gasLimit to run transaction which throws" taggedAs (
     UnitTest,
@@ -165,6 +166,48 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     expectedRefundCredit shouldEqual BigInt(15000)
     totalRefunded shouldEqual vmResult.gasRemaining + expectedRefundCredit
     totalRefunded should be > vmResult.gasRemaining
+
+  /** B-518: go-ethereum's `gasestimator.Estimate` seeds its search from the ceiling run's `MaxUsedGas`, the peak before
+    * refunds, not from `UsedGas`. A refund-heavy call (SSTORE set then clear, R_sclear) is charged far less than the
+    * execution needs: the estimate must be the least gas limit that executes, which is at least the peak.
+    */
+  it should "estimate a refund-heavy call at no less than its pre-refund peak, the least limit that executes" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new HiveGraphQLScenarioSetup:
+    // init code: SSTORE(0, 1), SSTORE(0, 0) (sets then clears: refund accrues), then STOP (empty runtime code)
+    val initCode: ByteString = ByteString(Hex.decode("6001600055" + "6000600055" + "00"))
+    def stxWithGas(gas: BigInt): SignedTransactionWithSender = SignedTransactionWithSender(
+      SignedTransaction(LegacyTransaction(0, GasPrice.Zero, GasAmount(gas), None, 0, initCode), noSignature),
+      fromAddress
+    )
+    val ceiling: BigInt = BigInt(200000)
+    val world: InMemoryWorldStateProxy = stxLedger.worldAt(block32Header)
+    val options = StxLedger.CallOptions.Empty
+
+    val atCeiling: PR =
+      mining.blockPreparator.runVM(stxWithGas(ceiling).tx, fromAddress, block32Header, worldWithAccount)
+    atCeiling.error shouldBe None
+    atCeiling.gasRefund should be > BigInt(0)
+    val peak: BigInt = ceiling - atCeiling.gasRemaining
+    val usedAfterRefund: BigInt = stxLedger
+      .simulateCall(stxWithGas(ceiling), block32Header, world, options, None)
+      .value
+      .txResult
+      .gasUsed
+    usedAfterRefund should be < peak // the refund really lowers UsedGas below what execution needs
+
+    val estimate: BigInt = stxLedger.estimateCallGas(stxWithGas(ceiling), block32Header, world, options).value
+    estimate.should(be >= peak)
+    def runs(gas: BigInt): Boolean =
+      stxLedger
+        .simulateCall(stxWithGas(gas), block32Header, stxLedger.worldAt(block32Header), options, None)
+        .value
+        .txResult
+        .vmError
+        .isEmpty
+    runs(estimate).shouldBe(true) // sufficient for execution
+    runs(estimate - 1).shouldBe(false) // and the least such limit, as geth's binary search returns
 
   /** go-ethereum `gasestimator.Estimate` (gasestimator.go:139-143) returns any failure at the ceiling that is not
     * `ErrOutOfGas`. At the ceiling below, a pre-Homestead CREATE runs its init code but cannot pay the 200,000 deposit

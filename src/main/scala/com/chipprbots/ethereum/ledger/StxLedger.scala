@@ -373,12 +373,31 @@ class StxLedger(
       val lowLimit = estimationLowerBound(stxHi, blockHeader)
       if hi < lowLimit then hi
       else
-        StxLedger.binaryChop(lowLimit, hi) { gasLimit =>
+        def fails(gasLimit: BigInt): Boolean =
           val result = runCallFrame(withGas(stx, gasLimit), blockHeader, world1, options, tracer = None)._1
           // See binarySearchGasEstimation: a pre-Homestead CREATE short of its code deposit is no answer.
-          if result.codeDepositShortfall then Some(StxLedger.CodeDepositShortfall)
-          else result.error.map(StxLedger.VmFailure.apply)
+          result.codeDepositShortfall || result.error.isDefined
+        // gasestimator.Estimate seeds the search from the run at the ceiling's MaxUsedGas, the peak before refunds,
+        // not from UsedGas: a refund (SSTORE clear, SELFDESTRUCT) lowers UsedGas but not the gas the execution needs.
+        // Nothing below the peak can succeed, so the search starts there; and the peak plus the call stipend, scaled
+        // by 63/64 for the EIP-150 retention, is tried first, since most calls succeed with it.
+        val peak = peakGasUsed(stxHi, blockHeader, atHi)
+        val lo = lowLimit.max(peak).min(hi)
+        val guess = (peak + StxLedger.CallStipend) * 64 / 63
+        val (searchLo, searchHi) =
+          if guess < hi && guess >= lo then if fails(guess) then (guess + 1, hi) else (lo, guess)
+          else (lo, hi)
+        StxLedger.binaryChop(searchLo, searchHi) { gasLimit =>
+          if fails(gasLimit) then Some(()) else None
         }
+
+  /** go-ethereum `ExecutionResult.MaxUsedGas` of a message call: the gas the frame consumed before refunds (the gas
+    * limit less what is left, less an unspent EIP-8037 state-gas reservoir), raised to the calldata floor where that is
+    * a validity rule. Report-only, like [[TxResult.maxUsedGas]]; nothing in execution reads it.
+    */
+  private def peakGasUsed(stx: SignedTransactionWithSender, blockHeader: BlockHeader, result: PR): BigInt =
+    val beforeRefund = stx.tx.tx.gasLimit.value - result.gasRemaining - result.stateGasReservoir
+    callFloorGas(stx, blockHeader).fold(beforeRefund)(beforeRefund.max(_))
 
   /** The authority an EIP-7702 authorization recovers to, under the same checks block execution applies before
     * recovering it (chain id, nonce bound, canonical signature values); `None` when it would be skipped.
@@ -820,6 +839,9 @@ object StxLedger:
     * @return
     *   minimal value for which provided function do not return error
     */
+  /** EVM call stipend (params.CallStipend), added by go-ethereum's optimistic estimation guess. */
+  private[ledger] val CallStipend: BigInt = 2300
+
   @tailrec
   private[ledger] def binaryChop[Err](min: BigInt, max: BigInt)(f: BigInt => Option[Err]): BigInt =
     assert(min <= max)
