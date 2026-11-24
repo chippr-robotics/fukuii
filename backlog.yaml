@@ -4372,12 +4372,17 @@ items:
   - id: B-459
     title: Document sync.backfill-stall-timeout (B-410) in sync.conf; fix branches cannot touch src/main/resources
     priority: P3
-    status: open
+    status: claimed
     area: sync
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T03:15:23Z
+      heartbeat: 2026-11-24T03:15:23Z
     notes: B-410 added SyncConfig.backfillStallTimeout (default 30 min, read via hasPath) but snap-split verify forbids src/main/resources edits on fix/* branches, so the key is undocumented in sync.conf. Add it from a non-fix branch.
   - id: B-460
     title: BlockImporter.resolveBranch hands the predicted old branch's txs to the pool before the import, against the pre-reorg state, even when the import fails
