@@ -257,22 +257,18 @@ items:
   - id: B-023
     title: "Close #1571 (fixed key in AmsterdamFixtureVectors) and #1660 (superseded by #1727)"
     priority: P2
-    status: blocked
+    status: done
     area: triage
     size: S
     opened: 2026-11-07
+    closed: 2026-11-24
     refs: [H14]
     links:
       issues: [1571, 1566, 1694, 1660]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T03:42:15Z
-      heartbeat: 2026-11-24T03:42:15Z
     notes: |-
-      #1571 fixed by #1640, #1566 by #1706, #1694 per 0.11.0's notes (verify), #1660 superseded by #1727.
       2026-11-08 blocked: needs the user's OK.
       #1566 already closed. #1694 is not fixed: it is B-005's ACCEPTED-on-missing-state; keep it open.
+      2026-11-24 done: user 2026-11-24: closed #1571 (fixed key, #1640) and #1660 (superseded by #1727); #1694 stays with B-005/B-340
   - id: B-024
     title: "Spec 020 DC-4 deferrals: scala.App in EcKeyGen/SignatureValidator (#1715); E029 false positive (#1716)"
     priority: P3
