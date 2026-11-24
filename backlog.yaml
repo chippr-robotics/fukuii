@@ -4763,3 +4763,14 @@ items:
     refs: [B-198]
     links: {}
     notes: "beacon review of B-198: cancun.md/osaka.md MUST -38004 if too large; check whether V2 pre-Osaka must answer -38005 before adding it."
+  - id: B-478
+    title: "ConsensusImpl: hand the CL's branch that forks below the view reach to StateRecovery now that its walk reaches the fork"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: [B-316]
+    links:
+      spec: 018
+    notes: "After B-316 (branch fix/b316-cl-branch-below-view) the fork choice's recovery adopts such a branch by the records. ConsensusImpl ~:721 still hands off only BranchTooLarge (comment says the walk cannot reach the fork) and queues a p2p-fetched below-view branch again unstored; widen the condition, flip the 'not hand off a fork below the views' case in ReorgBlockhashParitySpec, update BranchHandOff/handOffBranch docs. Held back: ConsensusImpl was in review on other branches."
