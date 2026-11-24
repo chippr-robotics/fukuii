@@ -4738,3 +4738,13 @@ items:
     links:
       spec: 018
     notes: "forge on B-440: thrownByTheStore reads imported from the batch's blocks on the head's chain only; a store failure outside the cap path that leaves the head on a branch's side parents tells no head. Reuse B-461's HeadLeftOnSideBlocks once both land."
+  - id: B-477
+    title: "engine_getBlobsV1/V2: refuse > 128 hashes with -38004 (geth) and malformed params with -32602 (today answered [])"
+    priority: P3
+    status: open
+    area: engine-api
+    size: S
+    opened: 2026-11-24
+    refs: [B-198]
+    links: {}
+    notes: "beacon review of B-198: cancun.md/osaka.md MUST -38004 if too large; check whether V2 pre-Osaka must answer -38005 before adding it."
