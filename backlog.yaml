@@ -2208,13 +2208,18 @@ items:
   - id: B-256
     title: "SNAPResetCharacterizationSpec dormant-mode case: the 10 s wait for 'SNAP finalization aborted' timed out once in CI (#1833), passes locally"
     priority: P1
-    status: open
+    status: claimed
     area: snap
     size: S
     opened: 2026-11-14
     refs: []
     links:
       spec: specs/016-snap-controller-split
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T02:53:01Z
+      heartbeat: 2026-11-24T02:53:01Z
     notes: |-
       2026-11-20 P2->P1 (user). Recurred on #1957 (run 44597611732). #1957 swaps the 10 s wait for 2 mailbox barriers and makes SnapLogCapture failures print the last 25 lines; root cause still unknown (15/15 local under load, 5/5 in CI suite order).
       2026-11-20 #1957 merged to main (6ea4ffd): barriers + 25-line diagnostics landed; root cause still open. Not on staging yet (cherry-pick 3cb05e4); next failure's message will show what the controller logged.
