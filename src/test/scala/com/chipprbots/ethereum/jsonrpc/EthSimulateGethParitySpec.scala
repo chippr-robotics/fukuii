@@ -112,6 +112,57 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     new Node().error("""{}""") shouldBe (-32602, "empty input")
   }
 
+  // ── B-158: simOpts decodes as encoding/json does ─────────────────────────────
+
+  /** The request decoded from `payload` at "latest", or its error. */
+  private def decoded(payload: String): Either[JsonRpcError, EthSimulateRequest] =
+    EthSimulateJsonMethodsImplicits.eth_simulateV1.decodeJson(Some(JArray(List(parse(payload), JString("latest")))))
+
+  it should "match the top-level keys case-insensitively, as encoding/json does" taggedAs (UnitTest, RPCTest) in {
+    // `BlockStateCalls` used to read as no blocks, which is "empty input"
+    val (_, bs) = new Node().blocks("""{"BlockStateCalls":[{}]}""")
+    bs.size shouldBe 1
+    val req =
+      decoded("""{"BLOCKSTATECALLS":[{}],"Validation":true,"TRACETRANSFERS":true,"returnfulltransactions":true}""")
+        .fold(err => fail(s"expected a request, got $err"), identity)
+    (req.blockStateCalls.size, req.validation, req.traceTransfers, req.returnFullTransactions) shouldBe
+      ((1, true, true, true))
+  }
+
+  it should "take the last of several keys that match a flag, in document order" taggedAs (UnitTest, RPCTest) in {
+    decoded("""{"blockStateCalls":[{}],"validation":true,"VALIDATION":false}""").map(_.validation) shouldBe
+      Right(false)
+    decoded("""{"blockStateCalls":[{}],"validation":false,"Validation":true}""").map(_.validation) shouldBe Right(true)
+  }
+
+  it should "refuse a flag that is not a boolean with -32602, in encoding/json's words" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    def typeError(kind: String, field: String): Either[JsonRpcError, EthSimulateRequest] =
+      Left(
+        JsonRpcError.InvalidParams(
+          s"invalid argument 0: json: cannot unmarshal $kind into Go struct field simOpts.$field of type bool"
+        )
+      )
+    // it used to be read as false
+    decoded("""{"blockStateCalls":[{}],"validation":"true"}""") shouldBe typeError("string", "Validation")
+    decoded("""{"blockStateCalls":[{}],"validation":1}""") shouldBe typeError("number", "Validation")
+    decoded("""{"blockStateCalls":[{}],"traceTransfers":[]}""") shouldBe typeError("array", "TraceTransfers")
+    decoded("""{"blockStateCalls":[{}],"returnFullTransactions":{}}""") shouldBe
+      typeError("object", "ReturnFullTransactions")
+    new Node().error("""{"blockStateCalls":[{}],"validation":"yes"}""") shouldBe
+      ((
+        -32602,
+        "invalid argument 0: json: cannot unmarshal string into Go struct field simOpts.Validation of type bool"
+      ))
+  }
+
+  it should "read a null flag as false, as encoding/json leaves a bool alone" taggedAs (UnitTest, RPCTest) in {
+    decoded("""{"blockStateCalls":[{}],"validation":null,"traceTransfers":null}""")
+      .map(r => (r.validation, r.traceTransfers)) shouldBe Right((false, false))
+  }
+
   // ── 3-4: state override validation (override.go:80-110) ────────────────────
 
   it should "reject an account override with both state and stateDiff, -32000 (override.go:108-110)" taggedAs (
