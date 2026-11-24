@@ -219,7 +219,9 @@ class StxLedger(
       val world0 = InMemoryWorldStateProxy(
         evmCodeStorage = evmCodeStorage,
         mptStorage = blockchainReader.scratchStateAt(parentHeader),
-        getBlockHashByNumber = (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+        // BLOCKHASH walks the block's own ancestry, as block import does (BlockExecution.buildInitialWorld), not the
+        // canonical index, which names another chain above the fork point of a traced side-chain block.
+        getBlockHashByNumber = AncestorBlockHashes.forBlock(blockHeader, blockchainReader),
         accountStartNonce = blockchainConfig.accountStartNonce,
         stateRootHash = parentHeader.stateRoot.value,
         noEmptyAccounts = EvmConfig.forBlock(blockHeader.number.value, blockchainConfig).noEmptyAccounts,

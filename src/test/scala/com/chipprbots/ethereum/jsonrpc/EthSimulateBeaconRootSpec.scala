@@ -16,6 +16,9 @@ import com.chipprbots.ethereum.ledger.AmsterdamFixtureVectors
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.ForkTimestamps
+import com.chipprbots.ethereum.utils.NetworkType
 
 /** #1727 class C: `blockOverrides.beaconRoot` is the simulated block's parent beacon block root (go-ethereum
   * `BlockOverrides.BeaconRoot`; `makeHeaders`, simulate.go:654-660). It is the header's `parentBeaconBlockRoot`, so the
@@ -33,15 +36,16 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
   private val Root: ByteString = ByteString(Array.fill[Byte](32)(0xab.toByte))
 
   /** A node whose best block sits at `baseTimestamp`, in the header shape its fork gives it. */
-  private class Node(baseTimestamp: Long) extends EphemBlockchainTestSetup:
-    implicit override lazy val blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig = amsterdamConfig
+  private class Node(baseTimestamp: Long, config: BlockchainConfig = amsterdamConfig) extends EphemBlockchainTestSetup:
+    implicit override lazy val blockchainConfig: BlockchainConfig = config
 
     private val ts = Timestamp(baseTimestamp)
     private val baseExtraFields =
-      if amsterdamConfig.isAmsterdamTimestamp(ts) then
+      if config.isAmsterdamTimestamp(ts) then
         HefPostAmsterdam(7, emptyRoot, 0, 0, zero32, zero32, BlockAccessList.EmptyHash, slotNumber = 29)
-      else if amsterdamConfig.isPragueTimestamp(ts) then HefPostPrague(7, emptyRoot, 0, 0, zero32, zero32)
-      else HefPostShanghai(7, emptyRoot)
+      else if config.isPragueTimestamp(ts) then HefPostPrague(7, emptyRoot, 0, 0, zero32, zero32)
+      else if config.isShanghaiTimestamp(ts) then HefPostShanghai(7, emptyRoot)
+      else HefEmpty // ETC before Olympia
 
     blockchainWriter.save(
       Block(
@@ -71,7 +75,7 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
       storagesInstance.storages.evmCodeStorage,
       mining.blockPreparator,
       mining,
-      amsterdamConfig
+      config
     )
 
     /** The simulated blocks of one block state call at `time`, with the overrides `beaconRoot` and `number` given.
@@ -225,4 +229,47 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
     val blocks = new Node(baseTimestamp = 132).simulate(time = 156, Some(Root), number = Some(31))
     blocks.map(_.header.number.value) shouldBe Seq(BigInt(30), BigInt(31))
     blocks.map(root) shouldBe Seq(Some(zero32), Some(Root))
+  }
+
+  // ── ETC (B-180): import's preamble on ETC's block-number schedule ─────────
+
+  /** An ETC chain (no fork timestamps, every ETC fork at 0) whose Olympia activates at block `olympia`. */
+  private def etcConfig(olympia: BigInt): BlockchainConfig =
+    preAmsterdamConfig
+      .copy(networkType = NetworkType.ETC, forkTimestamps = ForkTimestamps())
+      .withUpdatedForkBlocks(
+        _.copy(
+          // ETC's schedule: the ETC forks before Olympia (Spiral brings PUSH0, which the history contract runs)
+          atlantisBlockNumber = 0,
+          aghartaBlockNumber = 0,
+          phoenixBlockNumber = 0,
+          magnetoBlockNumber = 0,
+          mystiqueBlockNumber = 0,
+          spiralBlockNumber = 0,
+          olympiaBlockNumber = olympia
+        )
+      )
+
+  // ECIP-1112 / ECIP-1121: from Olympia, import deploys the EIP-2935 history contract where it has no code and writes
+  // the parent hash (BlockExecution.applyEip2935, gated by block number). The simulation's copy gated it on Prague,
+  // which ETC never reaches, so a simulated Olympia block had neither.
+  "eth_simulateV1 on ETC" should "deploy the EIP-2935 contract and store the parent hash at Olympia, as import does" taggedAs (
+    UnitTest,
+    RPCTest,
+    OlympiaTest
+  ) in {
+    val node = new Node(baseTimestamp = 1000, etcConfig(olympia = 30))
+    val block = node.simulate(time = 1012, None, systemContracts = false, calls = Seq(readBlockHash(29))).head
+    block.header.number.value shouldBe BigInt(30)
+    block.calls.map(c => (c.status, c.returnData)) shouldBe Seq((BigInt(1), node.baseHash))
+  }
+
+  it should "write nothing before Olympia, where the history contract has no code" taggedAs (
+    UnitTest,
+    RPCTest,
+    OlympiaTest
+  ) in {
+    val node = new Node(baseTimestamp = 1000, etcConfig(olympia = 31))
+    val block = node.simulate(time = 1012, None, systemContracts = false, calls = Seq(readBlockHash(29))).head
+    block.calls.map(c => (c.status, c.returnData)) shouldBe Seq((BigInt(1), ByteString.empty))
   }

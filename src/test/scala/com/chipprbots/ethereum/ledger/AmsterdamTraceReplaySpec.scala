@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefPostAmsterdam
 import com.chipprbots.ethereum.domain.SetCodeTransaction.addressToDelegation
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -115,7 +116,14 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
     legacyTx(Some(Emit), value = 0, gasLimit = 500000, payload = nonZeros(4), nonce = 3, config = amsterdamConfig)
   )
 
-  private class Chain(config: BlockchainConfig) extends EphemBlockchainTestSetup:
+  /** A node on `config`. The parent state holds the EIP-4788 and EIP-2935 contracts unless `systemContracts` is false,
+    * and `funded` adds accounts with the balances given.
+    */
+  private class Chain(
+      config: BlockchainConfig,
+      systemContracts: Boolean = true,
+      funded: Seq[(Address, BigInt)] = Nil
+  ) extends EphemBlockchainTestSetup:
     implicit override lazy val blockchainConfig: BlockchainConfig = config
 
     override lazy val blockQueue: BlockQueue = BlockQueue(blockchainReader, SyncConfig(Config.config))
@@ -163,14 +171,19 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
         noEmptyAccounts = true,
         ethCompatibleStorage = true
       )
-      val funded = empty
-        .saveAccount(senderAddress, Account(nonce = UInt256(0), balance = UInt256(BigInt(10).pow(24))))
-        .saveAccount(payee, Account(nonce = UInt256(0), balance = UInt256(1)))
-      val contracts = Seq(
-        BlockExecution.BeaconRootContractAddress -> BlockExecution.BeaconRootsCode,
-        BlockExecution.HistoryStorageAddress -> BlockExecution.HistoryStorageCode,
-        Stop -> ByteString(0x00)
-      ).foldLeft(funded) { case (w, (address, code)) => withCode(w, address, code) }
+      val accounts = (Seq(senderAddress -> BigInt(10).pow(24), payee -> BigInt(1)) ++ funded).foldLeft(empty) {
+        case (w, (address, balance)) => w.saveAccount(address, Account(nonce = UInt256(0), balance = UInt256(balance)))
+      }
+      val preambleContracts =
+        if systemContracts then
+          Seq(
+            BlockExecution.BeaconRootContractAddress -> BlockExecution.BeaconRootsCode,
+            BlockExecution.HistoryStorageAddress -> BlockExecution.HistoryStorageCode
+          )
+        else Nil
+      val contracts = (preambleContracts :+ (Stop -> ByteString(0x00))).foldLeft(accounts) {
+        case (w, (address, code)) => withCode(w, address, code)
+      }
       val emit = withCode(contracts, Emit, EmitCode, balance = 16)
       InMemoryWorldStateProxy.persistStateAndWriteCode(
         emit.saveStorage(Emit, emit.getStorage(Emit).store(UInt256(0), UInt256(8)))
@@ -341,3 +354,105 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
         ledger.simulateTransaction(stx, etcHeader, parent)
       )
     )
+
+  // ── ETC (B-180): import's preamble, on ETC's block-number schedule ─────────
+
+  private val etcMainnet: BlockchainConfig = Config.blockchains.blockchains("etc")
+  private val ethMainnet: BlockchainConfig = Config.blockchains.blockchains("eth")
+  private val OlympiaAt: Long = 25_000_000L
+  private val etcOlympia: BlockchainConfig =
+    etcMainnet.withUpdatedForkBlocks(_.copy(olympiaBlockNumber = BigInt(OlympiaAt)))
+  private val DaoForkBlock: Long = 1_920_000L
+
+  /** An ETC header (no base fee, no post-merge fields) at `number`, with the Amsterdam block's parent hash. */
+  private def etcHeader(number: Long): BlockHeader =
+    com.chipprbots.ethereum.Fixtures.Blocks.ValidBlock.header
+      .copy(number = BlockNumber(number), parentHash = header.parentHash, extraFields = HefEmpty)
+
+  private def persistedRoot(world: InMemoryWorldStateProxy): ByteString =
+    InMemoryWorldStateProxy.persistState(world).stateRootHash
+
+  // ECIP-1112 / ECIP-1121: from Olympia, import deploys the EIP-2935 history contract where it has no code and writes
+  // the parent hash at (number - 1) % 8191 (BlockExecution.applyEip2935, gated by block number). A trace replay starts
+  // on that state, not on the parent's.
+  "Replaying an ETC Olympia block" should "start on import's EIP-2935 deploy and parent-hash write" taggedAs (
+    UnitTest,
+    StateTest,
+    OlympiaTest
+  ) in (new Chain(etcOlympia, systemContracts = false):
+    val history = BlockExecution.HistoryStorageAddress
+    val olympia: BlockHeader = etcHeader(OlympiaAt)
+    val world: InMemoryWorldStateProxy = ledger.advanceWorldToTx(olympia, Nil, 0, parentHeader)
+    parent.getCode(history) shouldBe ByteString.empty
+    world.getCode(history) shouldBe BlockExecution.HistoryStorageCode
+    world.getAccount(history).map(_.nonce) shouldBe Some(UInt256(1))
+    world.getStorage(history).load(UInt256((OlympiaAt - 1) % 8191)) shouldBe BigInt(1, olympia.parentHash.value.toArray)
+    // the state import executes the block's first transaction on, to the byte
+    persistedRoot(world) shouldBe persistedRoot(executed(olympia, Nil).worldState)
+    persistedRoot(world) should not be parent.stateRootHash
+  )
+
+  it should "start on the parent's state at the block before Olympia" taggedAs (
+    UnitTest,
+    StateTest,
+    OlympiaTest
+  ) in (new Chain(etcOlympia, systemContracts = false):
+    val before: BlockHeader = etcHeader(OlympiaAt - 1)
+    val world: InMemoryWorldStateProxy = ledger.advanceWorldToTx(before, Nil, 0, parentHeader)
+    persistedRoot(world) shouldBe parent.stateRootHash
+    persistedRoot(executed(before, Nil).worldState) shouldBe parent.stateRootHash
+  )
+
+  // ETC did not take the DAO drain: its dao block names no refund contract, so BlockExecution.drainDaoForkAccounts
+  // moves nothing at 1,920,000. The drained account is one of ETH's drain list, funded here.
+  private val drained: Address = ethMainnet.daoForkConfig.map(_.drainList.head).getOrElse(fail("ETH has no drain list"))
+  private val DrainedBalance: BigInt = BigInt(10).pow(20)
+
+  "Replaying ETC's DAO fork block" should "start on the parent's state, with nothing drained" taggedAs (
+    UnitTest,
+    StateTest,
+    OlympiaTest
+  ) in (new Chain(etcMainnet, systemContracts = false, funded = Seq(drained -> DrainedBalance)):
+    etcMainnet.daoForkConfig.map(d => (d.forkBlockNumber, d.refundContract)) shouldBe Some((BigInt(DaoForkBlock), None))
+    val dao: BlockHeader = etcHeader(DaoForkBlock)
+    val world: InMemoryWorldStateProxy = ledger.advanceWorldToTx(dao, Nil, 0, parentHeader)
+    world.getAccount(drained).map(_.balance) shouldBe Some(UInt256(DrainedBalance))
+    persistedRoot(world) shouldBe parent.stateRootHash
+    persistedRoot(executed(dao, Nil).worldState) shouldBe parent.stateRootHash
+  )
+
+  // The control: on ETH's config the same replay drains the account, so the check above can fail.
+  it should "differ from ETH's, where the same block drains the account" taggedAs (UnitTest, StateTest) in
+    (new Chain(ethMainnet, systemContracts = false, funded = Seq(drained -> DrainedBalance)):
+      val dao: BlockHeader = etcHeader(DaoForkBlock)
+      val world: InMemoryWorldStateProxy = ledger.advanceWorldToTx(dao, Nil, 0, parentHeader)
+      world.getAccount(drained).map(_.balance) shouldBe Some(UInt256.Zero)
+      persistedRoot(world) should not be parent.stateRootHash
+      persistedRoot(world) shouldBe persistedRoot(executed(dao, Nil).worldState)
+    )
+
+  // BLOCKHASH in a replay before Amsterdam walks the traced block's own ancestry, as import does
+  // (BlockExecution.buildInitialWorld, AncestorBlockHashes): a traced side-chain block must not read the canonical
+  // index, which names another chain above the fork point.
+  "Replaying a non-canonical block before Amsterdam" should "read BLOCKHASH from the block's own ancestry" taggedAs (
+    UnitTest,
+    StateTest,
+    OlympiaTest
+  ) in (new Chain(etcMainnet, systemContracts = false):
+    def at(number: Long, parentHash: ByteString, salt: Int): BlockHeader =
+      etcHeader(number).copy(parentHash = BlockHash(parentHash), extraData = ByteString(salt))
+    val canonical44: BlockHeader = at(44, header.parentHash.value, 1)
+    val canonical45: BlockHeader = at(45, canonical44.hash.value, 1)
+    val side44: BlockHeader = at(44, header.parentHash.value, 2)
+    val side45: BlockHeader = at(45, side44.hash.value, 2)
+    blockchainWriter.storeBlockHeader(canonical44).and(blockchainWriter.storeBlockHeader(canonical45)).commit()
+    blockchainWriter
+      .storeBlockHeaderByHashOnly(side44)
+      .and(blockchainWriter.storeBlockHeaderByHashOnly(side45))
+      .commit()
+    val traced: BlockHeader = at(46, side45.hash.value, 2)
+    val world: InMemoryWorldStateProxy = ledger.advanceWorldToTx(traced, Nil, 0, parentHeader)
+    world.getBlockHash(UInt256(45)) shouldBe Some(UInt256(side45.hash.value))
+    world.getBlockHash(UInt256(44)) shouldBe Some(UInt256(side44.hash.value))
+    blockchainReader.getBlockHeaderByNumber(44).map(_.hash) shouldBe Some(canonical44.hash)
+  )
