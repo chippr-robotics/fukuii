@@ -5132,3 +5132,14 @@ items:
     links:
       spec: 018
     notes: beacon, review of B-463 (APPROVE); nice-to-have coverage. Also reword StateRecovery:510/550 comments to 'a block committed on it, or a move of it'.
+  - id: B-505
+    title: "Hash layout: settleHead's designated-head arm adopts an executed prefix on an invalid block or state fault; unified layout and geth refuse"
+    priority: P2
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "beacon W1 on B-088 (#PR). Take the restore path when !selectedByWeight && (maybeError.nonEmpty || stateFault.isDefined || !leadsToDesignatedHead). Test: invalid block after a valid prefix with txs."
