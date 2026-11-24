@@ -4376,7 +4376,7 @@ items:
   - id: B-451
     title: "Proposer pool filter: retry a stale view of the parent like the build does, instead of failing forkchoiceUpdated with no payload"
     priority: P3
-    status: claimed
+    status: in-progress
     area: consensus
     opened: 2026-11-24
     refs: []
@@ -4386,8 +4386,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T04:08:34Z
-      heartbeat: 2026-11-24T04:08:34Z
-    notes: "Follow-up of B-239 (beacon-b239): executableAtParent propagates StaleStateViewException; buildLeniently retries on a fresh view up to 3 times. A disk move during the filter answers ATTR (no payload). Needs a stale-injection seam in the test rig."
+      heartbeat: 2026-11-24T04:08:38Z
+    notes: |-
+      Follow-up of B-239 (beacon-b239): executableAtParent propagates StaleStateViewException; buildLeniently retries on a fresh view up to 3 times. A disk move during the filter answers ATTR (no payload). Needs a stale-injection seam in the test rig.
+      2026-11-24 in-progress: clone-d consensus lane batch 2
   - id: B-452
     title: "Exit paths that bypass StopOnce can cut a DB close: TUI 'q' sys.exit(0) (StdNode ~:656); route them through the stop"
     priority: P3
