@@ -1207,18 +1207,19 @@ items:
   - id: B-122
     title: "EngineApiService test: newPayload weight write waits for the chain-weight finish (ChainInsertLock.shared)"
     priority: P3
-    status: in-progress
+    status: review
     area: consensus
     size: S
     opened: 2026-11-08
     refs: ["#1654-B"]
-    links: {}
+    links:
+      prs: [2054]
     depends_on: [B-002]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T06:32:02Z
-      heartbeat: 2026-11-24T06:32:06Z
+      heartbeat: 2026-11-24T07:07:19Z
     notes: |-
       forge, B-002: the shared-lock wrap of storeChainWeightFor is covered only by a simulation in ChainWeightReconcileSpec; pin it at EngineApiService level (beacon).
       2026-11-24 in-progress: clone-d lane, chain-weight batch
