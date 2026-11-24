@@ -1739,6 +1739,34 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         }
     }
 
+  // B-510: an exception out of a commit in place (not a fault of the state: the recovery's run takes it as this node's
+  // fault) ends the adoption with the blocks it moved the head up to, and those it committed before it, canonical.
+  // Their weights are re-derived all the same, once the hold is let go: the next fork choice's walk stops at them.
+  it should "re-derive the weights of the blocks it made canonical when a commit in place throws (B-510)" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = tightNode
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val base = chain.last.header
+      val branch = blocks.slice(39, 44) // blocks 40 to 44
+      val repaired = repairedWeightOf(on, base)
+      val recovery = new on.Recovery(
+        maxBlocks = 1,
+        // the commit of 44, after 43's
+        adopting = block =>
+          if block.header.hash == branch(4).header.hash then throw new IllegalStateException("the commit of 44 fails")
+      )
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      branch.take(4).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      newPayload(branch(4)).status shouldBe PayloadStatus.Accepted
+      repairCanonical(on, base)
+      // the head is moved up the layers to 42 (40 to 42 made canonical), 43 is committed in place, and 44's commit throws
+      statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe a[StateRecovery.Outcome.LocalFault]
+      on.reader.getBestBlockNumber shouldBe branch(3).header.number.value
+      weightsOf(on, branch.take(4)) shouldBe weightsOn(repaired, branch.take(4))
+    }
+
   /** An attempt that holds the records above the head, open on a thread of its own until what is returned is called: an
     * adoption on another thread, as an import's reverse-then-commit is (B-294).
     */
@@ -2155,6 +2183,39 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
           val above = blocks.slice(39, 60)
           weightsOf(on, above) shouldBe weightsOn(repaired, above)
         }
+    }
+
+  // B-510: an exception out of a commit in place of a catch-up's chunk leaves the blocks of the chunk committed before
+  // it canonical; their weights are re-derived all the same. The repair lands as the first of them is committed, its
+  // parent's weight read already: the chunk below, re-derived when it ended, gives no exact weight to stand on
+  it should "re-derive the weights of the blocks a chunk committed before a commit throws (B-510)" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      blocks.take(39).foreach(on.imports)
+      val base = blocks(38).header
+      val repaired = repairedWeightOf(on, base)
+      val recovery = new on.Recovery(
+        maxBlocks = 1,
+        maxAdopted = 4,
+        catchUp = 30,
+        chunk = 5,
+        // the second chunk (47 to 51): repaired as 47 is committed, and 49's commit throws after 47 and 48
+        adopting = block =>
+          if block.header.hash == blocks(46).header.hash then repairCanonical(on, base)
+          if block.header.hash == blocks(48).header.hash then throw new IllegalStateException("the commit of 49 fails")
+      )
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash), recovery = Some(recovery))
+      given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+      blocks
+        .slice(39, 41)
+        .foreach(block => engine.newPayload(payloadOf(block)).unsafeRunSync().status shouldBe PayloadStatus.Valid)
+      blocks.slice(41, 60).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+      statusOf(engine.forkchoiceUpdated(choiceTo(blocks(59)), None).unsafeRunSync()) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe a[StateRecovery.Outcome.LocalFault]
+      // 40 and 41 moved up to, 42 to 46 the first chunk, 47 and 48 of the second
+      on.reader.getBestBlockNumber shouldBe blocks(47).header.number.value
+      val made = blocks.slice(39, 48)
+      weightsOf(on, made) shouldBe weightsOn(repaired, made)
     }
 
   /** A weight for `base` that is not the one stored: what a chain-weight repair would write. */

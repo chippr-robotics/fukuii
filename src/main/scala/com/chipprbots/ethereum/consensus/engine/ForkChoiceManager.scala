@@ -190,31 +190,34 @@ class ForkChoiceManager(
           }
           named
       }
-    // the blocks the move makes canonical: read before it, while the index is still the old head's ancestry (B-126)
+    // the blocks the move makes canonical: read before it, while the index is still the old head's ancestry (B-126);
+    // re-derived once it has returned, or thrown having made some of them canonical (a move of more than one batch
+    // refused part way, B-510); a block's exact weight is right whether or not the head stays on it
     val adopting = notCanonicalBelow(header)
     try
-      val moved = blockchainWriter.moveHeadInPlace(
-        header,
-        blockchainReader,
-        finalized = finalized,
-        // made while the fork choice's recovery adopts a branch in place: that adoption follows the head named, and
-        // stops when another is (B-294)
-        forkChoice = true,
-        // up a chain of executed blocks, or across a fork along the records and the executed blocks of the other
-        // branch; never down to an ancestor of the head, which go-ethereum skips too ("Ignoring beacon update to old
-        // head"): the Engine API answers that one VALID, and moves nothing (C4d part 2b)
-        admit = plan =>
-          Option.when(plan.forward.isEmpty && plan.reverse.nonEmpty)(
-            s"block ${header.number.value} is an ancestor of the head (${plan.anchor.show}): the head is not moved down " +
-              "to follow a fork choice"
-          )
-      )
+      val moved = rederivingAfter(adopting) {
+        blockchainWriter.moveHeadInPlace(
+          header,
+          blockchainReader,
+          finalized = finalized,
+          // made while the fork choice's recovery adopts a branch in place: that adoption follows the head named, and
+          // stops when another is (B-294)
+          forkChoice = true,
+          // up a chain of executed blocks, or across a fork along the records and the executed blocks of the other
+          // branch; never down to an ancestor of the head, which go-ethereum skips too ("Ignoring beacon update to old
+          // head"): the Engine API answers that one VALID, and moves nothing (C4d part 2b)
+          admit = plan =>
+            Option.when(plan.forward.isEmpty && plan.reverse.nonEmpty)(
+              s"block ${header.number.value} is an ancestor of the head (${plan.anchor.show}): the head is not moved down " +
+                "to follow a fork choice"
+            )
+        )
+      }
       log.info(
         s"Fork choice updated: head=${newState.headBlockHash} ($moved), " +
           s"safe=${newState.safeBlockHash}, finalized=${newState.finalizedBlockHash}"
       )
       currentState.set(Some(newState))
-      rederiveWeights(adopting)
       Right(())
     catch
       // a block on the way up has no state held, and the chain is held up to `heldTo`: the Engine API has the blocks
@@ -259,14 +262,22 @@ class ForkChoiceManager(
 
   /** The blocks a move of the head to `head` makes canonical ([[AdoptedChainWeights.notCanonicalBelow]]). */
   private def notCanonicalBelow(head: BlockHeader): Seq[BlockHash] =
-    AdoptedChainWeights.notCanonicalBelow(head, blockchainReader)
+    AdoptedChainWeights.notCanonicalBelow(head, blockchainReader, WeightsBy)
 
   /** '''Re-derives the weights of the blocks a fork choice made canonical''' (B-126; [[AdoptedChainWeights.rederive]]).
     * On the unified layout every payload is stored by its hash only, with the weight `newPayload` derived from its
     * parent's then; a side payload is so on the hash layout too.
     */
   private def rederiveWeights(adopted: Seq[BlockHash]): Unit =
-    AdoptedChainWeights.rederive(adopted, blockchainReader, blockchainWriter, "Fork choice (B-126)")
+    AdoptedChainWeights.rederive(adopted, blockchainReader, blockchainWriter, WeightsBy)
+
+  /** `body`, then [[rederiveWeights]] of `adopted`, whether `body` returns or throws
+    * ([[AdoptedChainWeights.rederivingAfter]], B-510).
+    */
+  private def rederivingAfter[A](adopted: Seq[BlockHash])(body: => A): A =
+    AdoptedChainWeights.rederivingAfter(adopted, blockchainReader, blockchainWriter, WeightsBy)(body)
+
+  private val WeightsBy = "Fork choice (B-126)"
 
   /** Publish the CL head to the registered listener and record it as the requested head — **nothing else**.
     *
