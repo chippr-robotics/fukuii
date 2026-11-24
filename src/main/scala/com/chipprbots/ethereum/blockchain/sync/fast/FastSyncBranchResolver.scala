@@ -7,6 +7,7 @@ import cats.data.NonEmptyList
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.CanonicalHeadLock
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.utils.Logger
 
@@ -22,7 +23,11 @@ trait FastSyncBranchResolver:
     * counts, and could not find them in the index after this.
     */
   def discardBlocksAfter(lastValidBlock: BigInt): Seq[(BigInt, ByteString)] =
-    discardBlocks(lastValidBlock, blockchainReader.getBestBlockNumber)
+    // under the head's lock, the whole discard (B-511): a fork choice between two removals would have the next one read
+    // the index of the chain the fork choice moved to, and remove a block of it
+    CanonicalHeadLock.held(s"the discard of the blocks above block $lastValidBlock")(
+      discardBlocks(lastValidBlock, blockchainReader.getBestBlockNumber)
+    )
 
   private def discardBlocks(fromBlock: BigInt, toBlock: BigInt): Seq[(BigInt, ByteString)] =
     val blocksToBeRemoved = childOf(fromBlock).to(toBlock).reverse.toList

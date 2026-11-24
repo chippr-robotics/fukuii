@@ -200,8 +200,15 @@ class ChainImporter(
       // on its parent's state wherever that is: after the merge the last valid block of the file is the head.
       // Blob sidecars take no part in the state transition: the hive consensus / consume-engine fixtures expect the
       // head to advance over blob blocks.
-      val parentWeight = blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)
-      blockExecution.executeAndAdoptBlockIf(block, parentWeight, () => None) match
+      // Under the head's lock (B-511): the block is committed as the head, with its index entry, and a fork choice is
+      // not between its parent's weight read here and that commit. Taken before the chain insert lock the execution
+      // takes, as every holder of both takes them. The fork choice's arm above is not under it: the import it runs
+      // takes it itself, on another thread.
+      val adopted = CanonicalHeadLock.held(s"the lenient import of block $blockNum") {
+        val parentWeight = blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)
+        blockExecution.executeAndAdoptBlockIf(block, parentWeight, () => None)
+      }
+      adopted match
         case Right(_) => LenientOutcome.Imported(1)
         case Left(error) =>
           log.error(s"Chain import: block $blockNum failed — ${error.describe}")
@@ -367,7 +374,7 @@ class ChainImporter(
                       s"${blockchainReader.genesisHeader.hashAsHexString}: the file is for a different network"
                   )
               else
-                ChainInsertLock.exclusive(importOneStrict(block)) match
+                strictlyUnderTheLocks(block) match
                   case Left(message) => fail(message)
                   case Right(true)   => progress.skipped += 1
                   case Right(false) =>
@@ -389,6 +396,19 @@ class ChainImporter(
       )
     }
     outcome.get
+
+  /** One block of a strict import under the chain insert lock, and on the hash layout under the head's lock first
+    * (B-511): its look at the head and its commit as the head are then one step that a fork choice is not between. The
+    * head's lock is taken before the chain insert lock, as every holder of both takes them.
+    */
+  private def strictlyUnderTheLocks(
+      block: Block
+  )(implicit blockchainConfig: BlockchainConfig): Either[String, Boolean] =
+    if blockchainReader.holdsStateInPlace then ChainInsertLock.exclusive(importOneStrict(block))
+    else
+      CanonicalHeadLock.held(s"the strict import of block ${block.header.number.value}")(
+        ChainInsertLock.exclusive(importOneStrict(block))
+      )
 
   /** One block of a strict import, under the chain insert lock. `Right(true)`: already present, skipped;
     * `Right(false)`: imported as the new head; `Left`: why it was refused.

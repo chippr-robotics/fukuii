@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.domain.CanonicalHeadLock
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
 
 /** The SNAP pivot's anchor in the validated header chain, where the header download validates it
@@ -532,7 +533,10 @@ private[sync] object PivotAnchor:
           s"${anchor.show}, and the best block moves only with it"
       )
     }
-    committed(appState, validated.number.value, validated)
-      .and(writer.storeBlockHeader(validated))
-      .and(appState.putBestBlockInfo(BlockInfo(validated.hash.value, validated.number.value)))
-      .commit()
+    // under the head's lock (B-511): a consensus client's fork choice may come while SNAP runs; one write
+    CanonicalHeadLock.held(s"SNAP's re-anchor of its pivot to block ${validated.number.value}") {
+      committed(appState, validated.number.value, validated)
+        .and(writer.storeBlockHeader(validated))
+        .and(appState.putBestBlockInfo(BlockInfo(validated.hash.value, validated.number.value)))
+        .commit()
+    }

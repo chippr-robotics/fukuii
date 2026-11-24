@@ -80,6 +80,9 @@ import com.chipprbots.ethereum.utils.FunctorOps.*
 
 object BlockImporter:
 
+  private val rewindLog =
+    org.slf4j.LoggerFactory.getLogger("com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter")
+
   /** How many fetched nodes in a row the position store may decline before the fetch is taken as exhausted. A decline
     * is the anchor moving under the fetch, or another node sitting at the position (spec 018 data-model 7.5); the
     * import is tried again at once, and a state that keeps declining ends in the exhausted fetch's back-off and, past
@@ -227,13 +230,24 @@ object BlockImporter:
 
   /** SYNC-FORK rewind of the canonical index to `target`, plus the reference-count undo of the blocks it
     * un-canonicalises. '''The hash layout only''': on the unified state layout the head moves with the state and a fork
-    * is judged by weight, so fork recovery moves nothing there (spec 018 C4e part 6).
+    * is judged by weight, so fork recovery moves nothing there (spec 018 C4e part 6). The head's lock is taken on
+    * either layout; on the unified one nothing else takes it.
     *
     * `setCanonicalChainHead` deletes the index entries target+1..currentBest and moves best, but never touches state
     * bookkeeping: those blocks keep their applied `bd` records while no longer canonical, so under basic pruning the
     * replacement branch's execution can prune nodes it still uses (MissingNode). Same undo `ConsensusImpl.settleHead`
     * performs for a reorg (#1471). The hashes must be read BEFORE the rewind removes the index. A block with no record
     * (SNAP-synced) is a no-op; a block later re-executed rewrites its record as applied, so the undo is safe.
+    *
+    * Under [[CanonicalHeadLock]], the reads and the write alike (B-511): a fork choice is never between them. One that
+    * came after the caller read `currentBest` is seen here. When the index no longer names `targetHash` at `target`,
+    * the head is on another chain now and nothing is rewound. Otherwise every entry above `target` goes, up to the
+    * highest of `currentBest`, the best block now and the last entry of the index above them, so that nothing a fork
+    * choice wrote above `currentBest` is left above the new head.
+    *
+    * @return
+    *   whether it rewound: false when the index no longer names `targetHash` at `target`, and nothing moved. The caller
+    *   then fetches from above the head as it is, not from above `target`, a block of a chain the head has left
     */
   private[regular] def rewindCanonicalChain(
       reader: BlockchainReader,
@@ -245,14 +259,32 @@ object BlockImporter:
       // what the branch resolver removed above the common block before this ran (B-248): their entries of the index are
       // gone, so they are not found by number here
       discarded: Seq[(BigInt, ByteString)] = Nil
-  ): Unit =
-    val indexed: Seq[(BigInt, ByteString)] =
-      if currentBest > target then
-        ((target + 1) to currentBest).flatMap(n => reader.getCanonicalHashByNumber(n).map(h => (n, h.value)))
-      else Nil
-    val abandoned = (indexed ++ discarded.filter(_._1 > target)).distinctBy(_._1).sortBy(_._1)
-    writer.setCanonicalChainHead(target, targetHash, currentBest)
-    if abandoned.nonEmpty then reorgState.abandonBlockStates(abandoned)
+  ): Boolean =
+    CanonicalHeadLock.held(s"the rewind of the canonical chain to block $target") {
+      if !reader.getCanonicalHashByNumber(target).contains(targetHash) then
+        rewindLog.warn(
+          s"[SYNC-FORK] Not rewinding to block $target (${targetHash.toHexString}): the index names " +
+            s"${reader.getCanonicalHashByNumber(target).fold("no block")(_.toHexString)} there now, a fork choice " +
+            s"moved the head (best block ${reader.getBestBlockNumber})"
+        )
+        false
+      else
+        val below = currentBest.max(reader.getBestBlockNumber)
+        // the last entry of the index above them, up to the first height that has none
+        val top = LazyList
+          .iterate(below + 1)(_ + 1)
+          .takeWhile(reader.getCanonicalHashByNumber(_).isDefined)
+          .lastOption
+          .getOrElse(below)
+        val indexed: Seq[(BigInt, ByteString)] =
+          if top > target then
+            ((target + 1) to top).flatMap(n => reader.getCanonicalHashByNumber(n).map(h => (n, h.value)))
+          else Nil
+        val abandoned = (indexed ++ discarded.filter(_._1 > target)).distinctBy(_._1).sortBy(_._1)
+        writer.setCanonicalChainHead(target, targetHash, top)
+        if abandoned.nonEmpty then reorgState.abandonBlockStates(abandoned)
+        true
+    }
 
   private[regular] case object SyncRetryTick extends Command
   private[regular] val RetryKey = "BlockImporterRetry"
@@ -2745,10 +2777,11 @@ final private class BlockImporterLogic(
               lca,
               capturedBest
             )
-            rewindCanonicalChain(lca, lcaHeader.hash, capturedBest, resolved.discarded)
+            val from =
+              fetchFromAfterTheRewind(rewindCanonicalChain(lca, lcaHeader.hash, capturedBest, resolved.discarded), lca)
             unknownParentStrikes = Map.empty
             fetcher ! BlockFetcher.InvalidateBlocksFrom(
-              lca + 1,
+              from,
               "SYNC-FORK branch-resolver rollback",
               shouldBlacklist = false
             )
@@ -2983,9 +3016,9 @@ final private class BlockImporterLogic(
           floor,
           snapPivot
         )
-        rewindCanonicalChain(floor, floorHeader.hash, capturedBest)
+        val from = fetchFromAfterTheRewind(rewindCanonicalChain(floor, floorHeader.hash, capturedBest), floor)
         unknownParentStrikes = Map.empty
-        fetcher ! BlockFetcher.InvalidateBlocksFrom(floor + 1, "SYNC-FORK rollback", shouldBlacklist = false)
+        fetcher ! BlockFetcher.InvalidateBlocksFrom(from, "SYNC-FORK rollback", shouldBlacklist = false)
       case None =>
         log.warning(
           "SYNC-FORK: no header at fork recovery floor bno={} — escalating to SNAP re-sync",
@@ -2993,12 +3026,19 @@ final private class BlockImporterLogic(
         )
         supervisor ! SyncProtocol.RegularSyncStuck(floor, s"no header at fork recovery floor $floor")
 
+  /** Where the fetcher goes on from after a rewind to `target`: above it when the index was rewound there, and above
+    * the head as it is when it was not (B-511): a fork choice moved the head to another chain meanwhile, and the blocks
+    * above `target` are no longer the ones this node stands on.
+    */
+  private def fetchFromAfterTheRewind(rewound: Boolean, target: BigInt): BigInt =
+    if rewound then target + 1 else bestKnownBlockNumber + 1
+
   private def rewindCanonicalChain(
       target: BigInt,
       targetHash: BlockHash,
       currentBest: BigInt,
       discarded: Seq[(BigInt, ByteString)] = Nil
-  ): Unit =
+  ): Boolean =
     BlockImporter.rewindCanonicalChain(
       blockchainReader,
       blockchainWriter,

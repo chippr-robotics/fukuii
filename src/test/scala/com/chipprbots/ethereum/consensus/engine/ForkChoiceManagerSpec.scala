@@ -9,6 +9,7 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager.BeaconHead
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.domain.BlockHash
@@ -80,6 +81,43 @@ class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     val received: BeaconHead = probe.expectMsgType[ForkChoiceManager.BeaconHead]
     received.headHash shouldBe knownHeadHash
     received.knownHeader.map(_.number) shouldBe Some(BigInt(12345))
+
+  // B-511: on the hash layout the fork choice holds the head's lock over its move AND the reference counts that follow
+  // it, so that a branch the p2p import settles is never between the move and the counts: it would re-adopt or abandon
+  // against an index the counts do not match yet. The move's own lock (promoteToCanonicalHead) covers the move alone.
+  it should "take the reference counts that follow a move of the head under the head's lock" taggedAs UnitTest in (
+    new Fixture:
+      @volatile var countedUnderTheLock: List[Boolean] = Nil
+      val recording: ReorgStateHandler = new com.chipprbots.ethereum.consensus.ReorgStateHandler:
+        override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit =
+          countedUnderTheLock :+= com.chipprbots.ethereum.domain.CanonicalHeadLock.isHeldByCurrentThread
+        override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit =
+          countedUnderTheLock :+= com.chipprbots.ethereum.domain.CanonicalHeadLock.isHeldByCurrentThread
+      val counted = new ForkChoiceManager(blockchainReader, blockchainWriter, recording)
+      counted.applyForkChoiceState(ForkChoiceState(knownHeadHash, ByteString.empty, ByteString.empty)) shouldBe Right(
+        ()
+      )
+      countedUnderTheLock shouldBe List(true, true)
+  )
+
+  // B-511 (vault): the blocks a move adopts are counted again before its write, and those it drops are taken out after.
+  // A stop between the two then leaves a block counted that is not indexed, which only keeps nodes longer; never one
+  // indexed that is not counted, whose nodes the prune would delete under the head.
+  it should "put back the counts of what a move adopts before its write, and take out what it drops after" taggedAs UnitTest in (
+    new Fixture:
+      @volatile var bestAt: List[(String, Option[ByteString])] = Nil
+      def best: Option[ByteString] = blockchainReader.getBestBlockHeader.map(_.hash.value)
+      val recording: ReorgStateHandler = new com.chipprbots.ethereum.consensus.ReorgStateHandler:
+        override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = bestAt :+= ("abandon" -> best)
+        override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = bestAt :+= ("readopt" -> best)
+      val before = best
+      before should not be Some(knownHeadHash)
+      val counted = new ForkChoiceManager(blockchainReader, blockchainWriter, recording)
+      counted.applyForkChoiceState(ForkChoiceState(knownHeadHash, ByteString.empty, ByteString.empty)) shouldBe Right(
+        ()
+      )
+      bestAt shouldBe List("readopt" -> before, "abandon" -> Some(knownHeadHash))
+  )
 
   it should "not throw when no listener is registered" taggedAs UnitTest in new Fixture:
     // No listener — must still succeed

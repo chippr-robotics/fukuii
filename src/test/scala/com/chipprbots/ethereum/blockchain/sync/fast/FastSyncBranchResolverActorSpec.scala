@@ -12,7 +12,6 @@ import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
-import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.implicits.*
 
@@ -105,11 +104,10 @@ class FastSyncBranchResolverActorSpec
           case r @ BranchResolvedSuccessful(num, _) if num == BigInt(5) => r
         }
 
-        val response: BranchResolvedSuccessful = (for
-          _ <- IO(fastSyncBranchResolver ! StartBranchResolver)
-          response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
-          _ <- IO(stopController(fastSyncBranchResolver))
-        yield response).unsafeRunSync()
+        // on the test's own thread: an `expectMsg` inside an `IO` parks a compute thread of the runtime (B-511)
+        fastSyncBranchResolver ! StartBranchResolver
+        val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout)(expectation)
+        stopController(fastSyncBranchResolver)
         assert(getBestPeers.contains(response.masterPeer))
 
       // Spec 018 C4e part 6: on the unified state layout the caller asks for the common block only. No block is taken
@@ -181,11 +179,9 @@ class FastSyncBranchResolverActorSpec
             case r @ BranchResolvedSuccessful(num, _) if num == BigInt(5) => r
           }
 
-          val response: BranchResolvedSuccessful = (for
-            _ <- IO(fastSyncBranchResolver ! StartBranchResolver)
-            response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
-            _ <- IO(stopController(fastSyncBranchResolver))
-          yield response).unsafeRunSync()
+          fastSyncBranchResolver ! StartBranchResolver
+          val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout)(expectation)
+          stopController(fastSyncBranchResolver)
           assert(getBestPeers.contains(response.masterPeer))
         "highest common block is in the first half" taggedAs (UnitTest, SyncTest) in new TestSetup:
           implicit override lazy val system: ActorSystem = self.system.classicSystem
@@ -218,11 +214,9 @@ class FastSyncBranchResolverActorSpec
             case r @ BranchResolvedSuccessful(num, _) if num == BigInt(3) => r
           }
 
-          val response: BranchResolvedSuccessful = (for
-            _ <- IO(fastSyncBranchResolver ! StartBranchResolver)
-            response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
-            _ <- IO(stopController(fastSyncBranchResolver))
-          yield response).unsafeRunSync()
+          fastSyncBranchResolver ! StartBranchResolver
+          val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout)(expectation)
+          stopController(fastSyncBranchResolver)
           assert(getBestPeers.contains(response.masterPeer))
 
         "highest common block is in the second half" taggedAs (UnitTest, SyncTest) in new TestSetup:
@@ -255,11 +249,9 @@ class FastSyncBranchResolverActorSpec
             case r @ BranchResolvedSuccessful(num, _) if num == BigInt(6) => r
           }
 
-          val response: BranchResolvedSuccessful = (for
-            _ <- IO(fastSyncBranchResolver ! StartBranchResolver)
-            response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
-            _ <- IO(stopController(fastSyncBranchResolver))
-          yield response).unsafeRunSync()
+          fastSyncBranchResolver ! StartBranchResolver
+          val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout)(expectation)
+          stopController(fastSyncBranchResolver)
           assert(getBestPeers.contains(response.masterPeer))
       }
 
@@ -289,11 +281,9 @@ class FastSyncBranchResolverActorSpec
           creatFastSyncBranchResolver(sender.ref, networkPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
 
         log.debug(s"*** peers: ${handshakedPeers.map(p => (p._1.id, p._2.maxBlockNumber))}")
-        (for
-          _ <- IO(fastSyncBranchResolver ! StartBranchResolver)
-          response <- IO(sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(NoCommonBlockFound)))
-          _ <- IO(stopController(fastSyncBranchResolver))
-        yield response).unsafeRunSync()
+        fastSyncBranchResolver ! StartBranchResolver
+        sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(NoCommonBlockFound)): Unit
+        stopController(fastSyncBranchResolver)
     }
     // B-298: on the hash layout the resolver takes this node's blocks off the chain only for a common block no deeper
     // than the guard allows and a branch the import's fork choice would take, and it follows the heaviest peer
@@ -615,12 +605,7 @@ class FastSyncBranchResolverActorSpec
 
     def createNetworkPeerManager(peers: Map[Peer, PeerInfo], blocks: Map[Int, List[Block]]): ActorRef =
       val networkPeerManager = TestProbe("network_peer_manager")
-      val autoPilot =
-        new NetworkPeerManagerAutoPilot(
-          peers,
-          blocks,
-          peerEventBus
-        )
+      val autoPilot = new NetworkPeerManagerAutoPilot(peers, blocks, peerEventBus)
       networkPeerManager.setAutoPilot(autoPilot)
       networkPeerManager.ref
 
@@ -679,6 +664,13 @@ object FastSyncBranchResolverActorSpec extends Logger:
         case _ => ()
       this
 
+  /** Answers the requests for headers with `blocks`, the n-th request with the n-th entry, as the tests script them.
+    *
+    * It runs on the actor system's dispatcher and never waits on the tests' IO runtime (a timeout flake, B-511): it
+    * completed a Deferred with `unsafeRunSync` on every peer poll, parking a dispatcher thread until a compute thread
+    * of `IORuntime.global` ran it, while the tests parked a compute thread in `expectMsg` inside an `IO`. Each waited
+    * on the other's pool, and the resolver's peers arrived only once the test's `expectMsg` had timed out.
+    */
   class NetworkPeerManagerAutoPilot(
       peers: Map[Peer, PeerInfo],
       blocks: Map[Int, List[Block]],

@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
 import com.chipprbots.ethereum.consensus.engine.*
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.storage.ReferenceCountNodeStorage
 import com.chipprbots.ethereum.db.storage.ReferenceCountedStateStorage
 import com.chipprbots.ethereum.db.storage.StagedBlockState
 import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
@@ -70,6 +71,7 @@ class EngineReorgRefCountSpec extends AnyFlatSpec with Matchers:
 
     val roots: mutable.Map[ByteString, ByteString] = mutable.Map.empty
     val plans: mutable.Map[ByteString, Seq[(Int, String)]] = mutable.Map.empty
+    @volatile var onExecute: Block => Unit = _ => ()
 
     class SimExecution(chain: BlockchainImpl)
         extends BlockExecution(chain, reader, writer, bs.evmCodeStorage, null, null):
@@ -80,6 +82,7 @@ class EngineReorgRefCountSpec extends AnyFlatSpec with Matchers:
       )(implicit
           blockchainConfig: BlockchainConfig
       ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+        onExecute(block)
         var root = roots(block.header.parentHash.value)
         plans.getOrElse(block.hash.value, Nil).foreach { case (slot, tag) =>
           root = ByteString(
@@ -185,6 +188,8 @@ class EngineReorgRefCountSpec extends AnyFlatSpec with Matchers:
         transactions = Nil,
         withdrawals = Some(Nil)
       )
+
+    def newPayloadStatus(b: Block): PayloadStatus = service.newPayload(payloadOf(b)).unsafeRunSync().status
 
     def newPayload(b: Block): PayloadStatus =
       val status = service.newPayload(payloadOf(b)).unsafeRunSync()
@@ -362,3 +367,55 @@ class EngineReorgRefCountSpec extends AnyFlatSpec with Matchers:
   ) in {
     failsReadingState(payloadDisplacedByImport(new Fixture(undoEnabled = false)))
   }
+
+  // B-511: on the hash layout `engine_newPayload` looks at the index and writes a payload's entry under the head's lock,
+  // which the p2p import holds while it executes and settles a branch (go-ethereum's `chainmu`). c3 extends a2, the
+  // head, when the branch b2, b3 (from a1) starts; it no longer does once the branch is the head.
+  "A payload that extends the head while the consensus layer's branch is executed over p2p" should
+    "wait for the branch to be settled, and then be stored as the side payload it is" taggedAs (
+      UnitTest,
+      DatabaseTest,
+      ConsensusTest
+    ) in {
+      val f = new Fixture(undoEnabled = true)
+      import f.*
+      initGenesis()
+      val a1 = mkBlock(genesis, 1, Seq(1 -> "a1"))
+      val a2 = mkBlock(a1, 2, Seq(3 -> "a2"))
+      newPayload(a1); forkchoice(a1)
+      newPayload(a2); forkchoice(a2)
+      val b2 = mkBlock(a1, 3, Seq(7 -> "b2"))
+      val b3 = mkBlock(b2, 4, Seq(8 -> "b3"))
+      val c3 = mkBlock(a2, 5, Seq(9 -> "c3"))
+      val node = new ConsensusImpl(
+        reader,
+        writer,
+        execution,
+        designatedHead = Some(DesignatedHead(() => Some(b3.hash.value))),
+        reorgState = handler
+      )
+      @volatile var payload: Option[Thread] = None
+      @volatile var answered: Option[PayloadStatus] = None
+      @volatile var heldBack = false
+      onExecute = block =>
+        if block.hash == b2.hash then
+          val thread = new Thread(() => answered = Some(newPayloadStatus(c3)))
+          payload = Some(thread)
+          thread.start()
+          val deadline = System.nanoTime() + 30_000_000_000L
+          // the payload is run on the IO runtime: one of its threads, not this one, waits for the lock
+          while !CanonicalHeadLock.hasWaiters && thread.isAlive && System.nanoTime() < deadline do Thread.onSpinWait()
+          heldBack = CanonicalHeadLock.hasWaiters
+      node.evaluateBranch(NonEmptyList.fromListUnsafe(List(b2, b3))).unsafeRunSync() shouldBe a[
+        com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
+      ]
+      heldBack shouldBe true
+      payload.foreach(_.join(30_000))
+      answered shouldBe Some(PayloadStatus.Valid)
+      reader.getBestBlock.map(_.hash) shouldBe Some(b3.hash)
+      reader.getCanonicalHashByNumber(2) shouldBe Some(b2.hash)
+      reader.getCanonicalHashByNumber(3) shouldBe Some(b3.hash)
+      // stored by its hash, its changes taken out: not left applied as the canonical extension it no longer is
+      ReferenceCountNodeStorage.isBlockApplied(c3.hash.value, bs.nodeStorage) shouldBe false
+      ReferenceCountNodeStorage.isBlockApplied(b3.hash.value, bs.nodeStorage) shouldBe true
+    }

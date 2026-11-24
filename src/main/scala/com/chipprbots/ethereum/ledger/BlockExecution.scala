@@ -1503,6 +1503,11 @@ object ChainInsertLock:
   /** Whether this thread holds the lock [[exclusive]]ly. For assertions (`ChainWeightReconcile`'s finish, #1654). */
   def heldExclusivelyByCurrentThread: Boolean = lock.isWriteLockedByCurrentThread
 
+  /** Whether this thread holds the lock, shared or exclusively: the head's lock is taken before it, never inside it
+    * (`CanonicalHeadLock`'s check of the order, B-511).
+    */
+  def heldByCurrentThread: Boolean = lock.isWriteLockedByCurrentThread || lock.getReadHoldCount > 0
+
 /** Serialises block execution + commit per block hash, across every path that executes blocks (the Engine API's
   * `newPayload` and the regular-sync importer).
   *

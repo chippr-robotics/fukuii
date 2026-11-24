@@ -305,9 +305,38 @@ class EngineApiService(
       val iter = set.iterator()
       while iter.hasNext do
         val child = iter.next()
-        blockchainWriter.removeBlockByHash(BlockHash(child)).commit()
+        removeInvalidBlock(BlockHash(child))
         markInvalidRecursive(child, effectiveLvh)
     }
+
+  /** A block found invalid, or standing on one, is removed: its header and body, and on the hash layout the entry of
+    * the index of blocks by number that names it, in the same batch, under the head's lock (B-511): the look at the
+    * index and the write are one step that a fork choice is not between, and no entry is left naming a block that is
+    * gone (`engine_newPayload` writes an entry for a payload that extends the index, ahead of the best block). On the
+    * unified layout the index is the held head's ancestry and moves only with it, and names no such block: only the
+    * block goes, as before.
+    */
+  private[engine] def removeInvalidBlock(hash: BlockHash): Unit =
+    if stateHeldInPlace.isDefined then blockchainWriter.removeBlockByHash(hash).commit()
+    else
+      CanonicalHeadLock.held(s"the removal of invalid block ${hash.toHexString}") {
+        val entry = blockchainReader
+          .getBlockHeaderByHash(hash)
+          .map(_.number.value)
+          .filter(n => blockchainReader.getCanonicalHashByNumber(n).contains(hash))
+        entry.foreach(n =>
+          log.warn(
+            "[ENGINE-API] block #{} {} is invalid and its entry of the index of blocks by number is removed with it",
+            n,
+            hash.toHexString
+          )
+        )
+        entry
+          .fold(blockchainWriter.removeBlockByHash(hash))(n =>
+            blockchainWriter.removeBlockByHash(hash).and(blockchainWriter.removeBlockNumberMapping(n))
+          )
+          .commit()
+      }
 
   /** Read-only copy of the invalid-block registry (blockHash -> latestValidHash), for specs that must assert the WHOLE
     * registry — "these entries and nothing else" — rather than probe it hash by hash through forkchoiceUpdated, which
@@ -387,7 +416,7 @@ class EngineApiService(
         val latestValid = block.header.parentHash.value
         (block :: above).foreach { invalid =>
           markInvalidRecursive(invalid.header.hash.value, latestValid)
-          blockchainWriter.removeBlockByHash(invalid.header.hash).commit()
+          removeInvalidBlock(invalid.header.hash)
         }
 
       // the rest of a catch-up's chain above a block that was rejected: marked and removed as those are (C5a part 8)
@@ -397,7 +426,7 @@ class EngineApiService(
       ): Unit =
         above.foreach { invalid =>
           markInvalidRecursive(invalid.hash.value, latestValid)
-          blockchainWriter.removeBlockByHash(invalid.hash).commit()
+          removeInvalidBlock(invalid.hash)
         }
 
   /** Has the state of the head `hash` names recovered, when this node recovers states: the stored blocks of its chain
@@ -529,8 +558,12 @@ class EngineApiService(
     *      known and we have state → full execution + validation 4. If parent is unknown → optimistic import (store
     *      block, skip execution, return VALID) This enables checkpoint sync where we follow the CL tip without full
     *      history.
+    *
+    * On a thread that may block (B-511): on the hash layout the look at the index and the write of the payload's entry
+    * wait for the head's lock, which a branch the p2p import executes and settles holds; on the unified layout the
+    * payload's state is written under the state's lock. A compute thread parked behind either starves the runtime.
     */
-  def newPayload(payload: ExecutionPayload): IO[PayloadStatusV1] = IO {
+  def newPayload(payload: ExecutionPayload): IO[PayloadStatusV1] = IO.blocking {
     val block = payloadToBlock(payload)
 
     // EIP-7928 (engine_newPayloadV5): the block access list must be the canonical RLP of a well-formed list, the empty
@@ -855,7 +888,7 @@ class EngineApiService(
                     // canonical chain. hive `GetPayloadBodiesByRange (Sidechain) (Paris)` sends exactly
                     // that sibling (withdrawals shuffled), and engine_getPayloadBodiesByRangeV1 then
                     // answered with the sibling's body ("withdrawal 1 not equal").
-                    val extendsCanonical = parentHeader.exists { p =>
+                    def extendsCanonical: Boolean = parentHeader.exists { p =>
                       blockchainReader.getBlockHeaderByNumber(p.number.value).exists(_.hash == p.hash)
                     } && blockchainReader
                       .getBlockHeaderByNumber(block.header.number.value)
@@ -864,15 +897,28 @@ class EngineApiService(
                     // of blocks by number is the ancestry of the block whose state is held, and moves with the state,
                     // in a fork choice's move of the head (spec 018 C4d part 2a; beacon). Its state is a forward layer,
                     // not a reference count to take back out.
-                    if stateHeldInPlace.isDefined then blockchainWriter.storeBlockByHashOnly(block).commit()
-                    else if extendsCanonical then blockchainWriter.storeBlock(block).commit()
-                    else
-                      blockchainWriter.storeBlockByHashOnly(block).commit()
-                      // A side payload is executed but not canonical: take its reference-count changes back out NOW,
-                      // not when it is eventually dropped. It shares nodes with the canonical chain (the one it
-                      // replaced is live there), so left applied it pushes them to zero references and the prune
-                      // deletes them. A forkchoiceUpdated that adopts it puts the changes back (ForkChoiceManager).
-                      reorgState.abandonBlockStates(Seq((block.header.number.value, block.header.hash.value)))
+                    val sidechain: Boolean =
+                      if stateHeldInPlace.isDefined then
+                        blockchainWriter.storeBlockByHashOnly(block).commit()
+                        true
+                      else
+                        // The look at the index and the write of the payload's entry are one step under the head's
+                        // lock (B-511), as go-ethereum's InsertBlockWithoutSetHead takes `chainmu`: a branch the p2p
+                        // import executes meanwhile writes its blocks' entries as they are committed, and an entry
+                        // written between the look and the write would land over one of them.
+                        CanonicalHeadLock.held(s"newPayload #${payload.blockNumber}") {
+                          val extendsIt = extendsCanonical
+                          if extendsIt then blockchainWriter.storeBlock(block).commit()
+                          else
+                            blockchainWriter.storeBlockByHashOnly(block).commit()
+                            // A side payload is executed but not canonical: take its reference-count changes back out
+                            // NOW, not when it is eventually dropped. It shares nodes with the canonical chain (the one
+                            // it replaced is live there), so left applied it pushes them to zero references and the
+                            // prune deletes them. A forkchoiceUpdated that adopts it puts the changes back
+                            // (ForkChoiceManager).
+                            reorgState.abandonBlockStates(Seq((block.header.number.value, block.header.hash.value)))
+                          !extendsIt
+                        }
                     keepExecuted(block, parentHeader, receipts, blockAccessList)
                     // NB: do NOT remove txs from the pool here. A newPayload'd block is stored
                     // but not yet canonical (no FCU has advanced bestBlock); the same txs must
@@ -884,7 +930,7 @@ class EngineApiService(
                       payload.blockNumber,
                       block.body.numberOfTxs,
                       // on the unified layout every executed payload is a forward layer until a fork choice moves to it
-                      if stateHeldInPlace.isDefined then "layer" else (!extendsCanonical).toString,
+                      if stateHeldInPlace.isDefined then "layer" else sidechain.toString,
                       derivedRequests.size,
                       block.header.stateRoot.value.take(8).map("%02x".format(_)).mkString
                     )
@@ -1177,10 +1223,10 @@ class EngineApiService(
       else
         // On the unified state layout the fork choice confirms the head under the state lock, through a move of the
         // head, and may wait there behind a move under way: on a thread that may block (beacon, spec 018 C4b part 3b).
-        // The hash store's runs where it always ran.
+        // On the hash layout it may wait as long, for the head's lock, behind a branch the p2p import is executing and
+        // settling (B-511): on a thread that may block too.
         val applied: IO[Either[ForkChoiceManager.Refusal, Unit]] =
-          if stateHeldInPlace.isDefined then IO.blocking(forkChoiceManager.applyForkChoiceState(forkChoiceState))
-          else IO.pure(forkChoiceManager.applyForkChoiceState(forkChoiceState))
+          IO.blocking(forkChoiceManager.applyForkChoiceState(forkChoiceState))
 
         applied.flatMap {
           case Left(_) if stateHeldInPlace.isDefined && isNowAnAncestorOfTheHead(headHeader) =>

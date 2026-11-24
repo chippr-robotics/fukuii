@@ -461,9 +461,11 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock1: Block = getBlock(bestNum - 1, difficulty = 101, parent = currentBestBlock.header.hash.value)
     val newBlock2: Block = getBlock(bestNum, difficulty = 105, parent = newBlock1.header.hash.value)
 
+    // B-511: on the hash layout a batch onto the head is executed a block at a time, under the head's lock, so that a
+    // fork choice waits a hold and a block, not the whole batch: one call per block, ending at the first that fails
     (mockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2), *, *, *)
+      .expects(List(newBlock1), *, *, *)
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
@@ -492,9 +494,11 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock2: Block = getBlock(bestNum + 2, difficulty = 105, parent = newBlock1.header.hash.value)
     val newBlock2bis: Block = getBlock(bestNum + 2, difficulty = 50, parent = newBlock1.header.hash.value)
 
+    // B-511: on the hash layout a batch onto the head is executed a block at a time, under the head's lock, so that a
+    // fork choice waits a hold and a block, not the whole batch: one call per block, ending at the first that fails
     (mockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2), *, *, *)
+      .expects(List(newBlock1), *, *, *)
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
@@ -527,10 +531,16 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock3: Block = getBlock(bestNum + 3, difficulty = 105, parent = newBlock2.header.hash.value)
     val newBlock3bis: Block = getBlock(bestNum + 3, difficulty = 50, parent = newBlock2.header.hash.value)
 
+    // B-511: on the hash layout a batch onto the head is executed a block at a time, under the head's lock, so that a
+    // fork choice waits a hold and a block, not the whole batch: one call per block, ending at the first that fails
     (mockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2, newBlock3), *, *, *)
-      .returning((List(BlockData(newBlock1, Nil, currentWeight.increase(newBlock1.header))), Some(execError)))
+      .expects(List(newBlock1), *, *, *)
+      .returning((List(BlockData(newBlock1, Nil, currentWeight.increase(newBlock1.header))), None))
+    (mockExecution
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
+      .expects(List(newBlock2), *, *, *)
+      .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
     whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock2).unsafeToFuture()) { result =>
@@ -614,6 +624,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     override def setBestBlock(block: Block): CallHandler0[BigInt] =
       (() => blockchainReader.getBestBlock).expects().anyNumberOfTimes().returning(Some(block))
+      // read again under the head's lock on the hash layout, before a batch is executed (B-511)
+      (() => blockchainReader.getBestBlockHeader).expects().anyNumberOfTimes().returning(Some(block.header))
       (() => blockchainReader.getBestBlockNumber).expects().anyNumberOfTimes().returning(block.header.number.value)
 
     override def setBestBlockNumber(num: BigInt): CallHandler0[BigInt] =
