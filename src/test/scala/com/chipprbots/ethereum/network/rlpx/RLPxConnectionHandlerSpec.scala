@@ -123,6 +123,40 @@ class RLPxConnectionHandlerSpec
       max = rlpxConfiguration.waitForTcpAckTimeout + Timeouts.normalTimeout
     )
 
+  it should "close the connection once a Disconnect it wrote is acknowledged (B-405)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("disconnect encoded"))
+
+    setupIncomingRLPxConnection()
+    rlpxConnectionParent.expectMsgType[InitialHelloReceived]
+
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(
+      com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect(
+        com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.UselessPeer
+      )
+    )
+    connection.expectMsg(Tcp.Write(ByteString("disconnect encoded"), RLPxConnectionHandler.Ack))
+    connection.reply(RLPxConnectionHandler.Ack)
+    // At once, not after the peer actor's 15 s disconnect-poison-pill-timeout: the frame is on the wire.
+    rlpxConnectionParent.expectTerminated(rlpxConnection, max = Timeouts.normalTimeout)
+
+  it should "keep the connection open once an ordinary message is acknowledged" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("ping encoded"))
+
+    setupIncomingRLPxConnection()
+    rlpxConnectionParent.expectMsgType[InitialHelloReceived]
+
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+    connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
+    connection.reply(RLPxConnectionHandler.Ack)
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+    connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
+
   it should "ignore timeout of old messages" taggedAs (UnitTest, NetworkTest) in new TestSetup:
     mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("ping encoded"))
 

@@ -992,7 +992,10 @@ object RLPxConnectionHandler:
         bridge: ClassicActorRef,
         messagesNotSent: Queue[MessageSerializable] = Queue.empty,
         cancellableAckTimeout: Option[CancellableAckTimeout],
-        seqNumber: Int
+        seqNumber: Int,
+        // A Disconnect has been written (B-405): once everything queued is acknowledged, the connection closes, as
+        // go-ethereum closes right after writing its disconnect frame (p2p/rlpx, discWriteTimeout).
+        closeAfterFlush: Boolean = false
     ): Behavior[Command] = Behaviors.receiveMessage {
 
       case SendMessage(h: HelloEnc) =>
@@ -1025,7 +1028,8 @@ object RLPxConnectionHandler:
             bridge,
             messagesNotSent :+ sm.serializable,
             cancellableAckTimeout,
-            seqNumber
+            seqNumber,
+            closeAfterFlush
           )
 
       case TcpReceived(data) =>
@@ -1055,7 +1059,21 @@ object RLPxConnectionHandler:
         log.debug("SEND_MSG_ACK: peer={}, seqNum={}", peerId, cancellableAckTimeout.map(_.seqNumber).getOrElse(-1))
         cancellableAckTimeout.foreach(_.cancellable.cancel())
         if messagesNotSent.nonEmpty then
-          sendMessage(messageCodec, inboundTranslator, bridge, messagesNotSent.head, seqNumber, messagesNotSent.tail)
+          sendMessage(
+            messageCodec,
+            inboundTranslator,
+            bridge,
+            messagesNotSent.head,
+            seqNumber,
+            messagesNotSent.tail,
+            closeAfterFlush
+          )
+        else if closeAfterFlush then
+          // B-405: the Disconnect frame is on the wire. Closing now lets the peer actor stop at once (it stops when
+          // this connection ends), instead of after its disconnect-poison-pill-timeout (15 s), which stays the bound
+          // for a write that is never acknowledged.
+          log.debug("[Stopping Connection] Disconnect sent and acknowledged: peer={}", peerId)
+          stopping()
         else handshaked(messageCodec, inboundTranslator, bridge, Queue.empty, None, seqNumber)
 
       case AckTimeout(n) if cancellableAckTimeout.exists(_.seqNumber == n) =>
@@ -1085,7 +1103,8 @@ object RLPxConnectionHandler:
         bridge: ClassicActorRef,
         messageToSend: MessageSerializable,
         seqNumber: Int,
-        remainingMsgsToSend: Queue[MessageSerializable]
+        remainingMsgsToSend: Queue[MessageSerializable],
+        closeAfterFlush: Boolean = false
     ): Behavior[Command] =
       val canonicalCode = messageToSend.code
       val wireCode = inboundTranslator.toPeerWireType(canonicalCode)
@@ -1122,5 +1141,6 @@ object RLPxConnectionHandler:
         bridge,
         remainingMsgsToSend,
         Some(CancellableAckTimeout(seqNumber, timeout)),
-        increaseSeqNumber(seqNumber)
+        increaseSeqNumber(seqNumber),
+        closeAfterFlush || messageToSend.underlyingMsg.isInstanceOf[Disconnect]
       )
