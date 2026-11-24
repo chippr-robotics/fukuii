@@ -318,17 +318,18 @@ items:
   - id: B-030
     title: Failed UDP sends log ERROR with a stack trace (IPv6 unreachable spam); demote, rate-limit, or skip IPv6
     priority: P2
-    status: claimed
+    status: review
     area: p2p
     size: S
     opened: 2026-11-05
     refs: [H9 rest, CHASE C]
-    links: {}
+    links:
+      prs: [2050]
     claim:
       by: cloud-719c6644
       agent: herald
       since: 2026-11-24T06:31:16Z
-      heartbeat: 2026-11-24T06:31:16Z
+      heartbeat: 2026-11-24T06:31:34Z
       branch: fix/b030-udp-send-failure-log
     notes: herald. Pollutes the gate's ERROR tally.
   - id: B-031
