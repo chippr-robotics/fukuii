@@ -2957,11 +2957,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T09:53:40Z
-      heartbeat: 2026-11-24T12:16:36Z
+      heartbeat: 2026-11-24T12:17:03Z
     notes: |-
-      2026-11-24 in-progress: forge agent clone-d (B-253 merged #2066)
       2026-11-24 in-progress: pushed 1af6249ed9; beacon review (ETH regular sync impact)
       2026-11-24 in-progress: beacon APPROVE (ETH) on condition B-460 lands with it; round 2 after #2069 merges: rebase, madeTheHead in partial arms, queue test, gas-used extension report test
+      2026-11-24 in-progress: round 2 pushed 57aafeda72 (B-338+B-509+B-513), B-460 6b0f77ce41 (B-460+B-514+B-515); round 3: post-merge blame consistency + importer pool reset from shared head
   - id: B-339
     title: SecureRandomBuilder reads secure-random-algo from the global ConfigFactory.load(), not the instance config
     priority: P3
