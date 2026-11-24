@@ -2576,13 +2576,18 @@ items:
   - id: B-287
     title: "TUI net report does not say the UPnP state: whether a port mapping was asked for, and whether the gateway gave it"
     priority: P3
-    status: open
+    status: claimed
     area: tui
     size: S
     opened: 2026-11-15
     refs: []
     links:
       spec: specs/029-tui-command-center
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T14:08:02Z
+      heartbeat: 2026-11-24T14:08:02Z
     notes: |-
       contracts/actions.md listed UPnP state under net. NetworkAddressInfo keeps the detected address and its step, not the mapping's outcome.
       PortForwarder would have to record it.
