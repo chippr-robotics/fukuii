@@ -2785,16 +2785,17 @@ items:
   - id: B-315
     title: "Weight arm of reorganiseOnLayers: weigh again when the head moved between the comparison and the move"
     priority: P3
-    status: in-progress
+    status: review
     area: consensus
     opened: 2026-11-16
     refs: [B-297]
-    links: {}
+    links:
+      prs: [2103]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T17:02:54Z
-      heartbeat: 2026-11-24T17:02:58Z
+      heartbeat: 2026-11-24T17:37:52Z
     notes: |-
       forge, after B-297: unreachable today (importLock); B1's anchor check is on the CL arm only
       2026-11-17 priority P3: unreachable under importLock
