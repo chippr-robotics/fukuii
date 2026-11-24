@@ -52,7 +52,8 @@ private[actors] class StubAccountTaskLifecycleState(
     with AccountRangeEnv
     with AccountPeerDispatchApi
     with AccountProgressApi
-    with ContractWorkCarryApi:
+    with ContractWorkCarryApi
+    with AccountTrieCommitApi:
 
   // AccountTaskLifecycleState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
@@ -116,6 +117,13 @@ private[actors] class StubAccountTaskLifecycleState(
   // AccountProgressApi
   val snapshots: mutable.ArrayBuffer[Boolean] = mutable.ArrayBuffer.empty
   def sendProgressSnapshot(durableRequested: Boolean = false): Unit = snapshots += durableRequested
+
+  // AccountTrieCommitApi
+  val trieCommits: mutable.ArrayBuffer[ByteString] = mutable.ArrayBuffer.empty
+  var trieCommitSucceeds: Boolean = true
+  def commitCompletedTaskTrie(task: AccountTask): Boolean =
+    trieCommits += task.last
+    trieCommitSucceeds
 
   // ContractWorkCarryApi
   val identified: mutable.ArrayBuffer[Int] = mutable.ArrayBuffer.empty
@@ -203,12 +211,33 @@ class AccountTaskLifecycleSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
 
     h.call(_.handleTaskComplete(BigInt(1), Right((0, Seq.empty, Seq(ByteString(Array[Byte](1, 2, 3)))))))
 
+    withClue("the range's open StackTrie is committed before it is marked complete (B-525): ")(
+      m.trieCommits.toSeq shouldBe Seq(t.last)
+    )
     m.completedTasks.toSeq shouldBe Seq(t.copy(next = t.last, done = true))
     m.consumedKeyspace shouldBe t.remainingKeyspace
     m.snapshots.toSeq shouldBe Seq(true)
     m.successes.toSeq shouldBe Seq(p.id)
     m.pendingTasks shouldBe empty
     h.selfMessages() shouldBe Seq(AccountRangeCoordinator.CheckCompletion)
+  }
+
+  it should "not complete a range whose trie commit fails on an empty response (B-525)" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    val p = peer("p1")
+    val w = TestInbox[AccountRangeWorker.Command]()
+    val t = wholeRange(m)
+    m.activeTasks(BigInt(1)) = (t.copy(pending = true), w.ref, p)
+    m.trieCommitSucceeds = false
+
+    h.call(_.handleTaskComplete(BigInt(1), Right((0, Seq.empty, Seq(ByteString(Array[Byte](1, 2, 3)))))))
+
+    m.trieCommits.toSeq shouldBe Seq(t.last)
+    m.completedTasks shouldBe empty
+    m.consumedKeyspace shouldBe BigInt(0)
+    m.snapshots shouldBe empty
+    h.selfMessages() shouldBe empty
   }
 
   it should "cool the peer and requeue on an empty response without proof or an error, and ignore an unknown request" taggedAs UnitTest in {
