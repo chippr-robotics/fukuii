@@ -222,7 +222,8 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       holdLastAdvanceMs = now
     if now - lastHeaderHoldWarnMs >= SNAPSyncController.HeaderHoldWarnIntervalMs then
       lastHeaderHoldWarnMs = now
-      ctx.log.warn(
+      // B-524: expected on a start from genesis (the state is ready before the headers reach the pivot): INFO, not WARN.
+      ctx.log.info(
         s"SNAP finalisation held for the header download: cursor=$cursor pivot=$pivot gap=${pivot - cursor} " +
           s"lastKnownPeers=${peersToDownloadFrom.size} (peer events are not processed during the hold)"
       )
@@ -782,7 +783,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     */
   private def finishedHandOff(pivot: BigInt): Behavior[Command] =
     progressMonitor.complete()
-    ctx.log.info(progressMonitor.currentProgress.toString)
+    ctx.log.info(progressMonitor.completionSummary)
     currentPhase = Completed
 
     // Cancel SNAP-only schedules before handing off so eviction tickers / stagnation checks stop

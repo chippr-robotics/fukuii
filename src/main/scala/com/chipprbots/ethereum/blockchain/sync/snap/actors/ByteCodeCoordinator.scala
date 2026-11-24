@@ -127,6 +127,8 @@ private[actors] class ByteCodeCoordinatorImpl(
   // Geth-aligned: coordinators run from start, tasks arrive inline during account download.
   private var noMoreTasksExpected: Boolean = false
   private var bytecodeMilestonePct: Int = -1
+  // B-524: the status line at 100% is logged once; it repeated on every pulse after completion.
+  private var loggedComplete: Boolean = false
   private var bytecodeStartMs: Long = 0L
 
   // Statistics
@@ -524,11 +526,13 @@ private[actors] class ByteCodeCoordinatorImpl(
         val rate = if elapsedSecs > 0 then (bytecodesDownloaded / elapsedSecs).toLong else 0L
         if noMoreTasksExpected then
           val pct = if total > 0 then ((completedTaskCount.toDouble / total) * 100).toInt else 0
-          log.info(
-            s"[SNAP-PROGRESS] BYTECODE-COORD $pct% — completed=$completedTaskCount total=$total " +
-              s"pending=${pendingTasks.size} active=${activeTasks.size} " +
-              s"workers=${workers.size} rate=$rate bytecodes/s"
-          )
+          if !(pct >= 100 && loggedComplete) then
+            log.info(
+              s"[SNAP-PROGRESS] BYTECODE-COORD $pct% — completed=$completedTaskCount total=$total " +
+                s"pending=${pendingTasks.size} active=${activeTasks.size} " +
+                s"workers=${workers.size} rate=$rate bytecodes/s"
+            )
+          loggedComplete = pct >= 100
           val (newM, crossed) =
             com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
               .crossed(completedTaskCount, total, bytecodeMilestonePct)
