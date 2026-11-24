@@ -4847,22 +4847,23 @@ items:
   - id: B-482
     title: Commit in place onto a branch leaves index entries above the new head when the index ran ahead of the anchor (post-hand-off)
     priority: P3
-    status: in-progress
+    status: review
     area: storage
     size: S
     opened: 2026-11-24
     refs: [B-316]
     links:
+      prs: [2058]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T06:59:16Z
-      heartbeat: 2026-11-24T07:16:41Z
+      heartbeat: 2026-11-24T07:30:09Z
     notes: |-
-      2026-11-24 in-progress: clone-e
       2026-11-24 in-progress: pushed 9de9b2745e; vault+beacon review
       2026-11-24 in-progress: vault CHANGES (bound, fold B-492); round 2 queued for next free lane
+      2026-11-24 review: 93b36d9321; vault round 2 addressed
   - id: B-483
     title: A fork choice to a canonical ancestor of the head ends TooLong after a maxCatchUp walk; geth ignores it ('Ignoring beacon update to old head', VALID)
     priority: P3
