@@ -5493,12 +5493,17 @@ items:
   - id: B-517
     title: "eth_simulateV1 pre-Amsterdam: a code override at the 4788/2935 contract runs no code (direct writes); geth's system call runs the override"
     priority: P3
-    status: open
+    status: claimed
     area: rpc
     size: S
     opened: 2026-11-24
     refs: [B-180]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T22:36:21Z
+      heartbeat: 2026-11-24T22:36:21Z
     notes: "Found in B-180. Import's pre-Amsterdam preamble writes the slots directly (valid only with the canonical code). geth simulate runs ProcessBeaconBlockRoot/ProcessParentBlockHash as EVM calls after overrides, so overridden code runs there. Needs a decision: a simulate-only system-call preamble would be a second implementation (proposer-import-parity Rule 2)."
   - id: B-518
     title: StxLedger estimator ignores maxUsedGas (geth gasestimator.go:155 uses it)
