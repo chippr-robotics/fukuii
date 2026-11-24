@@ -83,8 +83,9 @@ class ConsensusImpl(
     importHoldBudget: scala.concurrent.duration.FiniteDuration = CanonicalHeadLock.ImportHoldBudget,
     // The proof-of-work fork choice, core-geth's `ReorgNeeded` with its tie rule (B-284): asked only on a chain that
     // declares no terminal total difficulty (every ETC network). A node passes the one it shares with its other
-    // weighings, with its miner's etherbase; tests give a coin of their own.
-    override val powForkChoice: PowForkChoice = PowForkChoice.withoutMiner()
+    // weighings, with its miner's etherbase; tests give a coin of their own. The default breaks no tie and tosses no
+    // coin (forge W3, W4): a construction that names none is deterministic, test mode and the specs among them
+    override val powForkChoice: PowForkChoice = PowForkChoice.HeavierOnly
 ) extends Consensus
     with Logger:
 
@@ -872,6 +873,7 @@ class ConsensusImpl(
                         pinned,
                         remaining,
                         newBranch,
+                        parentWeight,
                         fork,
                         forkBlock,
                         bestBlockNumber,
@@ -1086,6 +1088,7 @@ class ConsensusImpl(
       pinned: List[BlockData],
       remaining: ToRun,
       newBranch: NonEmptyList[Block],
+      parentWeight: ChainWeight,
       fork: ForkPoint,
       forkBlock: BlockHeader,
       bestBlockNumber: BigInt,
@@ -1238,7 +1241,15 @@ class ConsensusImpl(
                   val diverged = divergedParent(failing, error)
                   if backToTheOldHead() then diverged
                   else whereTheHeadIsLeft(all, s"block ${failing.number}, which the branch stands on, failed")
-                case _ if outweighs(oldHead, bestBlockWeight, all.lastOption.fold(on)(_.block.header), weight) =>
+                case _
+                    if executedTakesTheHead(
+                      newBranch,
+                      parentWeight,
+                      oldHead.hash,
+                      bestBlockWeight,
+                      all.lastOption.fold(on)(_.block.header),
+                      weight
+                    ) =>
                   log.info(
                     "REORG-SETTLE: fork={} oldHead={} tip={} committedInPlace={}",
                     forkBlock.number,
@@ -1472,7 +1483,14 @@ class ConsensusImpl(
         val adopted =
           if selectedByWeight then
             executed.lastOption.fold(executedWeight > bestBlockWeight)(last =>
-              outweighsTheHead(bestBlockHash, bestBlockWeight, last.block.header, executedWeight)
+              executedTakesTheHead(
+                newBranch,
+                parentWeight,
+                bestBlockHash,
+                bestBlockWeight,
+                last.block.header,
+                executedWeight
+              )
             )
           else outcome.error.isEmpty && stillNamed
         // The consensus layer has named another head while its branch was executed: nothing is wrong with this node
@@ -1639,6 +1657,7 @@ class ConsensusImpl(
       !selectedByWeight && maybeError.isEmpty && outcome.stateFault.isEmpty && leadsToDesignatedHead(newBranch)
     val adopted =
       settleHead(
+        newBranch,
         executedBlocks,
         parentWeight,
         bestBlockNumber,
@@ -1817,6 +1836,33 @@ class ConsensusImpl(
           )
           false
 
+  /** The weight arm's question asked again of what was executed of a branch it selected over the head `headHash`, of
+    * weight `headWeight`: whether the executed tip `tip`, of weight `tipWeight`, still takes it.
+    *
+    * When the whole branch was executed, its tip and its weight are those it was selected by (`selected` from the
+    * weight `parentWeight` of the block it stands on), against the same head: the question is the one the selection
+    * answered, and its answer, a reorg, is carried through rather than asked again (forge W2). Asked again, a tie a
+    * coin decided is tossed again where the memo has forgotten the pair since (an eviction while the branch ran), and a
+    * block of this node's own is judged by an etherbase `miner_setEtherbase` may have changed since: a "keep" then
+    * would be taken for weights stored that disagree with the selection, a false `[STATE-FAULT]`. Where the executed
+    * weight is not the selection's, that disagreement is real and is asked as before. A prefix (a block of the branch
+    * failed) is another tip, and is weighed ([[outweighsTheHead]]).
+    *
+    * Chosen over pinning the memo's entry while the decision is in flight: a pin must be released on every way out of
+    * an execution (a fault, a throw, a hand-off, the hash layout's holds), and one missed holds its pair for good; this
+    * needs no state, and answers the same question once whatever the memo holds.
+    */
+  private def executedTakesTheHead(
+      selected: NonEmptyList[Block],
+      parentWeight: ChainWeight,
+      headHash: BlockHash,
+      headWeight: ChainWeight,
+      tip: BlockHeader,
+      tipWeight: ChainWeight
+  )(implicit blockchainConfig: BlockchainConfig): Boolean =
+    if tip.hash == selected.last.header.hash && tipWeight == newBranchWeight(selected, parentWeight) then true
+    else outweighsTheHead(headHash, headWeight, tip, tipWeight)
+
   private def returnNoTotalDifficultyForHeader(bestHeader: BlockHeader): IO[ConsensusError] =
     IO.pure(noTotalDifficultyForHeader(bestHeader))
 
@@ -1882,6 +1928,7 @@ class ConsensusImpl(
     * lighter head with an index mixing two chains; see ReorgBlockhashParitySpec.
     */
   private def settleHead(
+      newBranch: NonEmptyList[Block],
       executedBlocks: List[BlockData],
       parentWeight: ChainWeight,
       oldBestNumber: BigInt,
@@ -1972,7 +2019,9 @@ class ConsensusImpl(
       // the weight in. By core-geth's tie rule (B-284), as the branch was selected.
       val adopt =
         if selectedByWeight then
-          outweighsTheHead(
+          executedTakesTheHead(
+            newBranch,
+            parentWeight,
             oldBestHash,
             oldBestWeight,
             tip.header,

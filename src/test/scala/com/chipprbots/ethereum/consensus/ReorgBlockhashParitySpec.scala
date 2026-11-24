@@ -249,6 +249,47 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         }
     }
 
+    // forge W2: the coin's outcome for (head, tip) forgotten while the branch executes (another pair's toss evicted it)
+    // must not turn the settle against the selection: the whole branch executed is the branch selected, of the weight it
+    // was selected by, and the selection's decision is carried through, not weighed again. Weighed again, the coin is
+    // tossed a second time, and a "keep" would leave the executed branch beside the head or, at the cap, report the
+    // stored weights as disagreeing ([STATE-FAULT])
+    it should "adopt a whole branch whose coin outcome is evicted while it executes, as it was selected (B-284)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in {
+      // the first toss takes the side branch, the eviction's toss is any, and a third toss would keep the head
+      val coin = new PowForkChoiceSpec.Coins(0.0, 0.0, 0.99)
+      // for the side branch's execution only, once
+      var armed = false
+      var evicted = false
+      val (other, another) = (PowForkChoiceSpec.at(10, "elsewhere"), PowForkChoiceSpec.at(10, "elsewhere too"))
+      val f = new Fixture(
+        guard,
+        cap,
+        coin,
+        remembered = 1,
+        beforeExecution = choice =>
+          if armed && !evicted then
+            evicted = true
+            // another tie, tossed and remembered: with room for one, the selection's pair is forgotten
+            choice.reorgNeeded(other, PowForkChoiceSpec.weight(7), another, PowForkChoiceSpec.weight(7)): Unit
+      )
+      import f.*
+      val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 10, difficulty = 1000)
+      val side: List[Block] = oracle.extendSide(oldChain(4), 5, difficulty = 1000, tag = 0x5d)
+      node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+      coin.tossed shouldBe 0
+      armed = true
+      val result = node.importAll(side)
+      evicted shouldBe true
+      // the selection's toss and the eviction's: none at the settle
+      coin.tossed shouldBe 2
+      result shouldBe a[ChainReorganised]
+      node.bestHash shouldBe side.last.hash
+      (6 to 10).foreach(n => node.indexed(n) shouldBe Some(side(n - 6).hash))
+    }
+
     (s"A reorg back onto a previously orphaned block ($layout)" should
       "rewrite the canonical index below the branch parent, so BLOCKHASH and the old branch match core-geth").taggedAs(
       UnitTest,
@@ -2242,6 +2283,29 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         node.bestHash shouldBe aChain.last.hash
     )
 
+  // forge W3, W4: a ConsensusImpl built with no fork choice named (test mode before this, and the specs that build one)
+  // breaks no tie and tosses no coin: a tie of weight keeps the head, whatever the heights. Only a node's own fork
+  // choice breaks ties (`NodeBuilder.powForkChoice`)
+  "A ConsensusImpl given no fork choice" should "keep the head on every tie of total difficulty, with no coin" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (
+    new Fixture:
+      val consensus = new ConsensusImpl(node.blockchainReader, node.blockchainWriter, node.blockExecution)
+      consensus.powForkChoice shouldBe PowForkChoice.HeavierOnly
+      val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 5, difficulty = 1000)
+      // at the head's height, of its weight
+      val even: List[Block] = oracle.extendSide(aChain(1), 3, difficulty = 1000, tag = 0x76)
+      // lower than the head, of its weight: the lower block would win the tie by core-geth's rule
+      val lower: List[Block] = oracle.extendSide(aChain(1), 2, difficulty = 1500, tag = 0x77)
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      import node.blockchainConfig
+      import node.runtime
+      for branch <- Seq(even, lower) do
+        consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync() shouldBe KeptCurrentBestBranch
+        node.bestHash shouldBe aChain.last.hash
+  )
+
   // B-088: the transaction lookups follow the head across a reorganisation, as core-geth's `reorg` keeps them
   // (core/blockchain.go: `types.HashDifference(deletedTxs, addedTxs)`, then `rawdb.DeleteTxLookupEntry`). A transaction
   // only the blocks the head left include has no lookup; one the new chain includes too is looked up in the new chain's
@@ -3222,14 +3286,21 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
 
   /** @param coin
     *   the coin of the node's fork choice (B-284): by default one that fails the test if a tie is ever left to it
+    * @param remembered
+    *   how many coin outcomes the node's fork choice keeps
+    * @param beforeExecution
+    *   run, with the node's fork choice, each time the node's consensus executes blocks of a branch
     */
   class Fixture(
       guard: Boolean = false,
       cap: StateConfig => StateConfig = identity,
-      coin: () => Double = PowForkChoiceSpec.NoCoin
+      coin: () => Double = PowForkChoiceSpec.NoCoin,
+      remembered: Int = PowForkChoice.Remembered,
+      beforeExecution: PowForkChoice => Unit = _ => ()
   ):
     val oracle = new Oracle
-    val node = new Node(guard, cap, forkChoice = Some(new PowForkChoice(_ => false, coin)))
+    val forkChoice = new PowForkChoice(_ => false, coin, remembered)
+    val node = new Node(guard, cap, forkChoice = Some(forkChoice), beforeExecution = () => beforeExecution(forkChoice))
 
     /** The block hash `block`'s execution recorded at `slot`, on the node under test: read from its state on the hash
       * layout; on the unified layout the recorder's storage is the oracle's, root for root (the state root the block
@@ -3352,12 +3423,51 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       cap: StateConfig => StateConfig = identity,
       datadir: Option[EphemDataSource] = None,
       restart: Boolean = false,
-      forkChoice: Option[PowForkChoice] = None
+      forkChoice: Option[PowForkChoice] = None,
+      beforeExecution: () => Unit = () => ()
   ) extends ChainHost(guard, cap, datadir, restart):
 
     // the node's proof-of-work fork choice (B-284): the node's, with its miner and a real coin, unless the case gives one
     override lazy val powForkChoice: PowForkChoice =
       forkChoice.getOrElse(PowForkChoice.ofEtherbase(() => coinbaseProvider.get()))
+
+    // the node's, built as the node builds it, with `beforeExecution` run as the consensus executes a branch's blocks
+    // (the two ways `ConsensusImpl` executes them)
+    override lazy val blockExecution: BlockExecution =
+      new BlockExecution(
+        blockchain,
+        blockchainReader,
+        blockchainWriter,
+        storagesInstance.storages.evmCodeStorage,
+        mining.blockPreparator,
+        blockValidation
+      ):
+        override def executeAndValidateBranch(
+            blocks: List[Block],
+            parentChainWeight: ChainWeight,
+            suppliedBlockAccessLists: Map[ByteString, com.chipprbots.ethereum.domain.BlockAccessList],
+            pin: Option[com.chipprbots.ethereum.db.storage.pathstate.BranchPin]
+        )(implicit
+            blockchainConfig: BlockchainConfig
+        ): (List[com.chipprbots.ethereum.ledger.BlockData], Option[BlockExecutionError]) =
+          beforeExecution()
+          super.executeAndValidateBranch(blocks, parentChainWeight, suppliedBlockAccessLists, pin)
+
+        override def executeAndValidateBlocksWithAccessLists(
+            blocks: List[Block],
+            parentChainWeight: ChainWeight,
+            adoptEachBlock: Boolean,
+            suppliedBlockAccessLists: Map[ByteString, com.chipprbots.ethereum.domain.BlockAccessList]
+        )(implicit
+            blockchainConfig: BlockchainConfig
+        ): (List[com.chipprbots.ethereum.ledger.BlockData], Option[BlockExecutionError]) =
+          beforeExecution()
+          super.executeAndValidateBlocksWithAccessLists(
+            blocks,
+            parentChainWeight,
+            adoptEachBlock,
+            suppliedBlockAccessLists
+          )
     def importAll(blocks: List[Block]): BlockImportResult =
       consensusAdapter.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()
 

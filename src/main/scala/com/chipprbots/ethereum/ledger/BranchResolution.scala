@@ -31,14 +31,19 @@ import com.chipprbots.ethereum.utils.Logger
   * @param powForkChoice
   *   the proof-of-work fork choice, core-geth's `ReorgNeeded` with its tie rule (B-284): a node gives the one its
   *   consensus holds (`Consensus.powForkChoice`), so that a tie a coin decides is decided once for the headers and for
-  *   the branch. Asked only where no consensus layer is followed
+  *   the branch. Asked only where no consensus layer is followed and no terminal total difficulty is declared. The
+  *   default breaks no tie ([[PowForkChoice.HeavierOnly]]): a construction that names none tosses no coin (forge W4)
+  * @param terminalTotalDifficulty
+  *   the chain's, where it declares one: a tie is then never broken here, as `ConsensusImpl` breaks none on such a
+  *   chain, whatever `powForkChoice` is given (forge W4)
   */
 class BranchResolution(
     blockchainReader: BlockchainReader,
     designatedHead: Option[DesignatedHead] = None,
     backfillStallAfter: FiniteDuration = BranchResolution.DefaultBackfillStallAfter,
     nanoTime: () => Long = () => System.nanoTime(),
-    powForkChoice: PowForkChoice = PowForkChoice.withoutMiner()
+    powForkChoice: PowForkChoice = PowForkChoice.HeavierOnly,
+    terminalTotalDifficulty: Option[BigInt] = None
 ) extends Logger:
 
   /** Optional MESS config for anti-reorg protection. Set by SyncController when configured. */
@@ -54,6 +59,25 @@ class BranchResolution(
   def followsConsensusLayer: Boolean = designatedHead.isDefined
 
   def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
+    resolveBranch(headers, coinDecides = true)
+
+  /** [[resolveBranch]] by the fork choice's rule alone ([[PowForkChoice.verdict]]): a tie a coin would decide is not a
+    * better branch, and no coin is tossed. For what gives up more than the head on the answer, the hash layout's fork
+    * recovery, which takes this node's blocks off the chain for the branch (forge B1).
+    */
+  def resolveBranchByTheRule(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
+    resolveBranch(headers, coinDecides = false)
+
+  /** Whether a fork recovery may take this node's blocks above the common block off the chain for the branch of
+    * `headers`: it is the better branch by the rule ([[resolveBranchByTheRule]]), never by a coin (forge B1). The hash
+    * layout's discard guard (`BlockImporter`).
+    */
+  def discardsFor(headers: NonEmptyList[BlockHeader]): Boolean =
+    resolveBranchByTheRule(headers) match
+      case NewBetterBranch(_) => true
+      case _                  => false
+
+  private def resolveBranch(headers: NonEmptyList[BlockHeader], coinDecides: Boolean): BranchResolutionResult =
     if !doHeadersFormChain(headers) then InvalidBranch
     else
       val knownParentOrGenesis = blockchainReader
@@ -63,14 +87,17 @@ class BranchResolution(
         ) || headers.head.hash == blockchainReader.genesisHeader.hash
 
       if !knownParentOrGenesis then UnknownBranch
-      else compareBranch(headers)
+      else compareBranch(headers, coinDecides)
 
   private[ledger] def doHeadersFormChain(headers: NonEmptyList[BlockHeader]): Boolean =
     headers.toList.zip(headers.tail).forall { case (parent, child) =>
       parent.hash == child.parentHash && parent.number + 1 == child.number
     }
 
-  private[ledger] def compareBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
+  private[ledger] def compareBranch(
+      headers: NonEmptyList[BlockHeader],
+      coinDecides: Boolean = true
+  ): BranchResolutionResult =
     val headersList = headers.toList
     val own = getTopBlocksFromNumber(headers.head.number.value)
     own.firstMissing match
@@ -89,14 +116,15 @@ class BranchResolution(
           case Left(withoutBody) =>
             logGap("Branch not weighed: a block it would displace has no body", withoutBody, headersList)
             NoChainSwitch
-          case Right(oldBlocks) => compareWithOwn(headersList, commonPrefixLength, oldBlocks)
+          case Right(oldBlocks) => compareWithOwn(headersList, commonPrefixLength, oldBlocks, coinDecides)
 
   // compareBranch over this node's chain from the batch's first height to the head: no header missing, the first
   // `commonPrefixLength` the batch's own, and `oldBlocks` those above them, whole
   private def compareWithOwn(
       headersList: List[BlockHeader],
       commonPrefixLength: Int,
-      oldBlocks: List[Block]
+      oldBlocks: List[Block],
+      coinDecides: Boolean
   ): BranchResolutionResult =
     val newHeaders = headersList.drop(commonPrefixLength)
 
@@ -119,7 +147,7 @@ class BranchResolution(
           w.increase(h)
         }
 
-        if outweighs(oldBlocks.lastOption.map(_.header), oldWeight, newHeaders.lastOption, newWeight) then
+        if outweighs(oldBlocks.lastOption.map(_.header), oldWeight, newHeaders.lastOption, newWeight, coinDecides) then
           // New branch has higher TD, or wins the tie (B-284) — check MESS anti-reorg protection
           if shouldMessReject(oldBlocks, newHeaders) then NoChainSwitch
           else NewBetterBranch(oldBlocks)
@@ -172,21 +200,26 @@ class BranchResolution(
 
   /** Whether a branch whose tip is `tip`, of weight `newWeight`, takes the head from this node's chain, whose head is
     * `head`, of weight `oldWeight`, by weight: core-geth's `ForkChoice.ReorgNeeded` with its tie rule
-    * ([[PowForkChoice]], B-284), as `ConsensusImpl` selects the branch. Strictly heavier where either is not known
-    * (nothing of this node's chain is displaced: the branch extends it) and where a consensus layer is followed, as
-    * before.
+    * ([[PowForkChoice]], B-284), as `ConsensusImpl` selects the branch. With `coinDecides` false, the rule alone: a tie
+    * a coin would decide is not taken, and nothing is tossed. Strictly heavier where either is not known (nothing of
+    * this node's chain is displaced: the branch extends it), where a consensus layer is followed and where the chain
+    * declares a terminal total difficulty, as before (forge W4).
     */
   private def outweighs(
       head: Option[BlockHeader],
       oldWeight: ChainWeight,
       tip: Option[BlockHeader],
-      newWeight: ChainWeight
+      newWeight: ChainWeight,
+      coinDecides: Boolean = true
   ): Boolean =
     (for
       current <- head
       extern <- tip
-      if !followsConsensusLayer
-    yield powForkChoice.reorgNeeded(current, oldWeight, extern, newWeight)).getOrElse(newWeight > oldWeight)
+      if !followsConsensusLayer && terminalTotalDifficulty.isEmpty
+    yield
+      if coinDecides then powForkChoice.reorgNeeded(current, oldWeight, extern, newWeight)
+      else powForkChoice.verdict(current, oldWeight, extern, newWeight) == PowForkChoice.Verdict.Reorg)
+      .getOrElse(newWeight > oldWeight)
 
   /** Is the tip of this candidate branch on the path to the head the consensus layer designated?
     *

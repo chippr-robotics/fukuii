@@ -153,8 +153,15 @@ class BlockBroadcast(
     // ETH/69 peers: chainWeight may be actual TD (local lookup) or a block-number proxy (peer
     // ahead of us). The proxy case makes the TD comparison always true, spamming every ETH69 peer.
     // Use block-number comparison only for ETH69 — maxBlockNumber is now correct (from latestBlock).
+    //
+    // A peer of the block's own weight is sent it too when its head is another block (B-284): core-geth sends a block
+    // to every peer that does not have it (`eth/handler.go` BroadcastBlock, `peersWithoutBlock`), with no weight test,
+    // and a block that won a tie of total difficulty is what the peers on the block it beat need to follow it. Not
+    // wider: fukuii keeps no set of the blocks each peer knows, and the weight a peer reported is what stands for it
+    // here. A peer whose head is this block already has it; one heavier has a chain that outweighs it.
     val heavierChain = !Capability.isEth69Plus(peerInfo.remoteStatus.capability) &&
-      newBlock.chainWeight > peerInfo.chainWeight
+      (newBlock.chainWeight > peerInfo.chainWeight ||
+        (newBlock.chainWeight == peerInfo.chainWeight && peerInfo.bestBlockHash != newBlock.block.header.hash.value))
     blockAhead || heavierChain
 
   private def broadcastNewBlock(blockToBroadcast: BlockToBroadcast, peers: Map[PeerId, PeerWithInfo]): Unit =

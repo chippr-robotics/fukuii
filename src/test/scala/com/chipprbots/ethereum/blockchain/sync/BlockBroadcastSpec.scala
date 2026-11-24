@@ -6,6 +6,7 @@ import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -105,6 +106,41 @@ class BlockBroadcastSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     )
 
     // then
+    networkPeerManagerProbe.expectNoMessage()
+
+  // B-284: a block that won a tie of total difficulty is sent to the peers on the block it beat, as core-geth sends a
+  // block to every peer without it (eth/handler.go BroadcastBlock); a peer whose head is the block is not sent it
+  it should "send a new block to a peer of the same total difficulty whose head is another block, and not to one whose head it is" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup:
+    // at the peer's height, of the peer's weight: neither ahead nor heavier
+    val blockHeader: BlockHeader =
+      baseBlockHeader.copy(number = BlockNumber(initialPeerInfo.maxBlockNumber), extraData = ByteString("tie"))
+    blockHeader.hash.value should not be initialPeerInfo.bestBlockHash
+    val block: Block = Block(blockHeader, BlockBody(Nil, Nil))
+    val chainWeight: ChainWeight = initialPeerInfo.chainWeight
+
+    blockBroadcast.broadcastBlock(
+      BlockToBroadcast(block, chainWeight),
+      Map(peer.id -> PeerWithInfo(peer, initialPeerInfo))
+    )
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(ETHPackets.NewBlock(block, chainWeight.totalDifficulty.value), peer.id)
+    )
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(
+        NewBlockHashes(Seq(BlockHash(blockHeader.hash.value, blockHeader.number.value))),
+        peer.id
+      )
+    )
+    networkPeerManagerProbe.expectNoMessage()
+
+    // the peer's head is the block: it has it
+    blockBroadcast.broadcastBlock(
+      BlockToBroadcast(block, chainWeight),
+      Map(peer.id -> PeerWithInfo(peer, initialPeerInfo.copy(bestBlockHash = blockHeader.hash.value)))
+    )
     networkPeerManagerProbe.expectNoMessage()
 
   it should "send a new block when it is not known by the peer (known by comparing max block number)" taggedAs (

@@ -32,9 +32,9 @@ import com.chipprbots.ethereum.domain.ChainWeight
   * @param firstInvalidHeader
   *   the first header of the branch that is not valid, with why
   * @param forkChoice
-  *   the import's fork choice by weight, core-geth's `ReorgNeeded` with its tie rule (B-284): a node gives its
-  *   consensus's, so that a tie a coin decides is decided as the import decides it. The default keeps the head on a
-  *   tie, as this did before
+  *   the import's fork choice by weight, core-geth's `ReorgNeeded` with its tie rule (B-284), asked without its coin
+  *   ([[PowForkChoice.verdict]]): a branch is the heavier only where the rule takes it, a tie lost or one a coin would
+  *   decide is not. A node gives its consensus's. The default keeps the head on a tie, as this did before
   */
 final class DeepForkWeight(
     weightOf: BlockHash => Option[ChainWeight],
@@ -57,9 +57,11 @@ final class DeepForkWeight(
     yield (common, commonWeight, headHeader, headWeight, headers.toList.foldLeft(commonWeight)(_.increase(_)))
     weighed match
       case None => BeyondReachVerdict.NotHeavier
-      // not the heavier by the import's rule: lighter, or a tie it does not win (B-284)
+      // not the heavier by the import's rule: lighter, or a tie it does not win (B-284). Only the rule's own reorg
+      // escalates: a tie a coin would decide gives no node's state up for a SNAP re-sync, and no coin is tossed on
+      // headers not yet validated (forge B1, W1)
       case Some((_, _, headHeader, headWeight, branchWeight))
-          if !forkChoice.reorgNeeded(headHeader, headWeight, headers.last, branchWeight) =>
+          if forkChoice.verdict(headHeader, headWeight, headers.last, branchWeight) != PowForkChoice.Verdict.Reorg =>
         BeyondReachVerdict.NotHeavier
       case Some((common, commonWeight, headHeader, headWeight, branchWeight))
           if messActiveAt.exists(_(headHeader.number.value)) && messRefuses(

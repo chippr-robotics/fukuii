@@ -62,7 +62,8 @@ class ChainImporter(
     *
     * A block refused because another writer holds the head ([[StateBusy]], B-462) ends the import there too, as the
     * strict import ends on it (B-487): nothing of that block was written, it is no verdict on it and no fault of this
-    * node, and every block after it would stand on it. Said at WARN and carried by its type
+    * node, and every block after it would stand on it. So does a block whose head another writer moved while it
+    * executed, carried as the same refusal. Said at WARN and carried by its type
     * ([[ChainImporter.LenientSummary.busy]]), for the caller to import the file again once the head is free: the blocks
     * before it are then skipped as present.
     *
@@ -351,10 +352,28 @@ class ChainImporter(
             )
           else
             val parentWeight = blockchainReader.getChainWeightByHash(header.parentHash).getOrElse(ChainWeight.zero)
-            val stillOnHead =
-              () => Option.unless(onHead)(BlockExecutionError.ValidationAfterExecError(ChainImporter.HeadMoved))
+            var headMoved = false
+            val stillOnHead = () =>
+              if onHead then None
+              else
+                headMoved = true
+                Some(BlockExecutionError.ValidationAfterExecError(ChainImporter.HeadMoved))
             blockExecution.executeAndAdoptBlockIf(block, parentWeight, stillOnHead) match
               case Right(_) => LenientOutcome.Imported(1)
+              // Another writer of the head moved it while the block executed (a consensus client's forkchoiceUpdated,
+              // a miner's or a branch import's settle): nothing of the block was written, and it is no verdict on it.
+              // The import stops here, as the strict import stops on it, and typed as a head another writer holds
+              // (B-487): every block after it stands on it. Imported again, the blocks before it are skipped
+              case Left(_) if headMoved =>
+                val now =
+                  blockchainReader.getBestBlockHeader.map(h => s"#${h.number} (${h.hashAsHexString})").getOrElse("none")
+                LenientOutcome.Busy(
+                  new StateBusy(
+                    "another writer of the head",
+                    s"block ${header.number} (${header.hashAsHexString}): ${ChainImporter.HeadMoved} (head is now $now)"
+                  ),
+                  0
+                )
               case Left(error) =>
                 log.error(s"Chain import: block ${header.number} failed — ${error.describe}")
                 LenientOutcome.Failed

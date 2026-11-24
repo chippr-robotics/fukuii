@@ -36,13 +36,19 @@ import com.chipprbots.ethereum.domain.ChainWeight
   * A tie is broken only between two proof-of-work blocks: a block of no difficulty is a block after a merge, whose head
   * a consensus layer names, and keeps the head here as it did before. No valid block of an ETC chain has none.
   *
-  * '''One coin per decision.''' core-geth asks once, when the block is written (`writeBlockAndSetHead`). fukuii weighs
-  * the same branch more than once: the headers before the bodies are fetched (`BranchResolution`, which on the hash
-  * layout also decides a fork recovery's rewind), the branch when it is executed (`ConsensusImpl`), and what was
-  * executed after. So the coin's outcome is kept for the pair (head, tip) it was tossed for, and every later weighing
-  * of that pair reads it: all of them agree, as core-geth's single question does. Bounded (`remembered`); a pair
-  * forgotten is tossed again, as core-geth tosses again for a block written twice. One instance per node, shared by
-  * every weighing.
+  * '''One coin per pair.''' core-geth asks once, when the block is written (`writeBlockAndSetHead`). fukuii weighs the
+  * same branch more than once: the headers before the bodies are fetched (`BranchResolution`), the branch when it is
+  * executed (`ConsensusImpl`), and what was executed after. So the coin's outcome is kept for the two blocks it was
+  * tossed between, as the winner's hash, whichever of them was the head: (A, B) and (B, A) are one question, decided
+  * once, and a node that took B over A does not take A back over B on a second coin (forge B1). Bounded (`remembered`);
+  * a pair forgotten is tossed again, as core-geth tosses again for a block written twice. One instance per node, shared
+  * by every weighing.
+  *
+  * '''A coin moves the head, nothing more.''' What a weighing answers says whether the rule decided it or a coin did
+  * ([[PowForkChoice.Decision]]). A coin is worth a reorganisation on blocks this node holds, as core-geth's is; it is
+  * never worth giving this node's state up. The escalation to a SNAP re-sync, the fork recovery's discard and the
+  * escalation's count take a branch only on a [[PowForkChoice.Verdict.Reorg]] of the rule ([[verdict]]), and toss no
+  * coin: a peer's headers, not yet validated, can claim any weight, and a tie of theirs is no entry in the memo.
   *
   * @param preserve
   *   whether a block is this node's own: kept on a tie at its height, or taken over another
@@ -60,16 +66,18 @@ final class PowForkChoice(
     remembered: Int = PowForkChoice.Remembered,
     breaksTies: Boolean = true
 ):
+  import PowForkChoice.Decision
   import PowForkChoice.Verdict
 
   require(remembered > 0, s"remembered must be positive, was $remembered")
 
-  private val tossed = new java.util.LinkedHashMap[(BlockHash, BlockHash), java.lang.Boolean](16, 0.75f, true):
-    override def removeEldestEntry(eldest: java.util.Map.Entry[(BlockHash, BlockHash), java.lang.Boolean]): Boolean =
+  // the winner of each pair a coin decided, keyed by the pair unordered: (A, B) and (B, A) read one outcome
+  private val tossed = new java.util.LinkedHashMap[Set[BlockHash], BlockHash](16, 0.75f, true):
+    override def removeEldestEntry(eldest: java.util.Map.Entry[Set[BlockHash], BlockHash]): Boolean =
       size() > remembered
 
   /** The rule without the coin: whether `extern`, of weight `externWeight`, takes the head from `current`, of weight
-    * `currentWeight`; or that a coin is to decide it.
+    * `currentWeight`; or that a coin is to decide it. Tosses nothing and remembers nothing.
     */
   def verdict(
       current: BlockHeader,
@@ -93,8 +101,31 @@ final class PowForkChoice(
       else if externPreserve then Verdict.Reorg
       else Verdict.Coin
 
-  /** core-geth's `ReorgNeeded`: whether `extern` takes the head from `current`. A tie the coin decides is decided once
-    * for the pair, and read again after.
+  /** core-geth's `ReorgNeeded`, and whether the rule or a coin answered it. A tie the coin decides is decided once for
+    * the pair, in either order, and read again after.
+    */
+  def decide(
+      current: BlockHeader,
+      currentWeight: ChainWeight,
+      extern: BlockHeader,
+      externWeight: ChainWeight
+  ): Decision =
+    verdict(current, currentWeight, extern, externWeight) match
+      case Verdict.Reorg => Decision.Reorg
+      case Verdict.Keep  => Decision.Keep
+      case Verdict.Coin =>
+        val pair = Set(current.hash, extern.hash)
+        val winner = tossed.synchronized {
+          Option(tossed.get(pair)).getOrElse {
+            val won = if coin() < 0.5 then extern.hash else current.hash
+            tossed.put(pair, won)
+            won
+          }
+        }
+        Decision.Coin(taken = winner == extern.hash)
+
+  /** core-geth's `ReorgNeeded`: whether `extern` takes the head from `current`, the rule's answer or the coin's. For a
+    * head move only: what must not act on a coin asks [[verdict]].
     */
   def reorgNeeded(
       current: BlockHeader,
@@ -102,25 +133,29 @@ final class PowForkChoice(
       extern: BlockHeader,
       externWeight: ChainWeight
   ): Boolean =
-    verdict(current, currentWeight, extern, externWeight) match
-      case Verdict.Reorg => true
-      case Verdict.Keep  => false
-      case Verdict.Coin =>
-        val pair = (current.hash, extern.hash)
-        tossed.synchronized {
-          Option(tossed.get(pair)) match
-            case Some(outcome) => outcome.booleanValue
-            case None =>
-              val outcome = coin() < 0.5
-              tossed.put(pair, outcome)
-              outcome
-        }
+    decide(current, currentWeight, extern, externWeight).reorg
 
 object PowForkChoice:
 
-  /** What the rule says before a coin is tossed. */
+  /** What the rule says before a coin is tossed. `Reorg` and `Keep` are the rule's own; `Coin`, a tie only a coin
+    * decides.
+    */
   enum Verdict:
     case Reorg, Keep, Coin
+
+  /** What a weighing answers, and by what: the rule (`Reorg`, `Keep`), or a coin (`Coin`, with its outcome for this
+    * order of the pair). Only a `Reorg` is a reason to give anything of this node's up beyond its head.
+    */
+  enum Decision:
+    case Reorg
+    case Keep
+    case Coin(taken: Boolean)
+
+    /** Whether the head is taken. */
+    def reorg: Boolean = this match
+      case Decision.Reorg       => true
+      case Decision.Keep        => false
+      case Decision.Coin(taken) => taken
 
   /** How many coin outcomes a fork choice keeps: far more than the ties open at once on a live chain. */
   val Remembered: Int = 1024
@@ -136,11 +171,12 @@ object PowForkChoice:
   def ofEtherbase(etherbase: () => Address): PowForkChoice =
     new PowForkChoice(header => header.beneficiary == etherbase().bytes, Coin)
 
-  /** With no block this node's own, and the production coin: what a consensus built without a node's miner holds. */
-  def withoutMiner(): PowForkChoice = new PowForkChoice(_ => false, Coin)
-
-  /** The comparison fukuii made before B-284, strictly heavier, for an evaluation that takes no part in the fork
-    * choice: a [[Consensus]] that is not [[ConsensusImpl]] (test doubles), and an import that names its head whatever
-    * its weight ([[com.chipprbots.ethereum.blockchain.data.ChainImporter.adoptingOnLayers]]). A tie keeps the head.
+  /** The comparison fukuii made before B-284, strictly heavier: a tie keeps the head, and no coin is tossed. For an
+    * evaluation that takes no part in the fork choice: a [[Consensus]] that is not [[ConsensusImpl]] (test doubles),
+    * and an import that names its head whatever its weight
+    * ([[com.chipprbots.ethereum.blockchain.data.ChainImporter.adoptingOnLayers]]). For test mode and the ethereum/tests
+    * runners, which are deterministic (forge W3). And the default of every construction that names no fork choice
+    * (`ConsensusImpl`, `BranchResolution`, `DeepForkWeight`, `PowEscalationFeed`): only a node's own
+    * (`NodeBuilder.powForkChoice`) tosses a coin.
     */
   val HeavierOnly: PowForkChoice = new PowForkChoice(_ => false, () => 1.0, breaksTies = false)

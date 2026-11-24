@@ -195,7 +195,7 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
     refusedAt(rig) shouldBe None
   }
 
-  it should "count a branch of the head's weight that the import's tie rule takes, and no other (B-284)" taggedAs UnitTest in {
+  it should "count a branch of the head's weight that the import's tie rule itself takes, never one a coin would, and toss no coin (B-284)" taggedAs UnitTest in {
     import com.chipprbots.ethereum.consensus.PowForkChoice
     import com.chipprbots.ethereum.consensus.PowForkChoiceSpec
     // one block at 50 on the fork's 1000: block 5, of the head's weight 1050
@@ -211,18 +211,20 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
     lower.feed.outweighsTheHead(even) shouldBe true
     lower.refusedHeaders(even, tooDeep)
     lower.escalated.toList shouldBe List(EscalationKind.Unreachable)
-    // the head at block 5: the coin's, tossed once for both questions
-    for (landing, counted) <- Seq(0.0 -> true, 0.5 -> false) do
+    // The head at block 5: a tie only a coin decides. Not counted, whatever the coin would say, and the coin is never
+    // tossed: a coin is no reason to give this node's state up, and these headers are not validated yet (forge B1, W1)
+    for landing <- Seq(0.0, 0.5) do
       withClue(s"the coin at $landing: ") {
         val coin = new PowForkChoiceSpec.Coins(landing)
         val rig = new Rig(
           headHeader = Some(Fixtures.Blocks.ValidBlock.header.copy(number = BlockNumber(5))),
           forkChoice = new PowForkChoice(_ => false, coin)
         )
-        rig.feed.outweighsTheHead(even) shouldBe counted
-        rig.refusedHeaders(even, tooDeep)
-        rig.escalated.nonEmpty shouldBe counted
-        coin.tossed shouldBe 1
+        rig.feed.outweighsTheHead(even) shouldBe false
+        for _ <- 1 to 3 do rig.refusedHeaders(even, tooDeep)
+        rig.escalated shouldBe empty
+        rig.validated shouldBe 0
+        coin.tossed shouldBe 0
       }
   }
 

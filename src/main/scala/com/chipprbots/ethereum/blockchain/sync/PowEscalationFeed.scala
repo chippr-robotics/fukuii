@@ -62,10 +62,11 @@ import com.chipprbots.ethereum.domain.ChainWeight
   *   stored, it is that weight less the difficulty of the head's blocks above that block, found by their parent hashes
   *   (B-385); and the head a branch of the same weight is set against by the tie rule (B-284)
   * @param forkChoice
-  *   the import's fork choice by weight, core-geth's `ReorgNeeded` with its tie rule (B-284): a node on a chain that
-  *   declares no terminal total difficulty gives its consensus's, so that a branch is counted as the chain to follow by
-  *   the rule the import follows chains by, a tie a coin decides as the import decided it. The default keeps the head
-  *   on a tie, as this did before
+  *   the import's fork choice by weight, core-geth's `ReorgNeeded` with its tie rule (B-284), asked without its coin
+  *   ([[PowForkChoice.verdict]]): a branch is counted as the chain to follow only where the rule itself takes it. A tie
+  *   a coin would decide is not counted: a coin is never a reason to give this node's state up, and none is tossed for
+  *   headers not yet validated (forge B1, W1). A node on a chain that declares no terminal total difficulty gives its
+  *   consensus's. The default keeps the head on a tie, as this did before
   */
 final class PowEscalationFeed(
     watch: EscalationWatch,
@@ -145,9 +146,11 @@ final class PowEscalationFeed(
     yield takesTheHead(headers.last, of, headAt)).contains(true)
 
   // Whether a branch whose last header is `tip`, of weight `of`, takes the head, of weight `headAt`, by the import's
-  // fork choice (B-284): heavier, or a tie it wins. Strictly heavier where the head's header is not given
+  // fork choice's rule (B-284): heavier, or a tie the rule itself gives it (the lower block). Never a coin's: a tie a
+  // coin would decide is not taken, and nothing is tossed (forge B1, W1). Strictly heavier where the head's header is
+  // not given
   private def takesTheHead(tip: BlockHeader, of: ChainWeight, headAt: ChainWeight): Boolean =
-    head().fold(of > headAt)(current => forkChoice.reorgNeeded(current, headAt, tip, of))
+    head().fold(of > headAt)(current => forkChoice.verdict(current, headAt, tip, of) == PowForkChoice.Verdict.Reorg)
 
   // the chain weight at the last of `headers`, from the weight `of` gives the block the first stands on
   private def weighed(

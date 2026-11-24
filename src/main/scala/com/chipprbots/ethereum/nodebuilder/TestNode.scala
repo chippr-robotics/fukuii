@@ -26,6 +26,11 @@ class TestNode(
   override lazy val coinbaseProvider: CoinbaseProvider =
     new CoinbaseProvider(miningConfig.coinbase)
 
+  // Test mode is deterministic (forge W3): every weighing of the node keeps the head on a tie of total difficulty, as
+  // the consensus its test service imports through does (`TestModeComponentsProvider`)
+  override lazy val powForkChoice: com.chipprbots.ethereum.consensus.PowForkChoice =
+    com.chipprbots.ethereum.consensus.PowForkChoice.HeavierOnly
+
   lazy val testModeComponentsProvider: TestModeComponentsProvider =
     new TestModeComponentsProvider(
       blockchain,

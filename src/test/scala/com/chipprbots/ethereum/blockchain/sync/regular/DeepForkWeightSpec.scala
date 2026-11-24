@@ -72,7 +72,7 @@ class DeepForkWeightSpec extends AnyWordSpec with Matchers:
       weigher().verdict(NonEmptyList.fromListUnsafe(theirs.toList.take(5))) shouldBe BeyondReachVerdict.NotHeavier
     }
 
-    "weigh a branch of the head's weight by the import's tie rule: lower is the heavier, at the head's height the coin's (B-284)" taggedAs (
+    "weigh a branch of the head's weight by the import's tie rule: lower is the heavier, at the head's height never, and with no coin (B-284)" taggedAs (
       UnitTest,
       SyncTest
     ) in {
@@ -91,11 +91,32 @@ class DeepForkWeightSpec extends AnyWordSpec with Matchers:
         BeyondReachVerdict.Heavier
       // as before B-284
       weigher().verdict(lower) shouldBe BeyondReachVerdict.NotHeavier
-      // five blocks: the head's weight and height
+      // Five blocks: the head's weight and height, a tie only a coin decides. Never the heavier, whatever the coin
+      // would say, and the coin is not tossed: a coin gives no node's state up for a SNAP re-sync, and its headers
+      // are not validated (forge B1, W1)
       val even = NonEmptyList.fromListUnsafe(theirs.toList.take(5))
-      weigher(forkChoice = new PowForkChoice(_ => false, () => 0.0)).verdict(even) shouldBe BeyondReachVerdict.Heavier
-      weigher(forkChoice = new PowForkChoice(_ => false, () => 0.5))
-        .verdict(even) shouldBe BeyondReachVerdict.NotHeavier
+      var validated = 0
+      val coinFree = new PowForkChoice(_ => false, PowForkChoiceSpec.NoCoin)
+      weigher(
+        forkChoice = coinFree,
+        firstInvalid = _ =>
+          validated += 1; None
+      ).verdict(even) shouldBe
+        BeyondReachVerdict.NotHeavier
+      validated shouldBe 0
+      // and a coin that would take it changes nothing, nor is it remembered: it was never tossed
+      val taking = new PowForkChoiceSpec.Coins(0.0)
+      weigher(forkChoice = new PowForkChoice(_ => false, taking)).verdict(even) shouldBe BeyondReachVerdict.NotHeavier
+      taking.tossed shouldBe 0
+      // this node's miner's block on the other side is the rule's own reorg: escalated, validated first
+      val theirsMined = new PowForkChoice(h => even.toList.contains(h), PowForkChoiceSpec.NoCoin)
+      weigher(
+        forkChoice = theirsMined,
+        firstInvalid = _ =>
+          validated += 1; None
+      ).verdict(even) shouldBe
+        BeyondReachVerdict.Heavier
+      validated shouldBe 1
     }
 
     "say NotHeavier where the head's weight is not exact" taggedAs (UnitTest, SyncTest) in {

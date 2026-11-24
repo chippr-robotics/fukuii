@@ -940,6 +940,40 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     node.blockchainReader.getBlockHeaderByHash(fixtureBlocks(20).hash) shouldBe None
   }
 
+  // forge N4: on the unified layout the import onto the head checks the head again before its commit. A head another
+  // writer moved meanwhile stops the import there, typed as a head another writer holds, as the strict import stops on
+  // it; it no longer counts the block failed and goes on to blocks that stand on it.
+  it should "stop where another writer moved the head while a block executed, typed and at WARN, and import the rest when asked again (B-487)" taggedAs UnitTest in {
+    val node = new Node(guard = true)
+    given BlockchainConfig = node.blockchainConfig
+    node.importer.importChainFile(write(concat(fixtureBlocks.take(20))).toString).counts shouldBe (20, 0, 0)
+    val (block19, block20) = (fixtureBlocks(18), fixtureBlocks(19))
+    def pointTo(block: Block): Unit =
+      node.storagesInstance.storages.appStateStorage
+        .putBestBlockInfo(BlockInfo(block.hash.value, block.number.value))
+        .commit()
+    // after the importer found block 21 on the head, before it commits: a consensus client re-points the head
+    node.beforeExecution = Some(() => pointTo(block19))
+    val file = write(fixtureBytes)
+    var summary: Option[ChainImporter.LenientSummary] = None
+    val logs = importerLogs { summary = Some(node.importer.importChainFile(file.toString)) }
+    summary.map(_.counts) shouldBe Some((0, 20, 0))
+    summary.flatMap(_.busy).map(_.getMessage).getOrElse("") should include("head moved during import")
+    withClue(logs.map(e => s"${e.getLevel} ${e.getFormattedMessage}").mkString("\n")) {
+      logs.filter(_.getLevel == ch.qos.logback.classic.Level.ERROR) shouldBe empty
+      logs.exists(e =>
+        e.getLevel == ch.qos.logback.classic.Level.WARN && e.getFormattedMessage.contains("[STATE-BUSY]") &&
+          e.getFormattedMessage.contains("head moved during import")
+      ) shouldBe true
+    }
+    node.blockchainReader.getBlockHeaderByHash(fixtureBlocks(20).hash) shouldBe None
+    node.head.hash shouldBe block19.hash
+    // the head back where the state is, asked again: from where it stopped
+    pointTo(block20)
+    node.importer.importChainFile(file.toString) shouldBe ChainImporter.LenientSummary(40, 20, 0)
+    node.head.hash shouldBe fixtureBlocks.last.hash
+  }
+
   // W2: the adoption's unsafeRunSync waits for a thread of the blocking pool that takes the chain insert lock shared:
   // asked under this thread's hold of it, the import would hang with nothing said. Refused at once instead.
   "importChainFile's adoption on layers" should "refuse to run while the thread holds the chain insert lock" taggedAs UnitTest in {

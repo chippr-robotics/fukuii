@@ -62,8 +62,43 @@ class PowForkChoiceSpec extends AnyFlatSpec with Matchers:
     choice.reorgNeeded(head, weight(1000), other, weight(1000)) shouldBe true
     coin.tossed shouldBe 1
     // another pair is another toss
-    choice.reorgNeeded(other, weight(1000), head, weight(1000)) shouldBe false
+    choice.reorgNeeded(head, weight(1000), at(10, "y"), weight(1000)) shouldBe false
     coin.tossed shouldBe 2
+  }
+
+  // forge B1: the pair is unordered. A node that took B over A by a coin, weighed again with B the head, does not take A
+  // back on a second coin: a branch weighed and rejected is not taken again without new information
+  it should "decide a pair once whichever block is the head: (A, B) and then (B, A) agree on the winner" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    for (landing, aWins) <- Seq(0.0 -> false, 0.99 -> true) do
+      withClue(s"the coin at $landing: ") {
+        // a second toss, were there one, would land as the first: for the reversed pair, the other block
+        val coin = new Coins(landing, landing)
+        val choice = new PowForkChoice(_ => false, coin)
+        val (a, b) = (at(10), at(10, "b"))
+        choice.decide(a, weight(1000), b, weight(1000)) shouldBe PowForkChoice.Decision.Coin(taken = !aWins)
+        // the head is now the winner; the loser is presented again, and the other way round
+        choice.decide(b, weight(1000), a, weight(1000)) shouldBe PowForkChoice.Decision.Coin(taken = aWins)
+        choice.reorgNeeded(b, weight(1000), a, weight(1000)) shouldBe aWins
+        choice.reorgNeeded(a, weight(1000), b, weight(1000)) shouldBe !aWins
+        coin.tossed shouldBe 1
+      }
+  }
+
+  it should "say whether the rule or a coin decided, and toss nothing for the rule's verdict" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val choice = new PowForkChoice(header => header.extraData == ByteString("block 10 mine"), NoCoin)
+    choice.decide(at(10), weight(1000), at(10), weight(1001)) shouldBe PowForkChoice.Decision.Reorg
+    choice.decide(at(10), weight(1000), at(9), weight(1000)) shouldBe PowForkChoice.Decision.Reorg
+    choice.decide(at(10), weight(1000), at(11), weight(1000)) shouldBe PowForkChoice.Decision.Keep
+    choice.decide(at(10), weight(1000), at(10, "mine"), weight(1000)) shouldBe PowForkChoice.Decision.Reorg
+    choice.verdict(at(10), weight(1000), at(10, "x"), weight(1000)) shouldBe PowForkChoice.Verdict.Coin
+    new PowForkChoice(_ => false, () => 0.0).decide(at(10), weight(1000), at(10, "x"), weight(1000)) shouldBe
+      PowForkChoice.Decision.Coin(taken = true)
   }
 
   it should "toss again for a pair it no longer remembers" taggedAs (UnitTest, ConsensusTest) in {
