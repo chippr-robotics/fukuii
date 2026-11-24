@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.consensus.mining.*
 import com.chipprbots.ethereum.consensus.validators.*
@@ -546,7 +547,12 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     }
 
     whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock1).unsafeToFuture()) { result =>
-      result shouldBe a[BlockImportedToTop]
+      // B-338: block 1 is imported, and block 2's failure is answered with it
+      result shouldBe ImportedPartially(
+        BlockImportedToTop(List(BlockData(newBlock1, Nil, currentWeight.increase(newBlock1.header)))),
+        newBlock2.hash.value,
+        execError.toString
+      )
       blockQueue.isQueued(newBlock2.hash) shouldBe false
       blockQueue.isQueued(newBlock3.hash) shouldBe false
       blockQueue.isQueued(newBlock3bis.hash) shouldBe false

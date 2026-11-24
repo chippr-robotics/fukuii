@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.consensus
 
+import org.apache.pekko.util.ByteString
+
 import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
@@ -12,11 +14,19 @@ import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedAt
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedDueToMissingNode
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
+import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
+import com.chipprbots.ethereum.consensus.Consensus.ConsensusErrorDueToMissingNode
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusResult
+import com.chipprbots.ethereum.consensus.Consensus.ConsensusStateFault
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
+import com.chipprbots.ethereum.consensus.Consensus.HeadLeftOnSideBlocks
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranchPartially
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -26,6 +36,7 @@ import com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
 import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
@@ -40,10 +51,11 @@ class ConsensusAdapterPartialImportSpec extends AnyFlatSpec with Matchers with M
   private class Setup extends EphemBlockchainTestSetup:
     blockchainWriter.save(BlockHelpers.genesis, Nil, ChainWeight.totalDifficultyOnly(1000), saveAsBestBlock = true)
 
-    // b1 became the head; b2 failed; b3 stands on it. b2 and b3 are queued as blocks announced ahead of the head are
+    // b1 became the head; b2 failed; b3 stands on it. All three are queued, as a batch a fault of this node's state
+    // queued again is before it is fetched again (B-336, B-440); b1 leaves the queue as it becomes the head (B-503)
     val branch: List[Block] = BlockHelpers.generateChain(3, BlockHelpers.genesis)
     val queue: BlockQueue = new BlockQueue(blockchainReader, 100, 100)
-    branch.drop(1).foreach(queue.enqueueBlock(_))
+    branch.foreach(queue.enqueueBlock(_))
     // the head moved to b1, as the import left it
     blockchainWriter.save(branch.head, Nil, ChainWeight.totalDifficultyOnly(2000), saveAsBestBlock = true)
     val prefix: List[BlockData] = List(BlockData(branch.head, Nil, ChainWeight.totalDifficultyOnly(2000)))
@@ -83,17 +95,22 @@ class ConsensusAdapterPartialImportSpec extends AnyFlatSpec with Matchers with M
       queued(branch(1)) shouldBe true
       queued(branch(2)) shouldBe true
     }
+    withClue("the prefix is the head's, so it leaves the queue (B-503, B-509): ")(queued(branch.head) shouldBe false)
   )
 
-  it should "drop the failing block and what stands on it, and answer the prefix imported, when the block was invalid" taggedAs (
+  // B-338: the prefix imported AND the failing block's error, which the answer used to drop
+  it should "drop the failing block and what stands on it, and answer the prefix imported and the block failed, when the block was invalid" taggedAs (
     UnitTest,
     ConsensusTest
   ) in (new Setup:
     imported(
       ExtendedCurrentBestBranchPartially(prefix, BranchExecutionFailure(Nil, branch(1).hash.value, invalidBlock))
-    ) shouldBe BlockImportedToTop(prefix)
-    queued(branch(1)) shouldBe false
-    queued(branch(2)) shouldBe false
+    ) shouldBe ImportedPartially(BlockImportedToTop(prefix), branch(1).hash.value, invalidBlock)
+    withClue("the prefix is the head's, so it leaves the queue (B-503, B-509): ")(queued(branch.head) shouldBe false)
+    withClue("the failing block's subtree is dropped: ") {
+      queued(branch(1)) shouldBe false
+      queued(branch(2)) shouldBe false
+    }
   )
 
   "A branch whose first block failed" should "stay queued when this node's state faulted, and be dropped when the block was invalid" taggedAs (
@@ -143,20 +160,68 @@ class ConsensusAdapterPartialImportSpec extends AnyFlatSpec with Matchers with M
     queued(oldHead) shouldBe true
     queued(branch(1)) shouldBe true
     queued(branch(2)) shouldBe true
+    withClue("the prefix is the head's, so it leaves the queue (B-503, B-509): ")(queued(branch.head) shouldBe false)
   )
 
-  it should "queue the old branch again and drop the failing block, as before, when the block was invalid" taggedAs (
+  // B-338: answered as the reorganisation it is, with the blocks it moved off, and as the failing block's failure. Of
+  // the blocks moved onto, only the batch's were executed by this call: `side` is a stored block the branch stands on
+  it should "queue the old branch again, drop the failing block, and answer the reorganisation and the failure, when the block was invalid" taggedAs (
     UnitTest,
     ConsensusTest
   ) in (new Reorganised:
     val error: String = s"${Consensus.ReorganiseFailurePrefix}$invalidBlock"
-    imported(partially(Nil, error)) match
-      case at: BlockImportFailedAt =>
-        at shouldBe BlockImportFailed(error)
-        at.failingBlockHash shouldBe branch(1).hash.value
-        at.imported shouldBe Nil
-      case other => fail(s"not the failure at the failing block: $other")
+    imported(partially(Nil, error)) shouldBe ImportedPartially(
+      ChainReorganised(List(oldHead), List(side, branch.head), weights, branchBlocks = 1),
+      branch(1).hash.value,
+      error
+    )
     queued(oldHead) shouldBe true
-    queued(branch(1)) shouldBe false
-    queued(branch(2)) shouldBe false
+    withClue("the prefix is the head's, so it leaves the queue (B-503, B-509): ")(queued(branch.head) shouldBe false)
+    withClue("the failing block's subtree is dropped: ") {
+      queued(branch(1)) shouldBe false
+      queued(branch(2)) shouldBe false
+    }
+  )
+
+  // B-509: the other arms whose prefix, or side blocks, became the head take them out of the queue too, after the
+  // blocks the head left are queued again
+  "A batch a fault of this node's state stopped after a prefix became the head" should "take the prefix out of the queue and keep the rest queued" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new Setup:
+    imported(
+      ConsensusStateFault(new StateUnavailable("the head moved under the batch"), prefix, branch.drop(1))
+    ) shouldBe a[BlockImportStateFault]
+    queued(branch.head) shouldBe false
+    queued(branch(1)) shouldBe true
+    queued(branch(2)) shouldBe true
+  )
+
+  "A batch that met a missing node after a prefix became the head" should "take the prefix out of the queue and keep the rest queued" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new Setup:
+    val missing = new MissingNodeException(ByteString(Array.fill[Byte](32)(7)))
+    imported(ConsensusErrorDueToMissingNode(branch.drop(1), missing, prefix)) shouldBe
+      BlockImportFailedDueToMissingNode(missing, prefix)
+    queued(branch.head) shouldBe false
+    queued(branch(1)) shouldBe true
+    queued(branch(2)) shouldBe true
+  )
+
+  "A batch whose move back failed after a fault of this node's state" should "take the side blocks the head was left on out of the queue" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new Reorganised:
+    queue.enqueueBlock(side)
+    queued(side) shouldBe true
+    imported(
+      new HeadLeftOnSideBlocks(
+        new StateUnavailable("the move back failed"),
+        branch,
+        List(BlockData(side, Nil, weights.head))
+      )
+    ) shouldBe a[BlockImportStateFault]
+    queued(side) shouldBe false
+    branch.foreach(block => queued(block) shouldBe true)
   )

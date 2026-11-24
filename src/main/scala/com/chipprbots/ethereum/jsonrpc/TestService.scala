@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.consensus.blocks.*
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.crypto
@@ -358,6 +359,11 @@ class TestService(
             .getConsensus(preimageCache)
             .evaluateBranchBlock(blockForMining.block)
         }
+        // a partial import (B-338) is answered as it was before: the extension imported, a reorganisation failed
+        .map {
+          case partial: ImportedPartially => partial.answeredAsBefore
+          case other                      => other
+        }
         .map { res =>
           log.info("Block mining result: " + res)
           pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
@@ -459,6 +465,10 @@ class TestService(
         testModeComponentsProvider
           .getConsensus(preimageCache)
           .evaluateBranchBlock(value)
+          .map {
+            case partial: ImportedPartially => partial.answeredAsBefore
+            case other                      => other
+          }
           .flatMap(handleResult(value))
           .recover(notOnTheUnifiedLayout)
 

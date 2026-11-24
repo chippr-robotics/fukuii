@@ -346,9 +346,16 @@ class RegularSyncSpec
   /** An importer spawned alone, with probes for whom it tells of an import (B-448): new-head subscribers, the pool and
     * the broadcaster to peers. Every batch it is handed is answered `answer`; this node's chain is the genesis block.
     */
-  abstract class BatchImportTells(name: String) extends Fixture:
+  abstract class BatchImportTells(
+      name: String,
+      followsConsensusLayer: Boolean = false,
+      reporting: Boolean = false
+  ) extends Fixture:
     val answer: java.util.concurrent.atomic.AtomicReference[BlockImportResult] =
       new java.util.concurrent.atomic.AtomicReference(BlockEnqueued)
+    // what the importer reported to the consensus layer as invalid, with each block's latest valid hash
+    val reportedInvalid: java.util.concurrent.ConcurrentLinkedQueue[(ByteString, ByteString)] =
+      new java.util.concurrent.ConcurrentLinkedQueue()
     val newHeads: TypedTestProbe[Topic.Command[NewBlockImported]] =
       testKit.createTestProbe[Topic.Command[NewBlockImported]](s"$name-new-heads")
     val pool: TypedTestProbe[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command] =
@@ -364,9 +371,23 @@ class RegularSyncSpec
       override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
           blockExecutionScheduler: IORuntime,
           blockchainConfig: BlockchainConfig
-      ): IO[BlockImportResult] = IO(answer.get())
+      ): IO[BlockImportResult] = IO { evaluations.incrementAndGet(); answer.get() }
+      // an announced block is answered the same
+      override def evaluateBranchBlock(block: Block)(implicit
+          blockExecutionScheduler: IORuntime,
+          blockchainConfig: BlockchainConfig
+      ): IO[BlockImportResult] = IO { evaluations.incrementAndGet(); answer.get() }
+      override def reportsInvalidChains: Boolean = reporting
+      override def reportInvalidChain(blockHash: ByteString, latestValidHash: ByteString): Unit =
+        reportedInvalid.add(blockHash -> latestValidHash): Unit
 
-    override lazy val branchResolution: BranchResolution = new BranchResolution(blockchainReader):
+    // how many branches were handed to the consensus: a batch whose rest is dropped is not evaluated again
+    val evaluations: java.util.concurrent.atomic.AtomicInteger = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    override lazy val branchResolution: BranchResolution = new BranchResolution(
+      blockchainReader,
+      Option.when(followsConsensusLayer)(com.chipprbots.ethereum.consensus.engine.DesignatedHead(() => None))
+    ):
       override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult = NewBetterBranch(Nil)
 
     val importer: TypedActorRef[BlockImporter.Command] = testKit.spawn(
@@ -434,6 +455,29 @@ class RegularSyncSpec
       case com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset(_, txs) if txs.nonEmpty =>
         txs
     }
+
+    /** The pool's resets: one per move of the head. */
+    def resetsOfThePool(): Int =
+      toThePool.count(_.isInstanceOf[com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset])
+
+    /** Where the fetcher was sent back to, and which block's peer it blamed (B-338). */
+    def fetcherRewound(): InvalidateBlocksFrom =
+      importerFetcher
+        .fishForMessage(5.seconds) {
+          case _: InvalidateBlocksFrom => true
+          case _                       => false
+        }
+        .asInstanceOf[InvalidateBlocksFrom]
+
+    /** The head the importer reported as progress. */
+    def progressReported(): BigInt =
+      importerSupervisor
+        .fishForMessage(5.seconds) {
+          case _: RegularSync.ProgressProtocol.ImportedBlock => true
+          case _                                             => false
+        }
+        .asInstanceOf[RegularSync.ProgressProtocol.ImportedBlock]
+        .blockNumber
 
     /** No peer is told of a fetched batch, and no more new-head events come. */
     def noneTold(): Unit =
@@ -3786,6 +3830,218 @@ class RegularSyncSpec
           removedFromThePool() shouldBe List(prefix.body.transactionList)
           noneTold()
       )
+
+      // B-338: a batch whose block k failed on its own error after blocks 1..k-1 extended the head. core-geth's
+      // downloader inserts the prefix (the pool resets on the new head) and drops the peer that served the failing
+      // block. The prefix is told once, as any imported blocks are; the fetcher goes back to the failing block and
+      // blames its peer, as for a batch whose first block failed; the blocks after it are not imported or evaluated.
+      "tell of the prefix once and blame the failing block's peer when a later block of the batch is invalid" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("batch-partial-extension"):
+          val batch: List[Block] = testBlocks.take(4)
+          val prefix: List[Block] = batch.take(2)
+          val failing: Block = batch(2)
+          val invalid: String = BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString
+          answer.set(ImportedPartially(BlockImportedToTop(prefix.map(weighed)), failing.hash.value, invalid))
+
+          importBatch(batch)
+
+          newHeads.receiveMessages(2, 5.seconds) shouldBe prefix.map(b => Topic.Publish(NewBlockImported(b)))
+          val rewound: InvalidateBlocksFrom = fetcherRewound()
+          rewound.fromBlock shouldBe failing.number.value
+          withClue("the peer that served the failing block is blamed, as for a batch whose first block failed: ") {
+            rewound.toBlacklist shouldBe Some(failing.number.value)
+          }
+          progressReported() shouldBe prefix.last.number.value
+          removedFromThePool() shouldBe prefix.map(_.body.transactionList)
+          takenBackByThePool() shouldBe empty
+          resetsOfThePool() shouldBe 1
+          withClue("the rest of the batch is dropped, not evaluated again: ")(evaluations.get shouldBe 1)
+          noneTold()
+      )
+
+      // B-338: the same when the prefix outweighed the head and replaced it, then a block failed. The blocks moved off
+      // are taken back by the pool as for a reorganisation that went through (B-253's reset), in the same one reset.
+      "tell of the reorganisation once and blame the failing block's peer when a later block of the branch is invalid" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("batch-partial-reorg"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          // a stored side block the branch stands on, then the batch: two blocks executed, the failing one, one after
+          val sideParent: Block = testBlocks.head
+          val batch: List[Block] = testBlocks.slice(1, 5)
+          val executed: List[Block] = batch.take(2)
+          val failing: Block = batch(2)
+          val onto: List[Block] = sideParent :: executed
+          val invalid: String =
+            s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.ValidationAfterExecError("Block has invalid state root")}"
+          answer.set(
+            ImportedPartially(
+              ChainReorganised(List(movedOff), onto, onto.map(weighed).map(_.weight), branchBlocks = 2),
+              failing.hash.value,
+              invalid
+            )
+          )
+
+          importBatch(batch)
+
+          newHeads.receiveMessages(2, 5.seconds) shouldBe executed.map(b => Topic.Publish(NewBlockImported(b)))
+          val rewound: InvalidateBlocksFrom = fetcherRewound()
+          rewound.fromBlock shouldBe failing.number.value
+          rewound.toBlacklist shouldBe Some(failing.number.value)
+          progressReported() shouldBe executed.last.number.value
+          removedFromThePool() shouldBe onto.map(_.body.transactionList)
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+          resetsOfThePool() shouldBe 1
+          evaluations.get shouldBe 1
+          noneTold()
+      )
+
+      // beacon N2 (hive "Invalid P9", B-338): a gas-used mismatch at the batch's last block, after the blocks before it
+      // extended the head, following a consensus layer. The gas-used arm reads the failing block from the partial
+      // result and reports it, with its parent as the latest valid block, exactly once: the importer counts the
+      // prefix as imported, so the failing block heads what was not, and nothing behind it is reported
+      "report the block a gas-used mismatch failed on once, with its parent as latest valid, after a partial extension" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("batch-partial-gas-used", followsConsensusLayer = true, reporting = true):
+          val batch: List[Block] = testBlocks.take(9)
+          val p8: Block = batch(7)
+          val p9: Block = batch(8)
+          val gasUsed: String =
+            BlockExecutionError
+              .ValidationAfterExecError("Block has invalid gas used, expected 21000 but got 0")
+              .toString
+          answer.set(ImportedPartially(BlockImportedToTop(batch.take(8).map(weighed)), p9.hash.value, gasUsed))
+
+          importBatch(batch)
+
+          newHeads.receiveMessages(8, 5.seconds) shouldBe batch.take(8).map(b => Topic.Publish(NewBlockImported(b)))
+          val rewound: InvalidateBlocksFrom = fetcherRewound()
+          rewound.fromBlock shouldBe p9.number.value
+          withClue("following a consensus layer, the peer that served the branch is not blamed (B-513): ") {
+            rewound.toBlacklist shouldBe None
+          }
+          noneTold()
+          reportedInvalid.toArray.toList shouldBe List(p9.hash.value -> p8.hash.value)
+      )
+
+      // B-513 (beacon W2): following a consensus layer, the branch is the one it named, which every peer serves alike:
+      // the failing block's peer is not blamed; the fetcher still goes back to the failing block
+      "blame no peer for a partial import when it follows a consensus layer" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("batch-partial-follows-cl", followsConsensusLayer = true):
+          val batch: List[Block] = testBlocks.take(4)
+          val failing: Block = batch(2)
+          val invalid: String = BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString
+          answer.set(ImportedPartially(BlockImportedToTop(batch.take(2).map(weighed)), failing.hash.value, invalid))
+
+          importBatch(batch)
+
+          val rewound: InvalidateBlocksFrom = fetcherRewound()
+          rewound.fromBlock shouldBe failing.number.value
+          rewound.toBlacklist shouldBe None
+          resetsOfThePool() shouldBe 1
+      )
+
+      // B-513: the same for a batch whose first block is invalid, for the strikes against it, and for an announced
+      // block that is invalid. Following a consensus layer no peer is blacklisted or evicted; the fetcher is still
+      // rewound to the failing block. On a proof-of-work chain (ETC) the peer is blamed at once and evicted at the
+      // third strike, as before
+      for follows <- Seq(false, true) do
+        s"blame the peer of an invalid batch, and evict it at the third strike, only on a proof-of-work chain (follows a consensus layer: $follows)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new BatchImportTells(s"batch-invalid-$follows", followsConsensusLayer = follows):
+            val batch: List[Block] = testBlocks.take(2)
+            val invalid: String = BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString
+            answer.set(BlockImportFailed(invalid))
+            val evictions = new java.util.concurrent.atomic.AtomicInteger(0)
+            // the rewind, then the pick the importer asks for once the import is done: a batch handed to it before
+            // that is deferred while it imports, following a consensus layer, and dropped with the rewind
+            def rewoundOnce(): InvalidateBlocksFrom =
+              var rewound: Option[InvalidateBlocksFrom] = None
+              importerFetcher.fishForMessage(5.seconds) {
+                case _: BlockFetcher.BlockImportFailed =>
+                  evictions.incrementAndGet()
+                  false
+                case invalidated: InvalidateBlocksFrom =>
+                  rewound = Some(invalidated)
+                  false
+                case _: BlockFetcher.PickBlocks => rewound.isDefined
+                case _                          => false
+              }
+              rewound.get
+
+            for strike <- 1 to 3 do
+              importBatch(batch)
+              val rewound = rewoundOnce()
+              withClue(s"strike $strike: ") {
+                rewound.fromBlock shouldBe batch.head.number.value
+                rewound.toBlacklist shouldBe (if follows then None else Some(batch.head.number.value))
+              }
+            withClue("the peer evicted at the third strike: ")(evictions.get shouldBe (if follows then 0 else 1))
+        )
+
+        s"blame the peer of an invalid announced block only on a proof-of-work chain (follows a consensus layer: $follows)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new BatchImportTells(s"announce-invalid-$follows", followsConsensusLayer = follows):
+            val announced: Block = testBlocks.head
+            answer.set(
+              BlockImportFailed(BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString)
+            )
+
+            importer ! BlockImporter.ImportNewBlock(announced, PeerId("announcer"))
+
+            importerFetcher.fishForMessage(5.seconds) {
+              case BlockFetcher.BlockImportFailed(number, _) if !follows =>
+                number shouldBe announced.number.value
+                true
+              case InvalidateBlocksFrom(number, _, toBlacklist) if follows =>
+                number shouldBe announced.number.value
+                toBlacklist shouldBe None
+                true
+              case _: BlockFetcher.BlockImportFailed | _: InvalidateBlocksFrom =>
+                fail("the fetcher was told of the failure in the other chain's way")
+              case _ => false
+            }
+        )
+
+      // B-513 (beacon W3): an announced block on a queued branch whose block 2 failed after block 1 became the head.
+      // The fetcher is told of the failing block, whose peer served it, not of the announced block
+      for follows <- Seq(false, true) do
+        s"tell the fetcher of the failing block, not the announced one, after a partial import (follows a consensus layer: $follows)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new BatchImportTells(s"announce-partial-$follows", followsConsensusLayer = follows):
+            val branch: List[Block] = testBlocks.take(4)
+            val failing: Block = branch(1)
+            val invalid: String = BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString
+            answer.set(ImportedPartially(BlockImportedToTop(List(weighed(branch.head))), failing.hash.value, invalid))
+
+            importer ! BlockImporter.ImportNewBlock(branch.last, PeerId("announcer"))
+
+            importerFetcher.fishForMessage(5.seconds) {
+              case BlockFetcher.BlockImportFailed(number, _) if !follows =>
+                number shouldBe failing.number.value
+                true
+              case InvalidateBlocksFrom(number, _, toBlacklist) if follows =>
+                number shouldBe failing.number.value
+                toBlacklist shouldBe None
+                true
+              case _: BlockFetcher.BlockImportFailed | _: InvalidateBlocksFrom =>
+                fail("the fetcher was told of the failure in the other chain's way")
+              case _ => false
+            }
+            resetsOfThePool() shouldBe 1
+        )
 
       // Spec 018 C4b: the same for a state fault, which carries the adopted prefix itself
       "tell of the adopted prefix only when this node's state could not take a later block" taggedAs (

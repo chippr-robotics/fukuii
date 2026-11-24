@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusError
@@ -269,19 +270,25 @@ class ConsensusAdapter(
         case SelectedNewBestBranchPartially(
               oldBranch,
               adopted,
-              _,
+              weights,
               BranchExecutionFailure(_, failingBlockHash, error)
             ) =>
           // B-291: the prefix became the head, so the blocks it replaced are queued again and the head's followers
-          // are told, as for a reorganisation that went through; and the failure is answered as one, with the block
-          // that failed, as a partial extension's is not: the importer's invalid-chain report (the Engine API's
-          // latestValidHash for a gas-used mismatch, hive's invalid-ancestor tests) and its blame read it. The pool's
-          // update for the blocks moved off and onto is B-338's.
+          // are told, as for a reorganisation that went through. B-338: answered as the reorganisation it is, with the
+          // blocks it moved off, and as the failure of the block that failed: the importer tells the pool of both
+          // branches as for any reorganisation, and blames the failing block's peer as for a failed import. The
+          // blocks of `adopted` this call executed are the batch's; the ones before them are side blocks the branch
+          // stands on (B-297), and no new-head event is sent for those (B-344).
           oldBranch.foreach(blockQueue.enqueueBlock(_))
           blockQueue.removeSubtree(BlockHash(failingBlockHash))
           madeTheHead(adopted)
           toldOfTheHead(adopted.lastOption)
-          new BlockImportFailedAt(error, failingBlockHash)
+          val ofTheBatch = newBranch.toList.map(_.header.hash).toSet
+          ImportedPartially(
+            ChainReorganised(oldBranch, adopted, weights, adopted.count(block => ofTheBatch(block.header.hash))),
+            failingBlockHash,
+            error
+          )
         case ExtendedCurrentBestBranch(blockImportData) =>
           madeTheHead(blockImportData.map(_.block))
           toldOfTheHead(blockImportData.lastOption.map(_.block))
@@ -313,7 +320,8 @@ class ConsensusAdapter(
           madeTheHead(blockImportData.map(_.block))
           log.warn("extended best branch partially because of error: {}", error)
           toldOfTheHead(blockImportData.lastOption.map(_.block))
-          BlockImportedToTop(blockImportData)
+          // B-338: the prefix is imported, and the block that failed is a failed import, not dropped with its error
+          ImportedPartially(BlockImportedToTop(blockImportData), failingBlockHash, error)
         case KeptCurrentBestBranch =>
           newBranch.toList.foreach(blockQueue.enqueueBlock(_))
           BlockEnqueued
