@@ -1400,6 +1400,37 @@ class SyncControllerSpec
     said.head should include("1 < min 2")
   }
 
+  // B-453: the files are read once, at the start; a peer the operator adds over admin_addPeer during the wait is in the
+  // peer manager's maintained set, which the precondition reads again at each count.
+  it should "count a peer added over admin_addPeer during the wait as declared, read at each count (B-453)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    val added = new java.util.concurrent.atomic.AtomicReference(Set.empty[ByteString])
+    port.snapPeers = port.snapPeers.copy(declared = Set.empty, added = () => added.get)
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 2, snap = 1))
+    val lines = syncControllerLines(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      (1 to 3).foreach(_ => someTimePasses())
+      port.asked.get() shouldBe 0
+      // the operator adds the one snap peer there is, after the counts at the start were made
+      added.set(Set(nodeIdOf(1)))
+      timePasses(1.minute)
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
+    }
+    val said = lines.filter(_.contains("[SNAP-PEERS] SNAP starts"))
+    said should have size 1
+    said.head should include("1 snap-capable peer(s) on this chain (1 of them declared by the operator")
+    said.head should include("admin_addPeer")
+  }
+
   it should "not wait for peers, nor regular-sync from the genesis, when the node holds more than its genesis" taggedAs (
     UnitTest,
     SyncTest
