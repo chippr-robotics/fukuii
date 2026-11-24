@@ -3417,12 +3417,17 @@ items:
   - id: B-386
     title: Guard PoW node that fell back to regular sync logs an ERROR at every restart (beforeSnap Refused on held state)
     priority: P3
-    status: open
+    status: claimed
     area: sync
     opened: 2026-11-18
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: herald-b386
+      since: 2026-11-24T00:29:37Z
+      heartbeat: 2026-11-24T00:29:37Z
     notes: "After the C6 PR-C fallback, do-snap-sync=true restarts go precondition -> beforeSnap -> Refused (state above genesis) -> log.error. Correct, but noisy: say once at INFO that the node regular-syncs on the state it holds. Also: declared peers come from static-nodes.json and snap-server-peers at start only; admin_addPeer peers are not counted."
   - id: B-387
     title: "JwtAuthenticatorSpec: audit Engine API specs for clock-boundary races (iat at the 60 s skew edge)"
