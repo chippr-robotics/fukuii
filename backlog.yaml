@@ -4603,3 +4603,14 @@ items:
     links:
       spec: "016"
     notes: "B-256 root cause: logback 1.5.34 COWArrayList lost update; an appender added while another thread logs through the logger can receive nothing. SnapLogCapture now uses a turbo filter (fix/b256-snap-log-capture). testing/LogCapture.capture and ~15 specs attaching ListAppenders to shared loggers (network, sync, jsonrpc) have the same latent race when actors log during attach; move them onto a shared turbo-filter capture."
+  - id: B-469
+    title: "Refresh stale spec headers: 021 (S0 merged), 022 (slice 6 merged, T063 by 018 C7), 027 (slice 5 merged)"
+    priority: P3
+    status: open
+    area: docs
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      prs: [2029]
+    notes: "Found in the 2026-11-24 backlog validation (PR #2029)."
