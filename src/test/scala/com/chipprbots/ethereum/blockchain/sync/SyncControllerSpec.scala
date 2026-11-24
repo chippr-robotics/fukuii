@@ -2198,6 +2198,28 @@ class SyncControllerSpec
       port.handedOffs.get() shouldBe 1
     }
 
+  // B-329: the legacy Done in the pivot-header bootstrap is a hand-off too, as SnapSyncFinalized there and the
+  // legacy Done in runningSnapSync are; the escalation's count must begin with it.
+  it should "tell the port of a hand-off on the legacy path while the pivot's header is fetched" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+      pathLiveSync = Some(port)
+      seedStrandedFastSync(testSetup)
+      answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually {
+        someTimePasses()
+        assert(childNamed(testSetup, "pivot-header-bootstrap"))
+      }
+      syncController ! SyncController.WrappedExternal(SNAPSyncController.Done)
+      regularSyncChild(testSetup)
+      port.handedOffs.get() shouldBe 1
+    }
+
   it should "keep the SNAP backfill running when regular sync reports itself stuck or asks for a bulk recovery" taggedAs (
     UnitTest,
     SyncTest
