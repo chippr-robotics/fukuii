@@ -1044,7 +1044,11 @@ object NetworkPeerManagerActor:
         case _ => initialPeerInfo
 
     private def updateMaxBlock(message: Message, peerId: PeerId)(initialPeerInfo: PeerInfo): PeerInfo =
-      def update(ns: Seq[(BigInt, ByteString)]): PeerInfo =
+      // `sameHeight`: a block the peer sent whole (NewBlock) is one it holds, at the peer's height too. Its hash is
+      // taken as the peer's head then, where an announcement at that height is not: a peer that told of A at N and
+      // then sent B at N is recorded on B, so that B, if this node takes it on a tie, is not sent back to it
+      // (BlockBroadcast's equal-weight arm; forge W-a, B-284)
+      def update(ns: Seq[(BigInt, ByteString)], sameHeight: Boolean = false): PeerInfo =
         if ns.isEmpty then initialPeerInfo
         else
           val (maxBlockNumber, maxBlockHash) = ns.maxBy(_._1)
@@ -1052,8 +1056,9 @@ object NetworkPeerManagerActor:
             appStateStorage.putEstimatedHighestBlock(maxBlockNumber).commit()
 
           val updated =
-            if maxBlockNumber > initialPeerInfo.maxBlockNumber then
-              initialPeerInfo.withBestBlockData(maxBlockNumber, maxBlockHash)
+            if maxBlockNumber > initialPeerInfo.maxBlockNumber ||
+              (sameHeight && maxBlockNumber == initialPeerInfo.maxBlockNumber)
+            then initialPeerInfo.withBestBlockData(maxBlockNumber, maxBlockHash)
             else initialPeerInfo
 
           // For ETH/69 peers: re-resolve chainWeight via 3-tier.
@@ -1083,7 +1088,7 @@ object NetworkPeerManagerActor:
         case m: ETHPackets.BlockHeaders =>
           update(m.headers.map(header => (header.number.value, header.hash.value)))
         case m: ETHPackets.NewBlock =>
-          update(Seq((m.block.header.number.value, m.block.header.hash.value)))
+          update(Seq((m.block.header.number.value, m.block.header.hash.value)), sameHeight = true)
         case m: NewBlockHashes =>
           update(m.hashes.map(h => (h.number, h.hash)))
         case m: ETHPackets.BlockRangeUpdate =>

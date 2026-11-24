@@ -432,7 +432,10 @@ trait ConsensusBuilder:
     */
   lazy val powForkChoice: com.chipprbots.ethereum.consensus.PowForkChoice =
     if blockchainConfig.terminalTotalDifficulty.isEmpty then
-      com.chipprbots.ethereum.consensus.PowForkChoice.ofEtherbase(() => coinbaseProvider.get())
+      // this node's own blocks: the etherbase an operator chose, or the coinbase it mines to (forge N-c)
+      com.chipprbots.ethereum.consensus.PowForkChoice.ofEtherbase(() =>
+        coinbaseProvider.ownBlocksEtherbase(mining.config.generic.miningEnabled)
+      )
     else com.chipprbots.ethereum.consensus.PowForkChoice.HeavierOnly
 
   lazy val consensus: Consensus =

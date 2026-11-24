@@ -146,7 +146,7 @@ class PowForkChoiceSpec extends AnyFlatSpec with Matchers:
   ) in {
     val mine = Address(0x6d696e)
     var etherbase = mine
-    val choice = PowForkChoice.ofEtherbase(() => etherbase)
+    val choice = PowForkChoice.ofEtherbase(() => Some(etherbase))
     val head = at(10).copy(beneficiary = mine.bytes)
     val other = at(10, "x").copy(beneficiary = Address(0x6f746872).bytes)
     choice.reorgNeeded(head, weight(1000), other, weight(1000)) shouldBe false
@@ -154,6 +154,17 @@ class PowForkChoiceSpec extends AnyFlatSpec with Matchers:
     // miner_setEtherbase: the other's miner is this node's now
     etherbase = Address(0x6f746872)
     choice.reorgNeeded(head.copy(extraData = ByteString("z")), weight(1000), other, weight(1000)) shouldBe true
+  }
+
+  // forge N-c: with no etherbase (no coinbase chosen, and no mining), no block is this node's own, as core-geth's
+  // isLocalBlock answers: a tie at one height between blocks of any beneficiary is the coin's, and no rule reorg comes of it
+  it should "count no block as this node's own when there is no etherbase" taggedAs (UnitTest, ConsensusTest) in {
+    val default = com.chipprbots.ethereum.consensus.mining.MiningConfig.DefaultCoinbase
+    val choice = PowForkChoice.ofEtherbase(() => None)
+    val head = at(10).copy(beneficiary = default.bytes)
+    val other = at(10, "x").copy(beneficiary = default.bytes)
+    choice.verdict(head, weight(1000), other, weight(1000)) shouldBe PowForkChoice.Verdict.Coin
+    choice.verdict(other, weight(1000), head, weight(1000)) shouldBe PowForkChoice.Verdict.Coin
   }
 
   "PowForkChoice.HeavierOnly" should "keep the head on every tie, as fukuii did before B-284" taggedAs (

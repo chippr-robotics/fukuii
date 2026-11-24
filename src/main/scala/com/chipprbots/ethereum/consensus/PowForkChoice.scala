@@ -165,11 +165,13 @@ object PowForkChoice:
     private val random = new java.security.SecureRandom()
     def apply(): Double = random.nextDouble()
 
-  /** The fork choice of a node whose miner's etherbase `etherbase` gives (it may change at run time:
-    * `miner_setEtherbase`), with the production coin.
+  /** The fork choice of a node whose own blocks are those of the etherbase `etherbase` gives (it may change at run
+    * time: `miner_setEtherbase`), with the production coin. None: no block is the node's own, as core-geth's
+    * `isLocalBlock` answers with no etherbase set ([[com.chipprbots.ethereum.consensus.mining.CoinbaseProvider]]
+    * `.ownBlocksEtherbase`).
     */
-  def ofEtherbase(etherbase: () => Address): PowForkChoice =
-    new PowForkChoice(header => header.beneficiary == etherbase().bytes, Coin)
+  def ofEtherbase(etherbase: () => Option[Address]): PowForkChoice =
+    new PowForkChoice(header => etherbase().exists(_.bytes == header.beneficiary), Coin)
 
   /** The comparison fukuii made before B-284, strictly heavier: a tie keeps the head, and no coin is tossed. For an
     * evaluation that takes no part in the fork choice: a [[Consensus]] that is not [[ConsensusImpl]] (test doubles),

@@ -337,11 +337,64 @@ class BlockBroadcastSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
     val ourChainWeight: ChainWeight = ChainWeight.totalDifficultyOnly(BigInt("100000000000000000000000001"))
     val block: Block = Block(blockHeader, BlockBody(Nil, Nil))
 
+    // the peer's head is this block (B-284: a sibling of its head would be sent): the weight alone sends nothing
     blockBroadcast.broadcastBlock(
       BlockToBroadcast(block, ourChainWeight),
-      Map(peer.id -> PeerWithInfo(peer, eth69PeerInfo))
+      Map(peer.id -> PeerWithInfo(peer, eth69PeerInfo.copy(bestBlockHash = blockHeader.hash.value)))
     )
 
+    networkPeerManagerProbe.expectNoMessage()
+
+  // forge N-d (B-284): an ETH69 peer reports no total difficulty. On proof of work a block at its height whose head is
+  // another block (the block a tie was won over) is sent to it, by height and hash; not on proof of stake
+  it should "send a block to an ETH69 peer on proof of work whose head is another block at its height, and not on proof of stake" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new TestSetup:
+    val height: BigInt = BigInt(20_000_000)
+    val anyTD: ChainWeight = ChainWeight.totalDifficultyOnly(BigInt(20_000_000))
+    val eth69Status: RemoteStatus = RemoteStatus(
+      capability = Capability.ETH69,
+      networkId = 1,
+      chainWeight = anyTD,
+      bestHash = Fixtures.Blocks.Block3125369.header.hash.value,
+      genesisHash = Fixtures.Blocks.Genesis.header.hash.value,
+      latestBlock = Some(height)
+    )
+    val eth69PeerInfo: PeerInfo = PeerInfo(
+      remoteStatus = eth69Status,
+      chainWeight = anyTD,
+      forkAccepted = true,
+      maxBlockNumber = height,
+      bestBlockHash = eth69Status.bestHash
+    )
+    val blockHeader: BlockHeader = baseBlockHeader.copy(number = BlockNumber(height))
+    blockHeader.hash.value should not be eth69PeerInfo.bestBlockHash
+    val ourChainWeight: ChainWeight = ChainWeight.totalDifficultyOnly(BigInt("100000000000000000000000000"))
+    val block: Block = Block(blockHeader, BlockBody(Nil, Nil))
+    val peers: Map[PeerId, PeerWithInfo] = Map(peer.id -> PeerWithInfo(peer, eth69PeerInfo))
+
+    blockBroadcast.broadcastBlock(BlockToBroadcast(block, ourChainWeight), peers)
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(ETHPackets.NewBlock(block, ourChainWeight.totalDifficulty.value), peer.id)
+    )
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(
+        NewBlockHashes(Seq(BlockHash(blockHeader.hash.value, blockHeader.number.value))),
+        peer.id
+      )
+    )
+    networkPeerManagerProbe.expectMsg(
+      NetworkPeerManagerActor.SendMessageCmd(
+        ETH69.BlockRangeUpdate(BigInt(0), blockHeader.number.value, blockHeader.hash.value),
+        peer.id
+      )
+    )
+    networkPeerManagerProbe.expectNoMessage()
+
+    // proof of stake: nothing of this
+    val onStake = new BlockBroadcast(networkPeerManagerProbe.ref, isPoWChain = false)
+    onStake.broadcastBlock(BlockToBroadcast(block, ourChainWeight), peers)
     networkPeerManagerProbe.expectNoMessage()
 
   // ---- Mixed ETH68/ETH69 interaction tests ---------------------------------

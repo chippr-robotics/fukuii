@@ -2283,6 +2283,55 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         node.bestHash shouldBe aChain.last.hash
     )
 
+  // forge W-b: the selection's decision is carried through only for the branch it selected, of the weight it selected
+  // it by. At the cap the branch is committed in place from the weight stored for the block it is committed from: where
+  // that weight disagrees with the selection (here, read lower once the branch is executing), the executed tip is the
+  // selected one but its weight is not, the decision is weighed again, and the disagreement is said as a fault of this
+  // node's state, with the head moved back to the old head
+  for (layout, cap) <- Seq(
+      "nothing kept under the pin" -> pinnedCap(1L),
+      "the cap met within the branch" -> pinnedCap(MidCap)
+    )
+  do
+    (s"A heavier branch committed in place at the cap ($layout)" should
+      "be weighed again, and said as [STATE-FAULT], when the weight stored for the block it is committed from disagrees with its selection")
+      .taggedAs(
+        UnitTest,
+        ConsensusTest
+      ) in {
+      var armed = false
+      val f = new Fixture(guard = true, cap = cap, beforeExecution = _ => armed = true)
+      import f.*
+      val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 10, difficulty = 1000)
+      // six blocks above h5 at 1000: the heavier, by one block's weight, and higher; no tie
+      val side: List[Block] = oracle.extendSide(oldChain(4), 6, difficulty = 1000, tag = 0x5e)
+      node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+      armed = false
+      val ofTheBranch: Set[BlockHash] = (oldChain(4).hash :: side.map(_.hash)).toSet
+      // once the branch is executing: its blocks, and the fork, read 3000 lighter than stored
+      val reader = new TamperingReader(node.storagesInstance.storages, hash => armed && ofTheBranch(hash), less = 3000)
+      val consensus = new ConsensusImpl(
+        reader,
+        node.blockchainWriter,
+        node.blockExecution,
+        reorgState = node.blockchain,
+        powForkChoice = new PowForkChoice(_ => false, PowForkChoiceSpec.NoCoin)
+      )
+      import node.blockchainConfig
+      import node.runtime
+      val (_, said) = com.chipprbots.ethereum.testing.LogCapture.capture(classOf[ConsensusImpl]) {
+        consensus.evaluateBranch(NonEmptyList.fromListUnsafe(side)).unsafeRunSync(): Unit
+      }
+      armed shouldBe true
+      withClue(said.map(e => s"${e.getLevel} ${e.getFormattedMessage}").mkString("\n")) {
+        said.exists(e =>
+          e.getFormattedMessage.startsWith("[STATE-FAULT] REORG-AT-THE-CAP") &&
+            e.getFormattedMessage.contains("the chain weights stored do not agree")
+        ) shouldBe true
+      }
+      node.bestHash shouldBe oldChain.last.hash
+    }
+
   // forge W3, W4: a ConsensusImpl built with no fork choice named (test mode before this, and the specs that build one)
   // breaks no tie and tosses no coin: a tie of weight keeps the head, whatever the heights. Only a node's own fork
   // choice breaks ties (`NodeBuilder.powForkChoice`)
@@ -3429,7 +3478,9 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
 
     // the node's proof-of-work fork choice (B-284): the node's, with its miner and a real coin, unless the case gives one
     override lazy val powForkChoice: PowForkChoice =
-      forkChoice.getOrElse(PowForkChoice.ofEtherbase(() => coinbaseProvider.get()))
+      forkChoice.getOrElse(
+        PowForkChoice.ofEtherbase(() => coinbaseProvider.ownBlocksEtherbase(miningConfig.miningEnabled))
+      )
 
     // the node's, built as the node builds it, with `beforeExecution` run as the consensus executes a branch's blocks
     // (the two ways `ConsensusImpl` executes them)
@@ -3563,6 +3614,26 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       blockchainReader.getBlockByNumber(blockchainReader.getBestBranch, 0).get
 
 object ReorgBlockhashParitySpec extends SecureRandomBuilder:
+
+  /** A reader over the same stores whose chain weight of a block `tampered` names is read `less` than stored. */
+  class TamperingReader(s: BlockchainStorages, tampered: BlockHash => Boolean, less: BigInt)
+      extends BlockchainReader(
+        s.blockHeadersStorage,
+        s.blockBodiesStorage,
+        s.blockNumberMappingStorage,
+        s.stateStorage,
+        s.receiptStorage,
+        s.appStateStorage,
+        s.chainWeightStorage,
+        s.blockAccessListStorage,
+        s.pathStateStorage
+      ):
+    override def getChainWeightByHash(blockhash: BlockHash): Option[ChainWeight] =
+      super
+        .getChainWeightByHash(blockhash)
+        .map(weight =>
+          if tampered(blockhash) then ChainWeight.totalDifficultyOnly(weight.totalDifficulty.value - less) else weight
+        )
 
   /** A reader over the same stores that records which blocks were read whole, and whose receipts were read. */
   class CountingReader(s: BlockchainStorages)
