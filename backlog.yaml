@@ -5639,7 +5639,7 @@ items:
   - id: B-526
     title: "ETC mainnet SNAP: 421 account-range requests timed out (30 s) against 2 on Mordor; find whether peers or response size cause it"
     priority: P3
-    status: open
+    status: blocked
     area: snap
     size: S
     opened: 2026-11-24
@@ -5648,3 +5648,4 @@ items:
     notes: |-
       Mainnet account download ran at 23,000 accounts/s against 36,600/s on Mordor; not caused by the contract classification, which only feeds the storage file.
       Check per-peer timeout counts (AccountRangeWorker:200) and whether the 512 KB starting response size is too large for mainnet peers within the 30 s timeout.
+      2026-11-24 blocked: needs logs from a live ETC mainnet SNAP run on a build with #2112
