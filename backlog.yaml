@@ -2143,7 +2143,7 @@ items:
       by: cloud-719c6644
       agent: herald
       since: 2026-11-24T06:36:47Z
-      heartbeat: 2026-11-24T06:41:32Z
+      heartbeat: 2026-11-24T07:33:22Z
       branch: fix/b237-tcp-port-zero
     notes: "Found in spec 028 S1 (HoodiBootnodeSpec): NodeParser accepts tcp 0; PeerDiscoveryManager hands bootstrap nodes to PeerManagerActor which ConnectToPeerCmd's :0. DnsDiscovery.scala:515 already skips tcp-0 ENRs. Hoodi ships only :30303 enodes meanwhile."
   - id: B-238
