@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import cats.data.NonEmptyList
 import cats.effect.unsafe.IORuntime
 
+import scala.collection.mutable.ArrayBuffer
 import scala.jdk.CollectionConverters.*
 
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
@@ -383,6 +384,39 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     anchoredSince should contain(branch(2).hash.value)
     settledOn(oldChain.last)
     adoptedAgain()
+  )
+
+  // B-440: what regular sync is answered for the same failure. A write the disk refused stops the node (the user's
+  // decision of 2026-11-24, go-ethereum's log.Crit): the adapter asks for the stop once, with what was thrown, counts
+  // nothing, and answers a fault of this node with the branch queued again; the head is the old head, valid.
+  it should "stop the node, through the import's adapter, when a write of a commit is refused" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new FaultedReorg:
+    val refused = new java.io.IOException("injected: the disk refused the commit of block 7")
+    datadir.failAt(branch(3), refused)
+    val stopped: ArrayBuffer[Throwable] = ArrayBuffer.empty
+    // the import's adapter over the consensus this rig commits at the cap with, and the node's queue
+    val adapter = new ConsensusAdapter(
+      consensus,
+      node.blockchainReader,
+      node.blockQueue,
+      new com.chipprbots.ethereum.ledger.BlockValidation(node.mining, node.blockchainReader, node.blockQueue),
+      node.runtime,
+      onFatalStoreFailure = stopped += _
+    )
+    val answered: BlockImportResult =
+      import node.blockchainConfig
+      import node.runtime
+      adapter.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
+    answered match
+      case BlockImportStateFault(fault, imported) =>
+        fault.getMessage should include("the disk refused the commit of block 7")
+        imported shouldBe Nil
+      case other => fail(s"not a fault of this node: $other")
+    stopped.toList.map(_ eq refused) shouldBe List(true)
+    branch.foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
+    settledOn(oldChain.last)
   )
 
   // B-439: what was thrown is not the answer when the move back after it fails: the answer says where the head is

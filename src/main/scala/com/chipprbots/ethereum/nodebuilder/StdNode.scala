@@ -823,6 +823,16 @@ abstract class BaseNode extends Node:
     shutdown()
     stoppedCleanly
 
+  /** The store failed during an import (B-440, the user's decision of 2026-11-24): a write refused, a read that failed,
+    * or a store busy `ConsensusAdapter.BusyBeforeStop` times with no block made the head, and for at least
+    * `ConsensusAdapter.BusyStopAfter`. The node stops, on a thread of its own, and exits non-zero
+    * ([[StopSignal.stopThenExitAside]]).
+    */
+  override lazy val onFatalStoreFailure: Throwable => Unit =
+    val stop =
+      StopSignal.stopThenExitAside("the store failed", () => stopForExit(), code => sys.exit(code))
+    _ => stop()
+
   private def shutDownOnce(): ShutdownSequence.Outcome =
     import ShutdownSequence.Budget
     import ShutdownSequence.Step

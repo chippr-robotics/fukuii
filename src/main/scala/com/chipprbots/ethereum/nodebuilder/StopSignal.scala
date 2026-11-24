@@ -38,6 +38,25 @@ object StopSignal extends Logger:
     if handled.compareAndSet(false, true) then stopThenExit("SIGTERM", stop, exit)
     else log.warn("[SHUTDOWN] SIGTERM again: the stop under way goes on (SIGKILL ends it)")
 
+  /** A failure that ends the node, met on a thread the stop waits for (B-440: a write of the store refused during a
+    * block import, which the database's close waits on): the returned call starts [[stopThenExit]] on a thread of its
+    * own and returns at once. Only the first call starts it; the next ones only log. The exit is [[UncleanExit]]
+    * whatever the stop ends in: the node stopped on a failure.
+    *
+    * @param start
+    *   how the stop's thread is started; a thread of its own, which is no daemon, so that the JVM waits for the stop
+    */
+  def stopThenExitAside(
+      why: String,
+      stop: () => Boolean,
+      exit: Int => Unit,
+      start: Runnable => Unit = run => new Thread(run, "fatal-failure-stop").start()
+  ): () => Unit =
+    val asked = new AtomicBoolean(false)
+    () =>
+      if asked.compareAndSet(false, true) then start(() => stopThenExit(why, stop, exit, status = _ => UncleanExit))
+      else log.warn(s"[SHUTDOWN] $why again: the stop under way goes on")
+
   /** Stops the node, then exits: the way out of every exit path that starts once the node is up (SIGTERM, the TUI's
     * `q`, the Ephemery reset; B-426, B-452). `stop` runs the node's stop through its [[StopOnce]], so when another path
     * began the stop it waits for that stop to end, and says whether the database closed. The exit comes only after it:

@@ -1,11 +1,16 @@
 package com.chipprbots.ethereum.consensus
 
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+
 import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
+import scala.concurrent.duration.*
+import scala.util.Try
 import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.PowEscalationFeed
@@ -22,6 +27,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusError
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusErrorDueToMissingNode
+import com.chipprbots.ethereum.consensus.Consensus.ConsensusResult
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusStateFault
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranchPartially
@@ -30,6 +36,7 @@ import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranch
 import com.chipprbots.ethereum.consensus.Consensus.SelectedNewBestBranchPartially
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
+import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource.RocksDbDataSourceClosedException
 import com.chipprbots.ethereum.db.storage.pathstate.HeldStateIncomplete
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
@@ -67,8 +74,28 @@ class ConsensusAdapter(
     // What tells the escalation watch of proof-of-work branches this node's state could not take, and of heads that
     // moved (spec 018 C5a part 6b). Here because every result of an import passes here, typed, with the branch it is
     // of. `None` on the hash layout.
-    escalationFeed: Option[PowEscalationFeed] = None
+    escalationFeed: Option[PowEscalationFeed] = None,
+    // What stops the node when its store failed (B-440, the user's decision of 2026-11-24): the node's
+    // stop, then a non-zero exit (`StopSignal.stopThenExitAside`). Called on the import's thread, so it must return at
+    // once: the database's close waits for the import to end.
+    onFatalStoreFailure: Throwable => Unit = ConsensusAdapter.NoStopWired,
+    // A monotonic clock, in nanoseconds: how long the store has been busy with no block made the head (forge W1)
+    nanoClock: () => Long = () => System.nanoTime()
 ) extends Logger:
+
+  /** Set once a failure of the store has asked for the node's stop (B-440, forge C2), BEFORE the stop is asked for. The
+    * stop runs on a thread of its own and the database's close waits for the import, so batches keep coming until the
+    * actor system goes: the importer re-queues, the fetcher is rewound, and the import lock is free between batches.
+    * From here on no batch is evaluated, and none can write: each is answered as not judged, not counted.
+    */
+  private val stopAskedFor = new AtomicBoolean(false)
+
+  /** The store's busy answers since a block last became the head (B-440, forge W1); `None` while none came. Whichever
+    * block the batches stand on: batches that alternate between branches, on the same parent or not, count together.
+    * Only a head that moved starts it again ([[toldOfTheHead]]): a branch kept as it is, or another failure, wrote
+    * nothing, and says nothing of a store that takes writes.
+    */
+  private val busySinceTheHeadMoved = new AtomicReference[Option[ConsensusAdapter.BusyRun]](None)
 
   /** Report a block the import path has PROVEN consensus-invalid, so `engine_newPayload` / `engine_forkchoiceUpdated`
     * can answer INVALID for it and its descendants.
@@ -174,7 +201,7 @@ class ConsensusAdapter(
       blockExecutionScheduler: IORuntime,
       blockchainConfig: BlockchainConfig
   ): IO[BlockImportResult] =
-    forwardAndTranslateConsensusResult(blocks)
+    forwardAndTranslateConsensusResult(blocks, storeFailureIsAFault = true)
 
   /** [[evaluateBranch]] for a batch that arrived with peer-supplied EIP-7928 lists (prefetch hints only). */
   def evaluateBranchWithAccessLists(
@@ -184,14 +211,19 @@ class ConsensusAdapter(
       blockExecutionScheduler: IORuntime,
       blockchainConfig: BlockchainConfig
   ): IO[BlockImportResult] =
-    forwardAndTranslateConsensusResult(blocks, accessLists)
+    forwardAndTranslateConsensusResult(blocks, accessLists, storeFailureIsAFault = true)
 
+  /** @param storeFailureIsAFault
+    *   a failure of this node's store thrown out of the evaluation is answered as a fault of this node's state
+    *   ([[thrownByTheStore]], B-440). Regular sync's batches only: the other callers of [[evaluateBranchBlock]] (test
+    *   mode, the chain-file import) answer what is thrown as they always did.
+    */
   private def forwardAndTranslateConsensusResult(
       newBranch: NonEmptyList[Block],
-      accessLists: Map[ByteString, BlockAccessList] = Map.empty
+      accessLists: Map[ByteString, BlockAccessList] = Map.empty,
+      storeFailureIsAFault: Boolean = false
   )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[BlockImportResult] =
-    (if accessLists.isEmpty then consensus.evaluateBranch(newBranch)
-     else consensus.evaluateBranchWithAccessLists(newBranch, accessLists))
+    evaluated(newBranch, accessLists, storeFailureIsAFault)
       .map {
         // On the unified layout a node missing from the held state with no position to say is a fault of this node, not
         // a hole to fetch: the fetch writes the hash-keyed store, which this layout never reads, and the same block
@@ -304,14 +336,49 @@ class ConsensusAdapter(
           // The blocks were not judged: they wait in the queue to be tried again, and none of them is dropped from it
           // as an invalid block's descendants are.
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
+          // A store that refused a write, or was busy, says nothing of this node's state: not counted (B-440), and no
+          // feed call of a counted fault is made for it, the side blocks' head of B-461 included (forge N3)
+          val counted = !result.isInstanceOf[ConsensusAdapter.NotCounted]
           // the blocks of the batch that became the head before the fault moved it, and are no part of what is refused;
           // or the side blocks the branch stands on that a move back that failed left the head on (B-461)
-          toldOfTheHead(imported.lastOption.orElse(Consensus.headLeftOn(result).lastOption).map(_.block))
-          toldTheFeed("a branch that was not judged")(
-            _.notJudged(newBranch.toList.drop(imported.size), fault, blockValidation.firstInvalidHeaderNotJudged)
+          toldOfTheHead(
+            imported.lastOption
+              .orElse(if counted then Consensus.headLeftOn(result).lastOption else None)
+              .map(_.block)
           )
+          if counted then
+            toldTheFeed("a branch that was not judged")(
+              _.notJudged(newBranch.toList.drop(imported.size), fault, blockValidation.firstInvalidHeaderNotJudged)
+            )
           BlockImportStateFault(fault, imported)
       }
+
+  private def evaluated(
+      newBranch: NonEmptyList[Block],
+      accessLists: Map[ByteString, BlockAccessList],
+      storeFailureIsAFault: Boolean
+  )(implicit blockExecutionScheduler: IORuntime, blockchainConfig: BlockchainConfig): IO[ConsensusResult] =
+    IO.defer(
+      if stopAskedFor.get then
+        // the node stops (forge C2): nothing more is evaluated, so nothing more is written; the blocks wait, not judged
+        IO.pure(
+          new ConsensusAdapter.NotCounted(
+            new StateUnavailable("this node's store failed and the node stops: no block is evaluated"),
+            Nil,
+            newBranch.toList
+          )
+        )
+      else
+        IO.defer(
+          if accessLists.isEmpty then consensus.evaluateBranch(newBranch)
+          else consensus.evaluateBranchWithAccessLists(newBranch, accessLists)
+        ).recover(Function.unlift { (thrown: Throwable) =>
+          Option
+            .when(storeFailureIsAFault)(ConsensusAdapter.thrownFromTheStore(thrown))
+            .flatten
+            .map(thrownByTheStore(newBranch, thrown, _))
+        })
+    )
 
   /** A proof-of-work branch, known by its `headers` from the block above the one it leaves the chain at, that regular
     * sync refused before any of its blocks was fetched (B-300 g): it reaches further above that block than the fetcher
@@ -411,14 +478,157 @@ class ConsensusAdapter(
           false
     }
 
+  /** A failure of this node's store thrown out of the evaluation of `newBranch` (B-440), as
+    * [[ConsensusAdapter.thrownFromTheStore]] reads it. It is no verdict on any block. `ConsensusImpl` throws it (a
+    * commit in place at the cap throws it once the head is back at the old head, as #2001 pins); answered by the throw,
+    * the importer dropped the batch with an error line. It is answered here as a fault of this node's state is: the
+    * blocks of the batch the head stands on now (read from the store, by ancestry: what threw kept no account of them)
+    * are imported, and the others wait in the queue and are fetched again without blame. Only a fault of the state
+    * (thrown as it is, or a store that reads as corrupt) is told to the feed as a branch not judged; a store that
+    * failed stops the node, and a store that was busy is tried again until it has been busy
+    * [[ConsensusAdapter.BusyBeforeStop]] times over at least [[ConsensusAdapter.BusyStopAfter]] with no block made the
+    * head between.
+    *
+    * The stop is asked for before the store is read (forge C1): a disk that refused a write may refuse the reads too,
+    * and the stop must not hang on them. Otherwise the reads here run inside the evaluation's `recover`: one that
+    * throws propagates out of it, and the batch is dropped by the importer with an error line, as before B-440.
+    */
+  private def thrownByTheStore(
+      newBranch: NonEmptyList[Block],
+      thrown: Throwable,
+      failure: ConsensusAdapter.StoreFailure
+  ): ConsensusResult =
+    import ConsensusAdapter.StoreFailure
+    val blocks = s"[${newBranch.head.number}-${newBranch.last.number}]"
+    // how many times, and for how long, the store has been busy with no block made the head
+    val busy: Option[(Int, FiniteDuration)] = failure match
+      case StoreFailure.Busy =>
+        val now = nanoClock()
+        busySinceTheHeadMoved
+          .updateAndGet {
+            // a head not read yet is read again, at the next busy answer
+            case Some(run) =>
+              Some(run.copy(count = run.count + 1, headAtFirst = run.headAtFirst.orElse(storedHead())))
+            // the stored head as the first busy answer leaves it; a read that fails leaves none for now
+            case None => Some(ConsensusAdapter.BusyRun(1, now, storedHead()))
+          }
+          .map(run => (run.count, (now - run.firstNanos).nanos))
+      // no reset here: a store corrupt or a fault of the state wrote nothing; only a head that moved starts the count
+      // again, and a store that failed stops the node
+      case _ => None
+    val busyTooLong = busy.filter((count, busyFor) => ConsensusAdapter.busyTooLong(count, busyFor))
+    if failure == StoreFailure.Failed || busyTooLong.isDefined then stopped(newBranch, thrown, blocks, busyTooLong)
+    else
+      val imported = importedOf(newBranch)
+      val queued = newBranch.toList.drop(imported.size)
+      failure match
+        case StoreFailure.OfTheState(fault) =>
+          // the fault as it was thrown, never wrapped: its type is what the escalation's feed reads (B-462)
+          log.warn(
+            s"[STATE-FAULT] The import of blocks $blocks met a fault of this node's state, after ${imported.size} " +
+              s"block(s) of it became the head: no block was judged, the others are queued again: ${fault.getMessage}"
+          )
+          ConsensusStateFault(fault, imported, queued)
+        case StoreFailure.Corrupt =>
+          log.error(
+            s"[STATE-FAULT] The import of blocks $blocks found this node's store corrupt, after ${imported.size} " +
+              "block(s) of it became the head: no block was judged, the others are queued again and no peer is blamed",
+            thrown
+          )
+          ConsensusStateFault(
+            new StateUnavailable(s"this node's store is corrupt: $thrown"),
+            imported,
+            queued
+          )
+        case _ =>
+          val (count, busyFor) = busy.getOrElse((0, Duration.Zero))
+          log.warn(
+            s"[STATE-FAULT] The import of blocks $blocks met this node's store busy (${ConsensusAdapter.statusOf(thrown)}, " +
+              s"$count time(s) over ${busyFor.toSeconds} s with no block made the head between; the node stops at " +
+              s"${ConsensusAdapter.BusyBeforeStop} times over ${ConsensusAdapter.BusyStopAfter}), after ${imported.size} " +
+              s"block(s) of it became the head: the others are queued again and tried again, no peer is blamed: $thrown"
+          )
+          new ConsensusAdapter.NotCounted(
+            new StateUnavailable(s"this node's store was busy: $thrown", askAgain = true),
+            imported,
+            queued
+          )
+
+  /** The node stops (the user's decision of 2026-11-24): go-ethereum stops at once (log.Crit) when a write of a block
+    * or its state fails, and RocksDB takes no write after one it refused. No retry, no escalation, a loud stop. The
+    * latch is set first, then the stop is asked for, and only then is the store read for what the head stands on (forge
+    * C1, C2); a read that fails there leaves the answer with nothing imported.
+    */
+  private def stopped(
+      newBranch: NonEmptyList[Block],
+      thrown: Throwable,
+      blocks: String,
+      busyTooLong: Option[(Int, FiniteDuration)]
+  ): ConsensusResult =
+    val why = busyTooLong.fold(s"failed (${ConsensusAdapter.statusOf(thrown)})") { (count, busyFor) =>
+      s"was busy $count times over ${busyFor.toSeconds} s with no block made the head between " +
+        s"(${ConsensusAdapter.statusOf(thrown)}), a store that does not take the write"
+    }
+    val first = stopAskedFor.compareAndSet(false, true)
+    log.error(s"[STORE-FAILED] This node's store $why during the import of blocks $blocks: the node stops", thrown)
+    if first then onFatalStoreFailure(thrown)
+    val imported = Try(importedOf(newBranch)).getOrElse(Nil)
+    new ConsensusAdapter.NotCounted(
+      new StateUnavailable(s"this node's store $why, and the node stops: $thrown"),
+      imported,
+      newBranch.toList.drop(imported.size)
+    )
+
+  /** The blocks of `newBranch` the head stands on, read from the store by ancestry, with their weights and receipts. */
+  private def importedOf(newBranch: NonEmptyList[Block]): List[BlockData] =
+    val first = newBranch.head.number.value
+    val onTheHeadsChain: Set[BlockHash] =
+      Iterator
+        .iterate(blockchainReader.getBestBlockHeader)(
+          _.flatMap(h => blockchainReader.getBlockHeaderByHash(h.parentHash))
+        )
+        .takeWhile(_.exists(_.number.value >= first))
+        .flatten
+        .map(_.hash)
+        .toSet
+    newBranch.toList.iterator
+      .takeWhile(block => onTheHeadsChain(block.header.hash))
+      .map(block =>
+        blockchainReader
+          .getChainWeightByHash(block.header.hash)
+          .map(BlockData(block, blockchainReader.getReceiptsByHash(block.header.hash).getOrElse(Nil), _))
+      )
+      .takeWhile(_.isDefined)
+      .flatten
+      .toList
+
   /** Blocks a fault of this node's own state left unjudged, queued again against the head as it is now (B-336). */
   private def queuedAgain(blocks: List[Block]): Unit =
     if blocks.nonEmpty then
       val bestBlockNumber = blockchainReader.getBestBlockNumber
       blocks.foreach(blockQueue.enqueueBlock(_, bestBlockNumber))
 
+  /** A block became the head: the escalation's feed is told, and the count of busy answers starts again (forge W1) if
+    * the stored head changed since the first of them: the store took a write. Not the told block's hash: the blocks of
+    * a busy batch the head's chain already held are told as imported, at the head or below it (a batch from below the
+    * head, as after SNAP's pivot), and the head did not move (forge, rounds 5 and 6). A stored head that cannot be read
+    * now keeps the count; one not read at the first busy answer is read at the next, and until then any head told
+    * starts the count again.
+    */
   private def toldOfTheHead(head: Option[Block]): Unit =
-    head.foreach(block => toldTheFeed("a head that moved")(_.headMoved(block)))
+    head.foreach { block =>
+      if busySinceTheHeadMoved.get.isDefined then
+        val now = storedHead()
+        busySinceTheHeadMoved.updateAndGet {
+          case Some(run) if run.headAtFirst.isEmpty                                 => None
+          case Some(run) if now.exists(stored => !run.headAtFirst.contains(stored)) => None
+          case kept                                                                 => kept
+        }
+      toldTheFeed("a head that moved")(_.headMoved(block))
+    }
+
+  /** The hash of the stored head, `None` when it cannot be read. */
+  private def storedHead(): Option[BlockHash] = Try(blockchainReader.getBestBlockHeader).toOption.flatten.map(_.hash)
 
   /** The escalation's feed is told after the import is done, and says only: whatever goes wrong in it is logged, and
     * the import's result stands (forge).
@@ -459,3 +669,113 @@ class ConsensusAdapter(
       .enqueueBlock(block, bestBlockNumber)
       .map(topBlock => blockQueue.getBranch(BlockHash(topBlock.hash), dequeue = true))
       .flatMap(NonEmptyList.fromList)
+
+object ConsensusAdapter extends Logger:
+
+  /** What a failure thrown out of an import's evaluation is, read from its cause chain (B-440). */
+  private[consensus] enum StoreFailure:
+
+    /** A fault of this node's state, thrown rather than answered: answered as it is, and counted as any. */
+    case OfTheState(fault: StateFault)
+
+    /** RocksDB reads its store as corrupt (`Status.Code.Corruption`): something of this node's state, counted. */
+    case Corrupt
+
+    /** RocksDB refused for now (`Busy`, `TryAgain`, `TimedOut`, `Aborted`, `Incomplete`): the same write may well go
+      * through at the next try, and says nothing of the state. Tried again, not counted.
+      */
+    case Busy
+
+    /** The store failed (`IOError`, `NoSpace` among them, a `RocksDBException` without a status, or an `IOException`):
+      * mostly a write the disk refused, but a read that failed lands here too. The node stops.
+      */
+    case Failed
+
+  /** A [[ConsensusStateFault]] the escalation's feed is not told of: a store that was busy, or that refused a write
+    * (B-440). Equal to, and matched exactly like, the fault it extends.
+    */
+  final private[consensus] class NotCounted(fault: StateFault, imported: List[BlockData], queued: List[Block])
+      extends ConsensusStateFault(fault, imported, queued)
+
+  /** An adapter built without the node's stop (a test rig, a tool): what would stop the node is said, and no more. */
+  val NoStopWired: Throwable => Unit = thrown =>
+    log.error(s"[STORE-FAILED] No stop is wired to this import: the node is not stopped ($thrown)")
+
+  /** How many batches the store must have answered busy, with no block made the head between, before the node stops as
+    * for a store that failed (forge W1); and [[BusyStopAfter]] must have passed since the first of them. One busy
+    * answer after a long quiet says little; many in seconds are a stall that clears.
+    */
+  private[consensus] val BusyBeforeStop: Int = 5
+
+  /** How long the store must have been busy, from the first busy answer with no block made the head since, before the
+    * node stops (forge W1), and [[BusyBeforeStop]] answers must have come. A write stall, a compaction behind or a lock
+    * timed out clears in seconds; a store busy for ten minutes with no block made the head takes no write, and a node
+    * that retries it for ever follows no chain while it looks alive. The floor holds whatever blocks the batches stand
+    * on: the importer spaces its tries out (`BlockImporter.StateFaultBackoffAfter`, `exhaustBackoff`) only on the same
+    * block, and batches that alternate between branches come at once.
+    */
+  private[consensus] val BusyStopAfter: FiniteDuration = 10.minutes
+
+  /** The store's busy answers since a block last became the head: how many, when the first came (the adapter's
+    * `nanoClock`), and the head the first left, if it could be read.
+    */
+  final private[consensus] case class BusyRun(count: Int, firstNanos: Long, headAtFirst: Option[BlockHash])
+
+  /** Whether a store busy `count` times over `busyFor`, with no block made the head between, stops the node: both
+    * floors must be reached.
+    */
+  private[consensus] def busyTooLong(count: Int, busyFor: FiniteDuration): Boolean =
+    count >= BusyBeforeStop && busyFor >= BusyStopAfter
+
+  /** RocksDB's status code (and sub-code) in `thrown`'s cause chain, "no status" for a `RocksDBException` without one,
+    * else the class of the `IOException`: what the `[STORE-FAILED]` line names (forge N1).
+    */
+  private[consensus] def statusOf(thrown: Throwable): String =
+    val chain = Iterator.iterate(thrown)(_.getCause).takeWhile(_ != null).take(16).toList
+    chain
+      .collectFirst { case rocks: org.rocksdb.RocksDBException =>
+        Option(rocks.getStatus).fold("RocksDB, no status") { status =>
+          val sub = Option(status.getSubCode).filter(_ != org.rocksdb.Status.SubCode.None).fold("")(c => s"/$c")
+          s"RocksDB ${status.getCode}$sub"
+        }
+      }
+      .orElse(chain.collectFirst { case io: java.io.IOException => io.getClass.getSimpleName })
+      .getOrElse(thrown.getClass.getSimpleName)
+
+  private val TransientCodes: Set[org.rocksdb.Status.Code] = Set(
+    org.rocksdb.Status.Code.Busy,
+    org.rocksdb.Status.Code.TryAgain,
+    org.rocksdb.Status.Code.TimedOut,
+    org.rocksdb.Status.Code.Aborted,
+    org.rocksdb.Status.Code.Incomplete
+  )
+
+  /** What `thrown` is, if it is a failure of this node's store (B-440), read from its cause chain, so that the wrappers
+    * (`RocksDbDataSourceException`, `UncheckedIOException`, `CompletionException`, `ExecutionException`) are seen
+    * through. `None`, and it is thrown on as before, when it is not: a store closed under the import, or RocksDB
+    * shutting down (the node is stopping); a `RocksDBException` whose status says the call itself was wrong
+    * (`InvalidArgument`, `NotSupported`, ...), which is a defect; and anything with neither a `RocksDBException` nor an
+    * `IOException` in its chain, which is a defect too and fails loudly.
+    */
+  private[consensus] def thrownFromTheStore(thrown: Throwable): Option[StoreFailure] =
+    val chain = Iterator.iterate(thrown)(_.getCause).takeWhile(_ != null).take(16).toList
+    def first[A](pick: PartialFunction[Throwable, A]): Option[A] = chain.collectFirst(pick)
+    val stopping = chain.exists {
+      case _: RocksDbDataSourceClosedException => true
+      case rocks: org.rocksdb.RocksDBException =>
+        Option(rocks.getStatus).exists(_.getCode == org.rocksdb.Status.Code.ShutdownInProgress)
+      case _ => false
+    }
+    if stopping then None
+    else
+      first { case fault: StateFault => StoreFailure.OfTheState(fault) }.orElse(
+        first { case rocks: org.rocksdb.RocksDBException => rocks } match
+          // RocksDB's status decides; a call it calls wrong is a defect, whatever else the chain holds
+          case Some(rocks) =>
+            Option(rocks.getStatus).map(_.getCode) match
+              case Some(org.rocksdb.Status.Code.Corruption)     => Some(StoreFailure.Corrupt)
+              case Some(code) if TransientCodes(code)           => Some(StoreFailure.Busy)
+              case Some(org.rocksdb.Status.Code.IOError) | None => Some(StoreFailure.Failed)
+              case Some(_)                                      => None
+          case None => first { case _: java.io.IOException => StoreFailure.Failed }
+      )
