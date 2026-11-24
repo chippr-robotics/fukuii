@@ -4258,3 +4258,13 @@ items:
     links:
       spec: 018
     notes: "forge-b336: BranchExecutionFailure/partial arms with Consensus.isLocalStateFault answer BlockImportFailed(At); the importer escalates via ResolvingMissingNode(alreadyExhausted) and holeNotRepaired at the threshold. Check settleOnLayers-style conversion (MPTError -> StateUnavailable) is also wanted in importToTop on the unified layout, so the feed counts it."
+  - id: B-451
+    title: "Proposer pool filter: retry a stale view of the parent like the build does, instead of failing forkchoiceUpdated with no payload"
+    priority: P3
+    status: open
+    area: consensus
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "Follow-up of B-239 (beacon-b239): executableAtParent propagates StaleStateViewException; buildLeniently retries on a fresh view up to 3 times. A disk move during the filter answers ATTR (no payload). Needs a stale-injection seam in the test rig."
