@@ -557,7 +557,8 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     val tampered = bad.copy(header = bad.header.copy(gasUsed = GasAmount(1)))
     val node = new Node
     given BlockchainConfig = node.blockchainConfig
-    node.importer.importChainFile(write(concat(fixtureBlocks.init :+ tampered :+ bad)).toString) shouldBe (60, 0, 1)
+    node.importer.importChainFile(write(concat(fixtureBlocks.init :+ tampered :+ bad)).toString).counts shouldBe
+      (60, 0, 1)
     node.head.hash shouldBe bad.hash
   }
 
@@ -576,7 +577,7 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       withClue(s"basic pruning $basicPruning: ") {
         val node = new Node(basicPruning = basicPruning)
         given BlockchainConfig = node.blockchainConfig
-        def lenient(blocks: Seq[Block]) = node.importer.importChainFile(write(concat(blocks)).toString)
+        def lenient(blocks: Seq[Block]) = node.importer.importChainFile(write(concat(blocks)).toString).counts
         lenient(fixtureBlocks.take(creates)) shouldBe (creates, 0, 0)
         val (keys, code) = (node.keys, node.codeKeys)
         lenient(Seq(tampered)) shouldBe (0, 0, 1)
@@ -606,7 +607,7 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
 
   private def lenient(node: Node, blocks: Seq[Block]): (Int, Int, Int) =
     given BlockchainConfig = node.blockchainConfig
-    node.importer.importChainFile(write(concat(blocks)).toString)
+    node.importer.importChainFile(write(concat(blocks)).toString).counts
 
   private def refOf(header: BlockHeader): BlockRef =
     BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
@@ -813,6 +814,130 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
           node.head.hash shouldBe fixtureBlocks.last.hash
       }
     }
+  }
+
+  // B-487: the lenient import meets a refusal because another writer holds the head (`StateBusy`, B-462) as the strict
+  // import meets it: it stops at that block, nothing of it written, typed, said at WARN and never at ERROR; asked again,
+  // it picks up where it stopped. Thrown by the import onto the head, or answered by the fork choice or the adoption.
+  private def busy(): com.chipprbots.ethereum.db.storage.pathstate.StateBusy =
+    new com.chipprbots.ethereum.db.storage.pathstate.StateBusy("a test's adoption", "another writer holds the head")
+
+  /** The chain importer's log lines at WARN and above while `f` runs. */
+  private def importerLogs(f: => Unit): List[ch.qos.logback.classic.spi.ILoggingEvent] =
+    val logger = org.slf4j.LoggerFactory
+      .getLogger(classOf[ChainImporter])
+      .asInstanceOf[ch.qos.logback.classic.Logger]
+    val appender = new ch.qos.logback.core.read.ListAppender[ch.qos.logback.classic.spi.ILoggingEvent]
+    appender.start()
+    logger.addAppender(appender)
+    val levelBefore = logger.getLevel
+    logger.setLevel(ch.qos.logback.classic.Level.WARN)
+    try f
+    finally
+      logger.setLevel(levelBefore)
+      logger.detachAppender(appender)
+    scala.jdk.CollectionConverters.ListHasAsScala(appender.list).asScala.toList
+
+  private def stoppedAtWarnOnly(logs: List[ch.qos.logback.classic.spi.ILoggingEvent]): Unit =
+    withClue(logs.map(e => s"${e.getLevel} ${e.getFormattedMessage}").mkString("\n")) {
+      logs.filter(_.getLevel == ch.qos.logback.classic.Level.ERROR) shouldBe empty
+      logs.exists(e =>
+        e.getLevel == ch.qos.logback.classic.Level.WARN && e.getFormattedMessage.contains("[STATE-BUSY]") &&
+          e.getFormattedMessage.contains("another writer holds the head")
+      ) shouldBe true
+    }
+
+  /** Block 15 of the fixture, made another block at its height: a side block on block 14. */
+  private lazy val sideBlock15: Block =
+    val b = fixtureBlocks(14)
+    b.copy(header = b.header.copy(extraData = ByteString("a side block")))
+
+  for guard <- Seq(false, true) do
+    val layout = if guard then "the unified layout" else "the hash layout"
+    s"importChainFile ($layout)" should "stop where the import onto the head is refused because another writer holds it, typed and at WARN, and import the rest when asked again (B-487)" taggedAs UnitTest in {
+      val node = new Node(guard = guard)
+      given BlockchainConfig = node.blockchainConfig
+      node.importer.importChainFile(write(concat(fixtureBlocks.take(20))).toString).counts shouldBe (20, 0, 0)
+      // thrown out of the import of block 21, before anything of it is executed or written
+      node.beforeExecution = Some(() => throw busy())
+      val file = write(fixtureBytes)
+      var summary: Option[ChainImporter.LenientSummary] = None
+      val logs = importerLogs { summary = Some(node.importer.importChainFile(file.toString)) }
+      summary.map(_.counts) shouldBe Some((0, 20, 0))
+      summary.flatMap(_.busy).map(_.getMessage) shouldBe Some("State busy: another writer holds the head")
+      stoppedAtWarnOnly(logs)
+      node.blockchainReader.getBlockHeaderByHash(fixtureBlocks(20).hash) shouldBe None
+      node.head.hash shouldBe fixtureBlocks(19).hash
+      // asked again, once the head is free: from where it stopped
+      node.importer.importChainFile(file.toString) shouldBe ChainImporter.LenientSummary(40, 20, 0)
+      node.head.hash shouldBe fixtureBlocks.last.hash
+    }
+
+    it should "stop at a side block the fork choice answers as refused because another writer holds the head (B-487)" taggedAs UnitTest in {
+      val node = new Node(guard = guard)
+      // before the merge: a side block goes to the node's fork choice
+      given BlockchainConfig = node.blockchainConfig.copy(terminalTotalDifficulty = None)
+      node.importer.importChainFile(write(concat(fixtureBlocks.take(20))).toString).counts shouldBe (20, 0, 0)
+      @volatile var asked: List[Block] = Nil
+      val importer = new ChainImporter(
+        node.blockchainReader,
+        node.blockExecution,
+        Some((block, _) =>
+          asked :+= block
+          cats.effect.IO.pure(com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault(busy()))
+        )
+      )
+      var summary: Option[ChainImporter.LenientSummary] = None
+      val logs = importerLogs {
+        summary = Some(importer.importChainFile(write(concat(sideBlock15 +: fixtureBlocks.drop(20))).toString))
+      }
+      asked shouldBe List(sideBlock15)
+      // stopped there: block 21, which extends the head, is not imported
+      summary.map(_.counts) shouldBe Some((0, 0, 0))
+      summary.flatMap(_.busy).isDefined shouldBe true
+      stoppedAtWarnOnly(logs)
+      node.head.hash shouldBe fixtureBlocks(19).hash
+      node.blockchainReader.getBlockHeaderByHash(fixtureBlocks(20).hash) shouldBe None
+    }
+
+  "importChainFile" should "say this node's genesis at ERROR only when the file's first block does not stand on it" taggedAs UnitTest in {
+    val node = new Node
+    given BlockchainConfig = node.blockchainConfig
+    val elsewhere: Block = fixtureBlocks.head.copy(
+      header = fixtureBlocks.head.header.copy(parentHash = BlockHash(ByteString(Array.fill[Byte](32)(0x42))))
+    )
+    val onAnotherGenesis = importerLogs(node.importer.importChainFile(write(concat(Seq(elsewhere))).toString): Unit)
+    onAnotherGenesis.exists(e =>
+      e.getLevel == ch.qos.logback.classic.Level.ERROR && e.getFormattedMessage.contains("genesis hash=")
+    ) shouldBe true
+    val onThisGenesis = importerLogs(node.importer.importChainFile(write(concat(fixtureBlocks.take(2))).toString): Unit)
+    onThisGenesis.filter(_.getLevel == ch.qos.logback.classic.Level.ERROR) shouldBe empty
+  }
+
+  "importChainFile (the unified layout)" should "stop at a block after the merge whose adoption on layers is refused because another writer holds the head (B-487)" taggedAs UnitTest in {
+    val node = new Node(guard = true)
+    given BlockchainConfig = node.blockchainConfig
+    node.importer.importChainFile(write(concat(fixtureBlocks.take(20))).toString).counts shouldBe (20, 0, 0)
+    @volatile var asked: List[Block] = Nil
+    val importer = new ChainImporter(
+      node.blockchainReader,
+      node.blockExecution,
+      None,
+      Some((block, _) =>
+        asked :+= block
+        com.chipprbots.ethereum.consensus.Consensus.ConsensusStateFault(busy(), Nil, Nil)
+      )
+    )
+    var summary: Option[ChainImporter.LenientSummary] = None
+    val logs = importerLogs {
+      summary = Some(importer.importChainFile(write(concat(sideBlock15 +: fixtureBlocks.drop(20))).toString))
+    }
+    asked shouldBe List(sideBlock15)
+    summary.map(_.counts) shouldBe Some((0, 0, 0))
+    summary.flatMap(_.busy).isDefined shouldBe true
+    stoppedAtWarnOnly(logs)
+    node.head.hash shouldBe fixtureBlocks(19).hash
+    node.blockchainReader.getBlockHeaderByHash(fixtureBlocks(20).hash) shouldBe None
   }
 
   // W2: the adoption's unsafeRunSync waits for a thread of the blocking pool that takes the chain insert lock shared:

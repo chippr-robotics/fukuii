@@ -3365,7 +3365,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       val file = java.nio.file.Files.createTempFile("chain", ".rlp")
       try
         java.nio.file.Files.write(file, blocks.flatMap(b => Block.BlockEnc(b).toBytes.toSeq).toArray)
-        chainImporter.importChainFile(file.toString)
+        chainImporter.importChainFile(file.toString).counts
       finally java.nio.file.Files.delete(file)
 
     def importOne(block: Block): BlockImportResult =

@@ -229,7 +229,7 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
             file,
             blocks.flatMap(b => com.chipprbots.ethereum.blockchain.data.ChainFile.encode(b).toSeq).toArray
           )
-          val (_, _, failed) = chainImporter.importChainFile(file.toString)(using bc)
+          val (_, _, failed) = chainImporter.importChainFile(file.toString)(using bc).counts
           (Option.when(failed > 0)(s"the chain file import counted $failed failed block(s)").toSeq, 0)
         finally java.nio.file.Files.delete(file)
       else

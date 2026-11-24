@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
 import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.consensus.Consensus
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
@@ -59,27 +60,33 @@ class ChainImporter(
     *
     * A decode error ends the import; the blocks before it stay imported.
     *
+    * A block refused because another writer holds the head ([[StateBusy]], B-462) ends the import there too, as the
+    * strict import ends on it (B-487): nothing of that block was written, it is no verdict on it and no fault of this
+    * node, and every block after it would stand on it. Said at WARN and carried by its type
+    * ([[ChainImporter.LenientSummary.busy]]), for the caller to import the file again once the head is free: the blocks
+    * before it are then skipped as present.
+    *
     * @param filePath
     *   path to the chain file (see [[ChainFile]]; `.gz` is gunzipped)
     * @return
-    *   (imported, skipped, failed) counts
+    *   the imported, skipped and failed counts, and the refusal that stopped the import, if one did
     */
-  def importChainFile(filePath: String)(implicit blockchainConfig: BlockchainConfig): (Int, Int, Int) =
+  def importChainFile(filePath: String)(implicit blockchainConfig: BlockchainConfig): ChainImporter.LenientSummary =
     val file = new File(filePath)
     if !file.exists() then
       log.warn(s"Chain import file not found: $filePath")
-      (0, 0, 0)
+      ChainImporter.LenientSummary(0, 0, 0)
     else
       log.info(s"Chain import: reading ${file.length()} bytes from $filePath")
       scala.util.Try(ChainFile.openInput(file.toPath)) match
         case scala.util.Failure(e) =>
           log.error(s"Chain import: cannot read $filePath — ${e.getClass.getSimpleName}: ${e.getMessage}")
-          (0, 0, 0)
+          ChainImporter.LenientSummary(0, 0, 0)
         case scala.util.Success(in) => importLenientStream(in, filePath)
 
   private def importLenientStream(in: java.io.InputStream, filePath: String)(implicit
       blockchainConfig: BlockchainConfig
-  ): (Int, Int, Int) =
+  ): ChainImporter.LenientSummary =
     try
       val reader = new ChainFile.Reader(in, filePath)
 
@@ -88,6 +95,7 @@ class ChainImporter(
       var failed = 0
       var first = true
       var done = false
+      var busy: Option[StateBusy] = None
       sideBlocksRefused = 0
       orphanBlocksRefused = 0
 
@@ -102,12 +110,25 @@ class ChainImporter(
             if first then
               first = false
               logGenesisDiagnostics(block)
-            importLenient(block) match
+            // a refusal thrown by any arm is the same stop as one answered (B-487)
+            val outcome =
+              try importLenient(block)
+              catch case refused: StateBusy => LenientOutcome.Busy(refused, 0)
+            outcome match
               case LenientOutcome.Imported(n) =>
                 imported += n
                 if imported % 10 == 0 then log.info(s"Chain import: block ${block.header.number} imported ($imported)")
               case LenientOutcome.Skipped => skipped += 1
               case LenientOutcome.Failed  => failed += 1
+              case LenientOutcome.Busy(refused, importedBefore) =>
+                imported += importedBefore
+                busy = Some(refused)
+                done = true
+                log.warn(
+                  s"[STATE-BUSY] Chain import of $filePath stopped at block ${block.header.number} " +
+                    s"(${block.header.hashAsHexString}), nothing of it written: ${refused.getMessage}. Import the file " +
+                    "again once the head is free; the blocks before it are skipped as present"
+                )
 
       log.info(s"Chain import: decoded ${reader.blocksRead} blocks")
       // On the unified state layout a block that is not built on the head is refused, which is no fault of the block:
@@ -117,30 +138,45 @@ class ChainImporter(
         else
           s" ($sideBlocksRefused of them side blocks and $orphanBlocksRefused with no parent here, not taken by " +
             "the unified state layout)"
-      log.info(s"Chain import complete: $imported imported, $skipped skipped, $failed failed$refused")
-      (imported, skipped, failed)
+      if busy.isEmpty then
+        log.info(s"Chain import complete: $imported imported, $skipped skipped, $failed failed$refused")
+      else log.warn(s"[STATE-BUSY] Chain import stopped: $imported imported, $skipped skipped, $failed failed$refused")
+      ChainImporter.LenientSummary(imported, skipped, failed, busy)
     finally in.close()
 
-  // Log genesis vs first block's expected parent for debugging genesis mismatches
+  // Log genesis vs first block's expected parent for debugging genesis mismatches: at ERROR when the file's first block
+  // disagrees with this node's genesis (a file of another network, or a node given the wrong genesis: every block of
+  // the file then fails), at DEBUG when it does not, for an import that starts where it should is no error (B-487)
   private def logGenesisDiagnostics(firstBlock: Block): Unit =
     val genesisOpt = blockchainReader.getBlockHeaderByNumber(0)
+    val first = firstBlock.header
+    val mismatch = genesisOpt.exists { genesis =>
+      if first.number.value == 0 then first.hash != genesis.hash
+      else first.number.value == 1 && first.parentHash != genesis.hash
+    }
+    def say(line: String): Unit = if mismatch then log.error(line) else log.debug(line)
     genesisOpt.foreach { genesis =>
-      log.error(s"Chain import: genesis hash=${genesis.hashAsHexString}")
-      log.error(
+      say(s"Chain import: genesis hash=${genesis.hashAsHexString}")
+      say(
         s"Chain import: genesis stateRoot=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(genesis.stateRoot.value)}"
       )
-      log.error(
+      say(
         s"Chain import: genesis difficulty=${genesis.difficulty}, gasLimit=${genesis.gasLimit}, extraData=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(genesis.extraData)}"
       )
     }
-    log.error(
-      s"Chain import: block ${firstBlock.header.number} expects parent=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(firstBlock.header.parentHash.value)}"
+    say(
+      s"Chain import: block ${first.number} expects parent=${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(first.parentHash.value)}"
     )
 
   private[data] enum LenientOutcome:
     case Imported(count: Int)
     case Skipped
     case Failed
+
+    /** Refused because another writer holds the head (B-487): the import stops here. `imported`: the blocks the attempt
+      * made the head before the refusal, if any.
+      */
+    case Busy(busy: StateBusy, imported: Int)
 
   private def importLenient(block: Block)(implicit blockchainConfig: BlockchainConfig): LenientOutcome =
     val blockNum = block.header.number
@@ -218,7 +254,9 @@ class ChainImporter(
           LenientOutcome.Imported(newBranch.size)
         case BlockEnqueued | DuplicateBlock =>
           LenientOutcome.Skipped // kept as a side block (lighter or not yet rooted), exactly as core-geth writes a side chain
-        case BlockImportStateFault(fault, _) =>
+        // another writer holds the head: the import stops here, as the strict one does (B-487)
+        case BlockImportStateFault(busy: StateBusy, imported) => LenientOutcome.Busy(busy, imported.size)
+        case BlockImportStateFault(fault, _)                  =>
           // Not a verdict on the block: this node's state could not take it (on the unified layout, a branch that leaves
           // the chain deeper than its changeset records reach, for one). Counted as failed: it was neither imported nor
           // kept. Never met on the hash layout, where no such fault is thrown.
@@ -349,7 +387,9 @@ class ChainImporter(
         LenientOutcome.Imported(1)
       // the head became its parent meanwhile: it was imported onto it
       case Consensus.ExtendedCurrentBestBranch(data) => LenientOutcome.Imported(data.size)
-      case fault: Consensus.ConsensusStateFault      =>
+      // another writer holds the head: the import stops here, as the strict one does (B-487)
+      case Consensus.ConsensusStateFault(busy: StateBusy, imported, _) => LenientOutcome.Busy(busy, imported.size)
+      case fault: Consensus.ConsensusStateFault                        =>
         // Not a verdict on the block: this node's state could not take it (a fork deeper than the records reach)
         log.error(
           s"Chain import: block $number was not executed on this node's own state: ${fault.fault.getMessage}"
@@ -606,6 +646,13 @@ object ChainImporter:
       )
       com.chipprbots.ethereum.ledger.AdoptedChainWeights
         .rederive(move.adopted.map(_._2), blockchainReader, blockchainWriter, "Chain import (known block)")
+
+  /** What a lenient import ([[ChainImporter.importChainFile]]) did: blocks imported, skipped as present and failed, and
+    * the refusal that stopped it when another writer held the head (B-487): an import to ask for again, not a failed
+    * one, as a strict import's [[ImportFailure.fault]] says it.
+    */
+  final case class LenientSummary(imported: Int, skipped: Int, failed: Int, busy: Option[StateBusy] = None):
+    def counts: (Int, Int, Int) = (imported, skipped, failed)
 
   /** Counters a strict import keeps outside its `try`, so a failure part-way reports what was really imported. */
   final private[data] class StrictProgress:
