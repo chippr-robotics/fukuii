@@ -474,6 +474,24 @@ class RegularSyncSpec
       _.isInstanceOf[com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions]
     )
 
+    /** The headers the next offer to the ommer pool held (B-501), and that no other offer follows it. */
+    def offeredAsOmmers(): Seq[BlockHeader] =
+      val offered = ommersPool
+        .fishForMessage(5.seconds) {
+          case _: com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers => true
+          case _                                                      => false
+        }
+        .asInstanceOf[com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers]
+        .ommers
+      noOmmerOffered()
+      offered
+
+    /** Nothing is offered to the ommer pool (asked once the import is known to be done). */
+    def noOmmerOffered(): Unit =
+      ommersPool.receiveWhile(max = 1.second, idle = 1.second) {
+        case com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers(headers) => headers
+      } shouldBe empty
+
     /** The pool is sent nothing for this import (asked once the import is known to be done). */
     def poolToldNothing(): Unit = pool.expectNoMessage(1.second)
 
@@ -4183,6 +4201,111 @@ class RegularSyncSpec
           removedFromThePool() shouldBe List(prefix.body.transactionList)
           takenBackByThePool() shouldBe List(movedOff.body.transactionList)
           handedBackAheadOfAReset() shouldBe false
+      // B-501: the branch resolution offered its prediction's first old block to the ommer pool ahead of the import,
+      // whether or not the import then moved the head off it. core-geth's `reorg` sends a side event for each block of
+      // the old chain once the new one is written, and its miner keeps them as uncle candidates; only the lowest has a
+      // parent on the new chain. The offer follows the import's own answer: the lowest block it says the head left.
+      "offer the lowest block the import moved the head off as an ommer, not the one predicted" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b501-full"):
+          val predicted: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(predicted))
+          val movedOff: List[Block] = BlockHelpers.generateChain(2, BlockHelpers.genesis)
+          val executed: List[Block] = testBlocks.take(2)
+          answer.set(ChainReorganised(movedOff, executed, executed.map(weighed).map(_.weight), branchBlocks = 2))
+
+          importBatch(executed)
+
+          offeredAsOmmers() shouldBe List(movedOff.head.header)
+      )
+
+      "offer the lowest block a partial reorganisation moved the head off as an ommer (B-338)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b501-partial"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(movedOff))
+          val batch: List[Block] = testBlocks.take(3)
+          val executed: List[Block] = batch.take(2)
+          val invalid: String =
+            s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.ValidationAfterExecError("Block has invalid state root")}"
+          answer.set(
+            ImportedPartially(
+              ChainReorganised(List(movedOff), executed, executed.map(weighed).map(_.weight), branchBlocks = 2),
+              batch(2).hash.value,
+              invalid
+            )
+          )
+
+          importBatch(batch)
+
+          offeredAsOmmers() shouldBe List(movedOff.header)
+      )
+
+      "offer the block moved off as an ommer when this node's state failed after a reorganisation's prefix" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b501-local-fault"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(movedOff))
+          val batch: List[Block] = testBlocks.take(3)
+          val localFault: String =
+            s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.MPTError(new MPTException("Invalid Node"))}"
+          answer.set(
+            new BlockImportFailedAt(localFault, batch(1).hash.value, List(weighed(batch.head)), List(movedOff))
+          )
+
+          importBatch(batch)
+
+          offeredAsOmmers() shouldBe List(movedOff.header)
+      )
+
+      "offer no ommer when the reorganisation failed and the head stayed" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("b501-failed"):
+          predictedOldBranch.set(List(BlockHelpers.generateBlock(BlockHelpers.genesis)))
+          val batch: List[Block] = testBlocks.take(3)
+          val invalid: String =
+            s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.ValidationAfterExecError("Block has invalid state root")}"
+          answer.set(new BlockImportFailedAt(invalid, batch(1).hash.value))
+
+          importBatch(batch)
+
+          // the import is done once the fetcher is sent back
+          fetcherRewound()
+          noOmmerOffered()
+      )
+
+      "offer no ommer when the branch was not the heavier and the head was kept" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("b501-kept"):
+          predictedOldBranch.set(List(BlockHelpers.generateBlock(BlockHelpers.genesis)))
+          answer.set(BlockEnqueued)
+
+          importBatch(testBlocks.take(2))
+
+          importerFetcher.awaitCond(evaluations.get == 1, 5.seconds)
+          noOmmerOffered()
+      )
+
+      // an announced block that reorganised the chain offers the block it moved off as well, as core-geth's reorg does
+      // whatever inserted the block (before B-501 only a fetched batch's prediction offered one)
+      "offer the block an announced block's reorganisation moved the head off as an ommer" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b501-announced"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val executed: List[Block] = testBlocks.take(2)
+          answer.set(ChainReorganised(List(movedOff), executed, executed.map(weighed).map(_.weight), branchBlocks = 2))
+
+          importer ! BlockImporter.ImportNewBlock(executed.last, PeerId("announcer"))
+
+          offeredAsOmmers() shouldBe List(movedOff.header)
+      )
+
           resetsOfThePool() shouldBe 1
       )
 

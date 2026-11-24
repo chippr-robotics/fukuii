@@ -1913,6 +1913,7 @@ final private class BlockImporterLogic(
   private def tellBatchImported(onto: List[Block], off: List[Block], executed: List[Block]): Unit =
     updateTxPool(onto, off)
     executed.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
+    offerMovedOffAsOmmer(off)
 
   /** The consensus call of an import, timed: when it put blocks on the chain, how many and how long it took go to
     * `RegularSyncMetrics` (spec 027 C-7, the TUI's last-import duration). Timed here, around the call, so no consensus
@@ -1951,6 +1952,7 @@ final private class BlockImporterLogic(
       case ChainReorganised(oldBranch, newBranch, weights, branchBlocks) =>
         updateTxPool(newBranch, oldBranch)
         // Peers are told of the new head only, as core-geth announces only the block it imported (NewBlock to a
+        offerMovedOffAsOmmer(oldBranch)
         // square root of the peers, its hash to the rest), not the side blocks it stands on (B-344). The pool is
         // told of every block the consensus told, which it bounds. New-head subscribers are told of the blocks this
         // import executed, the head always among them: core-geth sends a chain event for each block it inserts,
@@ -2086,11 +2088,25 @@ final private class BlockImporterLogic(
       blocks.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
       supervisor ! ProgressProtocol.ImportedBlock(blocks.last.number.value, internally)
 
+    offerMovedOffAsOmmer(MovedOff.by(result))
   private def broadcastBlocks(blocks: List[Block], weights: List[ChainWeight]): Unit =
     // each block with its own weight: `mapN` on two lists is every pairing of the two, which sent a NewBlock with another
     // block's total difficulty whenever more than one block was told (forge, B-297, where a reorganisation tells the
     // side blocks it stands on too)
     val newBlocks = blocks.zip(weights).map((block, weight) => BlockToBroadcast(block, weight))
+  /** The blocks a move of the head left, as the import says it left them (`movedOff`: [[ChainReorganised]], a partial
+    * one, or [[MovedOff]]), offered to the ommer pool once the move is made (B-501). core-geth's `reorg` sends a
+    * `ChainSideEvent` for every block of the old chain after the new one is written, and its miner keeps each as an
+    * uncle candidate (`worker.go`, `chainSideCh`); `commitUncle` then takes only one whose parent is among the new
+    * head's ancestors. Of the blocks left, only the lowest stands on a block of the chain the head is on: its parent is
+    * the fork block. The others stand on blocks that left with them, so the pool's ancestry filter ([[OmmersPool]]'s
+    * `GetOmmers`) never hands them out, and offered they would only take slots of a bounded pool. So the lowest is
+    * offered alone. Before B-501 the branch resolution offered the first block of its prediction ahead of the import,
+    * whether or not the import then moved the head off it.
+    */
+  private def offerMovedOffAsOmmer(movedOff: Seq[Block]): Unit =
+    movedOff.minByOption(_.header.number.value).foreach(block => ommersPool ! AddOmmers(block.header))
+
     broadcaster ! BroadcastBlocks(newBlocks)
 
   // go-ethereum's pool reset (B-253): the blocks moved onto leave the pool, and the transactions of those moved off
@@ -2208,12 +2224,11 @@ final private class BlockImporterLogic(
           )
           RegularSyncMetrics.incrementReorgTotal()
           RegularSyncMetrics.setLastReorgDepth(depth)
-        // Nothing goes to the pool here (B-460): this is a prediction, made against the head before the import, and the
-        // import may fail or keep the head. The pool is reset by what the import did, as go-ethereum's is on the new
-        // head: a reorganisation, whole or partial, or a fault after its prefix replaced the head, tells the blocks
-        // moved off (ChainReorganised, ImportedPartially, MovedOff); a failure that kept the head tells nothing.
-        // Add first block from branch as an ommer
-        oldBranch.headOption.map(_.header).foreach(ommersPool ! AddOmmers(_))
+        // Nothing goes to the pool here (B-460), nor to the ommer pool (B-501): this is a prediction, made against the
+        // head before the import, and the import may fail or keep the head. Both are told by what the import did, as
+        // go-ethereum's are on the new head: a reorganisation, whole or partial, or a fault after its prefix replaced
+        // the head, tells the blocks moved off (ChainReorganised, ImportedPartially, MovedOff), and the lowest of them
+        // is offered as an ommer (`offerMovedOffAsOmmer`); a failure that kept the head tells nothing.
         Right(toImport)
       case ExtendsCanonicalHead(alreadyCanonical) =>
         // Post-merge only (BranchResolution.followsConsensusLayer). The first `alreadyCanonical` blocks ARE our
