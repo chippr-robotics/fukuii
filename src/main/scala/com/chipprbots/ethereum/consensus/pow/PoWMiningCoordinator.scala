@@ -178,9 +178,26 @@ class PoWMiningCoordinator private (
         Behaviors.same
 
       case StopMining =>
-        log.info("Stopping PoWMiningCoordinator...")
+        // B-279: paused, not stopped. PoWMining keeps this actor's ref for the node's life and spawns it only once, at
+        // start, so a stopped coordinator left every later miner_start messaging a dead actor while answering success.
+        // Paused, it mines nothing and waits for SetMiningMode (miner_start) to resume.
+        log.info("Mining stopped; the coordinator waits for a start")
+        timers.cancel(NotReadyRetryKey)
+        waitingFor = None
         PoWMiningMetrics.recordMinerRunning(false)
-        Behaviors.stopped
+        paused()
+    })
+
+  /** Mining stopped (miner_stop): nothing is mined; a start resumes it. A reply to work asked for before the stop, a
+    * turn or a sync status, is dropped.
+    */
+  private def paused(): Behavior[CoordinatorProtocol] =
+    recordStoppedOnPostStop(Behaviors.receiveMessage[CoordinatorProtocol] {
+      case SetMiningMode(mode) =>
+        log.info("Received message {}", SetMiningMode(mode))
+        switchMiningMode(mode)
+      case StopMining => Behaviors.same
+      case _          => Behaviors.same
     })
 
   private def handleMiningOnDemand(): Behavior[CoordinatorProtocol] =

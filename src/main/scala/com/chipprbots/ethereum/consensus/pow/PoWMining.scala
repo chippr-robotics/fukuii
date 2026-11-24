@@ -102,6 +102,11 @@ class PoWMining private (
 
   private val mutex = new Object
 
+  /** Whether this node runs a built-in miner: a coordinator (PoW, restricted PoW) or the mocked miner. None when mining
+    * is disabled in the configuration, or on an Engine API node (B-279: miner_start and miner_stop say so).
+    */
+  def hasInternalMiner: Boolean = minerCoordinatorRef.isDefined || mockedMinerRef.isDefined
+
   private def startMiningProcess(node: Node, blockCreator: PoWBlockCreator): Unit =
     mutex.synchronized {
       if minerCoordinatorRef.isEmpty && mockedMinerRef.isEmpty then

@@ -94,7 +94,9 @@ class PoWMiningCoordinatorSpec
         running shouldBe 1L
 
         coordinator ! StopMining
-        probe.expectTerminated(coordinator.ref.toClassic)
+        // B-279: the coordinator pauses, it does not end; the flag reads 0 once it has handled the stop.
+        eventually(running shouldBe 0L)
+        testKit.stop(coordinator, Timeouts.veryLongTimeout)
         running shouldBe 0L
 
       "reads 0 after the coordinator is stopped from outside while mining" taggedAs (
@@ -215,8 +217,8 @@ class PoWMiningCoordinatorSpec
         sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
         sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
 
-        coordinator ! StopMining
-        probe.expectTerminated(coordinator.ref.toClassic)
+        coordinator ! StopMining // B-279: pauses; the test ends the actor itself
+        testKit.stop(coordinator, Timeouts.veryLongTimeout)
 
       "Continue to attempt to mine if blockchainReader.getBestBlock return None" taggedAs (
         UnitTest,
@@ -250,8 +252,8 @@ class PoWMiningCoordinatorSpec
         sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
         sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
 
-        coordinator ! StopMining
-        probe.expectTerminated(coordinator.ref.toClassic)
+        coordinator ! StopMining // B-279: pauses; the test ends the actor itself
+        testKit.stop(coordinator, Timeouts.veryLongTimeout)
 
       // B-424: a node that cannot mine asked again at once, and logged an ERROR each time: 19 k a second, 90 M lines over
       // an 80-minute SNAP sync on Mordor.
@@ -286,8 +288,8 @@ class PoWMiningCoordinatorSpec
         best = Some(parentBlock)
         sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
 
-        coordinator ! StopMining
-        probe.expectTerminated(coordinator.ref.toClassic)
+        coordinator ! StopMining // B-279: pauses; the test ends the actor itself
+        testKit.stop(coordinator, Timeouts.veryLongTimeout)
 
       // B-424: node B mined block 1 on genesis while it imported a checkpoint. The sync controller imports one inside
       // its start, and answers nothing until it is done.
@@ -322,8 +324,8 @@ class PoWMiningCoordinatorSpec
         syncStatus = Some(SyncProtocol.Status.NotSyncing)
         sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
 
-        coordinator ! StopMining
-        probe.expectTerminated(coordinator.ref.toClassic)
+        coordinator ! StopMining // B-279: pauses; the test ends the actor itself
+        testKit.stop(coordinator, Timeouts.veryLongTimeout)
 
       "does not mine on a best block whose state the node does not hold" taggedAs (
         UnitTest,
@@ -347,8 +349,8 @@ class PoWMiningCoordinatorSpec
         stateHeld = true
         sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
 
-        coordinator ! StopMining
-        probe.expectTerminated(coordinator.ref.toClassic)
+        coordinator ! StopMining // B-279: pauses; the test ends the actor itself
+        testKit.stop(coordinator, Timeouts.veryLongTimeout)
 
       // go-ethereum's miner stops listening to the downloader after its first DoneEvent: a peer that announces a block
       // it never sends must not stop this node's mining.
@@ -373,19 +375,25 @@ class PoWMiningCoordinatorSpec
         sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
         statusAsks.get() shouldBe 1
 
-        coordinator ! StopMining
-        probe.expectTerminated(coordinator.ref.toClassic)
+        coordinator ! StopMining // B-279: pauses; the test ends the actor itself
+        testKit.stop(coordinator, Timeouts.veryLongTimeout)
 
-      "StopMining stops PoWMinerCoordinator" taggedAs (UnitTest, ConsensusTest, SlowTest) in new TestSetup:
+      "StopMining pauses PoWMinerCoordinator, and a start resumes mining (B-279)" taggedAs (
+        UnitTest,
+        ConsensusTest,
+        SlowTest
+      ) in new TestSetup:
         override def coordinatorName: String = s"StoppingMining-${System.nanoTime()}"
         val probe: TestProbe = TestProbe()
+        val testMiner = new InstantMiner(blockCreator, sync.ref, ethMiningService)
         override val coordinator: org.apache.pekko.actor.typed.ActorRef[CoordinatorProtocol] = testKit.spawn(
           PoWMiningCoordinator(
             sync.ref,
             ethMiningService,
             blockCreator,
             blockchainReader,
-            this
+            this,
+            minerOpt = Some(testMiner)
           ),
           coordinatorName
         )
@@ -394,9 +402,14 @@ class PoWMiningCoordinatorSpec
         (() => blockchainReader.getBestBlock).expects().returns(Some(parentBlock)).anyNumberOfTimes()
         setBlockForMining(parentBlock)
         coordinator ! SetMiningMode(RecurrentMining)
+        sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
         coordinator ! StopMining
-
-        probe.expectTerminated(coordinator.ref.toClassic)
+        // Not terminated: a stopped coordinator left every later miner_start messaging a dead actor.
+        probe.expectNoMessage(500.millis)
+        sync.receiveWhile(500.millis) { case m => m } // drop a block mined before the stop was handled
+        coordinator ! SetMiningMode(RecurrentMining)
+        sync.expectMsgType[SyncController.WrappedSyncProtocol](Timeouts.veryLongTimeout).msg shouldBe a[MinedBlock]
+        testKit.stop(coordinator, Timeouts.veryLongTimeout)
     }
   }
 
