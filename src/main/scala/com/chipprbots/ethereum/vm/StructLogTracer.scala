@@ -118,7 +118,9 @@ class StructLogTracer(
       next: ProgramState[W, S],
       handedBack: BigInt
   ): BigInt =
-    if next.error.contains(OutOfGas) && next.opcodeGasCost != prev.opcodeGasCost then next.opcodeGasCost
+    // Every place an instruction halts out of gas keeps its computed cost on the halted state (OpCode, CreateOp,
+    // CallOp), so the value is this op's, never one a CREATE earlier in the frame left behind.
+    if next.error.contains(OutOfGas) then next.opcodeGasCost
     else
       opCode match
         case _: CreateOp if next.error.isEmpty => next.opcodeGasCost

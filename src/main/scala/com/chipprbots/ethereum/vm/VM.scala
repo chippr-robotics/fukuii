@@ -339,6 +339,25 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     context.endowment <= context.world.getBalance(context.callerAddr) &&
       context.callDepth <= EvmConfig.MaxCallDepth
 
+  /** A sub-call's error as go-ethereum's tracers report it (`err.Error()`, B-026). `InvalidCall` is one result for the
+    * refusals before a frame starts, which go-ethereum names apart: "max call depth exceeded" (ErrDepth), "insufficient
+    * balance for transfer" (ErrInsufficientBalance) and, for a creation, "nonce uint64 overflow"
+    * (ErrNonceUintOverflow), checked in core/vm/evm.go's order. Read-only and run only for a tracer, so execution does
+    * not change.
+    */
+  private def exitErrorText(context: PC, error: ProgramError, isCreate: Boolean): String =
+    if error != InvalidCall then ProgramErrorText.vmErrorMessage(error)
+    else if context.callDepth > EvmConfig.MaxCallDepth then "max call depth exceeded"
+    else
+      // Runs in a `finally`: a read that throws (a pruned node) must not replace an exception already in flight.
+      scala.util
+        .Try {
+          if context.endowment > context.world.getBalance(context.callerAddr) then "insufficient balance for transfer"
+          else if isCreate && creatorNonceOverflowed(context) then "nonce uint64 overflow"
+          else ProgramErrorText.vmErrorMessage(error)
+        }
+        .getOrElse(ProgramErrorText.vmErrorMessage(error))
+
   /** EIP-2681: a creation whose creator nonce would overflow uint64 fails before it starts. go-ethereum core/vm/evm.go
     * create() returns ErrNonceUintOverflow with the gas unchanged, after the depth and balance checks and BEFORE
     * bumping the nonce and adding the address to the access list -- the same observable outcome as those two checks,
@@ -350,19 +369,6 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     * up as a bumped nonce above 2^64 - 1. At tx level it cannot: StdSignedTransactionValidator rejects tx nonces >=
     * 2^64 - 1, so the bumped sender nonce is at most 2^64 - 1.
     */
-  /** A sub-call's error as go-ethereum's tracers report it (`err.Error()`, B-026). `InvalidCall` is one result for the
-    * refusals before a frame starts, which go-ethereum names apart: "max call depth exceeded" (ErrDepth), "insufficient
-    * balance for transfer" (ErrInsufficientBalance) and, for a creation, "nonce uint64 overflow"
-    * (ErrNonceUintOverflow), checked in core/vm/evm.go's order. Read-only and run only for a tracer, so execution does
-    * not change.
-    */
-  private def exitErrorText(context: PC, error: ProgramError, isCreate: Boolean): String =
-    if error != InvalidCall then ProgramErrorText.vmErrorMessage(error)
-    else if context.callDepth > EvmConfig.MaxCallDepth then "max call depth exceeded"
-    else if context.endowment > context.world.getBalance(context.callerAddr) then "insufficient balance for transfer"
-    else if isCreate && creatorNonceOverflowed(context) then "nonce uint64 overflow"
-    else ProgramErrorText.vmErrorMessage(error)
-
   private def creatorNonceOverflowed(context: PC): Boolean =
     context.world.getAccount(context.callerAddr).exists(_.nonce.toBigInt > CreateOp.MaxNonce)
 
