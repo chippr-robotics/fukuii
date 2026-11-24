@@ -125,7 +125,7 @@ abstract class BaseNode extends Node:
     loadGenesisData()
     repairStoredBodies() // after genesis is loaded, before the sync controller reads the backfill cursors
     importChainData() // Must complete before APIs so queries return chain data
-    refuseRegularSyncFromGenesisOnTheGuard() // after the genesis and a chain file: what they leave is what syncs
+    refuseRegularSyncWithNoStateOnTheGuard() // after the genesis and a chain file: what they leave is what syncs
     tuiStarted(StartupPhase.Storage)
 
     // Phase 2: P2P networking — bind discovery + TCP server BEFORE the user-facing
@@ -933,20 +933,20 @@ abstract class BaseNode extends Node:
       .snapRepairRefusal(System.getProperty("fukuii.snap.clearDoneOnStart", "false").toBoolean)
       .foreach(why => throw new IllegalStateException(why))
 
-  /** A node on the unified state layout that would run regular sync from its genesis (spec 018 C5a part 10, the user's
-    * decision of 2026-11-17; on proof of work only with no state at all, the decision of 2026-11-18): refused, and the
-    * node does not start ([[com.chipprbots.ethereum.blockchain.sync.PathLiveSync.regularSyncFromGenesisRefusal]]).
+  /** A node on the unified state layout that would run regular sync with no state at all (spec 018 C5a part 10):
+    * refused, and the node does not start
+    * ([[com.chipprbots.ethereum.blockchain.sync.PathLiveSync.regularSyncWithNoStateRefusal]]). Regular sync from the
+    * genesis state starts, on every chain (the user's decision of 2026-11-24, B-314).
     */
-  def refuseRegularSyncFromGenesisOnTheGuard(): Unit =
+  def refuseRegularSyncWithNoStateOnTheGuard(): Unit =
     storagesInstance.storages.pathStateStorage.foreach { pathState =>
       val appState = storagesInstance.storages.appStateStorage
       com.chipprbots.ethereum.blockchain.sync.PathLiveSync
-        .regularSyncFromGenesisRefusal(
+        .regularSyncWithNoStateRefusal(
           doSnapSync = syncConfig.doSnapSync,
           testMode = Config.testmode,
           anchor = pathState.anchor,
-          syncStarted = appState.isSnapSyncDone() || appState.getSnapSyncPivotBlock().isDefined,
-          proofOfWork = com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck.isProofOfWork(blockchainConfig)
+          syncStarted = appState.isSnapSyncDone() || appState.getSnapSyncPivotBlock().isDefined
         )
         .foreach(why => throw new IllegalStateException(why))
     }
