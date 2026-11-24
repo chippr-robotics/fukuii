@@ -1198,7 +1198,10 @@ class SyncControllerSpec
     // no SNAP child here reaches its finalisation, the one reader of the hand-off
     def handoff: com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff = null
     // nor does a checkpoint import
-    def checkpointTarget: com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.UnifiedTarget = null
+    val targetReads = new java.util.concurrent.atomic.AtomicInteger(0)
+    def checkpointTarget: com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.UnifiedTarget =
+      targetReads.incrementAndGet()
+      null
     def beforeSnap(): SyncController.SnapStartOnGuard =
       askedOn.add(Thread.currentThread.getName)
       val n = asked.incrementAndGet()
@@ -1209,6 +1212,18 @@ class SyncControllerSpec
       PathLiveSync.SnapPeerPrecondition(minSnapPeers = 2, powWait = 1.minute, declared = Set.empty)
     @volatile var onlyGenesis: Boolean = false
     def holdsOnlyGenesis(): Boolean = onlyGenesis
+
+  /** A port whose check does not end until the test says: what arrives meanwhile is stashed (B-329). */
+  private class LatchedPort(answer: SyncController.SnapStartOnGuard) extends GuardPort(answer):
+    val release = new java.util.concurrent.CountDownLatch(1)
+    val entered = new java.util.concurrent.CountDownLatch(1)
+    val entries = new java.util.concurrent.atomic.AtomicInteger(0)
+    val enteredTwice = new java.util.concurrent.CountDownLatch(1)
+    override def beforeSnap(): SyncController.SnapStartOnGuard =
+      if entries.incrementAndGet() >= 2 then enteredTwice.countDown()
+      entered.countDown()
+      release.await(30, java.util.concurrent.TimeUnit.SECONDS)
+      super.beforeSnap()
 
   "On the unified state layout, SyncController" should "ask the port before SNAP, off its own thread, and begin SNAP when it says so" taggedAs (
     UnitTest,
@@ -1708,6 +1723,518 @@ class SyncControllerSpec
     (held.held(), held.held()) shouldBe (1, 2)
     held.handedOff()
     held.held() shouldBe 1
+  }
+
+  // B-329: the count is the gauge db.state.handoff.held.excluded.consecutive, and the sixth of three is an ERROR
+  it should "be the gauge of the hand-offs held in a row, which a hand-off sets back to 0" taggedAs UnitTest in {
+    def gauge: Double =
+      com.chipprbots.ethereum.metrics.Metrics
+        .get()
+        .registry
+        .getMeters
+        .asScala
+        .collectFirst {
+          case g: io.micrometer.core.instrument.Gauge
+              if g.getId.getName.endsWith("db.state.handoff.held.excluded.consecutive") =>
+            g.value()
+        }
+        .get
+    val held = new HandoffsHeldForExcluded
+    held.held(): Unit
+    held.held(): Unit
+    gauge shouldBe 2d
+    held.handedOff()
+    gauge shouldBe 0d
+    held.held(): Unit
+    gauge shouldBe 1d
+    HandoffsHeldForExcluded.ErrorFrom shouldBe 3
+  }
+
+  // ── B-329: a mutation pass over the start of SNAP on the unified layout ──────────────────────────────────────────
+
+  private def bulkRecoveryAsk: SyncController.WrappedSyncProtocol =
+    SyncController.WrappedSyncProtocol(
+      SyncProtocol.MissingCodeNeedsBulkRecovery(500, ByteString(Array.fill[Byte](32)(3)))
+    )
+
+  private val BulkRecoveryIgnored = "Ignoring a bulk bytecode recovery request for block 500"
+
+  "On the unified state layout, the start of SNAP in SyncController" should "give what arrived during the check to the SNAP sync it begins" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new LatchedPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 1, snap = 1))
+    try
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually {
+        someTimePasses()
+        port.entered.getCount shouldBe 0
+      }
+      syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+      port.handedOffs.get() shouldBe 0
+    finally port.release.countDown()
+    eventually {
+      someTimePasses()
+      port.handedOffs.get() shouldBe 1
+    }
+  }
+
+  private def replayedIntoRegularSync(answer: SyncController.SnapStartOnGuard): Unit = withRecoveryTestSetup() {
+    testSetup =>
+      import testSetup.*
+      val port = new LatchedPort(answer)
+      pathLiveSync = Some(port)
+      answerPeerPollsWith(peersOnTheChain(testSetup, n = 1, snap = 1))
+      val lines = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.WARN) {
+        try
+          syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+          eventually {
+            someTimePasses()
+            port.entered.getCount shouldBe 0
+          }
+          syncController ! bulkRecoveryAsk
+        finally port.release.countDown()
+        regularSyncChild(testSetup)
+      }
+      snapChildren(testSetup) shouldBe empty
+      lines.count(_.contains(BulkRecoveryIgnored)) shouldBe 1
+  }
+
+  it should "give what arrived during the check to regular sync when the port refuses SNAP" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in replayedIntoRegularSync(SyncController.SnapStartOnGuard.Refused("this node holds the state of block 9"))
+
+  it should "give what arrived during the check to regular sync when the node holds a state" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in replayedIntoRegularSync(SyncController.SnapStartOnGuard.HoldsState("9 (0102030405060708)"))
+
+  it should "give what arrived in the wait for snap peers to regular sync from the genesis" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 2, snap = 0))
+    val lines = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.WARN) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      syncController ! bulkRecoveryAsk
+      timePasses(1.minute)
+      regularSyncChild(testSetup)
+    }
+    lines.count(_.contains(BulkRecoveryIgnored)) shouldBe 1
+  }
+
+  it should "keep 256 messages that arrive during the check, drop the next and say so" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new LatchedPort(SyncController.SnapStartOnGuard.HoldsState("9 (0102030405060708)"))
+      pathLiveSync = Some(port)
+      answerPeerPollsWith(peersOnTheChain(testSetup, n = 1, snap = 1))
+      val lines = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.WARN) {
+        try
+          syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+          eventually {
+            someTimePasses()
+            port.entered.getCount shouldBe 0
+          }
+          (1 to 257).foreach(_ => syncController ! bulkRecoveryAsk)
+        finally port.release.countDown()
+        regularSyncChild(testSetup)
+      }
+      lines.count(_.contains("A message was dropped while a SNAP sync's start is checked")) shouldBe 1
+      lines.count(_.contains(BulkRecoveryIgnored)) shouldBe 256
+    }
+
+  it should "stop the node when the check before SNAP fails, so that a restart finishes the clear" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false)):
+      override def beforeSnap(): SyncController.SnapStartOnGuard =
+        throw new IllegalStateException("the clear failed")
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 1, snap = 1))
+    val errors = syncControllerErrorsDuring {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually {
+        someTimePasses()
+        syncController.underlying.isTerminated shouldBe true
+      }
+    }
+    errors.exists(_.contains("[STATE-CLEAR] The check before a SNAP sync failed")) shouldBe true
+  }
+
+  it should "say that the genesis state is cleared only when it was" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+      pathLiveSync = Some(port)
+      answerPeerPollsWith(peersOnTheChain(testSetup, n = 1, snap = 1))
+      val lines = syncControllerLogsDuring(ch.qos.logback.classic.Level.INFO) {
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+        eventually {
+          someTimePasses()
+          assert(snapChildren(testSetup).nonEmpty)
+        }
+      }
+      lines.count(_.contains("[STATE-CLEAR] The genesis state is cleared")) shouldBe 1
+      withClue("SNAP writes the path scheme on the unified layout, and says so once: ") {
+        lines.count(_.contains("[STATE-PATH-LIVE] SNAP writes the path scheme")) shouldBe 1
+      }
+    }
+
+  it should "say nothing of a clear when the genesis state was not cleared" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+      pathLiveSync = Some(port)
+      answerPeerPollsWith(peersOnTheChain(testSetup, n = 1, snap = 1))
+      val lines = syncControllerLogsDuring(ch.qos.logback.classic.Level.INFO) {
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+        eventually {
+          someTimePasses()
+          assert(snapChildren(testSetup).nonEmpty)
+        }
+      }
+      lines.exists(_.contains("[STATE-CLEAR]")) shouldBe false
+    }
+
+  it should "ask the peer manager for the count of snap peers at the start, before the first tick" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    pathLiveSync = Some(port)
+    val asked = new java.util.concurrent.atomic.AtomicInteger(0)
+    answerPeerPollsFrom { () =>
+      asked.incrementAndGet()
+      None
+    }
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually(asked.get() shouldBe 1)
+  }
+
+  it should "end the wait for snap peers at powWait to the second, not later" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+      port.onlyGenesis = true
+      port.snapPeers = port.snapPeers.copy(powWait = 62.seconds)
+      pathLiveSync = Some(port)
+      answerPeerPollsWith(peersOnTheChain(testSetup, n = 2, snap = 0))
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      timePasses(61.seconds)
+      assert(!childNamed(testSetup, "regular-sync"))
+      timePasses(1.second)
+      eventually(assert(childNamed(testSetup, "regular-sync")))
+    }
+
+  it should "say it waits once, at the first count, and not at each count after it" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+      port.onlyGenesis = true
+      port.snapPeers = port.snapPeers.copy(powWait = 5.minutes)
+      pathLiveSync = Some(port)
+      val replied = new java.util.concurrent.Semaphore(0)
+      answerPeerPollsEach(peersOnTheChain(testSetup, n = 3, snap = 1), times = 1, () => replied.release())
+      val first = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.INFO) {
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+        replied.tryAcquire(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+      }
+      first.count(l => l.contains("[SNAP-PEERS]") && l.contains("waits up to 5 min")) shouldBe 1
+      val after = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.INFO) {
+        (1 to 6).foreach(_ => timePasses(SyncController.SnapStartRecheckDelay))
+      }
+      after.count(l => l.contains("[SNAP-PEERS]") && l.contains("waits up to")) shouldBe 0
+    }
+
+  it should "leave no timer of the wait for snap peers running once SNAP begins" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+      port.onlyGenesis = true
+      port.snapPeers = port.snapPeers.copy(powWait = 62.seconds)
+      pathLiveSync = Some(port)
+      answerPeerPollsWith(peersOnTheChain(testSetup, n = 3, snap = 2))
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
+      val stray = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.DEBUG) {
+        timePasses(70.seconds)
+      }
+      stray.filter(l => l.contains("SnapPeersRecount") || l.contains("SnapPeersWaitOver")) shouldBe empty
+    }
+
+  it should "leave no timer of the wait for snap peers running once regular sync from the genesis begins" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    port.snapPeers = port.snapPeers.copy(powWait = 62.seconds)
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 3, snap = 0))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    timePasses(62.seconds)
+    regularSyncChild(testSetup)
+    val stray = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.DEBUG) {
+      timePasses(70.seconds)
+    }
+    stray.filter(l => l.contains("SnapPeersRecount") || l.contains("SnapPeersWaitOver")) shouldBe empty
+  }
+
+  it should "keep the head the consensus client names during the check, for the pivot of the SNAP sync" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withGuardPosSetup(withForkChoice = true) { testSetup =>
+    import testSetup.*
+    val port = new LatchedPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    pathLiveSync = Some(port)
+    val lines = syncControllerLogsDuring(ch.qos.logback.classic.Level.INFO) {
+      try
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+        withClue("the check was asked: ")(port.entered.await(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true)
+        syncController ! SyncController.WrappedExternal(
+          com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
+            .BeaconHead(ByteString(Array.fill[Byte](32)(9)), None)
+        )
+      finally port.release.countDown()
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
+    }
+    lines.exists(_.contains("Priming SNAP sync with buffered CL beacon head")) shouldBe true
+  }
+
+  it should "ask the port once when the peer manager answers a count twice" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new LatchedPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+      pathLiveSync = Some(port)
+      answerPeerPollsEach(peersOnTheChain(testSetup, n = 1, snap = 1), times = 2)
+      try
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+        withClue("the check was asked: ")(port.entered.await(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true)
+        withClue("the second answer of the count began no second check: ")(
+          port.enteredTwice.await(500, java.util.concurrent.TimeUnit.MILLISECONDS) shouldBe false
+        )
+      finally port.release.countDown()
+      awaitSnapStarted(syncController)
+      port.asked.get() shouldBe 1
+    }
+
+  it should "warn that the peer manager does not answer at the second count, and decide on the final count at the second tick after the wait" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    port.snapPeers = port.snapPeers.copy(powWait = 62.seconds)
+    pathLiveSync = Some(port)
+    answerPeerPollsFrom(() => None)
+    def warnings(f: => Unit) =
+      syncControllerLogsAtLeast(ch.qos.logback.classic.Level.WARN)(f).filter(_.contains("[SNAP-PEERS]"))
+    warnings {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      timePasses(5.seconds)
+    }.exists(_.contains("has not answered")) shouldBe false
+    warnings(timePasses(5.seconds)).count(_.contains("has not answered 2 counts")) shouldBe 1
+    timePasses(50.seconds)
+    warnings(timePasses(2.seconds)) // the wait is over
+    withClue("one tick after the wait: ") {
+      warnings(timePasses(3.seconds)).exists(_.contains("did not answer the final count")) shouldBe false
+    }
+    withClue("two ticks after the wait: ") {
+      warnings(timePasses(5.seconds)).count(_.contains("did not answer the final count")) shouldBe 1
+    }
+    eventually(port.asked.get() shouldBe 1)
+  }
+
+  it should "decide at the end of the wait on a recount made then, not on the last tick's" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    port.snapPeers = port.snapPeers.copy(powWait = 62.seconds)
+    pathLiveSync = Some(port)
+    @volatile var arrived = false
+    answerPeerPollsFrom { () =>
+      Some(peersOnTheChain(testSetup, n = 2, snap = if arrived then 1 else 0))
+    }
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    (1 to 12).foreach(_ => timePasses(SyncController.SnapStartRecheckDelay))
+    arrived = true
+    timePasses(2.seconds)
+    // no tick has come since: only the recount of the end of the wait can have seen the peer
+    eventually(port.asked.get() shouldBe 1)
+  }
+
+  it should "say how many hand-offs were held in a row, and why the excluded set was not taken as read" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    pathLiveSync = Some(new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false)))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    awaitSnapStarted(syncController)
+    def held(readFailed: Boolean): List[String] =
+      val before = snapChildren(testSetup)
+      syncControllerLogsAtLeast(ch.qos.logback.classic.Level.WARN) {
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.HandoffHeldForExcluded(BigInt(7), readFailed))
+        eventually {
+          someTimePasses()
+          assert((snapChildren(testSetup) -- before).nonEmpty)
+        }
+      }.filter(_.contains("not handing off at pivot 7"))
+    val unread = held(readFailed = true)
+    unread.exists(_.contains("the excluded set could not be read")) shouldBe true
+    unread.exists(_.contains("the sync left accounts out")) shouldBe false
+    val left = held(readFailed = false)
+    left.exists(_.contains("the sync left accounts out")) shouldBe true
+    left.exists(_.contains("could not be read")) shouldBe false
+  }
+
+  it should "count the hand-offs held again from one after a hand-off was made" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      def held(): List[String] =
+        val before = snapChildren(testSetup)
+        syncControllerLogsAtLeast(ch.qos.logback.classic.Level.WARN) {
+          syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.HandoffHeldForExcluded(BigInt(7), false))
+          eventually {
+            someTimePasses()
+            assert((snapChildren(testSetup) -- before).nonEmpty)
+          }
+        }.filter(_.contains("not handing off at pivot 7"))
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
+      awaitSnapStarted(syncController)
+      held().exists(_.contains("1 in a row")) shouldBe true
+      held().exists(_.contains("2 in a row")) shouldBe true
+      awaitSnapStarted(syncController)
+
+      // a hand-off, then a re-SNAP from regular sync: the next hand-off held is the first in a row again
+      syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+      regularSyncChild(testSetup)
+      val backfill = snapChildren(testSetup)
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(BigInt(500), "deadbeef"))
+      eventually {
+        someTimePasses()
+        assert((snapChildren(testSetup) -- backfill).nonEmpty)
+      }
+      held().exists(_.contains("1 in a row")) shouldBe true
+    }
+
+  it should "tell the port of a hand-off on the legacy path to regular sync as well" taggedAs (UnitTest, SyncTest) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+      pathLiveSync = Some(port)
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      // no peer answers the count: SNAP waits for peers, not in the bootstrap of a pivot's header
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
+      awaitSnapStarted(syncController)
+      assert(!childNamed(testSetup, "pivot-header-bootstrap"))
+      syncController ! SyncController.WrappedExternal(SNAPSyncController.Done)
+      regularSyncChild(testSetup)
+      port.handedOffs.get() shouldBe 1
+    }
+
+  it should "tell the port of a hand-off that comes while the pivot's header is fetched" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in
+    withRecoveryTestSetup() { testSetup =>
+      import testSetup.*
+      val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+      pathLiveSync = Some(port)
+      seedStrandedFastSync(testSetup)
+      answerPeerPollsWith(snapPeerAt(StrandedBest + 10))
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      eventually {
+        someTimePasses()
+        assert(childNamed(testSetup, "pivot-header-bootstrap"))
+      }
+      withClue("the floor the start was given reaches the SNAP sync, through the check: ") {
+        storagesInstance.storages.appStateStorage.getSnapSyncBootstrapTarget() shouldBe Some(StrandedBest + 1)
+      }
+      val debug = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.DEBUG) {
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.HandoffHeldForExcluded(BigInt(7), false))
+      }
+      withClue("a hand-off held for accounts left out is stale in the bootstrap, and dropped: ") {
+        debug.exists(_.contains("in runningPivotHeaderBootstrap — stale, dropping")) shouldBe true
+        debug.exists(_.contains("not handing off at pivot 7")) shouldBe false
+      }
+      syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+      regularSyncChild(testSetup)
+      port.handedOffs.get() shouldBe 1
+    }
+
+  it should "keep the SNAP backfill running when regular sync reports itself stuck or asks for a bulk recovery" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+    pathLiveSync = Some(port)
+    // no peer answers the count: SNAP waits for peers, and is still there to backfill when it finalises
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    awaitSnapStarted(syncController)
+    syncController ! SyncController.WrappedExternal(SNAPSyncController.SnapSyncFinalized(BigInt(1)))
+    regularSyncChild(testSetup)
+    val backfill = snapChildren(testSetup)
+    backfill should not be empty
+    val lines = syncControllerLogsDuring(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(BigInt(500), "deadbeef"))
+      syncController ! bulkRecoveryAsk
+    }
+    lines.exists(_.contains("Restart triggered")) shouldBe false
+    snapChildren(testSetup) shouldBe backfill
+  }
+
+  it should "read the checkpoint target of the port to recover an interrupted import and to import" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withCheckpointArchive(retryRefused = true) { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = false))
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 1, snap = 1))
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
+    port.targetReads.get() shouldBe 2
   }
 
   /** The regular-sync child running now: the latest generation (a stopped one can still be listed a moment). */
@@ -3538,6 +4065,19 @@ class SyncControllerSpec
             this
       )
 
+    /** Answer every peer poll `times` times with `peers`, and then say so: the reply is handled on this thread. */
+    def answerPeerPollsEach(peers: Map[Peer, PeerInfo], times: Int, afterReply: () => Unit = () => ()): Unit =
+      networkPeerManager.setAutoPilot(
+        new AutoPilot:
+          override def run(sender: ActorRef, msg: Any): AutoPilot =
+            msg.asMatchable match
+              case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) =>
+                (1 to times).foreach(_ => replyTo ! HandshakedPeers(peers))
+                afterReply()
+              case _ => ()
+            this
+      )
+
     /** Answer every peer poll with what `peers` gives at that moment; `None` leaves the poll unanswered. */
     def answerPeerPollsFrom(peers: () => Option[Map[Peer, PeerInfo]]): Unit =
       networkPeerManager.setAutoPilot(
@@ -3642,8 +4182,12 @@ class SyncControllerSpec
   /** A SyncController on the unified layout, SNAP on, on a chain with a terminal total difficulty (the ETH/Sepolia
     * shape): `pathLiveSync` is set before it is first used.
     */
-  class GuardPosSetup extends TestSetup():
+  class GuardPosSetup(withForkChoice: Boolean = false) extends TestSetup():
     override def defaultSyncConfig: SyncConfig = super.defaultSyncConfig.copy(doSnapSync = true)
+
+    /** The consensus client's fork choice, which makes a head it names the pivot's (clPivotEnabled). */
+    lazy val forkChoiceManager: com.chipprbots.ethereum.consensus.engine.ForkChoiceManager =
+      new com.chipprbots.ethereum.consensus.engine.ForkChoiceManager(blockchainReader, blockchainWriter)
 
     private val baseChainConfig: BlockchainConfig = blockchainConfig
     private lazy val chainConfigBuilder: com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder =
@@ -3674,6 +4218,7 @@ class SyncControllerSpec
           blacklist,
           syncConfig,
           chainConfigBuilder,
+          forkChoiceManagerOpt = Option.when(withForkChoice)(forkChoiceManager),
           externalSchedulerOpt = Some(system.scheduler),
           backgroundAuditEnabled = auditEnabled,
           chainWeightReconcileOn = false,
@@ -3682,8 +4227,8 @@ class SyncControllerSpec
       )
     )
 
-  def withGuardPosSetup()(test: GuardPosSetup => Any): Unit =
-    val testSetup = new GuardPosSetup
+  def withGuardPosSetup(withForkChoice: Boolean = false)(test: GuardPosSetup => Any): Unit =
+    val testSetup = new GuardPosSetup(withForkChoice)
     try test(testSetup)
     finally testSetup.cleanup()
 
