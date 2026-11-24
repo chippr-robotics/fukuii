@@ -52,7 +52,10 @@ import com.chipprbots.ethereum.utils.Config
   * head is moved to it in place, with no rewind.
   *
   * Each layout runs under both pruning modes (spec 018 T007, B-432): `basic`, the shipped default
-  * (`conf/base/pruning.conf`: history 64), and `archive`. The spec runs only in the nightly ethereum/tests job.
+  * (`conf/base/pruning.conf`: history 64), and `archive`. And on both layouts, under `basic`, the blocks are given once
+  * more as one chain file to the node's `ChainImporter`, the path hive's consensus simulator takes (B-220): there a
+  * failed block is counted, and the head and the post-state are judged as above. The spec runs only in the nightly
+  * ethereum/tests job.
   */
 class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
 
@@ -66,14 +69,27 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
 
   final private case class Outcome(name: String, error: Option[String], reorgs: Int)
 
-  /** The node a case runs on: its state layout and its pruning mode. */
-  final private case class Variant(layout: String, unified: Boolean, pruningName: String, pruning: PruningMode)
+  /** The node a case runs on: its state layout and its pruning mode; and whether its blocks come one at a time through
+    * the block import, or as one chain file through the node's `ChainImporter`, as hive's consensus simulator gives
+    * them (B-220).
+    */
+  final private case class Variant(
+      layout: String,
+      unified: Boolean,
+      pruningName: String,
+      pruning: PruningMode,
+      chainFile: Boolean = false
+  ):
+    def name: String = s"$layout, $pruningName pruning${if chainFile then ", from a chain file" else ""}"
 
   private val Variants: Seq[Variant] =
-    for
+    (for
       (layout, unified) <- Seq("the hash layout" -> false, "the unified layout" -> true)
       (pruningName, pruning) <- Seq("basic" -> BasicPruning(64), "archive" -> ArchivePruning)
-    yield Variant(layout, unified, pruningName, pruning)
+    yield Variant(layout, unified, pruningName, pruning)) ++
+      Seq("the hash layout" -> false, "the unified layout" -> true).map { (layout, unified) =>
+        Variant(layout, unified, "basic", BasicPruning(64), chainFile = true)
+      }
 
   private class FixtureNode(bc: BlockchainConfig, variant: Variant) extends EphemBlockchainTestSetup:
     implicit override lazy val blockchainConfig: BlockchainConfig = bc
@@ -144,11 +160,11 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
         )
       notTheFixtures match
         case Some(why) => Outcome(name, Some(why), 0)
-        case None      => importAndJudge(name, test, lastBlockHash, bc, node)
+        case None      => importAndJudge(name, test, lastBlockHash, bc, node, variant.chainFile)
     else
       seedOnTheHashLayout(test, bc, node, genesisHeader) match
         case Some(why) => Outcome(name, Some(why), 0)
-        case None      => importAndJudge(name, test, lastBlockHash, bc, node)
+        case None      => importAndJudge(name, test, lastBlockHash, bc, node, variant.chainFile)
 
   /** The hash layout's genesis: the pre-state into the node's own storage, then the fixture's genesis header on it. */
   private def seedOnTheHashLayout(
@@ -194,27 +210,46 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
       test: BlockchainTest,
       lastBlockHash: Option[ByteString],
       bc: BlockchainConfig,
-      node: FixtureNode
+      node: FixtureNode,
+      chainFile: Boolean
   ): Outcome =
     import node.*
-    val results = test.blocks.map { tb =>
-      val block = Block(
+    val blocks = test.blocks.map { tb =>
+      Block(
         TestConverter.toBlockHeader(tb.blockHeader),
         BlockBody(tb.transactions.map(TestConverter.toTransaction), tb.uncleHeaders.map(TestConverter.toBlockHeader))
       )
-      (
-        block,
-        consensusAdapter
-          .evaluateBranchBlock(block)(using IORuntime.global, bc)
-          .unsafeRunSync()(using IORuntime.global)
-      )
     }
-    val failures = results.collect {
-      case (block, BlockImportFailed(err)) => s"block ${block.number} ${block.header.hashAsHexString}: $err"
-      // An orphan is not a `BlockImportFailed` any more (B-007), but a vector block whose parent is missing is a failure.
-      case (block, UnknownParent) => s"block ${block.number} ${block.header.hashAsHexString}: parent not found"
-    }
-    val reorgs = results.count { case (_, r) => r.isInstanceOf[ChainReorganised] }
+    val (failures, reorgs) =
+      if chainFile then
+        // the node's own importer, as hive's consensus simulator feeds it: every block in one file
+        val file = java.nio.file.Files.createTempFile("fork-choice", ".rlp")
+        try
+          java.nio.file.Files.write(
+            file,
+            blocks.flatMap(b => com.chipprbots.ethereum.blockchain.data.ChainFile.encode(b).toSeq).toArray
+          )
+          val (_, _, failed) = chainImporter.importChainFile(file.toString)(using bc)
+          (Option.when(failed > 0)(s"the chain file import counted $failed failed block(s)").toSeq, 0)
+        finally java.nio.file.Files.delete(file)
+      else
+        val results = blocks.map { block =>
+          (
+            block,
+            consensusAdapter
+              .evaluateBranchBlock(block)(using IORuntime.global, bc)
+              .unsafeRunSync()(using IORuntime.global)
+          )
+        }
+        (
+          results.collect {
+            case (block, BlockImportFailed(err)) => s"block ${block.number} ${block.header.hashAsHexString}: $err"
+            // An orphan is not a `BlockImportFailed` any more (B-007), but a vector block whose parent is missing is a
+            // failure.
+            case (block, UnknownParent) => s"block ${block.number} ${block.header.hashAsHexString}: parent not found"
+          },
+          results.count { case (_, r) => r.isInstanceOf[ChainReorganised] }
+        )
 
     val head = blockchainReader.getBestBlock.map(_.header)
     val headError = (lastBlockHash, head) match
@@ -281,7 +316,7 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
     failed.map(o => s"${o.name}: ${o.error.get}") shouldBe empty
 
   for variant <- Variants do
-    s"Fork-choice BlockchainTests on ${variant.layout}, ${variant.pruningName} pruning" should "pass bcMultiChainTest" taggedAs (
+    s"Fork-choice BlockchainTests on ${variant.name}" should "pass bcMultiChainTest" taggedAs (
       IntegrationTest,
       EthereumTest,
       SlowTest

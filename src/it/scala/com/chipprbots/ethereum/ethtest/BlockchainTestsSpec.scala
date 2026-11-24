@@ -132,6 +132,49 @@ class BlockchainTestsSpec extends EthereumTestsSpec:
     }
   }
 
+  // Spec 018 T117 (B-220): the sequential runner with the unified layout's guard on. Each fixture of the resources, on
+  // every network it names, ends on the same state root, after the same blocks, as on the hash store.
+  it should "run its fixtures on the unified state layout to the hash store's state" taggedAs (
+    IntegrationTest,
+    EthereumTest,
+    SlowTest
+  ) in {
+    val fixtures = Seq(
+      "SimpleTx",
+      "SimpleTx_ValidBlock",
+      "ExtraData32",
+      "dataTx",
+      "RecallSuicidedContract",
+      "add11",
+      "addNonConst",
+      "basefeeExample",
+      "blockWithAllTransactionTypes",
+      "mergeExample",
+      "shanghaiExample",
+      "tloadDoesNotPersistCrossTxn"
+    )
+    val runs = for
+      fixture <- fixtures
+      (name, test) <- loadTestSuite(s"/ethereum-tests/$fixture.json").tests.toSeq.sortBy(_._1)
+    yield
+      val onHashes = EthereumTestExecutor.executeTest(test, baseBlockchainConfig, unified = false)
+      val onPositions = EthereumTestExecutor.executeTest(test, baseBlockchainConfig, unified = true)
+      (s"$fixture/$name (${test.network})", onHashes, onPositions)
+    info(s"${runs.size} cases on both layouts")
+    runs should not be empty
+    runs.foreach { case (name, onHashes, onPositions) =>
+      withClue(s"$name: ") {
+        // what the hash store runs, the unified layout runs to the same state; a case the hash store fails is not
+        // this check's to judge
+        onHashes.foreach { hashes =>
+          onPositions.map(r => (r.blocksExecuted, r.finalStateRoot)) shouldBe
+            Right((hashes.blocksExecuted, hashes.finalStateRoot))
+        }
+      }
+    }
+    runs.count(_._2.isRight) should be > 0
+  }
+
   it should "discover tests in ValidBlocks/bcValidBlockTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
     val basePath = "/home/runner/work/fukuii/fukuii/ets/tests/BlockchainTests"
     val baseDir = new File(basePath)

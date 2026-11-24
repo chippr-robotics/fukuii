@@ -109,4 +109,9 @@ abstract class EthereumTestsSpec extends AnyFlatSpec with Matchers:
 
   /** Execute a complete test including block execution and post-state validation */
   def executeTest(test: BlockchainTest): Either[String, TestExecutionResult] =
-    EthereumTestExecutor.executeTest(test, baseBlockchainConfig)
+    EthereumTestExecutor.executeTest(test, baseBlockchainConfig, unifiedLayout)
+
+  /** Whether this spec's fixtures run on the unified state layout, the guard on (spec 018 T117):
+    * `FUKUII_ETHTEST_LAYOUT=unified`, or a spec that says so.
+    */
+  protected def unifiedLayout: Boolean = EthereumTestHelper.unifiedByDefault
