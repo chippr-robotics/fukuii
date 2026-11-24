@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.nodebuilder.BaseNode
 import com.chipprbots.ethereum.nodebuilder.ChainTool
 import com.chipprbots.ethereum.nodebuilder.NodeStartup
 import com.chipprbots.ethereum.nodebuilder.StdNode
+import com.chipprbots.ethereum.nodebuilder.StopSignal
 import com.chipprbots.ethereum.nodebuilder.TestNode
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.JvmFlagGuard
@@ -165,6 +166,11 @@ object Fukuii extends Logger:
             new TestNode
           else new StdNode
         node = Some(built)
+        // SIGTERM stops this node and exits 0 when its database closed, not the JVM's 143 (B-426).
+        StopSignal.install(() =>
+          built.shutdown()
+          built.stoppedCleanly
+        )
         built.start()
       ,
       NodeStartup.OnFailure(

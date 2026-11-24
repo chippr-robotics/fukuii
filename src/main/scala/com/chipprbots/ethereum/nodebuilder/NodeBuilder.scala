@@ -1734,6 +1734,11 @@ trait ShutdownHookBuilder:
     /* No default behaviour during shutdown. */
   }
 
+  /** What the JVM's shutdown hook calls: [[shutdown]], unless a builder says otherwise (a node does not wait there for
+    * a stop already under way; B-274, B-426).
+    */
+  def shutdownOnExit(): Unit = shutdown()
+
   lazy val shutdownTimeoutDuration: Duration = instanceConfig.shutdownTimeout
 
   /** Whether the JVM shutdown hook holds this builder only weakly. False (a strong reference) for every node: nothing
@@ -1776,7 +1781,7 @@ private[nodebuilder] object ShutdownHooks:
     new Thread():
       override def run(): Unit =
         val target = if strong != null then strong else weak.get
-        if target != null then target.shutdown()
+        if target != null then target.shutdownOnExit()
 
 trait GenesisDataLoaderBuilder:
   self: BlockchainBuilder & StorageBuilder =>
