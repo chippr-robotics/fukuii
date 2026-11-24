@@ -2208,18 +2208,19 @@ items:
   - id: B-256
     title: "SNAPResetCharacterizationSpec dormant-mode case: the 10 s wait for 'SNAP finalization aborted' timed out once in CI (#1833), passes locally"
     priority: P1
-    status: in-progress
+    status: review
     area: snap
     size: S
     opened: 2026-11-14
     refs: []
     links:
+      prs: [2026]
       spec: specs/016-snap-controller-split
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T02:53:01Z
-      heartbeat: 2026-11-24T03:12:29Z
+      heartbeat: 2026-11-24T03:12:44Z
     notes: |-
       2026-11-20 #1957 merged to main (6ea4ffd): barriers + 25-line diagnostics landed; root cause still open. Not on staging yet (cherry-pick 3cb05e4); next failure's message will show what the controller logged.
       2026-11-20 #1958 merged: the #1957 fixture changes are on staging too, so a promotion keeps them.
