@@ -4402,3 +4402,14 @@ items:
     links:
       spec: 018
     notes: Outside B-294's window (the head is settled then). The adoption weighs the branch against the old head and its move-back target is the stale oldHead; the extra block becomes a side block. No corruption expected; forge to confirm whether a re-check of the head after the hold is wanted.
+  - id: B-464
+    title: "StateRecovery: moveBack after an invalid branch or local fault skips the asked() check and may undo a fork choice in flight"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "beacon review of B-294, StateRecovery.scala:508-511; CL told VALID for X while head elsewhere until next FCU; fix: if asked() then moveBack(...); changes which head is kept after an invalid branch -> beacon decision"
