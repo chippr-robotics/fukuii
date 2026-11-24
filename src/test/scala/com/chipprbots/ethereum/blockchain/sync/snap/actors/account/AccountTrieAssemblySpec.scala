@@ -322,9 +322,11 @@ class AccountTrieAssemblySpec extends ScalaTestWithActorTestKit with AnyFlatSpec
 
   // B-190: a failed store is a local fault. The task's cursor is already past the response, so a re-queue would skip the
   // unstored accounts for good; the run stops instead and the controller restarts SNAP.
-  private def assertStoppedOnStoreFault(h: Harness): Unit =
+  private def assertStoppedOnStoreFault(h: Harness, t: AccountTask, firstUnstored: ByteString): Unit =
     val m = h.module
-    m.storingTasks shouldBe empty
+    withClue("kept as a range with work, its cursor back at the first account not stored (vault review): ")(
+      m.storingTasks.toMap shouldBe Map(t.last -> t.copy(next = firstUnstored, pending = false, done = false))
+    )
     withClue("not re-queued (its cursor is past the unstored accounts): ")(m.pendingTasks shouldBe empty)
     m.completedTasks shouldBe empty
     m.taskStackTries shouldBe empty
@@ -342,7 +344,7 @@ class AccountTrieAssemblySpec extends ScalaTestWithActorTestKit with AnyFlatSpec
     h.call(_.handleStoreAccountChunk(t, accounts(2), 2, storedSoFar = 0, isTaskRangeComplete = true))
 
     m.accountsDownloaded shouldBe 0L
-    assertStoppedOnStoreFault(h)
+    assertStoppedOnStoreFault(h, t, hash(1))
   }
 
   it should "stop the account phase, not re-queue, when a Hash-scheme node write fails (B-190)" taggedAs UnitTest in {
@@ -355,7 +357,7 @@ class AccountTrieAssemblySpec extends ScalaTestWithActorTestKit with AnyFlatSpec
     // The range completes in this chunk, so its commit flushes through the failing store.
     h.call(_.handleStoreAccountChunk(t, accounts(4), 4, storedSoFar = 0, isTaskRangeComplete = true))
 
-    assertStoppedOnStoreFault(h)
+    assertStoppedOnStoreFault(h, t, hash(1))
   }
 
   it should "stop the account phase, not re-queue, when a Path-scheme node write fails (B-190)" taggedAs UnitTest in {
@@ -368,7 +370,7 @@ class AccountTrieAssemblySpec extends ScalaTestWithActorTestKit with AnyFlatSpec
 
     h.call(_.handleStoreAccountChunk(t, accounts(4), 4, storedSoFar = 0, isTaskRangeComplete = true))
 
-    assertStoppedOnStoreFault(h)
+    assertStoppedOnStoreFault(h, t, hash(1))
   }
 
   it should "commit straggler StackTries on finalisation and report the pivot's root" taggedAs UnitTest in {

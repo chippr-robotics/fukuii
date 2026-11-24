@@ -519,6 +519,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
     case AccountTrieFinalizationFailed(error) =>
       // Root mismatch: the trie we built doesn't hash to the pivot's state root.
       // This means peers returned empty/wrong data (e.g., snapshot not ready).
+      // Also a local fault storing an account range (B-190: a node write failed mid-range).
       // Restart with a fresh pivot rather than entering healing with corrupt state.
       ctx.log.error(s"Account trie finalization failed ($error) — restarting SNAP sync with fresh pivot")
       progressMonitor.setFinalizingTrie(false)

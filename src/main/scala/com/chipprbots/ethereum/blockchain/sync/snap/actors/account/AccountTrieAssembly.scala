@@ -301,7 +301,12 @@ private[actors] trait AccountTrieAssembly:
             "stopping the account phase",
           e
         )
-        storingTasks.remove(task.last)
+        // The range stays in storingTasks, with its cursor back at the first account not stored: it still has work, so
+        // the coordinator does not complete without it (isComplete reads tasksWithWork), and a snapshot taken before
+        // the restart records where the range resumes rather than leaving it out, which a resume would read as done
+        // (ResumePolicy.fillResumeLayout). Nothing chains another StoreAccountChunk for it, so it waits for the restart.
+        val firstUnstored = remaining.headOption.map(_._1).getOrElse(task.next)
+        storingTasks.update(task.last, task.copy(next = firstUnstored, pending = false, done = false))
         // Best effort: on Path, reset deletes the right-boundary stubs through the store that may just have failed.
         taskStackTries.remove(task.last).foreach(trie => Try(trie.reset()))
         snapSyncController ! SNAPSyncController.AccountTrieFinalizationFailed(
