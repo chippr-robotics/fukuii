@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-17
 
-**Status**: Active (2026-11-07). S0, the golden pins (tests only), is in PR #1737; S1, the limb type with GT-2, is next. The plan has 104 tasks in seven phases (prerequisites, then the slices S0 golden pins, S1 the limb type with GT-2, S2 the T-005 conversions, S3 the word stack and S4 mutable Memory, then closure). Split out of spec 018 (its former Track R item 17, FR-030, T-011, OQ-13) at the user's
+**Status**: Active (2026-11-07). S0, the golden pins (tests only), merged as #1737 on 2026-11-08; S1, the limb type with GT-2, is next: its pre-swap tests (T023–T031) can start now, while T008 (GT-1 part B), T022 (RP-2) and the B-046/B-047 datasets gate the swap and the merge. The plan has 104 tasks in seven phases (prerequisites, then the slices S0 golden pins, S1 the limb type with GT-2, S2 the T-005 conversions, S3 the word stack and S4 mutable Memory, then closure). Split out of spec 018 (its former Track R item 17, FR-030, T-011, OQ-13) at the user's
 request on 2026-10-17, because it is pure consensus code under the consensus-change protocol and should not be
 scheduled behind a storage gate. GT-1 reported 2026-11-06, and the Clarifications of 2026-11-07 scoped one end-state
 interpreter design (fixed-width type plus an in-place word stack). The Gates and Design constraints sections are
@@ -20,8 +20,6 @@ re-execution (018 SC-016) and before spec 019's SP-1b consumes the type (019 FR-
   path in `ledger/` and `consensus/`. The only shared file is `ledger/BlockPreparator.scala`, where this spec's
   masking sites and Track C's proposer view meet, so the two are sequenced per PR.
 - Spec 020's code has landed (PRs 3 to 7, the last #1722); its header still has to be closed.
-
-**In flight**: `fukuii-fc` (local session), branch `feat/021-s0` (PR #1737): S0 golden pins; S1 next
 
 **Depends on**: spec 020 landed (so the implementation is written once on the 3.9 toolchain and can use its `inline`
 and opaque-type facilities without a later rewrite). Nothing in storage.
