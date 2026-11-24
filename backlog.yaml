@@ -2421,13 +2421,18 @@ items:
   - id: B-267
     title: "TUI lists: keep a scroll offset so the cursor moves within the screenful (Block Observatory and Mempool pending list pin the cursor to the bottom row)"
     priority: P3
-    status: open
+    status: claimed
     area: tui
     size: S
     opened: 2026-11-14
     refs: []
     links:
       spec: specs/029-tui-command-center
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T14:07:50Z
+      heartbeat: 2026-11-24T14:07:50Z
     notes: prism, slice 4. ObservatoryPanels and MempoolPanels compute the first row from the selection; Up scrolls the list instead of moving the cursor.
   - id: B-268
     title: "PendingTransactionsManager: a by-hash query, so the TUI explorer does not copy the whole pool to open one pending transaction"
