@@ -1493,17 +1493,18 @@ items:
   - id: B-161
     title: eth_simulateV1 gas below the EIP-7623 calldata floor throws IllegalStateException; geth answers ErrFloorDataGas before execution
     priority: P2
-    status: in-progress
+    status: review
     area: rpc
     size: S
     opened: 2026-11-09
     refs: [B-130]
-    links: {}
+    links:
+      prs: [2101]
     claim:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T16:21:03Z
-      heartbeat: 2026-11-24T17:15:35Z
+      heartbeat: 2026-11-24T17:17:34Z
       branch: fix/r4-simulate-parity
     notes: |-
       From #1727 PR 4 (conduit), read from code, not reproduced: EthSimulateService.preCheck checks intrinsic gas only; a call with gas in [intrinsic, floor) on Prague/Olympia reaches executeTransactionWithOverrides and hits the #1438 guard. Also: the StxLedger estimator ignores maxUsedGas (geth gasestimator.go:155 uses it).
