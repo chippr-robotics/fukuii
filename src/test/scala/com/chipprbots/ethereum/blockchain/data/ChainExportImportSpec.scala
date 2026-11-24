@@ -440,6 +440,37 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     withClue(s"changed=$changed")(changed.forall(_.startsWith("73")) shouldBe true)
   }
 
+  // B-511: on the hash layout the strict import holds the head's lock over a block's look at the head and its commit
+  // as the head, as a fork choice holds it over its move: one is before the other, never between them.
+  it should "hold a fork choice that comes while a block executes, and end with the best block and the index on one chain" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val node = new Node
+    node.importStrict(write(concat(fixtureBlocks.take(20)))).map(_.imported) shouldBe Right(20L)
+    val block19 = fixtureBlocks(18)
+    @volatile var forkChoice: Option[Thread] = None
+    @volatile var heldBack = false
+    // a consensus client moves the head back to block 19 as block 21 executes
+    node.beforeExecution = Some { () =>
+      val thread =
+        new Thread(() => node.blockchainWriter.promoteToCanonicalHead(block19.header, node.blockchainReader): Unit)
+      forkChoice = Some(thread)
+      thread.start()
+      val deadline = System.nanoTime() + 30_000_000_000L
+      while !CanonicalHeadLock.isWaiting(thread) && thread.isAlive && System.nanoTime() < deadline do
+        Thread.onSpinWait()
+      heldBack = CanonicalHeadLock.isWaiting(thread)
+    }
+    // block 21 is imported first; block 22 is refused if the fork choice came between the two
+    node.importStrict(write(concat(fixtureBlocks.take(22)))): Unit
+    forkChoice.foreach(_.join(30_000))
+    heldBack shouldBe true
+    node.head.hash shouldBe block19.hash
+    (1 to 19).foreach(n => node.blockchainReader.getCanonicalHashByNumber(n) shouldBe Some(fixtureBlocks(n - 1).hash))
+    (20 to 22).foreach(n => node.blockchainReader.getCanonicalHashByNumber(n) shouldBe None)
+  }
+
   // B-462: a block refused because another thread's adoption holds the head (B-294) stops the import with nothing of
   // it written, carried by its type and said at WARN; admin_importChain answers it as a state to ask for again
   it should "stop on a block refused while another adoption holds the head, carrying the refusal by its type" taggedAs (

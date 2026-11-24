@@ -1767,6 +1767,16 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       oracle.extendWith(common.last, List(Nil, Seq(Shared, OnlyB), Nil), difficulty = 0, tag = 0x62)
     node.importAll(common ++ left) shouldBe a[BlockImportedToTop]
 
+    /** The best block and the index name one chain: the best block's ancestry at every height, nothing above it. */
+    def oneChain(): Unit =
+      val best = node.blockchainReader.getBestBlockHeader.get
+      @annotation.tailrec
+      def down(header: BlockHeader): Unit =
+        withClue(s"height ${header.number}: ")(node.indexed(header.number.value.toInt) shouldBe Some(header.hash))
+        if header.number.value > 0 then down(node.blockchainReader.getBlockHeaderByHash(header.parentHash).get)
+      down(best)
+      (best.number.value.toInt + 1 to 40).foreach(n => withClue(s"height $n: ")(node.indexed(n) shouldBe None))
+
     def keptTheOldHead(): Unit =
       node.bestHash shouldBe left.last.hash
       (1 to 2).foreach(n => node.indexed(n) shouldBe Some(common(n - 1).hash))
@@ -1895,6 +1905,85 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     node.lookup(Shared) shouldBe Some(TransactionLocation(left.head.hash.value, 0))
     node.lookup(OnlyA) shouldBe None
     node.lookup(OnlyB) shouldBe None
+  )
+
+  // B-511: a batch onto the head writes the best block and the index block by block as it commits them. It is executed
+  // under the head's lock too, so a fork choice that comes meanwhile moves the head from where the batch left it, and
+  // the best block and the index name one chain at the end. Before, a fork choice back to block 2 between two commits
+  // deleted the entries above it, and the next commits moved the best block on over the gap.
+  "A batch onto the head (the hash layout)" should
+    "hold a fork choice that comes while it is executed, and end with the best block and the index on one chain" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new DesignatedOnTheHashLayout:
+      val forkChoiceManager = new ForkChoiceManager(node.blockchainReader, node.blockchainWriter)
+      val onTop: List[Block] = oracle.extendWith(left.last, List(Nil, Nil), difficulty = 0, tag = 0x66)
+      named.set(Some(onTop.last.hash.value))
+      @volatile var forkChoice: Option[Thread] = None
+      @volatile var heldBack = false
+      onExecute = block =>
+        if block.hash == onTop.head.hash then
+          val thread = new Thread(() =>
+            forkChoiceManager.applyForkChoiceState(
+              ForkChoiceState(common.last.hash.value, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash)
+            ): Unit
+          )
+          forkChoice = Some(thread)
+          thread.start()
+          val deadline = System.nanoTime() + 30_000_000_000L
+          while !CanonicalHeadLock.isWaiting(thread) && thread.isAlive && System.nanoTime() < deadline do
+            Thread.onSpinWait()
+          heldBack = CanonicalHeadLock.isWaiting(thread)
+      evaluate(onTop) shouldBe a[ExtendedCurrentBestBranch]
+      heldBack shouldBe true
+      forkChoice.foreach(_.join(30_000))
+      node.bestHash shouldBe common.last.hash
+      oneChain()
+    )
+
+  // B-511: what the head's lock costs the Engine API. A fork choice that comes as the p2p import starts a branch of
+  // `Blocks` blocks waits for it to be executed and settled; the wait is measured, and a wait past
+  // CanonicalHeadLock.WarnAfter (2 s) is said at WARN with what holds the lock (CanonicalHeadLockSpec).
+  it should "measure how long a fork choice waits behind the settle of a branch" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedOnTheHashLayout:
+    val Blocks = 24
+    val forkChoiceManager = new ForkChoiceManager(node.blockchainReader, node.blockchainWriter)
+    val long: List[Block] = oracle.extendWith(common.last, List.fill(Blocks)(Nil), difficulty = 0, tag = 0x67)
+    named.set(Some(long.last.hash.value))
+    @volatile var forkChoice: Option[Thread] = None
+    @volatile var asked = 0L
+    @volatile var answered = 0L
+    @volatile var lastExecuted = 0L
+    @volatile var heldBack = false
+    onExecute = block =>
+      if block.hash == long.head.hash then
+        val thread = new Thread(() =>
+          asked = System.nanoTime()
+          // a head this node holds, so that the fork choice moves it (one it does not hold is answered SYNCING at once)
+          forkChoiceManager.applyForkChoiceState(
+            ForkChoiceState(common.last.hash.value, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash)
+          ): Unit
+          answered = System.nanoTime()
+        )
+        forkChoice = Some(thread)
+        thread.start()
+        val deadline = System.nanoTime() + 30_000_000_000L
+        while !CanonicalHeadLock.isWaiting(thread) && thread.isAlive && System.nanoTime() < deadline do
+          Thread.onSpinWait()
+        heldBack = CanonicalHeadLock.isWaiting(thread)
+      if block.hash == long.last.hash then lastExecuted = System.nanoTime()
+    evaluate(long) shouldBe a[SelectedNewBestBranch]
+    forkChoice.foreach(_.join(30_000))
+    heldBack shouldBe true
+    // it was answered only once the branch's last block was executed: it waited for the settle
+    answered should be > lastExecuted
+    val waitedMs: Long = (answered - asked) / 1000000
+    info(s"a forkchoiceUpdated waited $waitedMs ms behind the execution and settle of $Blocks blocks")
+    // and then moved the head from the settled index
+    node.bestHash shouldBe common.last.hash
+    oneChain()
   )
 
   it should "be weighed against the head as it is when a fork choice moved the head after the branch was weighed" taggedAs (

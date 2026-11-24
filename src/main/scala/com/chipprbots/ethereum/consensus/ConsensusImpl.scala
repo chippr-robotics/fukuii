@@ -188,24 +188,27 @@ class ConsensusImpl(
   ): IO[ConsensusResult] =
 
     val consensusResult: IO[ConsensusResult] =
-      if currentBestHeader.hash == branch.head.header.parentHash then
-        IO.delay(importToTop(branch, currentBestBlockWeight, accessLists)).evalOn(blockExecutionScheduler.compute)
-      else if blockchainReader.holdsStateInPlace then
-        // on the unified layout a branch that is adopted moves the head with the state, under the state lock and
-        // behind any move under way: on a thread that may block (spec 018 C4e; forge)
-        IO.blocking(
-          importToNewBranch(
-            branch,
-            currentBestHeader.number.value,
-            currentBestBlockWeight,
-            accessLists,
-            currentBestHeader.hash
+      if blockchainReader.holdsStateInPlace then
+        if currentBestHeader.hash == branch.head.header.parentHash then
+          IO.delay(importToTop(branch, currentBestBlockWeight, accessLists)).evalOn(blockExecutionScheduler.compute)
+        else
+          // on the unified layout a branch that is adopted moves the head with the state, under the state lock and
+          // behind any move under way: on a thread that may block (spec 018 C4e; forge)
+          IO.blocking(
+            importToNewBranch(
+              branch,
+              currentBestHeader.number.value,
+              currentBestBlockWeight,
+              accessLists,
+              currentBestHeader.hash
+            )
           )
-        )
       else
-        // on the hash layout the branch is executed and settled under the head's lock, as go-ethereum's insertChain
-        // holds `chainmu`: a fork choice or a payload's entry waits for it, and the head it is weighed against is the
-        // head as it is once the lock is held (B-511)
+        // On the hash layout a batch onto the head and a branch alike are executed and settled under the head's lock,
+        // as go-ethereum's insertChain holds `chainmu`: a fork choice or a payload's entry waits for it, and the head
+        // the batch is weighed against is the head as it is once the lock is held (B-511). A batch onto the head
+        // writes the best block and the index block by block as it commits them; a fork choice between two of those
+        // commits left the index of one chain under the best block of another.
         IO
           .delay(
             CanonicalHeadLock.held(s"the import of blocks [${branch.head.number}-${branch.last.number}]")(
@@ -216,9 +219,10 @@ class ConsensusImpl(
 
     consensusResult.flatTap(result => IO(measureBlockMetrics(result)))
 
-  /** A branch that does not extend the head it was weighed against, on the hash layout, under [[CanonicalHeadLock]]:
-    * weighed again against the head as it is now, when a fork choice moved the head since (B-511). Nothing else moves
-    * it while the lock is held, so the head the branch is executed and settled against stays the head it was read as.
+  /** A batch on the hash layout, under [[CanonicalHeadLock]], against the head as it is now: the head it was weighed
+    * against, or, when a fork choice moved the head since, the head it moved to, which the batch is weighed against
+    * again (B-511). Nothing else moves the head while the lock is held, so the head the batch is executed and settled
+    * against stays the head it was read as.
     */
   private def againstTheHeadNow(
       branch: NonEmptyList[Block],
@@ -226,24 +230,25 @@ class ConsensusImpl(
       weighedWeight: ChainWeight,
       accessLists: Map[ByteString, BlockAccessList]
   )(implicit blockchainConfig: BlockchainConfig): ConsensusResult =
+    def onTheHead(head: BlockHeader, weight: ChainWeight): ConsensusResult =
+      if head.hash == branch.head.header.parentHash then importToTop(branch, weight, accessLists)
+      else importToNewBranch(branch, head.number.value, weight, accessLists, head.hash)
     // the header alone: the old head is read whole only if its blocks are told (B-296)
     blockchainReader.getBestBlockHeader match
-      case Some(now) if now.hash == weighedHeader.hash =>
-        importToNewBranch(branch, weighedHeader.number.value, weighedWeight, accessLists, weighedHeader.hash)
+      case Some(now) if now.hash == weighedHeader.hash => onTheHead(weighedHeader, weighedWeight)
       case Some(now) =>
         blockchainReader.getChainWeightByHash(now.hash) match
           case Some(weight) =>
             log.info(
-              "REORG: the head moved to {} {} since the branch [{}-{}] was weighed against {}: it is weighed against " +
-                "the head as it is",
+              "REORG: the head moved to {} {} since the blocks [{}-{}] were weighed against {}: they are weighed " +
+                "against the head as it is",
               now.number,
               now.hashAsHexString,
               branch.head.number,
               branch.last.number,
               weighedHeader.number
             )
-            if now.hash == branch.head.header.parentHash then importToTop(branch, weight, accessLists)
-            else importToNewBranch(branch, now.number.value, weight, accessLists, now.hash)
+            onTheHead(now, weight)
           case None => noTotalDifficultyForHeader(now)
       case None => noBestBlock()
 

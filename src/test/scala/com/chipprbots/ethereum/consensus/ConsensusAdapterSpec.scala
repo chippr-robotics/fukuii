@@ -614,6 +614,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     override def setBestBlock(block: Block): CallHandler0[BigInt] =
       (() => blockchainReader.getBestBlock).expects().anyNumberOfTimes().returning(Some(block))
+      // read again under the head's lock on the hash layout, before a batch is executed (B-511)
+      (() => blockchainReader.getBestBlockHeader).expects().anyNumberOfTimes().returning(Some(block.header))
       (() => blockchainReader.getBestBlockNumber).expects().anyNumberOfTimes().returning(block.header.number.value)
 
     override def setBestBlockNumber(num: BigInt): CallHandler0[BigInt] =

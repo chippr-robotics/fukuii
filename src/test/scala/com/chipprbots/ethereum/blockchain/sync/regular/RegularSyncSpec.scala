@@ -1134,9 +1134,12 @@ class RegularSyncSpec
           (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)
           (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(lca).returns(Some(lcaHeader))
           // the canonical index above the LCA, which the rewind must read BEFORE it deletes it
-          testBlocks.filter(b => b.number.value > lca).foreach { b =>
+          // (and at the LCA, which the rewind checks is still the block it rewinds to, and the first height above the
+          // best, where the index ends: B-511)
+          testBlocks.filter(b => b.number.value >= lca).foreach { b =>
             (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(b.number.value).returns(Some(b.hash))
           }
+          (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(capturedBest + 1).returns(None)
           val abandonedByRewind: java.util.concurrent.ConcurrentLinkedQueue[(BigInt, ByteString)] =
             new java.util.concurrent.ConcurrentLinkedQueue()
           val recordingReorgState: com.chipprbots.ethereum.consensus.ReorgStateHandler =
