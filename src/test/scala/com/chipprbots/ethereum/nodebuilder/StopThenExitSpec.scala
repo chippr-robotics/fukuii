@@ -150,26 +150,31 @@ class StopThenExitSpec extends AnyFlatSpec with Matchers:
     tui.isEnabled shouldBe false
   }
 
-  it should "still exit when its wait for a stop under way is interrupted, keeping the interrupt (B-467)" taggedAs UnitTest in {
+  it should "keep waiting through an interrupt, then exit with the other stop's outcome and the interrupt set" taggedAs UnitTest in {
     val stop = new HeldStop(clean = true)
-    val first = daemon("b467-other-stop")(stop.once.run(): Unit)
+    val first = daemon("b452-other-stop")(stop.once.run(): Unit)
     first.start()
     stop.inStop.await(10, TimeUnit.SECONDS) shouldBe true
 
-    val exits = new ConcurrentLinkedQueue[(Int, Boolean)]()
-    val waiter = daemon("b467-waiter") {
+    // (status, interrupted, whether the other stop had ended) at the exit
+    val exits = new ConcurrentLinkedQueue[(Int, Boolean, Boolean)]()
+    val waiter = daemon("b452-waiter") {
       StopSignal.stopThenExit(
         "test",
         stop.stopForExit,
-        code => exits.add((code, Thread.currentThread().isInterrupted)): Unit
+        code => exits.add((code, Thread.currentThread().isInterrupted, stop.once.outcome.isDefined)): Unit
       )
     }
     waiter.start()
     parked(waiter)
-    exits.isEmpty shouldBe true
     waiter.interrupt()
-    waiter.join(10000)
-    exits.asScala.toList shouldBe List((StopSignal.UncleanExit, true))
+    // whether or not it has woken yet, it does not exit while the other stop still runs
+    parked(waiter)
+    waiter.isAlive shouldBe true
+    exits.isEmpty shouldBe true
     stop.release.countDown()
+    waiter.join(10000)
     first.join(10000)
+    // the clean status is the other stop's outcome: only a wait that lasted to its end could see it
+    exits.asScala.toList shouldBe List((StopSignal.CleanExit, true, true))
   }

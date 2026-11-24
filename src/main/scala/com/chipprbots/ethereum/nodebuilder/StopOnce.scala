@@ -24,6 +24,10 @@ final private[nodebuilder] class StopOnce[A](stop: () => A):
   /** Runs the stop if no call has, or waits for the one that did. How it ended: `None` while it has not (a call on the
     * stop's own thread), or when it ended on a fatal error. The call that runs the stop throws what the stop threw, as
     * a direct call of it would; a call that waited gets it as the `Failure`.
+    *
+    * An interrupt does not end the wait (B-452): its caller exits next, and exiting while the stop still closes the
+    * database would cut the close. The wait goes on to the stop's end, which its own bounds limit, and the interrupt is
+    * set again when it returns.
     */
   def run(): Option[Try[A]] = runThen(waitForIt = true)
 
@@ -42,5 +46,16 @@ final private[nodebuilder] class StopOnce[A](stop: () => A):
       result
     else if !waitForIt || stopping.contains(Thread.currentThread()) then result
     else
-      ended.await()
+      awaitEnd()
       result
+
+  /** Waits for the stop to end, through any interrupt, which is set again afterwards. */
+  private def awaitEnd(): Unit =
+    var interrupted = false
+    var done = false
+    while !done do
+      try
+        ended.await()
+        done = true
+      catch case _: InterruptedException => interrupted = true
+    if interrupted then Thread.currentThread().interrupt()

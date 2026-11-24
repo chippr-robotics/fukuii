@@ -44,8 +44,9 @@ object StopSignal extends Logger:
     * an exit made at once would run the JVM's hook, which does not wait for a stop under way (B-274), and the process
     * would end while the database still closes.
     *
-    * Whatever the stop ends in, the process ends (B-467): a stop that throws, even a fatal error, or a wait for a stop
-    * under way that is interrupted, exits with the unclean status, and leaves no node half-stopped and still up. A
+    * Whatever the stop ends in, the process ends (B-467): a stop that throws, even a fatal error, exits with the
+    * unclean status, and leaves no node half-stopped and still up. A wait for a stop under way is not cut short by an
+    * interrupt ([[StopOnce.run]]): it exits with that stop's outcome, the interrupt set again. A
     * [[VirtualMachineError]] halts instead of exiting: the JVM's hooks may hang on a JVM in that state.
     *
     * @param why
@@ -80,7 +81,7 @@ object StopSignal extends Logger:
         catch case _: Throwable => ()
         halt(code)
       case Left(e) =>
-        // An interrupted wait for a stop under way: the exit's hooks run on this thread, and keep the interrupt.
+        // An interrupt from a stop that is not StopOnce's (whose waits outlast one): keep it for the exit's thread.
         if e.isInstanceOf[InterruptedException] then Thread.currentThread().interrupt()
         val code = status(false)
         log.error(s"[SHUTDOWN] The node's stop failed: exit $code", e)
