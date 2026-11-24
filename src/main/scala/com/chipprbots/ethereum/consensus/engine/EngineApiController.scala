@@ -532,8 +532,8 @@ class EngineApiController(
 
   /** engine_getBlobsV2 (execution-apis osaka.md, EIP-7594 / PeerDAS) answers `Array of BlobAndProofV2` or `null`: all
     * or nothing. The client "MUST return `null` in case of any missing or older version blobs", so a missing blob makes
-    * the whole result `null`, never a `null` element; per-element nulls are V1's shape. A consensus client
-    * rejects a `null` inside the array (Lighthouse: "invalid type: null, expected struct BlobAndProofV2", B-198).
+    * the whole result `null`, never a `null` element; per-element nulls are V1's shape. A consensus client rejects a
+    * `null` inside the array (Lighthouse: "invalid type: null, expected struct BlobAndProofV2", B-198).
     *
     * Fukuii does not index pool blobs by versioned hash, so any non-empty request has a missing blob and is answered
     * `null`; the CL falls back to fetching the cells from its peers. An empty request has nothing missing and is
