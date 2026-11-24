@@ -1472,12 +1472,17 @@ items:
   - id: B-158
     title: "eth_simulateV1 payload: case-insensitive top-level keys; non-boolean validation is -32602; TxArgs Go type names"
     priority: P2
-    status: open
+    status: claimed
     area: rpc
     size: S
     opened: 2026-11-08
     refs: [B-128]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: beacon
+      since: 2026-11-24T16:20:59Z
+      heartbeat: 2026-11-24T16:20:59Z
     notes: "From #1727 PR 2 (conduit): decodePayload matches blockStateCalls/validation/traceTransfers/returnFullTransactions exact-case (BlockStateCalls answers empty input); extractOpt[Boolean] turns a non-boolean validation into false where geth gives -32602; TxArgsJson/TxArgsSpec:118-119 name hexutil.Big/U256 where geth says *hexutil.Big / *uint256.Int."
   - id: B-161
     title: eth_simulateV1 gas below the EIP-7623 calldata floor throws IllegalStateException; geth answers ErrFloorDataGas before execution
