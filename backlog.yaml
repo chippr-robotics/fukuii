@@ -1,7 +1,8 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
+# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
+# header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -2716,7 +2717,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-18T00:57:40Z
-      heartbeat: 2026-11-24T13:07:16Z
+      heartbeat: 2026-11-24T13:43:32Z
     notes: |-
       2026-11-24 in-progress: hive engine path_live on staging 4a722435c5 (run 45372923367): 78/83 fail, all re-org (Invalid Missing Ancestor Syncing ReOrg P8/P9, Withdrawals Fork re-org); hash layout same filter passes. Root-causing from sim logs.
       2026-11-24 in-progress: root cause: path-live PoS-from-genesis startup guard killed every hive client at launch (78/78 'client did not start'; re-orgs never exercised). User 2026-11-24: allow by default. Fix queued (scratchpad b314-fix.md), then re-run the gate.
@@ -2768,7 +2769,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T10:51:23Z
-      heartbeat: 2026-11-24T11:13:51Z
+      heartbeat: 2026-11-24T13:43:32Z
     notes: |-
       2026-11-24 in-progress: beacon agent clone-e
       2026-11-24 review: items 1+2; item 3 split out as B-516
@@ -4638,7 +4639,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T10:48:37Z
-      heartbeat: 2026-11-24T12:51:21Z
+      heartbeat: 2026-11-24T13:43:32Z
     notes: |-
       2026-11-24 in-progress: forge agent clone-d
       2026-11-24 released by cloud-dc960fdc: depends on B-338, which builds on B-253 (#2066); pick up after #2066 merges
@@ -5248,7 +5249,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:30:35Z
-      heartbeat: 2026-11-24T13:02:39Z
+      heartbeat: 2026-11-24T13:43:32Z
     notes: |-
       2026-11-24 in-progress: one PR with B-506+B-511 (settleHead designated arm), clone-d
       2026-11-24 in-progress: pushed 31a4bfc91e (index sweep above head; CanonicalHeadLock on hash layout incl. FCU/newPayload; prefix pruning pinned); covering importToTop/setCanonicalChainHead next, then beacon+vault review
@@ -5282,7 +5283,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T13:26:23Z
-      heartbeat: 2026-11-24T13:26:27Z
+      heartbeat: 2026-11-24T13:43:32Z
     notes: "B-374 is done (#1927, #2029) but the spec failed again in Test and Build on 2026-11-24 for a PR that doesn't touch the Engine API HTTP server. Find the remaining timing assumption; no Thread.sleep fixes."
   - id: B-509
     title: "B-503 follow-ups: pin the partial-success arms' queue removal; a weightless queued block whose queued parent became the head stays weightless"
@@ -5315,7 +5316,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T13:07:02Z
-      heartbeat: 2026-11-24T13:26:01Z
+      heartbeat: 2026-11-24T13:43:32Z
     notes: |-
       vault review of B-490. adopt: rederiveWeights after try/finally; catchUp: after commitEach. Note B-491 too: closing fix is same-batch weight write or a pass on restart.
       2026-11-24 in-progress: agent clone-e
@@ -5333,7 +5334,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:30:43Z
-      heartbeat: 2026-11-24T13:02:43Z
+      heartbeat: 2026-11-24T13:43:32Z
     notes: |-
       2026-11-24 in-progress: one PR with B-506+B-511 (settleHead designated arm), clone-d
       2026-11-24 in-progress: pushed 31a4bfc91e (index sweep above head; CanonicalHeadLock on hash layout incl. FCU/newPayload; prefix pruning pinned); covering importToTop/setCanonicalChainHead next, then beacon+vault review
@@ -5380,7 +5381,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:15:36Z
-      heartbeat: 2026-11-24T12:51:25Z
+      heartbeat: 2026-11-24T13:43:32Z
     notes: |-
       beacon W4 on B-460. Also N3: leftBy works by exclusion; pin the producers. W3: announce-path blame uses block.number (ETC).
       2026-11-24 in-progress: folded into the B-338/B-460 round 2 (user: fix in the PR, don't split)
@@ -5399,7 +5400,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:15:45Z
-      heartbeat: 2026-11-24T12:51:30Z
+      heartbeat: 2026-11-24T13:43:32Z
     notes: |-
       beacon W1 on B-338 (EngineApiService.poolHead only moves on FCU). Pool contents/RPC only, never a build. One shared tracker for both paths.
       2026-11-24 in-progress: folded into the B-338/B-460 round 2 (user: fix in the PR, don't split)
@@ -5418,7 +5419,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:13:55Z
-      heartbeat: 2026-11-24T11:27:37Z
+      heartbeat: 2026-11-24T13:43:32Z
     notes: |-
       2026-11-24 in-progress: beacon agent clone-e (after #2074; refuse backward-only move)
       2026-11-24 in-progress: folded into B-318 / PR #2074 (user: fix in the PR, don't split)
