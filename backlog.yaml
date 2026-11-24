@@ -4731,3 +4731,13 @@ items:
     links:
       spec: none
     notes: "B-455 routed ChainImporter's hash-store lenient import through executeAndAdoptBlockIf. executeBlockNoValidation writes code and trie nodes before validation; callers left: EestBlockchainReplay, RpcCompatNode, Engine API specs, ReorgBlockhashParitySpec, EtcPowReorgMatrixSpec, OnDemandFetchByPositionSpec. Dead-code review (wire/delete/defer)."
+  - id: B-476
+    title: thrownByTheStore should build HeadLeftOnSideBlocks when a non-cap store failure leaves the head on side parents (after B-461)
+    priority: P3
+    status: open
+    area: consensus
+    opened: 2026-11-24
+    refs: [B-440, B-461]
+    links:
+      spec: 018
+    notes: "forge on B-440: thrownByTheStore reads imported from the batch's blocks on the head's chain only; a store failure outside the cap path that leaves the head on a branch's side parents tells no head. Reuse B-461's HeadLeftOnSideBlocks once both land."
