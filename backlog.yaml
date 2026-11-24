@@ -2300,11 +2300,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T07:27:46Z
-      heartbeat: 2026-11-24T08:42:34Z
+      heartbeat: 2026-11-24T08:45:33Z
     notes: |-
-      2026-11-24 in-progress: beacon CHANGES: blob tx reinjection (must), pendingNonces high-water mark, FCU guard; round 2 queued for clone-e
       2026-11-24 in-progress: round 2 (beacon CHANGES) running in clone-e
       2026-11-24 in-progress: round 2 pushed 45089afc30 (rebased); beacon re-review
+      2026-11-24 in-progress: beacon round 2: C1/W1/W2 resolved; one Warning (same sender+nonce double-pooled on reinject); round 3 queued
   - id: B-255
     title: "Spec 018 T156: child-JVM kill -9 between newPayload and forkchoiceUpdated on RocksDB, restart with no peers, real consensus client reaches VALID"
     priority: P2
