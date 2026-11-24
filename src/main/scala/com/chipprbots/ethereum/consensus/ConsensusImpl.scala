@@ -739,10 +739,6 @@ class ConsensusImpl(
                         // its blocks stored by hash, for the recovery to read; not a weight, which only a block
                         // executed has (beacon). The side blocks among them were read from the store: stored already
                         storeByHashOnly(remaining.branch)
-                        // and what hangs from it is set aside with it while the head stays: the recovery moves the
-                        // head when it has adopted it, and a branch fetched and executed again meanwhile would only
-                        // pin the layers the recovery needs (beacon, after code)
-                        rememberRefused(newBranch.toList, bestBlockHash)
                         handOffTip = Some(newBranch.last.hash.value)
                         log.info(
                           "REORG-HAND-OFF: {}; {} block(s) of it are stored by hash for the recovery",
@@ -868,11 +864,16 @@ class ConsensusImpl(
                         )
               }
             catch case fault: StateFault => notJudged(fault)
-          // only when that is what was answered: a fault after it (the pin's release) queues the branch again instead
+          // only when that is what was answered: a fault after it (the pin's release) queues the branch again instead, or
+          // is thrown, and the branch is then neither handed off nor set aside (B-318)
           val handedOff = result match
             case ConsensusStateFault(_: HandedToRecovery, _, _) => handOffTip
             case _                                              => None
           handedOff.foreach { tip =>
+            // what hangs from it is set aside with it while the head stays: the recovery moves the head when it has
+            // adopted it, and a branch fetched and executed again meanwhile would only pin the layers the recovery
+            // needs (beacon, after code)
+            rememberRefused(newBranch.toList, bestBlockHash)
             val why = s"the consensus layer's branch [${newBranch.head.number}-${newBranch.last.number}] at the cap"
             if !branchHandOff.exists(_.handOff(tip, why)) then
               log.warn(
