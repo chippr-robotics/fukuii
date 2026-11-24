@@ -17,8 +17,11 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.*
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.jsonrpc.BlockParam.WithHash
 import com.chipprbots.ethereum.jsonrpc.EthUserService.GetBalanceRequest
 import com.chipprbots.ethereum.jsonrpc.EthUserService.GetBalanceResponse
 import com.chipprbots.ethereum.jsonrpc.EthUserService.GetStorageAtRequest
@@ -168,6 +171,45 @@ class EthProofServiceSpec
     val keys = entries.map(e => e \ "key")
     keys shouldBe List(JString("0x0"), JString("0x1"), JString("0x" + "00" * 31 + "01"))
   }
+
+  "EthProofService" should "answer a block whose state is not held with the missing-node error, as eth_getBalance does (B-210)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    // a block stored by hash whose state root names no node: a hash-store block whose state was pruned or never synced
+    val missingRoot: TrieRoot = TrieRoot(ByteString(crypto.kec256("no such state".getBytes)))
+    val orphan: Block =
+      newblock.copy(header = newblock.header.copy(stateRoot = missingRoot))
+    blockchainWriter.storeBlock(orphan).commit()
+    val byHash: WithHash = BlockParam.WithHash(orphan.hash.value)
+    fetchProof(address, storageKeys, byHash).unsafeRunSync() shouldBe Left(JsonRpcError.NodeNotFound)
+    ethUserService.getBalance(GetBalanceRequest(address, byHash)).unsafeRunSync() shouldBe Left(
+      JsonRpcError.NodeNotFound
+    )
+
+  "EthProofService" should "name \"safe\" and \"finalized\" by the consensus client's fork choice, as the other state reads do" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    // no fork choice (a PoW chain, or before the first forkchoiceUpdated): not the head, but not available
+    fetchProof(address, storageKeys, BlockParam.Safe).unsafeRunSync() shouldBe
+      Left(JsonRpcError.InvalidParams("safe block not available"))
+    fetchProof(address, storageKeys, BlockParam.Finalized).unsafeRunSync() shouldBe
+      Left(JsonRpcError.InvalidParams("finalized block not available"))
+    val forkChoice = new ForkChoiceManager(blockchainReader, blockchainWriter, blockchain)
+    val head = newblock.hash.value
+    forkChoice.applyForkChoiceState(ForkChoiceState(head, head, head)) shouldBe Right(())
+    val withForkChoice = new EthProofService(
+      blockchain,
+      blockchainReader,
+      blockGenerator,
+      blockchainConfig.ethCompatibleStorage,
+      Some(forkChoice)
+    )
+    for tag <- Seq(BlockParam.Safe, BlockParam.Finalized) do
+      val proof = withForkChoice.getProof(GetProofRequest(address, storageKeys, tag)).unsafeRunSync().value.proofAccount
+      ByteString(crypto.kec256(proof.accountProof.head.toArray[Byte])) shouldBe ByteString(mpt.getRootHash)
+      proof.balance shouldBe balance.toBigInt
 
   "EthProofService" should "return the proof with empty value for non-existing storage key" taggedAs (
     UnitTest,

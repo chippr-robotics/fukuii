@@ -791,13 +791,14 @@ trait DebugServiceBuilder:
   lazy val debugService = new DebugService(peerManager, networkPeerManager)(using classicSystem.toTyped.scheduler)
 
 trait EthProofServiceBuilder:
-  self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder =>
+  self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & EthBlocksServiceBuilder =>
 
   lazy val ethProofService: ProofService = new EthProofService(
     blockchain,
     blockchainReader,
     mining.blockGenerator,
-    blockchainConfig.ethCompatibleStorage
+    blockchainConfig.ethCompatibleStorage,
+    forkChoiceManagerForRpc
   )
 
 trait EthInfoServiceBuilder:
