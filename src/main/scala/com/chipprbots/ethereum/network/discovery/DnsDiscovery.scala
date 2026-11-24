@@ -69,11 +69,25 @@ object DnsDiscovery extends Logger:
     *   most TXT queries in flight at once, per tree. This is also the DNS request rate limit: a walk can never ask the
     *   resolver for more than this many answers at a time.
     */
-  final case class WalkSettings(treeDeadline: FiniteDuration, concurrency: Int):
+  /** @param recheckInterval
+    *   How long after one walk of every tree ends the next one starts (B-035): go-ethereum's `recheckInterval` (30 min,
+    *   p2p/dnsdisc/client.go), after which it fetches each tree's root again and walks what changed. A tree's operator
+    *   rotates its nodes, so a node that only walks once at start-up keeps the nodes of that day.
+    */
+  final case class WalkSettings(
+      treeDeadline: FiniteDuration,
+      concurrency: Int,
+      recheckInterval: FiniteDuration = WalkSettings.DefaultRecheckInterval
+  ):
     require(treeDeadline > Duration.Zero, s"DNS tree deadline must be positive, got $treeDeadline")
     require(concurrency > 0, s"DNS walk concurrency must be positive, got $concurrency")
+    require(recheckInterval > Duration.Zero, s"DNS recheck interval must be positive, got $recheckInterval")
 
   object WalkSettings:
+
+    /** go-ethereum's `recheckInterval` default (p2p/dnsdisc/client.go). Defined before [[Default]], which reads it. */
+    val DefaultRecheckInterval: FiniteDuration = 30.minutes
+
     /** ETC mainnet's tree is about 300 queries. At 8 in flight that is seconds on a healthy resolver; the deadline only
       * matters when queries are being lost (a lost JNDI query costs 15 s), where 120 s still lets a 300-query walk
       * finish with several percent of them lost.
@@ -222,6 +236,19 @@ object DnsDiscovery extends Logger:
           IO(NodeParser.parseNodes(Set(enode))).flatMap(nodes => if nodes.isEmpty then IO.unit else onNodes(nodes))
       )
     }
+
+  /** [[seed]], then again every `settings.recheckInterval` after the last walk ended, until cancelled (B-035). Each
+    * walk reports every node it finds; the caller drops the ones it already has. A walk that fails or times out only
+    * logs (see [[walkTree]]), so the next one still runs.
+    */
+  def seedPeriodically(
+      trees: Seq[Eip1459.DnsTree],
+      lookup: TxtLookup,
+      settings: WalkSettings,
+      forkIdFilter: Option[EnrForkIdFilter],
+      onNodes: Set[Node] => IO[Unit]
+  ): IO[Nothing] =
+    (seed(trees, lookup, settings, forkIdFilter, onNodes) >> IO.sleep(settings.recheckInterval)).foreverM
 
   /** Blocking convenience over [[walkTree]] for tests and tools: the enode URLs of one tree, empty on any failure.
     * `entry` is an `enrtree://<key>@<domain>` URL, or one of the shipped domains ([[DnsTrustAnchors]]); a domain with
