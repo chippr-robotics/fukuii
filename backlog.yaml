@@ -5561,12 +5561,17 @@ items:
   - id: B-523
     title: SNAP keeps the accounts-complete task files after finalisation (4.4 GB on ETC mainnet); the storage file also holds every code account with an empty root
     priority: P3
-    status: open
+    status: claimed
     area: snap
     size: S
     opened: 2026-11-24
     refs: ["sync reports v0.12.117, 2026-11-23/24", "#1601"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: vault
+      since: 2026-11-24T22:17:17Z
+      heartbeat: 2026-11-24T22:17:17Z
     notes: |-
       SnapFinalization.scala:796 keeps the getSnapSyncStorageFilePath/CodeHashesPath files ('not re-read'); delete them and clear those AppState paths once SnapSyncDone is durable. Mordor leaves 13 MB, mainnet 4.4 GB.
       ContractWorkCarry.identifyContractAccounts writes hasCode || hasRoot, and the replays and sweep skip an empty root, so the mainnet file's 73.5M entries carry every code account. Check the checkpoint counts before dropping those. #1601 is the contract-accounts file's leak.
