@@ -5560,3 +5560,16 @@ items:
     notes: |-
       SnapFinalization.scala:796 keeps the getSnapSyncStorageFilePath/CodeHashesPath files ('not re-read'); delete them and clear those AppState paths once SnapSyncDone is durable. Mordor leaves 13 MB, mainnet 4.4 GB.
       ContractWorkCarry.identifyContractAccounts writes hasCode || hasRoot, and the replays and sweep skip an empty root, so the mainnet file's 73.5M entries carry every code account. Check the checkpoint counts before dropping those. #1601 is the contract-accounts file's leak.
+  - id: B-524
+    title: "SNAP log noise and wording from the v0.12.117 sync reports: header-hold WARN, completion-line rates, repeating bytecode 100% line, audit-owed on a new datadir"
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-24
+    refs: ["sync reports v0.12.117, 2026-11-23/24"]
+    links: {}
+    notes: |-
+      SnapFinalization:226 header-hold is expected on a genesis start, so INFO not WARN; SyncProgressMonitor:369 completion rates divide by total elapsed, use each phase's own time.
+      ByteCodeCoordinator:520-531 logs BYTECODE-COORD 100% on every pulse after completion, log once; SyncController:2441 says an audit pass is 'owed' on a brand-new datadir, reword.
+      AccountRangeCoordinator:429-433 calls the storage-file count 'storage-task entries', and :284 still says ~20% of ~67M; both mislead on ETC, where ~85% of accounts are contracts.
