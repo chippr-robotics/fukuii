@@ -3867,13 +3867,18 @@ items:
   - id: B-405
     title: Allowlist peer removal takes ~15 s from 'disconnecting' to PEER_DISCONNECTED (dev-node Q8.7); check UselessPeer disconnect path
     priority: P3
-    status: open
+    status: claimed
     area: p2p
     size: S
     opened: 2026-11-20
     refs: []
     links:
       spec: "030"
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T13:16:05Z
+      heartbeat: 2026-11-24T13:16:05Z
     notes: "dev-node 2026-11-20: ALLOWLIST_REMOVED at 08:00:32.104, PEER_DISCONNECTED at 08:00:47.124. Likely the graceful Disconnect timeout."
   - id: B-406
     title: StorageRecoveryActor legacy scan passes ctx.log into a Future (throws off the actor thread), as BytecodeRecoveryActor did
