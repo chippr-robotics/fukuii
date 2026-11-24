@@ -82,6 +82,11 @@ object PathStateTestKit:
     f.delete()
     ()
 
+  /** Says the datadir's state began at `origin`, as a sync's hand-off says it, for a spec outside this package: a move
+    * of the head may not reverse it (`ReorgRefusal.Pivot`).
+    */
+  def beganAt(appState: AppStateStorage, origin: BlockRef): Unit = appState.putStateOrigin(origin).commit()
+
   def block(number: Int, stateRoot: ByteString): BlockRef =
     BlockRef(ByteString(kec256(s"block-$number".getBytes("UTF-8"))), BigInt(number), stateRoot)
 

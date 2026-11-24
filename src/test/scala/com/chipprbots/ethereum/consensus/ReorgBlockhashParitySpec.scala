@@ -49,9 +49,12 @@ import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
+import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateAnchor
 import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecution
@@ -854,6 +857,54 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     consensus.refusedWithTheirParent(NonEmptyList.of(above(1))) shouldBe false
   )
 
+  // B-318: the other three refusals that hold while the head stays, each met for real by the move back to the fork
+  // (block 2, three blocks below the head): no depth reaches past one block; every record a tombstone; the state began
+  // at block 4. Each refused before anything is executed, not queued, and nothing written but the branch by its hash.
+  for (reason, tune, began) <- Seq[(ReorgRefusal, StateConfig => StateConfig, Boolean)](
+      (ReorgRefusal.Deep, _.copy(reorgMaxDepth = StateConfig.ReorgDepth.Fixed(1)), false),
+      (ReorgRefusal.Incomplete, config => config.copy(changeset = config.changeset.copy(maxRecordBytes = 1L)), false),
+      (ReorgRefusal.Pivot, identity, true)
+    )
+  do
+    it should s"be refused for this head, not queued, and nothing of it written but its blocks by hash ($reason)" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new DesignatedFixture(tune):
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      // the state began at block 4, as a sync's pivot does
+      if began then
+        PathStateTestKit.beganAt(
+          node.storagesInstance.storages.appStateStorage,
+          BlockRef(aChain(3).hash.value, 4, aChain(3).header.stateRoot.value)
+        )
+      named.set(Some(bChain.last.hash.value))
+      val state = node.storagesInstance.storages.pathStateStorage.get
+      val anchorBefore = state.anchor
+      val before = node.storagesInstance.dataSource.storage
+      evaluate(bChain) match
+        case ConsensusStateFault(refused: RefusedForThisHead, imported, toEnqueue) =>
+          refused.cause match
+            case tooDeep: ReorgTooDeep => tooDeep.reason shouldBe reason
+            case other                 => fail(s"not a refused move back: $other")
+          (imported, toEnqueue) shouldBe (Nil, Nil)
+        case other => fail(s"not refused for this head: $other")
+      // nothing written but the branch's headers and bodies by their hash: no weight, no index, no state, no record
+      val after = node.storagesInstance.dataSource.storage
+      (before.keySet -- after.keySet) shouldBe empty
+      val written: Set[Seq[Byte]] = after.collect {
+        case (key, value) if !before.get(key).exists(_.sameElements(value)) => key.array().toSeq
+      }.toSet
+      written shouldBe bChain.flatMap { block =>
+        Seq(Namespaces.HeaderNamespace, Namespaces.BodyNamespace).map(_ ++ block.hash.value.toSeq)
+      }.toSet
+      node.bestHash shouldBe aChain.last.hash
+      state.anchor shouldBe anchorBefore
+      reported shouldBe Nil
+      // and remembered against this head: what hangs from it is set aside with it
+      val above: Block = oracle.extendSide(bChain.last, 1, difficulty = 0, tag = 0x77).head
+      consensus.refusedWithTheirParent(NonEmptyList.of(above)) shouldBe true
+    )
+
   it should "be handed, at the cap, to the fork choice's recovery, which commits it in place" taggedAs (
     UnitTest,
     ConsensusTest
@@ -1116,6 +1167,49 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         }
   }
 
+  // B-318: a fault as the pin is released, after the body answered the hand-off. The hand-off is asked for only after
+  // the release, so that the recovery does not find the pinned layers held (beacon): with the release failed, it is
+  // not asked for, and the branch is neither handed off nor set aside. A fault of the state queues it again, as any
+  // fault of the state does; anything else is thrown, as it was. The next attempt, its pin released, hands it off.
+  it should "be neither handed off nor set aside when its pin's release fails, and be handed off at the next attempt" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    for thrown <- Seq[Throwable](
+        new StateUnavailable("injected: the pin's release failed"),
+        new IllegalStateException("injected: the pin's release failed")
+      )
+    do
+      val asked = new java.util.concurrent.ConcurrentLinkedQueue[ByteString]()
+      val recording: BranchHandOff = (tip, _) => asked.add(tip)
+      val releaseFails = new java.util.concurrent.atomic.AtomicReference[Option[Throwable]](None)
+      new DesignatedFixture(pinnedCap(1L), Some(recording), writerOf = releaseFailing(releaseFails)):
+        node.importAll(aChain) shouldBe a[BlockImportedToTop]
+        named.set(Some(bChain.last.hash.value))
+        val above: Block = oracle.extendSide(bChain.last, 1, difficulty = 0, tag = 0x7b).head
+        withClue(s"$thrown: ") {
+          releaseFails.set(Some(thrown))
+          thrown match
+            case fault: StateFault =>
+              evaluate(bChain) match
+                case ConsensusStateFault(answered, Nil, queued) =>
+                  answered shouldBe fault
+                  queued.map(_.hash) shouldBe bChain.map(_.hash)
+                case other => fail(s"not queued again: $other")
+            case _ => (the[IllegalStateException] thrownBy evaluate(bChain)) shouldBe thrown
+          asked shouldBe empty
+          consensus.refusedWithTheirParent(NonEmptyList.of(above)) shouldBe false
+          node.bestHash shouldBe aChain.last.hash
+          // the next attempt
+          releaseFails.set(None)
+          evaluate(bChain) match
+            case ConsensusStateFault(_: HandedToRecovery, Nil, Nil) => ()
+            case other                                              => fail(s"not handed off: $other")
+          asked.toArray.toSeq shouldBe Seq(bChain.last.hash.value)
+          consensus.refusedWithTheirParent(NonEmptyList.of(above)) shouldBe true
+        }
+  }
+
   it should "not move the head back when a fork choice moved it to the branch's tip meanwhile" taggedAs (
     UnitTest,
     ConsensusTest
@@ -1134,6 +1228,40 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         weights.size shouldBe bChain.size
       case other => fail(s"not told as the head's: $other")
     node.bestHash shouldBe bChain.last.hash
+  )
+
+  // B-516: the head already past the tip when the branch is weighed (b7, which the consensus layer names, on b6'). The
+  // move to the tip has nothing forward: it is refused as the move after a head moved meanwhile is, and answered the
+  // same. Before, the head was taken back down to b6' and b7 told as the chain it left.
+  it should "not move the head back down when it is past the branch's tip already as the branch is weighed" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture():
+    node.importAll(aChain) shouldBe a[BlockImportedToTop]
+    named.set(Some(bChain.last.hash.value))
+    evaluate(bChain) shouldBe a[SelectedNewBestBranch]
+    val b7: Block = oracle.extendSide(bChain.last, 1, difficulty = 0, tag = 0x7c).head
+    node.importAll(List(b7)) shouldBe a[BlockImportedToTop]
+    named.set(Some(b7.hash.value))
+    val state = node.storagesInstance.storages.pathStateStorage.get
+    val anchorBefore = state.anchor
+    val before = node.storagesInstance.dataSource.storage
+    evaluate(bChain) match
+      // as when a fork choice moved the head there meanwhile: the head's own chain, with nothing it left
+      case SelectedNewBestBranch(Nil, newBranch, weights, branchBlocks) =>
+        newBranch.map(_.hash) shouldBe bChain.map(_.hash)
+        weights shouldBe bChain.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
+        branchBlocks shouldBe bChain.size
+      case other => fail(s"not told as the head's: $other")
+    node.bestHash shouldBe b7.hash
+    (3 to 6).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 3).hash))
+    node.indexed(7) shouldBe Some(b7.hash)
+    state.anchor shouldBe anchorBefore
+    // nothing written
+    val after = node.storagesInstance.dataSource.storage
+    (before.keySet -- after.keySet) shouldBe empty
+    after.count((key, value) => !before.get(key).exists(_.sameElements(value))) shouldBe 0
+    reported shouldBe Nil
   )
 
   it should "not take the head off a block it moved to meanwhile" taggedAs (UnitTest, ConsensusTest) in (
@@ -1688,7 +1816,8 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       tune: StateConfig => StateConfig = identity,
       handOff: Option[BranchHandOff] = None,
       guard: Boolean = true,
-      hooked: Boolean = false
+      hooked: Boolean = false,
+      writerOf: Node => BlockchainWriter = _.blockchainWriter
   ):
     private val merged = (config: BlockchainConfig) => config.copy(terminalTotalDifficulty = Some(BigInt(0)))
     val oracle: Oracle = new Oracle:
@@ -1720,7 +1849,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
             super.executeAndValidateStaged(block, alreadyValidated, staged)
     val consensus = new ConsensusImpl(
       node.blockchainReader,
-      node.blockchainWriter,
+      writerOf(node),
       execution,
       Some(reporter),
       Some(DesignatedHead(() => namedNow())),
@@ -1733,6 +1862,31 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       import node.blockchainConfig
       import node.runtime
       consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
+
+  /** A writer over `node`'s storages whose pin of a branch throws what `fails` holds once the pin is released, after
+    * its body has returned: a fault of the release (B-318).
+    */
+  def releaseFailing(fails: java.util.concurrent.atomic.AtomicReference[Option[Throwable]])(
+      node: Node
+  ): BlockchainWriter =
+    val storages = node.storagesInstance.storages
+    new BlockchainWriter(
+      storages.blockHeadersStorage,
+      storages.blockBodiesStorage,
+      storages.blockNumberMappingStorage,
+      storages.transactionMappingStorage,
+      storages.receiptStorage,
+      storages.chainWeightStorage,
+      storages.appStateStorage,
+      storages.blockAccessListStorage,
+      pathState = storages.pathStateStorage
+    ):
+      override def withPinnedBranch[A](name: String)(
+          body: Option[com.chipprbots.ethereum.db.storage.pathstate.BranchPin] => A
+      ): A =
+        val result = super.withPinnedBranch(name)(body)
+        fails.get().foreach(thrown => throw thrown)
+        result
 
   /** [[KilledReorg]]'s two chains on a node that runs on, at the cap with nothing kept under the pin, so that the whole
     * branch is committed in place. An import of the branch through this fixture's `consensus` stops at the execution in

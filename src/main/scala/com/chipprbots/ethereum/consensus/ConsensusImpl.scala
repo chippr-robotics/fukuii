@@ -739,10 +739,6 @@ class ConsensusImpl(
                         // its blocks stored by hash, for the recovery to read; not a weight, which only a block
                         // executed has (beacon). The side blocks among them were read from the store: stored already
                         storeByHashOnly(remaining.branch)
-                        // and what hangs from it is set aside with it while the head stays: the recovery moves the
-                        // head when it has adopted it, and a branch fetched and executed again meanwhile would only
-                        // pin the layers the recovery needs (beacon, after code)
-                        rememberRefused(newBranch.toList, bestBlockHash)
                         handOffTip = Some(newBranch.last.hash.value)
                         log.info(
                           "REORG-HAND-OFF: {}; {} block(s) of it are stored by hash for the recovery",
@@ -868,11 +864,16 @@ class ConsensusImpl(
                         )
               }
             catch case fault: StateFault => notJudged(fault)
-          // only when that is what was answered: a fault after it (the pin's release) queues the branch again instead
+          // only when that is what was answered: a fault after it (the pin's release) queues the branch again instead, or
+          // is thrown, and the branch is then neither handed off nor set aside (B-318)
           val handedOff = result match
             case ConsensusStateFault(_: HandedToRecovery, _, _) => handOffTip
             case _                                              => None
           handedOff.foreach { tip =>
+            // what hangs from it is set aside with it while the head stays: the recovery moves the head when it has
+            // adopted it, and a branch fetched and executed again meanwhile would only pin the layers the recovery
+            // needs (beacon, after code)
+            rememberRefused(newBranch.toList, bestBlockHash)
             val why = s"the consensus layer's branch [${newBranch.head.number}-${newBranch.last.number}] at the cap"
             if !branchHandOff.exists(_.handOff(tip, why)) then
               log.warn(
@@ -1282,6 +1283,11 @@ class ConsensusImpl(
             // the consensus layer's branch only: the head moved meanwhile, by a fork choice, past the branch's tip
             // (its chain holds the tip) or elsewhere. Without this the move would take the head back down, below a head
             // the consensus client had confirmed (beacon, B-297)
+            // The head's chain holds the tip: a move with nothing forward, which would only take the head back down to
+            // the tip. Refused whether the head got there meanwhile or before the branch was weighed (B-516). Both are
+            // answered alike: the head never moves back and nothing is written. Where the head was past the tip before
+            // the branch was weighed, its blocks were told when they became canonical, and the importer tells them once
+            // more (the pool, new-head subscribers): harmless, and accepted so that no other answer is needed (B-516)
             var headAlreadyHoldsIt = false
             val moved =
               try
@@ -1291,12 +1297,15 @@ class ConsensusImpl(
                     blockchainReader,
                     admit = plan =>
                       val headMoved = !selectedByWeight && plan.anchor.hash != bestBlockHash.value
-                      headAlreadyHoldsIt = headMoved && plan.forward.isEmpty
+                      headAlreadyHoldsIt = !selectedByWeight && plan.forward.isEmpty
                       val another = !selectedByWeight && (headMoved ||
                         designatedHead.flatMap(_.headBlockHash) != namedAt && !leadsToDesignatedHead(newBranch))
-                      refusedAsSuperseded = another
+                      refusedAsSuperseded = another || headAlreadyHoldsIt
                       Option
                         .when(headMoved)(s"the head moved to block ${plan.anchor.show} meanwhile")
+                        .orElse(
+                          Option.when(headAlreadyHoldsIt)(s"the head ${plan.anchor.show} is past the branch's tip")
+                        )
                         .orElse(Option.when(another)("the consensus layer names another head"))
                   )
                 )
@@ -1324,11 +1333,11 @@ class ConsensusImpl(
                   )
                   throw failed
             moved match
-              // the head is already on the branch, past its tip: a fork choice moved it there meanwhile, and the
-              // blocks of the head's chain it left are that move's to tell
+              // the head is already on the branch, at or past its tip: a fork choice took it there, meanwhile or before
+              // the branch was weighed (B-516), and the blocks of the head's chain it left are that move's to tell
               case None if headAlreadyHoldsIt =>
                 log.info(
-                  "REORG-SUPERSEDED: the head moved to the consensus layer's branch [{}-{}] meanwhile, past its tip",
+                  "REORG-SUPERSEDED: the head is on the consensus layer's branch [{}-{}] already, at or past its tip",
                   newBranch.head.number,
                   newBranch.last.number
                 )
