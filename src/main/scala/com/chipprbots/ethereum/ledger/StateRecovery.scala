@@ -15,6 +15,7 @@ import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
@@ -508,9 +509,13 @@ class StateRecovery(
                         if asked() && state.anchor != from then moveBack(sink, from)
                         Some(if asked() then Outcome.NotAdopted(refused.getMessage) else Outcome.Superseded)
                   movedTo.getOrElse {
-                    commitEach(head, blocks, sink) match
+                    // the block this adoption's own writes leave the head on: `held`, then each block it commits
+                    var leftOn = held.hash.value
+                    commitEach(head, blocks, sink, onCommitted = block => leftOn = block.header.hash.value) match
                       case refused @ (Outcome.Invalid(_, _) | Outcome.LocalFault(_)) =>
-                        moveBack(sink, from)
+                        // only from there (B-464): a fork choice to another head may have moved the head meanwhile,
+                        // and not yet recorded it as the head it followed
+                        moveBack(sink, from, leftOn = Some(leftOn))
                         refused
                       case other => other
                   }
@@ -658,7 +663,8 @@ class StateRecovery(
       head: ByteString,
       blocks: List[Block],
       sink: Sink,
-      asked: Option[() => Boolean] = None
+      asked: Option[() => Boolean] = None,
+      onCommitted: Block => Unit = _ => ()
   ): Outcome =
     def stillAsked: Boolean = asked.fold(this.stillAsked(head, sink))(_())
     @tailrec
@@ -683,6 +689,7 @@ class StateRecovery(
               result match
                 case Left(_) => Outcome.Superseded
                 case Right(Right(_)) =>
+                  onCommitted(block)
                   adopting = adopting.map(_.copy(current = block.header.number.value))
                   StateMetrics.reexecuted(1)
                   next(rest, committed + 1)
@@ -718,23 +725,42 @@ class StateRecovery(
   /** The head moved back after a branch failed: to the head of the last fork choice followed, or to where the adoption
     * found it. A way back that cannot be taken (its records unreadable) leaves the head on the last block committed,
     * all of whose blocks are valid: said at ERROR, and the state does not fail closed.
+    *
+    * '''Only from `leftOn`''', when it is given: the block the adoption's own writes left the head on (B-464). A fork
+    * choice moves the head while an adoption is open, and records the head it followed (`followedHead`) only once its
+    * move has returned. One to another head that moved the head after the branch failed, and has not recorded it yet,
+    * has the head where the consensus client is about to be told it is: moved back to the head followed before, the
+    * head would leave it until the next fork choice. `stillAsked` does not close that: the fork choice may name its
+    * head right after it is read. So the move back is refused when its plan finds the head elsewhere: the plan is made
+    * under the lock that keeps other moves out, and no fork choice moves the head between that look and the move's
+    * write. The head is then left where the fork choice put it.
     */
-  private def moveBack(sink: Sink, from: Option[BlockRef]): Unit =
+  private def moveBack(sink: Sink, from: Option[BlockRef], leftOn: Option[ByteString] = None): Unit =
     val targets = (sink.followedHead.toList ++ from.map(_.hash).toList).distinct
+    // the block the head was found on, when it was not `leftOn`
+    val movedTo = new java.util.concurrent.atomic.AtomicReference[Option[BlockRef]](None)
+    val stillLeftOn: HeadMovePlan => Option[String] = plan =>
+      Option.when(leftOn.exists(_ != plan.anchor.hash)) {
+        movedTo.set(Some(plan.anchor))
+        s"the head is at ${plan.anchor.show}, where another writer moved it after the branch failed"
+      }
     val back = targets.iterator.flatMap(hash => reader.getBlockHeaderByHash(BlockHash(hash))).find { header =>
-      state.isApplied(header.hash.value) || (
+      movedTo.get.isEmpty && (state.isApplied(header.hash.value) || (
         try
-          writer.moveHeadInPlace(header, reader)
+          writer.moveHeadInPlace(header, reader, admit = stillLeftOn)
           true
         catch
           case NonFatal(refused) =>
-            log.warn(s"[STATE-RECOVERY] The head was not moved back to ${refOf(header).show}: ${refused.getMessage}")
+            if movedTo.get.isEmpty then
+              log.warn(s"[STATE-RECOVERY] The head was not moved back to ${refOf(header).show}: ${refused.getMessage}")
             false
-      )
+      ))
     }
-    back match
-      case Some(header) => log.info(s"[STATE-RECOVERY] The head is back at ${refOf(header).show}")
-      case None =>
+    (back, movedTo.get) match
+      case (Some(header), _) => log.info(s"[STATE-RECOVERY] The head is back at ${refOf(header).show}")
+      case (None, Some(at)) =>
+        log.info(s"[STATE-RECOVERY] The head is not moved back: a fork choice moved it to ${at.show} meanwhile")
+      case (None, None) =>
         log.error(
           s"[STATE-RECOVERY] The head could not be moved back after the branch failed: it is left at " +
             s"${state.anchor.map(_.show).getOrElse("no block")}, whose blocks are valid"
