@@ -2098,21 +2098,19 @@ items:
   - id: B-220
     title: "Spec 018 C4 leftovers: side blocks in ChainImporter's lenient import; test_rewindToBlock to any block on the unified layout"
     priority: P2
-    status: review
+    status: done
     area: storage
     size: L
     opened: 2026-11-12
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2102]
       spec: 018
     depends_on: [B-060]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T17:03:11Z
-      heartbeat: 2026-11-24T17:32:28Z
-    notes: "By the user's decision of 2026-11-12, C3c part 3 is its linear subset (plan.md 'C3c part 3'). Left for the overlay (C4a) and the head move (C4b): ChainImporter.importInPlace refuses a block that is not built on the head (the rest of T109: pre-merge side blocks through the fork choice, post-merge ones adopted; bcMultiChainTest, the uncle races, lotsOfLeafs end on another head with the guard on); test_rewindToBlock in test mode; it/ethtest EthereumTestHelper, EthereumTestExecutor and ForkChoiceBlockchainTestsSpec (the rest of T117, needed by EG-2 / T254); engine_newPayload adopting nothing on the guard."
+    notes: |-
+      By the user's decision of 2026-11-12, C3c part 3 is its linear subset (plan.md 'C3c part 3'). Left for the overlay (C4a) and the head move (C4b): ChainImporter.importInPlace refuses a block that is not built on the head (the rest of T109: pre-merge side blocks through the fork choice, post-merge ones adopted; bcMultiChainTest, the uncle races, lotsOfLeafs end on another head with the guard on); test_rewindToBlock in test mode; it/ethtest EthereumTestHelper, EthereumTestExecutor and ForkChoiceBlockchainTestsSpec (the rest of T117, needed by EG-2 / T254); engine_newPayload adopting nothing on the guard.
+      2026-11-24 done: merged cb887cc6a9; hive engine 210/210, path-live 83/83, sync 18/18
   - id: B-228
     title: "GraphQL answers a missing trie node as an account that does not exist: balance 0, nonce 0, zero storage (GraphQLSchema.scala:484); answer an error"
     priority: P2
