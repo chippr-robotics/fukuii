@@ -1522,18 +1522,14 @@ items:
   - id: B-163
     title: "eth_simulateV1: run the request system calls (withdrawal/consolidation queues, deposit logs) for Prague and Osaka blocks, as geth PostExecution does"
     priority: P2
-    status: review
+    status: done
     area: rpc
     size: M
     opened: 2026-11-09
+    closed: 2026-11-24
     refs: [B-131]
     links:
       prs: [2101]
-    claim:
-      by: cloud-719c6644
-      agent: beacon
-      since: 2026-11-24T16:20:55Z
-      heartbeat: 2026-11-24T17:17:26Z
     notes: |-
       From #1727 PR 5 (conduit): EthSimulateService runs request system calls only for Amsterdam blocks; geth runs PostExecution for every Prague block (simulate.go:499). Changes simulated requestsHash and state for Prague/Osaka; RPC only, not import. Many simulate tests on empty state will need the queue stubs (RequestContractStubs).
       2026-11-24 do with B-180 (shared preamble); B-166's ordering fix lands there
