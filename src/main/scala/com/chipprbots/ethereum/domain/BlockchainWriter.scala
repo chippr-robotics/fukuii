@@ -247,6 +247,12 @@ class BlockchainWriter(
     * @param chain
     *   the blocks of the chain the index names afterwards, above the point where `left` leaves it: a transaction one of
     *   them includes keeps its lookup, which names the block of `chain` that includes it
+    * @param clearAbove
+    *   every entry above this height is deleted too, up to the first height that has none, and the blocks they name are
+    *   taken off the chain as `left`'s are: go-ethereum `reorg`, "Delete all hash markers that are not part of the new
+    *   canonical chain", as [[canonicalHeadUpdate]] deletes them. `engine_newPayload` writes the entry of a payload
+    *   that extends the index above the best block, so the old best block is not where the old chain's entries end
+    *   (B-506)
     * @return
     *   how many transaction lookups were deleted
     */
@@ -256,12 +262,25 @@ class BlockchainWriter(
       newBest: Option[(BlockHash, BigInt)],
       left: Seq[BlockHash],
       chain: Seq[BlockHash],
-      reader: BlockchainReader
+      reader: BlockchainReader,
+      clearAbove: Option[BigInt] = None
   ): Int =
     refuseOnTheUnifiedLayout("rewriteCanonicalIndex")
-    val (staleLookups, dropped) = staleLookupRemoval(left, chain, reader)
-    canonicalIndexUpdate(put, remove, newBest, reader).and(staleLookups).commit()
+    val cleared = clearAbove.fold(List.empty[(BigInt, BlockHash)])(indexAbove(_, reader))
+    val (staleLookups, dropped) = staleLookupRemoval(left ++ cleared.map(_._2), chain, reader)
+    canonicalIndexUpdate(put, remove ++ cleared.map(_._1), newBest, reader).and(staleLookups).commit()
     dropped
+
+  /** The entries of the index above `number`, from `number + 1` up to the first height that has none, in order: what a
+    * writer of the head's ancestry deletes above it (go-ethereum `reorg`), and [[canonicalHeadUpdate]] reads.
+    */
+  def indexAbove(number: BigInt, reader: BlockchainReader): List[(BigInt, BlockHash)] =
+    LazyList
+      .iterate(number + 1)(_ + 1)
+      .map(n => reader.getCanonicalHashByNumber(n).map(n -> _))
+      .takeWhile(_.isDefined)
+      .flatten
+      .toList
 
   /** The deletes of the lookups of the transactions the `left` blocks include and the `chain` blocks do not, and how
     * many: go-ethereum `reorg`, `types.HashDifference(deletedTxs, addedTxs)`. The one implementation for every writer

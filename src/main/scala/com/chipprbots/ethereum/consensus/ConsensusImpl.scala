@@ -1389,6 +1389,10 @@ class ConsensusImpl(
       ((fork.number + 1) to bestBlockNumber).toList.flatMap(n =>
         blockchainReader.getCanonicalHashByNumber(n).map(n -> _)
       )
+    // And what it holds ABOVE the head (B-506): the entries `engine_newPayload` writes for a payload that extends the
+    // index, ahead of the best block, or that a branch's commits left when a stop came before its settle. The branch's
+    // blocks write over those at the heights they reach, so they are read now too.
+    val aheadOfTheHead: List[(BigInt, BlockHash)] = blockchainWriter.indexAbove(bestBlockNumber, blockchainReader)
 
     // Execute new branch against the unchanged parent canonical state
     val outcome = executeBranch(newBranch.toList, parentWeight, adoptEachBlock = false, accessLists)
@@ -1408,6 +1412,7 @@ class ConsensusImpl(
         bestBlockWeight,
         fork,
         oldCanonical,
+        aheadOfTheHead,
         selectedByWeight,
         designatedAdopts
       )
@@ -1585,11 +1590,14 @@ class ConsensusImpl(
     * Branch chosen by weight (every ETC reorg):
     *   - the executed blocks outweigh the old head (always, when the whole branch executed): they become the head.
     *     Heights between the fork point and the branch parent are pointed at the parent's own ancestry (non-empty only
-    *     when the parent was itself a non-canonical block), and every entry above the new head is deleted — so a
-    *     shorter new chain leaves no old-chain hashes above it.
+    *     when the parent was itself a non-canonical block), and every entry above the new head is deleted, up to the
+    *     first height with none, not only up to the old head (B-506): so a shorter new chain leaves no old-chain hashes
+    *     above it, nor the entries `aheadOfTheHead` held. Those are `engine_newPayload`'s on a post-merge chain; on ETC
+    *     a branch's own commits leave them when the node stops between them and this settle, and a datadir written
+    *     before this method existed may hold an old chain's.
     *   - they do not (execution stopped early, on a lighter prefix): the old head stays, as core-geth's `ReorgNeeded`
-    *     would keep it, and the index is put back exactly as it was captured before execution; heights the old chain
-    *     never reached are deleted.
+    *     would keep it, and the index is put back exactly as it was captured before execution, `aheadOfTheHead`
+    *     included; heights it did not hold are deleted.
     *
     * Before this, best always moved to the last executed block and nothing else was rewritten, which left the node on a
     * lighter head with an index mixing two chains; see ReorgBlockhashParitySpec.
@@ -1601,6 +1609,7 @@ class ConsensusImpl(
       oldBestWeight: ChainWeight,
       fork: ForkPoint,
       oldCanonical: List[(BigInt, BlockHash)],
+      aheadOfTheHead: List[(BigInt, BlockHash)],
       selectedByWeight: Boolean,
       designatedAdopts: Boolean
   ): Boolean =
@@ -1626,19 +1635,27 @@ class ConsensusImpl(
         reExecuted.size,
         selectedByWeight
       )
+      // The entries that stood above the old head before execution and are no part of the tip's chain (B-506): those
+      // above the fork point that the branch did not execute. At the heights the branch reached, its blocks wrote over
+      // them, so they are known only from what was read before; above, the rewrite deletes them with whatever else is
+      // there. Their blocks leave with the old chain's: their transactions lose their lookups, and their state changes
+      // are taken out, as a fork choice's move takes out those of every entry it deletes above its head.
+      val aheadLeft = aheadOfTheHead.filter((n, _) => n > fork.number).filterNot(executedIds)
       // The executed blocks become the head: the index is made the tip's ancestry (the side blocks the branch stands on
-      // put back, every entry above the tip deleted), the best block is the tip, and the transactions only the blocks
-      // the head left include lose their lookups, all in one batch (B-088). The executed blocks wrote their own entries
-      // and lookups as they were committed, over the old chain's at the heights the two share, so which blocks left is
-      // `displaced`, captured before execution, not what the index names now.
+      // put back, every entry above the tip deleted, up to the first height with none: B-506), the best block is the
+      // tip, and the transactions only the blocks the head left include lose their lookups, all in one batch (B-088).
+      // The executed blocks wrote their own entries and lookups as they were committed, over the old chain's at the
+      // heights the two share, so which blocks left is `displaced` and `aheadLeft`, captured before execution, not what
+      // the index names now.
       def adoptTip(): Unit =
         val droppedTxLookups = blockchainWriter.rewriteCanonicalIndex(
           put = fork.parentSideChain,
           remove = ((tip.number.value + 1) to oldBestNumber).toList,
           newBest = Some((tip.hash, tip.number.value)),
-          left = displaced.map(_._2),
+          left = (displaced ++ aheadLeft).map(_._2),
           chain = fork.parentSideChain.map(_._2) ++ executedBlocks.map(_.block.hash),
-          reader = blockchainReader
+          reader = blockchainReader,
+          clearAbove = Some(tip.number.value.max(oldBestNumber))
         )
         if droppedTxLookups > 0 then
           log.info(
@@ -1646,7 +1663,7 @@ class ConsensusImpl(
             tip.number,
             tip.hash.toHexString,
             droppedTxLookups,
-            displaced.size
+            displaced.size + aheadLeft.size
           )
       // Whether the executed blocks become the head. The post-merge arm: when the caller found the whole branch valid
       // and still leading to the head the consensus layer names (B-505). The weight arm: when they outweigh the old
@@ -1667,10 +1684,13 @@ class ConsensusImpl(
         // node only they replaced stays at zero references while the new chain uses it, and is pruned. The side blocks
         // the new branch builds on are canonical again (their changes were taken out when they were executed as a side
         // payload or dropped). Idempotent through the record's applied flag.
-        reorgState.abandonBlockStates(displaced.map { case (n, h) => (n, h.value) })
+        reorgState.abandonBlockStates((displaced ++ aheadLeft).map { case (n, h) => (n, h.value) })
         reorgState.readoptBlockStates(fork.parentSideChain.map { case (n, h) => (n, h.value) })
       else
-        val old = oldCanonical.toMap
+        // The index as it was captured before execution: the old head's chain above the fork, and what stood above the
+        // old head (B-506), which the branch's blocks wrote over at the heights they reached.
+        val restored = oldCanonical ++ aheadOfTheHead
+        val restoredHeights = restored.map(_._1).toSet
         val executedHeights = executedBlocks.map(_.block.number.value)
         log.warn(
           "REORG-PARTIAL: executed blocks {}-{} {} the current head {} — keeping it and restoring the canonical index",
@@ -1680,20 +1700,21 @@ class ConsensusImpl(
           else "are not the whole valid branch to the head the consensus layer names, and do not replace",
           oldBestNumber
         )
-        // The executed side blocks are committed but not canonical. A re-presented canonical block among them is put
-        // back in the index below, so it stays applied.
+        // The executed side blocks are committed but not canonical. A re-presented canonical block among them, or one
+        // the index named above the head (a payload `engine_newPayload` executed and indexed first), is put back in
+        // the index below, so it stays applied.
         val sideBlocks =
-          executedBlocks.map(b => (b.block.number.value, b.block.hash)).filterNot(id => oldCanonical.contains(id))
+          executedBlocks.map(b => (b.block.number.value, b.block.hash)).filterNot(id => restored.contains(id))
         // All of the captured segment, not only the executed heights: that also re-points the transaction
         // locations of every old block, which a side block carrying the same transaction may have overwritten. The
         // transactions only the side blocks (and the side blocks the branch stands on) include lose the lookups
         // their commits wrote (B-088): none of those blocks is canonical.
         blockchainWriter.rewriteCanonicalIndex(
-          put = oldCanonical,
-          remove = executedHeights.filterNot(old.contains),
+          put = restored,
+          remove = executedHeights.filterNot(restoredHeights),
           newBest = None,
           left = (fork.parentSideChain ++ sideBlocks).map(_._2),
-          chain = oldCanonical.map(_._2),
+          chain = restored.map(_._2),
           reader = blockchainReader
         )
         reorgState.abandonBlockStates(sideBlocks.map { case (n, h) => (n, h.value) })

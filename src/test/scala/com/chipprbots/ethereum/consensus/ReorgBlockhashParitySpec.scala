@@ -1833,6 +1833,82 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     reported shouldBe Nil
   )
 
+  // B-506: `engine_newPayload` writes the entry of a payload that extends the index, above the best block, until a fork
+  // choice names it. `ahead` is two such payloads on the old head, blocks 5 and 6; the branch's block 5 writes over the
+  // first, and the second is above the branch's tip.
+  class DesignatedWithPayloadsAhead extends DesignatedOnTheHashLayout:
+    val ahead: List[Block] =
+      oracle.extendWith(left.last, List(Seq(AheadOnly), Seq(AheadAbove)), difficulty = 0, tag = 0x63)
+    ahead.foreach(block => node.blockchainWriter.storeBlock(block).commit())
+    node.bestHash shouldBe left.last.hash
+    node.indexed(5) shouldBe Some(ahead.head.hash)
+    node.indexed(6) shouldBe Some(ahead(1).hash)
+    node.lookup(AheadOnly) shouldBe Some(TransactionLocation(ahead.head.hash.value, 0))
+    node.lookup(AheadAbove) shouldBe Some(TransactionLocation(ahead(1).hash.value, 0))
+
+  it should "delete the entries of the payloads above the old head, and their lookups, when it becomes the head" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedWithPayloadsAhead:
+    named.set(Some(prefix.last.hash.value))
+    evaluate(prefix) shouldBe a[SelectedNewBestBranch]
+    node.bestHash shouldBe prefix.last.hash
+    (3 to 5).foreach(n => node.indexed(n) shouldBe Some(prefix(n - 3).hash))
+    // the payload above the tip: its entry was left before B-506, as the delete stopped at the old head
+    node.indexed(6) shouldBe None
+    node.indexed(7) shouldBe None
+    // the payload the branch's block 5 wrote over: its transaction was still looked up in it
+    node.lookup(AheadOnly) shouldBe None
+    node.lookup(AheadAbove) shouldBe None
+    node.lookup(OnlyA) shouldBe None
+    node.lookup(Shared) shouldBe Some(TransactionLocation(prefix(1).hash.value, 0))
+    node.lookup(OnlyB) shouldBe Some(TransactionLocation(prefix(1).hash.value, 1))
+    reported shouldBe Nil
+  )
+
+  it should "put the entries of the payloads above the old head back when it is not adopted" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedWithPayloadsAhead:
+    val invalid: Block = oracle.invalidChild(prefix.last, difficulty = 0)
+    named.set(Some(invalid.hash.value))
+    evaluate(prefix :+ invalid) match
+      case BranchExecutionFailure(_, failing, _) => failing shouldBe invalid.hash.value
+      case other                                 => fail(s"not a failure of the branch: $other")
+    node.bestHash shouldBe left.last.hash
+    (3 to 4).foreach(n => node.indexed(n) shouldBe Some(left(n - 3).hash))
+    // the branch's block 5 wrote over the first payload's entry: it is put back, as it was before the branch
+    node.indexed(5) shouldBe Some(ahead.head.hash)
+    node.indexed(6) shouldBe Some(ahead(1).hash)
+    node.lookup(AheadOnly) shouldBe Some(TransactionLocation(ahead.head.hash.value, 0))
+    node.lookup(AheadAbove) shouldBe Some(TransactionLocation(ahead(1).hash.value, 0))
+    node.lookup(OnlyB) shouldBe None
+    node.lookup(Shared) shouldBe Some(TransactionLocation(left.head.hash.value, 0))
+  )
+
+  // B-506 on the weight arm (ETC): a branch's blocks write their entries as they are committed, and the settle after
+  // them makes the index the head's ancestry. A node stopped between the two keeps entries above its head; so does a
+  // datadir from before the settle existed, when a reorganisation moved the best block alone. A heavier branch that
+  // becomes the head deletes them too, as core-geth's `reorg` deletes every hash marker above the new head.
+  "A heavier, shorter branch on the hash layout" should
+    "delete the entries above the old head that an earlier branch's commits left" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new Fixture(guard = false):
+      val common: List[Block] = oracle.extendCanonical(oracle.genesis, 3, difficulty = 1000)
+      val aChain: List[Block] = oracle.extendCanonical(common.last, 3, difficulty = 1000)
+      node.importAll(common ++ aChain) shouldBe a[BlockImportedToTop]
+      val leftBehind: List[Block] = oracle.extendSide(aChain.last, 2, difficulty = 1000, tag = 0x64)
+      leftBehind.foreach(block => node.blockchainWriter.storeBlock(block).commit())
+      node.indexed(8) shouldBe Some(leftBehind(1).hash)
+      // b4, b5 at 2000 each outweigh a4..a6 at 1000
+      val bChain: List[Block] = oracle.extendSide(common.last, 2, difficulty = 2000, tag = 0x65)
+      node.importAll(bChain) shouldBe a[ChainReorganised]
+      node.bestHash shouldBe bChain.last.hash
+      (4 to 5).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 4).hash))
+      (6 to 9).foreach(n => node.indexed(n) shouldBe None)
+    )
+
   /** A node past the merge (a terminal total difficulty of 0), on the unified layout unless `guard` is false, with a
     * `ConsensusImpl` that has a head the consensus layer names and a reporter of invalid blocks, as the node builds one
     * with the Engine API on. `aChain` is blocks 1 to 5; `bChain` leaves it after block 2 and is blocks 3 to 6. With
@@ -2581,6 +2657,10 @@ object ReorgBlockhashParitySpec extends SecureRandomBuilder:
   val Shared: SignedTransaction = transfer(nonce = 0, value = 1)
   val OnlyA: SignedTransaction = transfer(nonce = 1, value = 2)
   val OnlyB: SignedTransaction = transfer(nonce = 1, value = 3)
+
+  /** In payloads above the head that only `engine_newPayload` stored (B-506). */
+  val AheadOnly: SignedTransaction = transfer(nonce = 2, value = 4)
+  val AheadAbove: SignedTransaction = transfer(nonce = 3, value = 5)
 
   /** `PUSH1 0; CALLDATALOAD; BLOCKHASH; NUMBER; SSTORE; STOP` — storage[NUMBER] := BLOCKHASH(calldata[0..32]). */
   val BlockhashRecorder: Address = Address(0xb10c4a54L)
