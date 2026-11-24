@@ -170,7 +170,7 @@ class TestingService(
                     "[STATE-BUSY] testing_commitBlockV1: the block that was built was not committed: {}",
                     busy.getMessage
                   )
-                  Left(JsonRpcError.StateBusy)
+                  Left(JsonRpcError.HeadBusy)
             case None =>
               // The block and its receipts are stored, then the head is promoted, as engine_newPayload and
               // engine_forkchoiceUpdated do for a canonical-extending payload. The world state is already persisted:

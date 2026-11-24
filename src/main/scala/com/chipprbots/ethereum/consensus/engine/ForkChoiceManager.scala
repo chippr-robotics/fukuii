@@ -9,6 +9,7 @@ import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -213,6 +214,9 @@ class ForkChoiceManager(
     catch
       // a block on the way up has no state held, and the chain is held up to `heldTo`: the Engine API has the blocks
       // above it executed again (C4d part 3), and answers SYNCING meanwhile
+      // Another thread's adoption is moving the head (B-294): nothing was written. No fault of this node, so never a
+      // LocalFault, which the escalation counts: SYNCING, and the next fork choice is made once it ends (B-462)
+      case busy: StateBusy => notMoved(busy.getMessage)
       case unavailable: StateUnavailable if unavailable.heldTo.isDefined =>
         notMoved(unavailable.reason)
         Left(Refusal.NotHeld(unavailable.reason))

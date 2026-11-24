@@ -492,7 +492,7 @@ class TestService(
 
   private def answeredBusy[A](busy: com.chipprbots.ethereum.db.storage.pathstate.StateBusy): Either[JsonRpcError, A] =
     log.warn("[STATE-BUSY] Test mode: {}", busy.getMessage)
-    Left(JsonRpcError.StateBusy)
+    Left(JsonRpcError.HeadBusy)
 
   private def handleResult(
       block: Block

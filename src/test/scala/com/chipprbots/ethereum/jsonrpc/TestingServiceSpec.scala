@@ -273,7 +273,7 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       )(using blockchainConfig)
       busyService
         .commitBlock(CommitBlockRequest(attrs(), Some(Nil), Some(ByteString.empty)))
-        .unsafeRunSync() shouldBe Left(JsonRpcError.StateBusy)
+        .unsafeRunSync() shouldBe Left(JsonRpcError.HeadBusy)
       blockchainReader.getBestBlockNumber shouldBe BigInt(0)
 
     "NOT move the head when a transaction cannot be applied" taggedAs UnitTest in new Setup:

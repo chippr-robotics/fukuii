@@ -665,10 +665,12 @@ final class StateBusy(holder, reason)     extends StateFault(...)   // another t
 `StateBusy` (B-462, forge 2026-11-24) is thrown only where a writer of the head (a commit, a promotion, a move that is no
 fork choice, the hold of an attempt) finds another thread's adoption open, with nothing written. It is no fault of this
 node: the escalation never counts it and the proof-of-work feed takes no weight from it (no bound); it is logged at WARN as
-`[STATE-BUSY]`, never at ERROR; the RPC answers it as `StateBusy` (-32005, ask again); `StateRecovery` answers it as
-superseded. A move the state moved under between two of its batches, and one whose replans ran out, stay
+`[STATE-BUSY]`, never at ERROR; the RPC answers it as `HeadBusy` (-32005, "the head is being moved to another branch;
+nothing was written, ask again", B-486); a fork choice answers it SYNCING, never as a local fault; `StateRecovery`
+answers it as superseded. A move the state moved under between two of its batches, and one whose replans ran out, stay
 `StateUnavailable` asking again, and are counted. An attempt older than ten minutes is said once at WARN by the first writer
-it refuses, and its age is the gauge `app.db.state.attempt.age.seconds`.
+it refuses, and its age is the gauge `app.db.state.attempt.age.seconds`, read from the store by its own clock. An
+operator alert on that gauge above 600 s says an adoption is stuck (forge).
 
 `CorruptNodeException` keeps its existing type: by spec 022 T062's design it is a `MissingNodeException` (the stored entry is
 not the node, so it is treated as missing), handled as a missing node everywhere and never as INVALID. The record-size guard

@@ -1017,7 +1017,7 @@ class TestServiceOnPositionsSpec
       holder.start()
       opened.await()
       try
-        onPositions.rewind(1) shouldBe Left(JsonRpcError.StateBusy)
+        onPositions.rewind(1) shouldBe Left(JsonRpcError.HeadBusy)
         onPositions.everything shouldBe before
         onPositions.cleared shouldBe cleared
       finally

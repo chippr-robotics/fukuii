@@ -24,8 +24,8 @@ class StateBusySpec extends AnyFlatSpec with Matchers:
   import PathStateTestKit.*
 
   final private class Told extends CommitObserver:
-    val openSince: ListBuffer[Option[Long]] = ListBuffer.empty
-    override def attemptOpenSince(openedAt: Option[Long]): Unit = synchronized(openSince += openedAt)
+    val ages: ListBuffer[() => Option[Long]] = ListBuffer.empty
+    override def attemptAgeOf(ageMillis: () => Option[Long]): Unit = synchronized(ages += ageMillis)
 
   private class Fixture(warnAfterMillis: Long = 60000L):
     val now = new AtomicLong(1000000L)
@@ -64,14 +64,18 @@ class StateBusySpec extends AnyFlatSpec with Matchers:
       elsewhere(state.withRecordsHeld(fork)(42)).get shouldBe 42
     )
 
-  it should "tell the observer when the oldest open attempt was opened, and none once it has ended" taggedAs UnitTest in (new Fixture:
-    state.oldestAttemptAgeMillis shouldBe None
+  it should "give the observer, once, a way to read the open attempt's age by the store's own clock" taggedAs UnitTest in (new Fixture:
+    told.ages should have size 1
+    val age = told.ages.head
+    age() shouldBe None
     state.withRecordsHeld(fork) {
       now.addAndGet(7000L)
       state.oldestAttemptAgeMillis shouldBe Some(7000L)
+      // read from another thread, with no lock, as the gauge is
+      elsewhere(age()).get shouldBe Some(7000L)
     }
-    state.oldestAttemptAgeMillis shouldBe None
-    told.openSince.toList shouldBe List(Some(1000000L), None)
+    age() shouldBe None
+    told.ages should have size 1
   )
 
   it should "say once at WARN, tagged, that an attempt older than the bound refuses writers, and not before" taggedAs

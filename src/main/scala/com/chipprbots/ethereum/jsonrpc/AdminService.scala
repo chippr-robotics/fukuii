@@ -507,7 +507,7 @@ class AdminService(
               failure.fault match
                 // another thread's adoption holds the head: nothing of the block was written, ask again (B-462)
                 case Some(_: com.chipprbots.ethereum.db.storage.pathstate.StateBusy) =>
-                  JsonRpcError.StateBusy.copy(data = Some(org.json4s.JString(failure.describe)))
+                  JsonRpcError.HeadBusy.copy(data = Some(org.json4s.JString(failure.describe)))
                 case _ => JsonRpcError.LogicError(failure.describe)
             }
             .map(_ => AdminImportChainResponse(true))

@@ -54,8 +54,8 @@ object StateMetrics extends PathStateStorage.CommitObserver:
   private val recordsKept = new AtomicLong(0L)
   // The overlay (data-model 6.4, 11): what the last change of it left.
   private val overlayNow = new AtomicReference(OverlayUsage(0, 0L, 0, 0L, 0L))
-  // B-462: when the oldest attempt that holds the records was opened, in the wall clock's milliseconds; -1 for none
-  private val attemptOpenedAt = new AtomicLong(-1L)
+  // B-462: how to read the age of the oldest attempt that holds the records, from the store, by its clock
+  private val attemptAge = new AtomicReference[() => Option[Long]](() => None)
 
   /** The meters, on the registry that is in use. The object is first touched when the storages are built, before
     * `Metrics.configure` installs the exported registry (B-425, as B-400 for the allowlist), so meters held from first
@@ -66,7 +66,7 @@ object StateMetrics extends PathStateStorage.CommitObserver:
   final private class Meters(val metrics: Metrics):
     metrics.gauge("db.state.anchor.number", () => anchorNumber.get.toDouble)
     metrics.gauge("db.state.changeset.records", () => recordsKept.get.toDouble)
-    metrics.gauge("db.state.attempt.age.seconds", () => attemptAgeSeconds(System.currentTimeMillis()))
+    metrics.gauge("db.state.attempt.age.seconds", () => attemptAgeSeconds)
 
     val commitTimer: Timer = metrics.timer("db.state.commit.seconds")
     val commitPositions: DistributionSummary = metrics.distribution("db.state.commit.positions")
@@ -181,12 +181,10 @@ object StateMetrics extends PathStateStorage.CommitObserver:
 
   override def repairOverwrote(): Unit = m.repairOverwrites.increment()
 
-  override def attemptOpenSince(openedAt: Option[Long]): Unit = attemptOpenedAt.set(openedAt.getOrElse(-1L))
+  override def attemptAgeOf(ageMillis: () => Option[Long]): Unit = attemptAge.set(ageMillis)
 
-  /** What the gauge of the open attempt's age reads at `nowMillis`: 0 when none is open (B-462). */
-  private[pathstate] def attemptAgeSeconds(nowMillis: Long): Double =
-    val opened = attemptOpenedAt.get
-    if opened < 0 then 0.0 else math.max(0L, nowMillis - opened) / 1000.0
+  /** What the gauge of the open attempt's age reads: 0 when none is open (B-462). */
+  private[pathstate] def attemptAgeSeconds: Double = attemptAge.get()().fold(0.0)(_ / 1000.0)
 
   override def moved(move: MoveOutcome.Moved): Unit =
     anchorNumber.set(move.to.number.toLong)

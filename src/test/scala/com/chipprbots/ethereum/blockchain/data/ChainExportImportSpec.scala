@@ -484,7 +484,7 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       .importChain(AdminService.AdminImportChainRequest(file.toString))
       .unsafeRunSync()(using cats.effect.unsafe.implicits.global)
     val error = answer.left.toOption.get
-    (error.code, error.message) shouldBe (JsonRpcError.StateBusy.code, JsonRpcError.StateBusy.message)
+    (error.code, error.message) shouldBe (JsonRpcError.HeadBusy.code, JsonRpcError.HeadBusy.message)
     node.head.number.value shouldBe 20
     // and once the adoption has ended, the same file is imported
     node.importStrict(file).map(_.imported) shouldBe Right(1L)

@@ -80,6 +80,12 @@ object JsonRpcError extends JsonMethodsImplicits:
   val StateBusy: JsonRpcError =
     JsonRpcError(-32005, "too many reads of states behind the head are in flight, ask again", None)
 
+  /** A write of the head, or a read on it, was refused with nothing written: another thread's adoption is moving the
+    * head to another branch (B-294, B-462). Asking again once it ends finds the head settled.
+    */
+  val HeadBusy: JsonRpcError =
+    JsonRpcError(-32005, "the head is being moved to another branch; nothing was written, ask again", None)
+
   /** The chain moved on under the read each time it was made. */
   val StateMoved: JsonRpcError = JsonRpcError(-32005, "the state moved while it was read, ask again", None)
 

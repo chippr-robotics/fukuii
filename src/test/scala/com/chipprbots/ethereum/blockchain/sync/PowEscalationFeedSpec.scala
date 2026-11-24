@@ -277,6 +277,12 @@ class PowEscalationFeedSpec extends AnyFlatSpec with Matchers:
     counted.feed.headMoved(branch(9, 1).head)
     refusedAt(counted) shouldBe None
     counted.escalated shouldBe empty
+    // and on proof of stake (no difficulty) the feed says nothing of it at all: that is the Engine API's (beacon)
+    val pos = new Rig(refusals = 2)
+    pos.refused(branch(5, 3, difficulty = 0), busy)
+    pos.refusedHeaders(branch(5, 3, difficulty = 0).map(_.header), busy)
+    pos.left shouldBe empty
+    pos.escalated shouldBe empty
   }
 
   it should "still count a move that the state moved under between two of its batches, which asks again too" taggedAs UnitTest in {

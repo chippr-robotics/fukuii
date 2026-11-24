@@ -102,22 +102,27 @@ class StateReadRetrySpec extends AnyFlatSpec with Matchers:
         "the adoption on thread 'adopter'",
         "the commit of block 9 was not made"
       )
-      StateRead.unavailable(busy) shouldBe JsonRpcError.StateBusy
+      StateRead.unavailable(busy) shouldBe JsonRpcError.HeadBusy
       var runs = 0
       StateRead.retrying[String](new States().next) { _ =>
         runs += 1
         throw busy
-      } shouldBe Left(JsonRpcError.StateBusy)
+      } shouldBe Left(JsonRpcError.HeadBusy)
       runs shouldBe 1
     }
 
-  it should "tell a client three things apart, and none of them as an execution error" taggedAs UnitTest in {
-    val errors = Seq(JsonRpcError.StateNotHeld, JsonRpcError.StateBusy, JsonRpcError.StateMoved)
-    errors.distinct should have size 3
+  it should "tell a client four things apart, and none of them as an execution error" taggedAs UnitTest in {
+    val errors = Seq(JsonRpcError.StateNotHeld, JsonRpcError.StateBusy, JsonRpcError.StateMoved, JsonRpcError.HeadBusy)
+    errors.distinct should have size 4
     // code 3 is what a client takes for a revert
-    errors.map(_.code) shouldBe Seq(-32000, -32005, -32005)
+    errors.map(_.code) shouldBe Seq(-32000, -32005, -32005, -32005)
+    errors.foreach(error => StateRead.isStateError(error) shouldBe true)
     JsonRpcError.StateNotHeld.message should include("missing trie node")
-    Seq(JsonRpcError.StateBusy, JsonRpcError.StateMoved).foreach(_.message should include("ask again"))
+    Seq(JsonRpcError.StateBusy, JsonRpcError.StateMoved, JsonRpcError.HeadBusy).foreach(
+      _.message should include("ask again")
+    )
+    // B-486: the head being moved is not said as too many reads in flight
+    (JsonRpcError.HeadBusy.message should not).include("reads")
     (JsonRpcError.StateNotHeld.message should not).include("ask again")
   }
 
