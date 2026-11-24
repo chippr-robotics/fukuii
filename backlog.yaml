@@ -1599,12 +1599,17 @@ items:
   - id: B-173
     title: "PR 7a nits: GraphQL shortfall data 0x; trace endpoints carry no error for the deposit shortfall; guard blobBaseFee when blobGas 0; test defaulted supplied gas"
     priority: P3
-    status: open
+    status: claimed
     area: rpc
     size: S
     opened: 2026-11-09
     refs: [B-133]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: beacon
+      since: 2026-11-24T16:21:14Z
+      heartbeat: 2026-11-24T16:21:14Z
     notes: "conduit review of #1777."
   - id: B-174
     title: "CI hive jobs: cache the sbt tarball and back off longer; a GitHub 504 on sbt download fails rpc-compat with zero results"
