@@ -747,11 +747,12 @@ object StaticUDPPeerGroup extends StrictLogging:
         packet = new DatagramPacket(Unpooled.wrappedBuffer(asBuffer), remoteAddress)
         _ <- toTask(nettyChannel.writeAndFlush(packet)).handleErrorWith {
           case ex: IOException =>
-            // Log the actual IOException to help diagnose the real problem
+            // A send the OS refuses (no route, an IPv6 address on an IPv4-only host, a full buffer) is the network's
+            // state, not a fault: one line at DEBUG, no stack trace, and the error goes to the caller, which decides
+            // what it means. At ERROR with a stack trace it flooded the log and the gate's ERROR tally (B-030).
             IO(
-              logger.error(
-                s"Failed to send UDP packet to $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}",
-                ex
+              logger.debug(
+                s"Failed to send UDP packet to $remoteAddress: ${ex.getClass.getSimpleName}: ${ex.getMessage}"
               )
             ) >>
               IO.raiseError(ex)
