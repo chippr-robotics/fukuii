@@ -1482,7 +1482,8 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T16:20:59Z
-      heartbeat: 2026-11-24T16:20:59Z
+      heartbeat: 2026-11-24T16:21:19Z
+      branch: fix/r4-simulate-parity
     notes: "From #1727 PR 2 (conduit): decodePayload matches blockStateCalls/validation/traceTransfers/returnFullTransactions exact-case (BlockStateCalls answers empty input); extractOpt[Boolean] turns a non-boolean validation into false where geth gives -32602; TxArgsJson/TxArgsSpec:118-119 name hexutil.Big/U256 where geth says *hexutil.Big / *uint256.Int."
   - id: B-161
     title: eth_simulateV1 gas below the EIP-7623 calldata floor throws IllegalStateException; geth answers ErrFloorDataGas before execution
