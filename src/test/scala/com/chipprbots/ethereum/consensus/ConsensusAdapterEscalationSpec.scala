@@ -285,6 +285,97 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     }
   }
 
+  // forge C1: a disk that refused a write may refuse the reads too. The stop is asked for before the store is read for
+  // what the head stands on; a read that throws there leaves the answer with nothing imported, and the stop stands
+  it should "stop the node even when the store cannot be read after the write it refused" taggedAs UnitTest in {
+    val unreadable = new java.io.UncheckedIOException(new java.io.IOException("injected: the read failed as well"))
+    val reader = new com.chipprbots.ethereum.domain.BlockchainReader(null, null, null, null, null, null, null, null):
+      override def getBestBlockHeader: Option[BlockHeader] = throw unreadable
+      override def getBlockHeaderByHash(hash: BlockHash): Option[BlockHeader] = throw unreadable
+      override def getChainWeightByHash(hash: BlockHash): Option[ChainWeight] = throw unreadable
+    val host = new EphemBlockchainTestSetup {}
+    val queue = BlockQueue(host.blockchainReader, com.chipprbots.ethereum.utils.Config.SyncConfig(Config.config))
+    val refused = Thrown.wrapped(Thrown.rocks(org.rocksdb.Status.Code.IOError, org.rocksdb.Status.SubCode.NoSpace))
+    val rig = new Rig(_ => throw refused, reader, queue)
+    val blocks = branch(5, 3)
+    rig.imported(blocks) match
+      case fault: BlockImportStateFault =>
+        fault.imported shouldBe Nil
+        fault.fault.getMessage should include("the node stops")
+        fault.fault.getMessage should include("IOError/NoSpace")
+      case other => fail(s"not a fault of this node's state: $other")
+    rig.stopped.toList.map(_ eq refused) shouldBe List(true)
+    rig.feed.refusedWeight shouldBe None
+    blocks.toList.foreach(block => queue.isQueued(block.hash) shouldBe true)
+  }
+
+  // forge C2: the stop runs aside and the database's close waits for the import, so batches keep coming. Once the stop
+  // is asked for none is evaluated (none can write): each is answered not judged, not counted, and the stop is asked once
+  it should "evaluate no batch once the stop is asked for" taggedAs UnitTest in {
+    val refused = new java.io.IOException("injected: the disk refused the commit")
+    var evaluations = 0
+    val on = new ThrowingRig(refused)
+    val rig = new Rig(
+      { _ =>
+        evaluations += 1
+        throw refused
+      },
+      on.host.blockchainReader,
+      on.queue
+    )
+    rig.imported(on.blocks) shouldBe a[BlockImportStateFault]
+    evaluations shouldBe 1
+    val later = branch(8, 2)
+    rig.imported(later) match
+      case fault: BlockImportStateFault =>
+        fault.fault shouldBe a[com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable]
+        fault.fault.getMessage should include("no block is evaluated")
+        fault.imported shouldBe Nil
+      case other => fail(s"not a fault of this node's state: $other")
+    evaluations shouldBe 1
+    rig.stopped.toList.map(_ eq refused) shouldBe List(true)
+    rig.validated shouldBe empty
+    rig.feed.refusedWeight shouldBe None
+    later.toList.foreach(block => on.queue.isQueued(block.hash) shouldBe true)
+  }
+
+  // forge W1: a store busy on the same block, batch after batch, takes no write. At the fifth answer in a row (some ten
+  // minutes, with the importer's backoff) the node stops as for a store that failed; a batch from another block, or one
+  // evaluated, starts the count again
+  it should "stop the node when the store is busy on the same block too many times in a row" taggedAs UnitTest in {
+    val busy = Thrown.busy.head
+    var fails = true
+    val on = new ThrowingRig(busy)
+    val rig = new Rig(
+      blocks => if fails then throw busy else ExtendedCurrentBestBranch(blocks.toList.map(data)),
+      on.host.blockchainReader,
+      on.queue
+    )
+    def busyAnswer(blocks: NonEmptyList[Block]): Boolean = rig.imported(blocks) match
+      case BlockImportStateFault(fault: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable, _) =>
+        fault.askAgain
+      case other => fail(s"not a fault of this node's state: $other")
+    // four in a row, broken by an evaluation, then by a batch from another block: the count starts again each time
+    (1 until ConsensusAdapter.BusyBeforeStop).foreach(_ => busyAnswer(on.blocks) shouldBe true)
+    fails = false
+    rig.imported(on.blocks) shouldBe a[BlockImportedToTop]
+    fails = true
+    (1 until ConsensusAdapter.BusyBeforeStop).foreach(_ => busyAnswer(on.blocks) shouldBe true)
+    busyAnswer(branch(6, 2)) shouldBe true
+    (2 until ConsensusAdapter.BusyBeforeStop).foreach(_ => busyAnswer(on.blocks) shouldBe true)
+    rig.stopped shouldBe empty
+    // the fifth in a row from the same block stops the node
+    (1 until ConsensusAdapter.BusyBeforeStop).foreach(_ => busyAnswer(branch(9, 1)) shouldBe true)
+    rig.stopped shouldBe empty
+    rig.imported(branch(9, 1)) match
+      case BlockImportStateFault(fault, _) =>
+        fault.getMessage should include(s"was busy ${ConsensusAdapter.BusyBeforeStop} times in a row on block 9")
+        fault.getMessage should include("the node stops")
+      case other => fail(s"not a fault of this node's state: $other")
+    rig.stopped.toList.map(_ eq busy) shouldBe List(true)
+    rig.feed.refusedWeight shouldBe None
+  }
+
   // a store busy for now: the same write may go through at the next try. Queued again, no peer blamed, not counted
   it should "queue the batch again, uncounted, when the store was busy" taggedAs UnitTest in {
     Thrown.busy.foreach { failure =>
