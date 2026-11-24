@@ -4290,3 +4290,13 @@ items:
     links:
       spec: 018
     notes: "vault re-review of #2012 (B-426). Pre-existing, not a regression."
+  - id: B-453
+    title: "SNAP-peer precondition counts admin_addPeer peers: declared set is read at start only (split from B-386)"
+    priority: P3
+    status: open
+    area: sync
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: NodeBuilder.snapPeerPrecondition builds PathLiveSync.SnapPeerPrecondition.declared once from static-nodes.json + snap-server-peers. Runtime admin_addPeer peers (PeerManagerActor maintained set; PeerEventBus MaintainedPeersChanged event, see PeersClient) are not counted in SnapPeerCount.declaredSnapCapable, which only feeds the [SNAP-PEERS] log line and does not change the verdict. Needs a SyncController subscription/adapter or a supplier on the port; log-only effect, so low value.
