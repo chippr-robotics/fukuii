@@ -2838,7 +2838,12 @@ class RegularSyncSpec
         SyncTest
       ) in sync(
         new AncestorBodiesMissing("ancestor-bodies-lost"):
-          BlockImporter.ancestorBodiesFetchDeadline = 1.millis
+          // Zero: every fetch is past its deadline by the next fault, whatever the machine's speed. The importer reads
+          // the age of a fetch off System.nanoTime, which never runs backwards, so `age < deadline` is never true. A
+          // deadline of 1 ms raced the test (B-446): on a warm JVM the second fault came within the same millisecond
+          // as the first fetch, which then rightly still held the slot. That a fetch within its deadline holds the slot
+          // is pinned by the test that fetches the bodies and stores those that match.
+          BlockImporter.ancestorBodiesFetchDeadline = Duration.Zero
           try
             failOnce()
             importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.FetchAncestorBodies => m }
