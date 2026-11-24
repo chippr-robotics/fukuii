@@ -4339,3 +4339,15 @@ items:
     links: {}
     depends_on: [B-443]
     notes: fukuii.sh maps BPO1/BPO2 only; HiveAdapterForkEnvSpec canonical set needs the hive mapper names, not only forkenv.json.
+  - id: B-457
+    title: "Ephemery: map genesis bpo3Time..bpo5Time and blobSchedule.bpo3..5 (ChainConfRenderer/EphemeryRelease still refuse them)"
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: specs/028-ephemery
+    depends_on: [B-443]
+    notes: Renderer output is golden-tested; adding keys changes the committed ephemery-16x fixtures.
