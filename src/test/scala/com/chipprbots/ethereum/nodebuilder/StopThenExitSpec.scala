@@ -21,8 +21,12 @@ import com.chipprbots.ethereum.testing.Tags.*
   */
 class StopThenExitSpec extends AnyFlatSpec with Matchers:
 
+  /** Waits until `t` is blocked (WAITING) or has ended, failing after 10 s rather than spinning for ever. */
   private def parked(t: Thread): Unit =
-    while t.getState != Thread.State.WAITING && t.isAlive do Thread.onSpinWait()
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+    while t.getState != Thread.State.WAITING && t.isAlive do
+      if System.nanoTime() - deadline > 0 then fail(s"${t.getName} did not park within 10 s: ${t.getState}")
+      Thread.onSpinWait()
 
   private def daemon(name: String)(body: => Unit): Thread =
     val t = new Thread(() => body, name)
@@ -114,4 +118,58 @@ class StopThenExitSpec extends AnyFlatSpec with Matchers:
     resetter.join(10000)
     // the supervisor's contract (spec 028 exit-codes.md) holds whatever the close did; the log says it was unclean
     exits.asScala.toList shouldBe List(75)
+  }
+
+  "StopSignal.stopThenExit" should "still exit with the unclean status when the stop dies of a fatal error (B-467)" taggedAs UnitTest in {
+    val exits = new ConcurrentLinkedQueue[Int]()
+    val halts = new ConcurrentLinkedQueue[Int]()
+    // fatal (not NonFatal), but not a VirtualMachineError
+    StopSignal.stopThenExit(
+      "test",
+      () => throw new LinkageError("test-only fatal error"),
+      code => exits.add(code): Unit,
+      halt = code => halts.add(code): Unit
+    )
+    exits.asScala.toList shouldBe List(StopSignal.UncleanExit)
+    halts.isEmpty shouldBe true
+  }
+
+  it should "halt, not exit, when the stop dies of a VirtualMachineError (B-467)" taggedAs UnitTest in withTui { tui =>
+    val exits = new ConcurrentLinkedQueue[Int]()
+    val halts = new ConcurrentLinkedQueue[Int]()
+    // constructed, not provoked: no stack overflows here
+    val quit = StdNode.tuiQuit(
+      tui,
+      () => throw new StackOverflowError("test-only"),
+      code => exits.add(code): Unit,
+      halt = code => halts.add(code): Unit
+    )
+    quit()
+    halts.asScala.toList shouldBe List(StopSignal.UncleanExit)
+    exits.isEmpty shouldBe true
+    tui.isEnabled shouldBe false
+  }
+
+  it should "still exit when its wait for a stop under way is interrupted, keeping the interrupt (B-467)" taggedAs UnitTest in {
+    val stop = new HeldStop(clean = true)
+    val first = daemon("b467-other-stop")(stop.once.run(): Unit)
+    first.start()
+    stop.inStop.await(10, TimeUnit.SECONDS) shouldBe true
+
+    val exits = new ConcurrentLinkedQueue[(Int, Boolean)]()
+    val waiter = daemon("b467-waiter") {
+      StopSignal.stopThenExit(
+        "test",
+        stop.stopForExit,
+        code => exits.add((code, Thread.currentThread().isInterrupted)): Unit
+      )
+    }
+    waiter.start()
+    parked(waiter)
+    exits.isEmpty shouldBe true
+    waiter.interrupt()
+    waiter.join(10000)
+    exits.asScala.toList shouldBe List((StopSignal.UncleanExit, true))
+    stop.release.countDown()
+    first.join(10000)
   }

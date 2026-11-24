@@ -83,7 +83,7 @@ class TuiUpdater(
         false
       case Some(TuiCommand.Quit) =>
         log.info("Quit requested via TUI")
-        // Off-thread: onQuit typically exits the JVM, whose shutdown hooks stop this updater and join its thread.
+        // Off-thread: onQuit stops the node, then exits, and the stop runs TuiUpdater.stop, which joins this thread.
         val quitter = new Thread(() => onQuit(), "TuiQuit")
         quitter.start()
         false

@@ -186,6 +186,8 @@ object Fukuii extends Logger:
     // operator's prepared directory, or `exit-at-reset = false`). Nothing is armed on any other network.
     // Its exit 75 comes after the node's stop, as SIGTERM's does (B-452): the JVM's hook does not wait for a stop that
     // began elsewhere, and exiting first could cut the database's close.
+    // A SIGTERM that races the reset waits for the same stop, and the process exits 0 or 75, whichever exits first:
+    // both are harmless. The stop has run to its end either way, and 0 answers the SIGTERM that asked for a stop.
     if started then
       val stopThenExit: Int => Unit = code =>
         StopSignal.stopThenExit(s"exit $code", () => node.forall(_.stopForExit()), deps.exit, _ => code)

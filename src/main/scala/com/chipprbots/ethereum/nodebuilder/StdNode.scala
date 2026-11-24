@@ -1063,10 +1063,15 @@ object StdNode:
 
   /** The TUI's `q` (B-452): the terminal is restored first (its raw mode and alternate screen, whatever the stop then
     * does), then the node stops through [[StopSignal.stopThenExit]], and `exit` comes only once that stop has ended,
-    * with its status. `stop` is [[BaseNode.stopForExit]].
+    * with its status (or `halt` when the stop died of a [[VirtualMachineError]]). `stop` is [[BaseNode.stopForExit]].
     */
-  def tuiQuit(tui: Tui, stop: () => Boolean, exit: Int => Unit): () => Unit =
-    TuiUpdater.restoreThenQuit(tui, () => StopSignal.stopThenExit("TUI quit", stop, exit))
+  def tuiQuit(
+      tui: Tui,
+      stop: () => Boolean,
+      exit: Int => Unit,
+      halt: Int => Unit = code => Runtime.getRuntime.halt(code)
+  ): () => Unit =
+    TuiUpdater.restoreThenQuit(tui, () => StopSignal.stopThenExit("TUI quit", stop, exit, halt = halt))
 
   /** The name of the stop's last step, whose completion makes a stop clean (B-426). */
   val CloseDatabase: String = "database close"
