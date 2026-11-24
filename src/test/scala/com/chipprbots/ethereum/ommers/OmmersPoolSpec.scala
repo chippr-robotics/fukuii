@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.ommers
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe
 import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.util.ByteString
 
 import org.scalamock.scalatest.MockFactory
 import org.scalatest.freespec.AnyFreeSpecLike
@@ -10,6 +11,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures.Blocks.Block3125369
 import com.chipprbots.ethereum.Timeouts
+import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -146,6 +149,31 @@ class OmmersPoolSpec extends ScalaTestWithActorTestKit with AnyFreeSpecLike with
         Timeouts.normalTimeout,
         OmmersPool.Ommers(Seq(block1Chain6, block1Chain5, block2Chain4))
       )
+
+    "should not return an ommer an ancestor included, but the next candidate (B-500)" in new TestSetup:
+
+      /** 00 --> 11 --> 21 --> 31' --> [new block] (chain1), where 31' included 22 as its ommer; 33 and 37 are children
+        * of 21. 22 is included once: a block that carries it again fails the ommers check, and it took a slot of the
+        * two. core-geth's worker refuses it ("uncle already included"): its `family` holds the ancestors' uncles.
+        */
+      override val ommerGenerationLimit: Int = 3
+      val block3Chain1WithOmmer: BlockHeader =
+        block3Chain1.copy(ommersHash = BlockHash(ByteString(Array.fill[Byte](32)(1))))
+      val block3Chain7: BlockHeader =
+        Block3125369.header.copy(number = BlockNumber(3), parentHash = block2Chain1.hash, difficulty = Difficulty(37))
+      blockchainReader.getBlockHeaderByHash.expects(block3Chain1WithOmmer.hash).returns(Some(block3Chain1WithOmmer))
+      blockchainReader.getBlockHeaderByHash.expects(block2Chain1.hash).returns(Some(block2Chain1))
+      blockchainReader.getBlockHeaderByHash.expects(block1Chain1.hash).returns(Some(block1Chain1))
+      // read only for the ancestor whose header names ommers: 21 and 11 name none
+      blockchainReader.getBlockBodyByHash
+        .expects(block3Chain1WithOmmer.hash)
+        .returns(Some(BlockBody(Nil, Seq(block2Chain2))))
+        .once()
+
+      ommersPool ! AddOmmers(block2Chain2, block3Chain3, block3Chain7)
+
+      ommersPool ! GetOmmers(block3Chain1WithOmmer.hash.value, ommersProbe.ref)
+      ommersProbe.expectMessage(Timeouts.normalTimeout, OmmersPool.Ommers(Seq(block3Chain3, block3Chain7)))
   }
 
   // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.
