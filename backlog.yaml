@@ -5157,7 +5157,7 @@ items:
   - id: B-505
     title: "Hash layout: settleHead's designated-head arm adopts an executed prefix on an invalid block or state fault; unified layout and geth refuse"
     priority: P2
-    status: claimed
+    status: in-progress
     area: consensus
     size: S
     opened: 2026-11-24
@@ -5168,8 +5168,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T10:12:51Z
-      heartbeat: 2026-11-24T10:12:51Z
-    notes: "beacon W1 on B-088 (#PR). Take the restore path when !selectedByWeight && (maybeError.nonEmpty || stateFault.isDefined || !leadsToDesignatedHead). Test: invalid block after a valid prefix with txs."
+      heartbeat: 2026-11-24T10:12:55Z
+    notes: |-
+      beacon W1 on B-088 (#PR). Take the restore path when !selectedByWeight && (maybeError.nonEmpty || stateFault.isDefined || !leadsToDesignatedHead). Test: invalid block after a valid prefix with txs.
+      2026-11-24 in-progress: beacon agent clone-e (B-088 merged #2064)
   - id: B-506
     title: settleHead designated-head arm deletes index entries above the tip only up to the old best; sweep upward like canonicalHeadUpdate
     priority: P3
