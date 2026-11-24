@@ -1641,19 +1641,14 @@ items:
   - id: B-176
     title: "Precompile failure fallback: WARN plus a counter when failureReason finds no geth reason (divergence signal); RPC tests for precompile errors"
     priority: P2
-    status: review
+    status: done
     area: rpc
     size: S
     opened: 2026-11-09
+    closed: 2026-11-24
     refs: [B-133]
     links:
       prs: [2101]
-    claim:
-      by: cloud-719c6644
-      agent: beacon
-      since: 2026-11-24T16:21:10Z
-      heartbeat: 2026-11-24T17:17:42Z
-      branch: fix/r4-simulate-parity
     notes: |-
       conduit review of #1778: UnexplainedFailure (precompiled contract failed) fires when exec fails but geth checks pass (e.g. Besu lib rejects what geth accepts). Log contract name and input length/hash, not the input; counter json.rpc.precompile.unexplained.counter. Also no RPC-level test for estimateGas/createAccessList/simulateV1 -32015 on a precompile failure (precedents TypedCallPathSpec:607, EthSimulateGethParitySpec:422).
       2026-11-24 in-progress: committed on fix/r4-simulate-parity (local, not pushed); PR pending
