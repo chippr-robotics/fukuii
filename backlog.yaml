@@ -3091,23 +3091,19 @@ items:
   - id: B-352
     title: "RegularSyncSpec timing flakes under load: 'save fetched node' and the ancestor-bodies deadline test each fail about 1 run in 5"
     priority: P3
-    status: review
+    status: done
     area: test
     size: S
     opened: 2026-11-18
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2047]
       spec: "016"
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T06:24:39Z
-      heartbeat: 2026-11-24T06:41:32Z
-      branch: fix/b352-save-fetched-node-wait
     notes: |-
       Seen on B-349 (#1912): 5 full runs, 2 with one failure each, a different test each time; 'save fetched node' also fails on plain staging. Fixed waits (fishForSpecificMessage 5 s, a 1 ms deadline) race a loaded machine. Find each wait and synchronise on the event instead; never skip.
       2026-11-24 rescoped: ancestor-bodies deadline fixed by #2015; left: 'save fetched node' (untagged, runs in testEssential)
+      2026-11-24 done: merged as 10b621403
   - id: B-353
     title: "CI: a commit pushed by the 'Apply scalafmt' workflow starts no CI, so the PR's head has no checks"
     priority: P3
