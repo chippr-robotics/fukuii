@@ -4419,3 +4419,14 @@ items:
     links:
       spec: 018
     notes: "beacon review of B-294, StateRecovery.scala:508-511; CL told VALID for X while head elsewhere until next FCU; fix: if asked() then moveBack(...); changes which head is kept after an invalid branch -> beacon decision"
+  - id: B-465
+    title: clearForResync can run while a ConsensusImpl adoption hold is open on ETC; refuse it while any attempt is open
+    priority: P3
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "forge ruling on B-294 (D): bytes safe (anchor None refuses later writes) but may discard a state about to follow the chain -> full re-SNAP, misleading ERROR at ConsensusImpl:967. Fix: PathStateStorage clearForResync (~1138/1159) refuses (cannot wait under moves: deadlock), maps to SyncController ~1655 'not cleared' arm, reword its 'a recovery' message; retried after clearRefused cooldown."
