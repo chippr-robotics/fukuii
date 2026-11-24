@@ -1912,12 +1912,17 @@ items:
   - id: B-206
     title: "StackTrieSpec: two cases take 3.5 min of Tier 1 because TestMptStorage re-stores the whole trie on every put"
     priority: P3
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-11
     refs: []
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T15:12:34Z
+      heartbeat: 2026-11-24T15:12:34Z
     notes: "'10 000 random 32-byte keys' (2 min) and 'large random corpus' (1.2 min), the same on staging 0.11.44 and on #1788. Quadratic in the test double, not in the trie."
   - id: B-207
     title: "Spec 018 T026, the half that waits: the position mirror on the ethereum/tests pre-Atlantis networks, and the comparison with C0's ethtests baseline"
