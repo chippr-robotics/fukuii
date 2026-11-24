@@ -1680,9 +1680,11 @@ final class PathStateStorage(
     * B-294). Such an attempt moves the head to a branch and commits its blocks in place, and may move it back: in the
     * meantime the head stands on blocks it may not stay on, and a block committed on one of them would be moved off by
     * the attempt's next write, or would take its place. The writer is refused, with nothing written, and asks again
-    * once the attempt has ended: it does not wait here, since the attempt may be waiting for what that writer holds
-    * (the gate of a block it executes; forge). Asked under the state lock, where an attempt is opened: a writer that
-    * passes it finds the head settled, or its own attempt's.
+    * once the attempt has ended. It does not wait for the attempt, which may be waiting for what that writer holds (the
+    * gate of a block it executes; forge). A commit or a promotion may still wait before it gets here, as any adopter
+    * does ([[adopting]]): for one move of the head under way on another thread, which takes no gate, and is then
+    * refused. Asked under the state lock, where an attempt is opened: a writer that passes it finds the head settled,
+    * or its own attempt's.
     */
   private def refuseInAnotherAttempt(what: String)(using StateLockHeld): Unit =
     val self = Thread.currentThread()
@@ -1702,8 +1704,10 @@ final class PathStateStorage(
     * this a branch longer than what is retained would delete the old branch's records, which are the way back, and its
     * own first ones. Nothing is pruned while it runs that the hold covers; the commit after it catches up.
     *
-    * The attempt is the calling thread's: while it runs, no other thread adopts a block or begins an attempt
-    * ([[refuseInAnotherAttempt]], B-294), and its own moves and commits are made on this thread.
+    * '''The attempt is the calling thread's''' (B-294): while it runs, no other thread adopts a block, moves the head
+    * (but a fork choice) or begins an attempt ([[refuseInAnotherAttempt]]). So `body` must run synchronously on the
+    * calling thread, its moves and commits included: one it hands to another thread, or makes on one (an `IO` shifted
+    * off this thread, a future), is refused as another thread's write, asking again.
     */
   @throws[ReorgTooDeep]("when the records above `above` are not all kept already: the way back is not there")
   @throws[StateUnavailable]("asking again, when another thread's attempt is open: nothing was held")
@@ -1721,9 +1725,11 @@ final class PathStateStorage(
       recordHolds.put(hold, above.number + 1)
       attemptThreads.put(hold, Thread.currentThread())
     }
-    // the hold is the attempt: the head is not settled until it ends, whatever moves and commits it makes
-    openAttempt()
-    try body
+    // the hold is the attempt: the head is not settled until it ends, whatever moves and commits it makes. Opened
+    // inside the `try`, so that nothing between the hold and its release can leave the hold, or its thread, behind
+    try
+      openAttempt()
+      body
     finally
       recordHolds.remove(hold)
       attemptThreads.remove(hold)
