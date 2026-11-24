@@ -283,17 +283,18 @@ items:
   - id: B-025
     title: JSON-RPC errors answer HTTP 400; geth answers 200 with the error in the body
     priority: P2
-    status: claimed
+    status: review
     area: rpc
     size: S
     opened: 2026-11-06
     refs: [backlog 9, H10, CHASE D]
-    links: {}
+    links:
+      prs: [2078]
     claim:
       by: cloud-719c6644
       agent: conduit
       since: 2026-11-24T11:48:39Z
-      heartbeat: 2026-11-24T11:48:39Z
+      heartbeat: 2026-11-24T12:18:25Z
       branch: fix/b025-rpc-error-status-codes
     notes: conduit. Check hive rpc-compat's expectations first (JsonRpcHttpServer.scala:148-153).
   - id: B-026
