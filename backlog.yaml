@@ -1670,7 +1670,7 @@ items:
   - id: B-180
     title: "eth_simulateV1 and trace replays apply import's block preamble (BlockExecution.applyBlockPreamble): 4788/2935/DAO, before overrides"
     priority: P2
-    status: claimed
+    status: in-progress
     area: rpc
     size: S
     opened: 2026-11-09
@@ -1680,10 +1680,11 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T16:20:51Z
-      heartbeat: 2026-11-24T16:20:51Z
+      heartbeat: 2026-11-24T17:15:22Z
     notes: |-
       EthSimulateService.applyEip4788/applyEip2935 vs BlockExecution (no code: no change). Call BlockExecution.applyBlockPreamble/applyEip2935 instead. ETC Olympia fixed in B-167. beacon, conduit.
       2026-11-24: absorbs B-181, B-166 (validation of 2026-11-24)
+      2026-11-24 in-progress: committed on fix/r4-simulate-parity (local, not pushed); PR pending
   - id: B-181
     title: "Trace replays (StxLedger.advanceWorldToTx) skip the pre-Amsterdam block preamble: DAO drain, EIP-4788, EIP-2935"
     priority: P2
