@@ -5148,13 +5148,18 @@ items:
   - id: B-504
     title: "B-463 PoS tests: fork-choice move in the read-to-hold window, anchor read between move batches, Engine API-level SYNCING + no escalation"
     priority: P3
-    status: open
+    status: claimed
     area: consensus
     size: S
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T09:36:11Z
+      heartbeat: 2026-11-24T09:36:11Z
     notes: beacon, review of B-463 (APPROVE); nice-to-have coverage. Also reword StateRecovery:510/550 comments to 'a block committed on it, or a move of it'.
   - id: B-505
     title: "Hash layout: settleHead's designated-head arm adopts an executed prefix on an invalid block or state fault; unified layout and geth refuse"
