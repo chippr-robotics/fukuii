@@ -2887,7 +2887,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T13:44:23Z
-      heartbeat: 2026-11-24T13:44:27Z
+      heartbeat: 2026-11-24T19:41:33Z
   - id: B-331
     title: TUI Ops pagination hint prints a Unicode ellipsis in ASCII mode (OpsPanels.scala:175; regenerate the ops-*-ascii goldens)
     priority: P3
