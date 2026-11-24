@@ -3753,7 +3753,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b410b
       since: 2026-11-24T00:37:34Z
-      heartbeat: 2026-11-24T01:14:25Z
+      heartbeat: 2026-11-24T01:27:14Z
     notes: B-407 tells the feed only above the pivot, since a backfill gap there would trip the 64-block threshold. If the backfill stalls, nothing ends the wait. Needs a backfill-done signal or a pivot-clear check.
   - id: B-411
     title: "After a checkpoint import the archive's own block N is not served over RPC: the archive carries no body for N and nothing fetches it"
