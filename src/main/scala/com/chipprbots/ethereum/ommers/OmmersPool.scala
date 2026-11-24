@@ -61,10 +61,20 @@ object OmmersPool:
 
         case GetOmmers(parentBlockHash, replyTo) =>
           val ancestors = collectAncestors(blockchainReader, parentBlockHash, ommerGenerationLimit)
+          val ancestorHashes = ancestors.map(_.hash).toSet
+          // An ommer of block N is a child of a block from N - 2 down to N - 7: of one of the parents of the ancestors
+          // walked (YP 11.1, the rule StdOmmersValidator.validateOmmersAncestors applies). A child of the parent itself is
+          // a sibling of block N, never its ommer. As core-geth's `commitUncle`: "uncle is sibling", and the uncle's
+          // parent among the seven blocks from the parent down.
+          val ommerParents = ancestors.map(_.parentHash).toSet
+          // What the ancestors' bodies hold already: an ommer is included once (B-500). One handed out again failed the
+          // ommers check of the block built with it. As core-geth's worker, whose `family` (`makeEnv`) holds the
+          // ancestors and the uncles they included, and `commitUncle` refuses an uncle in it ("uncle already included").
+          val included = ancestors.flatMap(includedBy(blockchainReader, _)).map(_.hash).toSet
           val ommers = ommersPool
             .filter { b =>
-              val notAncestor = ancestors.find(_.hash == b.hash).isEmpty
-              ancestors.find(_.hash == b.parentHash).isDefined && notAncestor
+              val notAncestor = !ancestorHashes.contains(b.hash)
+              ommerParents.contains(b.parentHash) && notAncestor && !included.contains(b.hash)
             }
             .take(returnedOmmersSizeLimit)
           logStatus(context, event = s"Ommers given parent block ${Hex.toHexString(parentBlockHash.toArray)}", ommers)
@@ -85,6 +95,14 @@ object OmmersPool:
           case None     => acc
       else acc
     rec(BlockHash(parentHash), generationLimit, List.empty)
+
+  /** The ommers `ancestor` included. Its body is read only where its header names some (B-302). Where that body is not
+    * stored, none is known: the block builder's ommers check reads the bodies it needs and takes no ommers without them
+    * (B-283), so a header handed out here is never one an ancestor's unread body holds in a block this node builds.
+    */
+  private def includedBy(blockchainReader: BlockchainReader, ancestor: BlockHeader): Seq[BlockHeader] =
+    if ancestor.ommersHash.value == BlockHeader.EmptyOmmers then Nil
+    else blockchainReader.getBlockBodyByHash(ancestor.hash).map(_.uncleNodesList).getOrElse(Nil)
 
   private def logStatus(
       context: org.apache.pekko.actor.typed.scaladsl.ActorContext[Command],
