@@ -136,13 +136,21 @@ class ByteCodeResponseHandlingSpec extends ScalaTestWithActorTestKit() with AnyF
   private type Module = StubByteCodeResponseHandlingState & ByteCodeResponseHandling
 
   private def newModule(
-      tracker: SNAPRequestTracker = new SNAPRequestTracker()
+      tracker: SNAPRequestTracker = new SNAPRequestTracker(),
+      store: EvmCodeStorage = new TestEvmCodeStorage()
   ): (Module, TestInbox[SNAPSyncController.Command]) =
     val controller = TestInbox[SNAPSyncController.Command]()
     val module =
-      new StubByteCodeResponseHandlingState(new TestEvmCodeStorage(), controller.ref, tracker)
-        with ByteCodeResponseHandling
+      new StubByteCodeResponseHandlingState(store, controller.ref, tracker) with ByteCodeResponseHandling
     (module, controller)
+
+  /** A code store whose every write fails, as a full or read-only disk would (B-488). */
+  private def failingStore: EvmCodeStorage =
+    new EvmCodeStorage(
+      new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
+        override def update(dataSourceUpdates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+          throw new java.io.IOException("injected write failure")
+    )
 
   /** A tracker that feeds `scorer`, holding request 7 for `p` as the dispatch registers it. */
   private def trackerHolding(p: Peer, scorer: PeerScoringManager): SNAPRequestTracker =
@@ -194,6 +202,26 @@ class ByteCodeResponseHandlingSpec extends ScalaTestWithActorTestKit() with AnyF
     m.calls.toSeq shouldBe Seq(s"grow p1 1000 ${codes.map(_.size).sum}", "clear p1")
     m.cooldowns shouldBe empty
     m.completionChecks shouldBe 1
+  }
+
+  it should "report a failed store to the controller and not blame the peer, keeping the task whole (B-488)" taggedAs UnitTest in {
+    val (m, controller) = newModule(store = failingStore)
+    val worker = TestInbox[ByteCodeWorker.Command]()
+    val p = peer("p1")
+    val codes = Seq(code(1), code(2))
+    val task = inFlight(m, codes.map(kec256(_)), worker.ref, p)
+
+    m.handleByteCodesResponse(ByteCodes(BigInt(7), codes))
+
+    m.activeTasks shouldBe empty
+    withClue("re-queued whole, so no code is skipped: ")(m.pendingTasks.toSeq shouldBe Seq(task.copy(pending = false)))
+    m.completedTaskCount shouldBe 0L
+    val faults = controller.receiveAll().collect { case f: SNAPSyncController.SnapStoreFaulted => f }
+    faults.map(_.where) shouldBe Seq("bytecode (2 codes)")
+    withClue("a local fault is not the peer's: ")(m.cooldowns shouldBe empty)
+    m.calls.toSeq shouldBe empty
+    worker.receiveAll() shouldBe Seq(ByteCodeWorkerRelease(BigInt(7)))
+    m.idled.toSeq shouldBe Seq(worker.ref)
   }
 
   it should "re-queue a partly served task's remainder and keep the task open" taggedAs UnitTest in {

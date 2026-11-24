@@ -134,6 +134,7 @@ class SNAPIdleTotalitySpec
     ProgressAccountsTrieFinalized,
     AccountTrieFinalized(root),
     AccountTrieFinalizationFailed("idle totality"),
+    SnapStoreFaulted("idle totality", "idle totality"),
     ProgressBytecodesDownloaded(0L),
     ProgressStorageSlotsSynced(0L),
     ProgressNodesHealed(0L),

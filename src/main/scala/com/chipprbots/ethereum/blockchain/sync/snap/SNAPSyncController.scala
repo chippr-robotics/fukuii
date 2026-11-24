@@ -778,6 +778,9 @@ private class SNAPSyncControllerImpl(
         case _: AccountTrieFinalizationFailed =>
           ctx.log.warn("Unexpected AccountTrieFinalizationFailed in idle — dropped")
           Behaviors.same
+        case SnapStoreFaulted(where, error) =>
+          ctx.log.warn(s"Store fault ($where: $error) reported in idle, after its run ended — dropped")
+          Behaviors.same
         case _: ProgressBytecodesDownloaded => Behaviors.same
         case _: ProgressStorageSlotsSynced  => Behaviors.same
         case _: ProgressNodesHealed         => Behaviors.same
@@ -1472,6 +1475,12 @@ object SNAPSyncController:
   case object ProgressAccountsTrieFinalized extends Command
   final case class AccountTrieFinalized(finalizedRoot: ByteString) extends Command
   final case class AccountTrieFinalizationFailed(error: String) extends Command
+
+  /** A local write of downloaded state failed (an account range's trie nodes, bytecode): a fault of this node's store,
+    * not of a peer (B-488). The controller counts it as a critical failure: it restarts SNAP on a fresh pivot until
+    * `maxSnapSyncFailures`, then enters dormant mode, so a full or read-only disk does not restart SNAP without end.
+    */
+  final case class SnapStoreFaulted(where: String, error: String) extends Command
   final case class ProgressBytecodesDownloaded(count: Long) extends Command
   final case class ProgressStorageSlotsSynced(count: Long) extends Command
   final case class ProgressNodesHealed(count: Long) extends Command
