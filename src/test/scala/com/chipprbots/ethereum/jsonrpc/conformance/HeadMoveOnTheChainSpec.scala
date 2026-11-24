@@ -2010,11 +2010,27 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         withClue(s"to block ${tip.header.number.value}: ") {
           val on = handedOff()
           side.foreach(block => on.writer.storeBlockByHashOnly(block).commit())
-          // the index names blocks 21 to 44, as a sync leaves it; the head and the state are at block 20
-          (21 to 44).foreach(n => on.putIndex(n, blocks(n - 1).header.hash.value))
+          // the index names blocks 21 to 44, and the lookups of their transactions name them, as a sync leaves them;
+          // the head and the state are at block 20
+          (21 to 44).foreach(n => on.writer.storeBlock(blocks(n - 1)).commit())
           on.pathState.anchor.map(_.number) shouldBe Some(BigInt(20))
           on.pathState.stateAvailable(refOf(blocks(29).header)) shouldBe false
-          val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 4, catchUp = 30, chunk = 5)
+          // B-482 (beacon): the index above each block committed, and the lookups of the transactions of the old
+          // blocks above it, as the disk holds them right after its commit, read before the next block is committed:
+          // what a node killed between the two would keep
+          val afterEach = scala.collection.mutable.Map.empty[Int, (Seq[Option[ByteString]], Seq[Option[ByteString]])]
+          val recovery = new on.Recovery(
+            maxBlocks = 1,
+            maxAdopted = 4,
+            catchUp = 30,
+            chunk = 5,
+            adopting = block =>
+              val below = block.header.number.value.toInt - 1
+              afterEach(below) = (
+                (below + 1 to 44).map(h => on.reader.getCanonicalHashByNumber(h).map(_.value)),
+                blocks.slice(below, 44).flatMap(on.txsOf).map(on.lookup)
+              )
+          )
           val (_, choose) = recoveringEngine(on, recovery)
           statusOf(choose(tip)) shouldBe PayloadStatus.Syncing
           // walked down to the anchor, and not stopped on the index above it: caught up over, every block
@@ -2025,10 +2041,68 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
           chainTo.foreach(block =>
             on.reader.getCanonicalHashByNumber(block.header.number.value) shouldBe Some(block.header.hash)
           )
+          // every transaction of the head's chain above the anchor is looked up in its block there
+          on.lookedUpIn(chainTo.drop(20).map(_.header))
+          // B-482: the chain left the index at block 31'. The old chain's entries above the head are gone, and so are
+          // the lookups of the transactions only those blocks hold (go-ethereum's reorg deletes both)
+          val left = blocks.slice(chainTo.size, 44)
+          if tip eq side.last then
+            left.map(_.header.number.value) shouldBe (36 to 44).map(BigInt(_))
+            left.flatMap(on.txsOf) should not be empty
+          left.foreach(block => on.reader.getCanonicalHashByNumber(block.header.number.value) shouldBe None)
+          left.flatMap(on.txsOf).foreach(tx => on.lookup(tx) shouldBe None)
+          // and so right after the very commit that leaves the index, in its batch: no kill leaves them behind. Where
+          // the chain is the index's own, its entries above the head stay until they are committed over
+          (21 until tip.header.number.value.toInt).foreach { n =>
+            val (above, lookups) = afterEach(n)
+            withClue(s"after block $n: ") {
+              if n <= 30 || (tip eq blocks(43)) then
+                above shouldBe (n + 1 to 44).map(h => Some(blocks(h - 1).header.hash.value))
+                lookups.foreach(_ should not be empty)
+              else
+                above.foreach(_ shouldBe None)
+                lookups.foreach(_ shouldBe None)
+            }
+          }
         }
     }
 
-  it should "be a head that cannot be reached when it is longer than the catch-up covers" taggedAs (
+  // B-482: the clean-up is the block's own commit's, whoever commits it. A block imported onto the head, stored by
+  // nothing before its commit, keeps the lookups of the transactions it shares with the block it replaces
+  "A block committed as the head where the index names another block at its height" should "clear the index above it and the lookups only the blocks it drops hold, in its own batch, and keep its own" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      blocks.take(20).foreach(on.imports)
+      // the index names blocks 21 to 25 above the head, with their lookups, as a sync leaves them
+      (21 to 25).foreach(n => on.writer.storeBlock(blocks(n - 1)).commit())
+      val competing = siblingOf(blocks(20))
+      on.reader.getBlockHeaderByHash(competing.header.hash) shouldBe None
+      val writesBefore = on.source.writes.get
+      on.imports(competing)
+      // one batch: the block, its state, and the clean-up
+      on.source.writes.get - writesBefore shouldBe 1
+      on.holds(competing.header, blocks.take(20) :+ competing)
+      (22 to 25).foreach(n => on.reader.getCanonicalHashByNumber(n) shouldBe None)
+      val own = on.txsOf(competing)
+      own should not be empty
+      own.foreach(tx => on.lookup(tx) shouldBe Some(competing.header.hash.value))
+      val dropped = blocks.slice(21, 25).flatMap(on.txsOf)
+      dropped should not be empty
+      dropped.foreach(tx => on.lookup(tx) shouldBe None)
+    }
+
+  it should "leave the index above it where the index names the block itself: its own chain, committed over in turn" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      blocks.take(20).foreach(on.imports)
+      (21 to 25).foreach(n => on.writer.storeBlock(blocks(n - 1)).commit())
+      on.imports(blocks(20))
+      on.pathState.anchor shouldBe Some(refOf(blocks(20).header))
+      on.index shouldBe blocks.take(25).map(_.header.hash.value)
+      on.lookedUpIn(blocks.take(25).map(_.header))
+    }
+
+  "A straight extension of the head, longer than a branch is adopted over" should "be a head that cannot be reached when it is longer than the catch-up covers" taggedAs (
     UnitTest,
     ConsensusTest
   ) in {

@@ -30,6 +30,7 @@ head-writer 6 src/main/scala/com/chipprbots/ethereum/domain/Blockchain.scala DEF
 
 # A block's own commit, and the genesis: the head moves with the state.
 block-store 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala MOVE saveBatch in the block's commit: in the state's batch, under the state lock, with the check that the best block is the anchor
+head-writer 1 src/main/scala/com/chipprbots/ethereum/ledger/BlockExecution.scala MOVE canonicalHeadUpdate's rows in the block's own commit, where the block leaves the index a sync left ahead of the head (B-482): in the state's batch, under the state lock, as a move's rows
 block-store 2 src/main/scala/com/chipprbots/ethereum/blockchain/data/GenesisDataLoader.scala MOVE the genesis block with the genesis commit, which gives the datadir its anchor
 
 # The fork choice and the reorganisation: the fork choice confirms the head through a move (C4b part 3b); C4d and C4e

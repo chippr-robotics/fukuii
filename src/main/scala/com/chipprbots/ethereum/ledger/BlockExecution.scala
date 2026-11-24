@@ -9,6 +9,7 @@ import scala.annotation.tailrec
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockError
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.db.storage.StagedBlockState
@@ -676,10 +677,42 @@ class BlockExecution(
         base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
       )
     timedCommit(blockToExecute)(
-      staged.commitWith(blockToExecute.header.number.value, blockHash, Some(withAccessList))
+      staged.commitWith(
+        blockToExecute.header.number.value,
+        blockHash,
+        Some(if adoptEachBlock then withIndexLeft(blockToExecute, withAccessList) else withAccessList)
+      )
     )
     BlockImportGate.record(blockHash, executed)
     Right(newBlockData)
+
+  /** `commit`, the rows of a block committed as the head, with what clears the index of blocks by number above it where
+    * the block leaves the chain the index names (B-482): on the unified layout only, and only where the index names
+    * another block at the block's height.
+    *
+    * On the unified layout the index is the ancestry of the head (I6), but for what a sync leaves above the pivot it
+    * hands off at: the index runs ahead of the head there, and a catch-up (`StateRecovery.catchUp`) commits the blocks
+    * above the head one by one, with no move of the head to clear it. A block whose height the index names with another
+    * block leaves that chain: its entries above the block, and the lookups of the transactions only the blocks they
+    * name hold, go in the block's own batch, as a move of the head clears them
+    * ([[BlockchainWriter.canonicalHeadUpdate]], go-ethereum's `reorg`). In the same batch, so that no stop between two
+    * writes leaves them behind. Where the index names the block itself, or nothing, the entries above it are of its own
+    * chain, and stay until each is committed over.
+    *
+    * Those rows come first in the batch, and the block's own after them: a batch is written in order, so the block's
+    * index entry, its best-block rows and its transactions' lookups are the block's own whatever the clean-up reads. It
+    * reads the block's body by its hash, and a block not stored yet would have the lookups of the transactions it
+    * shares with the blocks it drops deleted, after its own were written, if the clean-up came last.
+    *
+    * The rows are read before the state lock is taken; the commit refuses there unless the block's parent is still the
+    * block whose state the disk holds, and on this layout only a commit or a move of the head writes the index, each
+    * under that lock. A move away and back between the read and the commit clears the entries above the parent itself,
+    * and the rows then delete what is gone already.
+    */
+  private def withIndexLeft(block: Block, commit: DataSourceBatchUpdate): DataSourceBatchUpdate =
+    val leaves = blockchainReader.holdsStateInPlace &&
+      blockchainReader.getCanonicalHashByNumber(block.header.number.value).exists(_ != block.header.hash)
+    if leaves then blockchainWriter.canonicalHeadUpdate(block.header, blockchainReader).batch.and(commit) else commit
 
   /** One block onto the head, for an operator chain import holding [[ChainInsertLock.exclusive]], and for the adoption
     * of a long branch on the unified layout (`StateRecovery`, which holds it shared, as any import): the same
