@@ -29,7 +29,8 @@ grep -rn "getBlockHeaderByNumber(number).map(_.hash" src/main/scala/com/chipprbo
 ## Rule 2: every head change leaves the index equal to the head's ancestry
 
 core-geth `writeBlockAndSetHead` + `reorg()` (`core/blockchain.go` ~1465, ~2160-2284):
-- the head moves only to a strictly heavier block (`ReorgNeeded`);
+- the head moves only to a block `ReorgNeeded` takes (`core/forkchoice.go`): a heavier one, or one of equal total
+  difficulty that wins the tie (the lower block; at the same height the node's own block, else a coin; B-284);
 - on a move, heights between the common ancestor and the new head are rewritten to the new chain, including the
   part below the branch parent when that parent was not canonical;
 - every index entry above the new head is deleted;

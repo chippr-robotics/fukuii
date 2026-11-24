@@ -650,8 +650,9 @@ The parts, in order, each mergeable alone:
 - **The PoW escalation** (T182's second half) **is folded into C5a with the PoS trigger** (the user's decision of
   2026-11-15): there is nothing to escalate to before it. C4e says `[STATE-REORG-TOO-DEEP]` at ERROR.
 
-Recorded, not changed: on equal total difficulty core-geth prefers the lower block number, then chooses at random;
-fukuii keeps its head, on both layouts (B-284). ECIP-1017 rewards do not depend on the layout.
+Recorded here, then changed (B-284, the user's decision of 2026-11-24): on equal total difficulty core-geth prefers the
+lower block number, then chooses at random; fukuii kept its head, on both layouts, and now follows core-geth's rule
+(`PowForkChoice`). ECIP-1017 rewards do not depend on the layout.
 
 *The records of C4e parts 1 to 6, and of the mining gate (B-293) are in [implementation-log.md](./implementation-log.md#c4e-part-records-and-the-mining-gate-b-293), verbatim (moved 2026-11-21).*
 
