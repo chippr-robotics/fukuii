@@ -2912,13 +2912,18 @@ items:
   - id: B-338
     title: One import result for both partial arms (extension and reorganisation) that blames the invalid block's peer and updates the pool
     priority: P3
-    status: open
+    status: claimed
     area: sync
     size: M
     opened: 2026-11-17
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T09:53:40Z
+      heartbeat: 2026-11-24T09:53:40Z
     notes: "forge F3 on B-291's review: after a partial insert core-geth's downloader drops the peer; fukuii answers BlockImportedToTop / ChainReorganised and the batch's rest is dropped silently, blamed only if an orphan rewind refetches the invalid block. E.g. ImportedPartially(base, failingHash, error), handled as BlockImportFailedAt for blame and as success for the pool."
   - id: B-339
     title: SecureRandomBuilder reads secure-random-algo from the global ConfigFactory.load(), not the instance config
