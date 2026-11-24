@@ -1920,23 +1920,19 @@ items:
   - id: B-210
     title: "RPC: a block imported by newPayload and not yet the head is above best, so account reads answer 'no account' though its state is held"
     priority: P3
-    status: review
+    status: done
     area: rpc
     size: S
     opened: 2026-11-11
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2051]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T05:14:33Z
-      heartbeat: 2026-11-24T06:36:59Z
     notes: |-
-      2026-11-24 in-progress: pushed c734f955ee; conduit+beacon review
       2026-11-24 in-progress: conduit+beacon CHANGES: getProof missing-node recover, delegate resolveHeader; brief scratchpad b210-round2.md; queued for next free clone
       2026-11-24 in-progress: Round 2 pushed: 0bf6c67834 (proof missing-node, ResolveHeader delegation). Follow-up B-489.
+      2026-11-24 done: merged 150608d9a2
   - id: B-211
     title: "RPC: GraphQL call and estimateGas reach EthInfoService without the controller, so without the stale-view retry (StateRead.request)"
     priority: P3
