@@ -4973,3 +4973,14 @@ items:
     links:
       spec: 018
     notes: B-482's clean-up (BlockExecution.withIndexLeft) runs only where the index names ANOTHER block at the committed height. An index with no entry there but entries above (a gap) keeps them; same-chain entries above a catch-up's tip also stay (by design). Decide whether StateReconciliation-style gap scan is wanted at hand-off instead.
+  - id: B-493
+    title: "B-217 follow-up: remove the retired parallel-recovery-scan key from conf/base/sync.conf (chore/ branch), then warn on any setting of it"
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links: {}
+    depends_on: [B-217]
+    notes: fix/b217-legacy-recovery-scans retires the legacy recovery scans and stops reading the key; a fix/ branch may not touch src/main/resources. Remove the key and its comment from sync.conf, and widen ConfigValidator.legacyRecoveryScanWarning from 'false' to hasPath.
