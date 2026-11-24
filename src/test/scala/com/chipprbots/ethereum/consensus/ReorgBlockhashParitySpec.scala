@@ -1222,6 +1222,40 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     node.bestHash shouldBe bChain.last.hash
   )
 
+  // B-516: the head already past the tip when the branch is weighed (b7, which the consensus layer names, on b6'). The
+  // move to the tip has nothing forward: it is refused as the move after a head moved meanwhile is, and answered the
+  // same. Before, the head was taken back down to b6' and b7 told as the chain it left.
+  it should "not move the head back down when it is past the branch's tip already as the branch is weighed" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture():
+    node.importAll(aChain) shouldBe a[BlockImportedToTop]
+    named.set(Some(bChain.last.hash.value))
+    evaluate(bChain) shouldBe a[SelectedNewBestBranch]
+    val b7: Block = oracle.extendSide(bChain.last, 1, difficulty = 0, tag = 0x7c).head
+    node.importAll(List(b7)) shouldBe a[BlockImportedToTop]
+    named.set(Some(b7.hash.value))
+    val state = node.storagesInstance.storages.pathStateStorage.get
+    val anchorBefore = state.anchor
+    val before = node.storagesInstance.dataSource.storage
+    evaluate(bChain) match
+      // as when a fork choice moved the head there meanwhile: the head's own chain, with nothing it left
+      case SelectedNewBestBranch(Nil, newBranch, weights, branchBlocks) =>
+        newBranch.map(_.hash) shouldBe bChain.map(_.hash)
+        weights shouldBe bChain.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
+        branchBlocks shouldBe bChain.size
+      case other => fail(s"not told as the head's: $other")
+    node.bestHash shouldBe b7.hash
+    (3 to 6).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 3).hash))
+    node.indexed(7) shouldBe Some(b7.hash)
+    state.anchor shouldBe anchorBefore
+    // nothing written
+    val after = node.storagesInstance.dataSource.storage
+    (before.keySet -- after.keySet) shouldBe empty
+    after.count((key, value) => !before.get(key).exists(_.sameElements(value))) shouldBe 0
+    reported shouldBe Nil
+  )
+
   it should "not take the head off a block it moved to meanwhile" taggedAs (UnitTest, ConsensusTest) in (
     new DesignatedFixture():
       node.importAll(aChain) shouldBe a[BlockImportedToTop]
