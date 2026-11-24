@@ -4564,17 +4564,18 @@ items:
   - id: B-462
     title: "Ask-again refusals during an adoption (B-294): typed answers on the layers move, ChainImporter, testing_commitBlockV1; keep them out of the escalation count"
     priority: P3
-    status: in-progress
+    status: review
     area: state
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2045]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T05:12:53Z
-      heartbeat: 2026-11-24T05:52:18Z
+      heartbeat: 2026-11-24T06:20:02Z
     notes: |-
       2026-11-24 in-progress: clone-d consensus lane; forge design in scratchpad b462-b463-forge-ruling.md
       2026-11-24 in-progress: pushed 1a07bf0844; forge + beacon review
