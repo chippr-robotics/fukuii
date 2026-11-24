@@ -4984,3 +4984,13 @@ items:
     links: {}
     depends_on: [B-217]
     notes: fix/b217-legacy-recovery-scans retires the legacy recovery scans and stops reading the key; a fix/ branch may not touch src/main/resources. Remove the key and its comment from sync.conf, and widen ConfigValidator.legacyRecoveryScanWarning from 'false' to hasPath.
+  - id: B-494
+    title: BytecodeRecoveryActor counts each ByteCodeDownloadProgress twice (downloadedCount += 1 twice), so the recovery progress log and gauge run at 2x
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links: {}
+    notes: "BytecodeRecoveryActor.downloading, case ByteCodeDownloadProgress(_): two increments, and the message's n is ignored. Found during B-217; not changed there."
