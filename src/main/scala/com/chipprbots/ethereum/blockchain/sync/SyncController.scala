@@ -89,6 +89,14 @@ object SyncController:
   /** How many messages wait while a state that is given up is cleared. */
   private val ClearingStashSize = 256
 
+  /** A clear for a sync begun again on its branch that could not be begun (an adoption held the records, or a recovery
+    * was executing a block: both end soon) is asked for again this many times, this long apart (B-465), before the sync
+    * is begun again over what it wrote.
+    */
+  val BranchRetryClearAgainAfter: FiniteDuration = 10.seconds
+  val BranchRetryClearAsks: Int = 6
+  private val BranchRetryClearAgainKey = "BranchRetryClearAgain"
+
   /** What the controller gives the state up with, on the unified layout (spec 018 C5a part 7b). None on the hash
     * layout, and a request that arrives there is dropped.
     */
@@ -102,8 +110,9 @@ object SyncController:
       * recoveries that wait or run, and the head the fork choice followed (B-307).
       *
       * @return
-      *   false when it could not be begun (a recovery was still executing a block): nothing was cleared and nothing
-      *   recorded, and the next verdict is decided as if this one had not been
+      *   false when it could not be begun (a recovery was still executing a block, or an adoption held the records:
+      *   [[StateEscalationPort.notClearedWhenRefused]]): nothing was cleared and nothing recorded, and the next verdict
+      *   is decided as if this one had not been
       */
     def clear(
         record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
@@ -123,9 +132,38 @@ object SyncController:
       * the attempt (B-307). Called once that sync has stopped; it returns when the rows are gone.
       *
       * @return
-      *   false when it could not be begun: nothing was cleared and nothing counted
+      *   false when it could not be begun (a recovery was still executing a block, or an adoption held the records):
+      *   nothing was cleared and nothing counted
       */
     def clearForBranchRetry(): Boolean
+
+    /** How long after a [[clearForBranchRetry]] that could not be begun it is asked for again (B-465). */
+    def branchRetryClearAgainAfter: FiniteDuration = SyncController.BranchRetryClearAgainAfter
+
+  object StateEscalationPort:
+
+    /** `clear`'s answer when the state refused to be cleared because an attempt held the records (B-465, forge): an
+      * adoption of a heavier branch was moving the head, which the chain may follow from where it ends. Nothing was
+      * written, so it is a clear that could not be begun (false), and `refused` is told why. Anything else `clear`
+      * throws is thrown on.
+      *
+      * `held` is looked at first, and when it is true `clear` is not run at all (vault): what `clear` undoes before the
+      * state's own check (the recoveries that wait, and what is remembered of those that failed) is kept for a clear
+      * that would be refused. The state's check under its lock is still the one that counts.
+      */
+    def notClearedWhenRefused(held: => Boolean, refused: String => Unit)(clear: => Boolean): Boolean =
+      if held then
+        refused(
+          "The state was not cleared for a sync from scratch: an adoption holds the records and is moving the head. " +
+            "Ask again once it has ended"
+        )
+        false
+      else
+        try clear
+        catch
+          case busy: com.chipprbots.ethereum.db.storage.pathstate.StateClearRefused =>
+            refused(busy.getMessage)
+            false
 
   /** A sync on the unified state layout (spec 018 C5a part 10). None on the hash layout. */
   trait PathLiveSyncPort:
@@ -300,6 +338,8 @@ object SyncController:
   ) extends Command
   // the clear of a state that is given up ended: done, not begun (a recovery was still running), or failed
   private case object SnapStoppedForBranchRetry extends Command
+  // B-465: the clear for the branch could not be begun; asked for again
+  private case object BranchRetryClearAgain extends Command
   private case class BranchRetryCleared(ended: scala.util.Try[Boolean]) extends Command
   // B-435: the checkpoint download and import, run off the actor's thread, ended
   private case class CheckpointSyncEnded(ended: scala.util.Try[Unit]) extends Command
@@ -1658,8 +1698,9 @@ object SyncController:
             startSnapSync(minPivotBlock = givenUpFor.map(_.number))
           case StateClearEnded(_, _, scala.util.Success(false)) =>
             log.error(
-              "[STATE-ESCALATION] The state was not cleared: a recovery of the state was still executing a block. " +
-                "Nothing was given up and nothing recorded; regular sync goes on, and no verdict is asked about for a while."
+              "[STATE-ESCALATION] The state was not cleared: a recovery of the state was still executing a block, or " +
+                "an adoption of a heavier branch was moving the head. Nothing was given up and nothing recorded; " +
+                "regular sync goes on, and no verdict is asked about for a while: the clear is asked for again after it."
             )
             port.clearRefused()
             waiting.unstashAll(runningRegularSync(regularSync))
@@ -1685,18 +1726,33 @@ object SyncController:
 
     // B-307: SNAP is stopping, or has stopped and what it wrote is being cleared, before it is begun again with its
     // pivot no lower than the branch. What arrives meanwhile was for the sync that is gone.
-    private def clearingForBranchRetry(port: StateEscalationPort): Behavior[Command] =
+    //
+    // B-465 (vault): a clear that could not be begun is asked for again, a few times, a short while apart. Not regular
+    // sync instead, as for an escalation's clear: here the state was given up already and SNAP had not handed off, so
+    // there is no state for regular sync to import onto. What holds the clear back (an adoption that holds the records,
+    // a recovery executing a block) ends soon. Only when it does not is the sync begun again over what it wrote.
+    private def clearingForBranchRetry(port: StateEscalationPort, asked: Int = 0): Behavior[Command] =
       Behaviors.receive { (_, cmd) =>
         unwrap(cmd) match
-          case SnapStoppedForBranchRetry =>
+          case SnapStoppedForBranchRetry | BranchRetryClearAgain =>
             val blocking = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
             ctx.pipeToSelf(scala.concurrent.Future(port.clearForBranchRetry())(using blocking))(BranchRetryCleared(_))
+            clearingForBranchRetry(port, asked + 1)
+          case BranchRetryCleared(scala.util.Success(false)) if asked < SyncController.BranchRetryClearAsks =>
+            val again = port.branchRetryClearAgainAfter
+            log.warn(
+              s"[STATE-ESCALATION-PIVOT] What the sync wrote was not cleared: a recovery of the state was still " +
+                s"executing a block, or an adoption of a heavier branch was moving the head. Asked again in $again " +
+                s"($asked of ${SyncController.BranchRetryClearAsks})."
+            )
+            timers.startSingleTimer(BranchRetryClearAgainKey, BranchRetryClearAgain, again)
             Behaviors.same
           case BranchRetryCleared(scala.util.Success(cleared)) =>
             if !cleared then
               log.error(
-                "[STATE-ESCALATION-PIVOT] What the sync wrote was not cleared, and the attempt was not counted: the " +
-                  "sync is begun again over it."
+                s"[STATE-ESCALATION-PIVOT] What the sync wrote was not cleared after $asked asks (a recovery of the " +
+                  "state was still executing a block, or an adoption of a heavier branch was moving the head), and the " +
+                  "attempt was not counted: the sync is begun again over it."
               )
             startSnapSync(minPivotBlock = liveSnapPivotFloor())
           case BranchRetryCleared(scala.util.Failure(failed)) =>

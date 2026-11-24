@@ -129,3 +129,13 @@ final class HandedToRecovery(detail: String) extends StateFault(s"Handed to the 
 /** A branch under execution holds more than the pinned-layer cap allows. Retryable, and never an invalid block. */
 final class BranchTooLarge(val bytes: Long, val cap: Long)
     extends StateFault(s"The branch under execution holds $bytes bytes of state changes, above the cap of $cap")
+
+/** A clear of the state for a sync from scratch was not begun: an attempt holds the records (an adoption of a heavier
+  * branch, [[PathStateStorage.withRecordsHeld]]), and its head may yet be one the chain follows (B-465, forge). Nothing
+  * was written. It cannot wait for the attempt under the lock of the moves, which the attempt's next move takes: the
+  * clear is asked for again once it has ended.
+  *
+  * Not a [[StateFault]]: it says nothing of the state, only that this is not the time to give it up.
+  */
+final class StateClearRefused(detail: String)
+    extends RuntimeException(s"The state was not cleared for a sync from scratch: $detail")
