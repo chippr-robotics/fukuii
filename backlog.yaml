@@ -4831,12 +4831,17 @@ items:
   - id: B-471
     title: "Flaky under CI load: JsonRpcHttpServerLifecycleSpec (22 fixed waits); capture the failure text from the full job log when it recurs"
     priority: P3
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-24
     refs: [B-374]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T15:40:25Z
+      heartbeat: 2026-11-24T15:40:25Z
     notes: "Split from B-374 (closes with #2029: LookupsSpec #1927, ObservationSpec cherry-pick). Failed once on #1921 (2026-11-18). Synchronise on events; never skip."
   - id: B-472
     title: "NewBlock path (evaluateBranchBlock): a store failure thrown out of the import drops the block dequeued from BlockQueue; map it as B-440 does"
