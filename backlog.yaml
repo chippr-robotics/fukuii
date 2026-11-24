@@ -5291,22 +5291,19 @@ items:
   - id: B-509
     title: "B-503 follow-ups: pin the partial-success arms' queue removal; a weightless queued block whose queued parent became the head stays weightless"
     priority: P3
-    status: review
+    status: done
     area: consensus
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2080]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T11:15:19Z
-      heartbeat: 2026-11-24T12:51:12Z
     notes: |-
       forge, found during B-503. Partial arms: state fault, missing node, side blocks a failed move-back left the head on. Weightless child never resolved (pre-existing); recompute from the stored parent.
       2026-11-24 in-progress: folded into the B-338/B-460 round 2 (user: fix in the PR, don't split)
+      2026-11-24 done: merged b95b59db5e
   - id: B-510
     title: "B-490 nits: StateRecovery re-derive skipped on a non-fault exception (move into finally); WARN when the 8192 walk limit drops the moved blocks"
     priority: P3
