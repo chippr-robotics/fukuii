@@ -4640,3 +4640,13 @@ items:
     links:
       spec: 018
     notes: "forge review of B-441 (#2030): NodeJsonRpcHealthChecker.isConsideredSyncing computes 0 - current > threshold; report target = best, or treat target == 0 as STARTING"
+  - id: B-471
+    title: "Flaky under CI load: JsonRpcHttpServerLifecycleSpec (22 fixed waits); capture the failure text from the full job log when it recurs"
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-24
+    refs: [B-374]
+    links: {}
+    notes: "Split from B-374 (closes with #2029: LookupsSpec #1927, ObservationSpec cherry-pick). Failed once on #1921 (2026-11-18). Synchronise on events; never skip."
