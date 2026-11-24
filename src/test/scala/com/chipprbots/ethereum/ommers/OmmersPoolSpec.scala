@@ -111,6 +111,41 @@ class OmmersPoolSpec extends ScalaTestWithActorTestKit with AnyFreeSpecLike with
         ommersProbe.expectMessage(Timeouts.normalTimeout, OmmersPool.Ommers(Seq(block2Chain2, block3Chain3)))
 
     }
+
+    "should not evict a candidate when a header already in a full pool is added again (B-499)" in new TestSetup:
+
+      /** 00 --> [14] --> 24 (chain4), with 11 (chain1), 15 (chain5) and 16 (chain6) also children of 00. Given parent
+        * 14, every pooled header here passes the ommer filter, and the reply limit (4) is above the pool size (3), so a
+        * reply is the whole pool, newest first.
+        */
+      override val ommersPoolSize: Int = 3
+      override val returnedOmmerSizeLimit: Int = 4
+      val block1Chain6: BlockHeader =
+        Block3125369.header.copy(number = BlockNumber(1), parentHash = block0.hash, difficulty = Difficulty(16))
+      blockchainReader.getBlockHeaderByHash.expects(block1Chain4.hash).returns(Some(block1Chain4)).twice()
+      blockchainReader.getBlockHeaderByHash.expects(block0.hash).returns(Some(block0)).twice()
+
+      ommersPool ! AddOmmers(block1Chain1)
+      ommersPool ! AddOmmers(block1Chain5)
+      ommersPool ! AddOmmers(block2Chain4)
+      // The pool is full: [24, 15, 11]. 15 again is no new candidate, so nothing is evicted (trimmed before the
+      // de-duplication, its second copy took 11's slot); it moves to the front, as the newest.
+      ommersPool ! AddOmmers(block1Chain5)
+
+      ommersPool ! GetOmmers(block1Chain4.hash.value, ommersProbe.ref)
+      ommersProbe.expectMessage(
+        Timeouts.normalTimeout,
+        OmmersPool.Ommers(Seq(block1Chain5, block2Chain4, block1Chain1))
+      )
+
+      // A new header still evicts the oldest, 11.
+      ommersPool ! AddOmmers(block1Chain6)
+
+      ommersPool ! GetOmmers(block1Chain4.hash.value, ommersProbe.ref)
+      ommersProbe.expectMessage(
+        Timeouts.normalTimeout,
+        OmmersPool.Ommers(Seq(block1Chain6, block1Chain5, block2Chain4))
+      )
   }
 
   // SCALA 3 MIGRATION: Cannot use self-type constraint with `new TestSetup` in Scala 3.

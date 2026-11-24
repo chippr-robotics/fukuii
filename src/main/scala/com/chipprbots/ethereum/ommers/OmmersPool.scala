@@ -52,7 +52,10 @@ object OmmersPool:
     Behaviors.receive { (context, message) =>
       message match
         case AddOmmers(ommers) =>
-          val updated = (ommers ++ ommersPool).take(ommersPoolSize).distinct
+          // Newest first, so the trim drops the oldest. De-duplicate (by hash) before trimming: trimmed first, a
+          // header already in the pool took a second slot and pushed a real candidate out of a full pool (B-499).
+          // A re-added header moves to the front, as the newest.
+          val updated = (ommers ++ ommersPool).distinctBy(_.hash).take(ommersPoolSize)
           logStatus(context, event = "Ommers after add", ommers = updated)
           running(blockchainReader, ommersPoolSize, ommerGenerationLimit, returnedOmmersSizeLimit, updated)
 
