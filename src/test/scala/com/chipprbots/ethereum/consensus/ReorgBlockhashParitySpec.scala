@@ -955,11 +955,51 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         reads(Unchunked) shouldBe checked ++ checked
     )
 
+  // B-343 (forge): of the side blocks executed again only the `oldBranchToldAtMost` nearest the branch are kept, and
+  // what is told of a side block that is not kept is read back from the store (`sideParentsTold`). With a bound smaller
+  // than the side chain the keeping is trimmed: what is told must still be the bound's nearest blocks, with their
+  // weights, in chunks or in one run.
+  for (layout, cap) <- Seq[(String, StateConfig => StateConfig)](
+      ("on layers", identity),
+      ("at the cap", pinnedCap(1L)),
+      ("the cap met among the side blocks", pinnedCap(MidCap))
+    )
+  do
+    s"A heavier branch on the unified layout ($layout) that stands on more lost side blocks than the told bound" should
+      "tell the bound's nearest blocks, with their weights, whatever the chunk" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in {
+        for bound <- Seq(2, 3, 5) do
+          val chain = new LostSideChain(8, cap, bound)
+          import chain.*
+          val whole = evaluated(Unchunked)
+          withClue(s"a bound of $bound, in one run: ") {
+            whole.toldNew shouldBe (aChain.drop(2) ++ aMore).takeRight(bound).map(_.hash)
+            whole.toldOld shouldBe bChain.takeRight(bound).map(_.hash)
+            whole.head shouldBe aMore.last.hash
+          }
+          for chunk <- Seq(1, 3) do withClue(s"a bound of $bound, chunks of $chunk: ")(evaluated(chunk) shouldBe whole)
+      }
+
+  "A heavier branch on the unified layout whose told side blocks are partly held and partly executed again" should
+    "tell the held ones as they are stored, and the others as they were executed, whatever the chunk" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new LostSideChain(8, identity, bound = 5):
+      // a3..a8 held, a9 and a10 executed again: the five told are a8, read from the store, a9, a10, and the branch
+      val whole: Seen = evaluated(Unchunked, held = 6)
+      whole.toldNew shouldBe (aChain.drop(7) ++ aMore).map(_.hash)
+      whole.head shouldBe aMore.last.hash
+      evaluated(1, held = 6) shouldBe whole
+    )
+
   /** A side chain a restart lost the state of (B-343): canonical a1..a(lost + 2); b3.., heavier, from a2, which leaves
     * a3..a(lost + 2) beside the head; the node is started again, which keeps no layer; then a heavier `aMore` on the a
-    * tip is evaluated, standing on the `lost` side blocks, none of them held.
+    * tip is evaluated, standing on the `lost` side blocks, none of them held. With `held`, the `held` lowest of them
+    * are held again first, by an attempt that stopped above them. `bound` is what is told at most.
     */
-  class LostSideChain(lost: Int, cap: StateConfig => StateConfig):
+  class LostSideChain(lost: Int, cap: StateConfig => StateConfig, bound: Int = ConsensusImpl.OldBranchToldAtMost):
     val oracle = new Oracle
     val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, lost + 2, difficulty = 1000)
     private val bLength = lost / 2 + 1
@@ -971,6 +1011,8 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       */
     final case class Seen(
         result: String,
+        toldNew: List[BlockHash],
+        toldOld: List[BlockHash],
         head: BlockHash,
         anchor: Option[com.chipprbots.ethereum.db.storage.pathstate.BlockRef],
         index: Seq[Option[BlockHash]],
@@ -981,21 +1023,37 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     def evaluated(
         chunk: Int,
         prepare: (Node, Faulty) => Unit = (_, _) => (),
-        reader: Node => BlockchainReader = _.blockchainReader
+        reader: Node => BlockchainReader = _.blockchainReader,
+        held: Int = 0
     ): Seen =
       val datadir = new Faulty
       val first = new Node(guard = true, cap, Some(datadir))
       first.importAll(aChain) shouldBe a[BlockImportedToTop]
       first.importAll(bChain) shouldBe a[ChainReorganised]
       val node = new Node(guard = true, cap, Some(datadir), restart = true)
+      if held > 0 then
+        // a first attempt, on another consensus, whose side block above the `held` lowest diverges: those below it were
+        // executed again and are kept, by their layers, beside the head; then the block is stored whole again
+        val bodies = node.storagesInstance.storages.blockBodiesStorage
+        val diverging = aChain(2 + held)
+        bodies.put(diverging.hash.value, BlockBody(Nil, Seq(aChain(0).header))).commit()
+        val attempt = new ConsensusImpl(node.blockchainReader, node.blockchainWriter, node.blockExecution)
+        locally {
+          import node.blockchainConfig
+          import node.runtime
+          attempt.evaluateBranch(NonEmptyList.fromListUnsafe(aMore)).unsafeRunSync() shouldBe a[ConsensusStateFault]
+        }
+        bodies.put(diverging.hash.value, diverging.body).commit()
+        aChain.slice(2, 2 + held).foreach(block => node.blockchainWriter.stateHeldInPlaceOf(block.header) shouldBe true)
       node.bestHash shouldBe bChain.last.hash
-      aChain.drop(2).foreach(block => node.blockchainWriter.stateHeldInPlaceOf(block.header) shouldBe false)
+      aChain.drop(2 + held).foreach(block => node.blockchainWriter.stateHeldInPlaceOf(block.header) shouldBe false)
       prepare(node, datadir)
       val consensus = new ConsensusImpl(
         reader(node),
         node.blockchainWriter,
         node.blockExecution,
         reorgState = node.blockchain,
+        oldBranchToldAtMost = bound,
         reorgChunkBlocks = chunk
       )
       val result =
@@ -1003,8 +1061,15 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         import node.runtime
         scala.util.Try(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(aMore)).unsafeRunSync()).toEither
       val all = aChain ++ bChain ++ aMore
+      val (toldNew, toldOld) = result match
+        case Right(SelectedNewBestBranch(oldBranch, newBranch, weights, _)) =>
+          weights shouldBe newBranch.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
+          (newBranch.map(_.hash), oldBranch.map(_.hash))
+        case _ => (Nil, Nil)
       Seen(
         told(result),
+        toldNew,
+        toldOld,
         node.bestHash,
         node.storagesInstance.storages.appStateStorage.getStateAnchor(),
         (1 to all.map(_.number.value.toInt).max).map(node.indexed),

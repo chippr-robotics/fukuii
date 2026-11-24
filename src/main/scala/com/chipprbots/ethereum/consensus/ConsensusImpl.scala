@@ -406,9 +406,12 @@ class ConsensusImpl(
 
   /** Blocks still to run at a reorganisation, in order: side blocks the branch stands on, by number and hash, read from
     * the store a chunk at a time as they are executed, then blocks of the branch itself, which are in memory already.
+    * `standsOn` is the hash of the block the first of them stands on, known where it is made: the commit in place
+    * starts from it without reading the first side block again, which another writer may have taken meanwhile.
     */
-  final private case class ToRun(sideParents: List[(BigInt, BlockHash)], branch: List[Block]):
+  final private case class ToRun(sideParents: List[(BigInt, BlockHash)], branch: List[Block], standsOn: BlockHash):
     def size: Int = sideParents.size + branch.size
+    def nonEmpty: Boolean = sideParents.nonEmpty || branch.nonEmpty
 
   /** What [[executeInChunks]] ran: how many blocks were executed, what is kept of them, and how the run ended.
     *
@@ -779,14 +782,25 @@ class ConsensusImpl(
                         )
                       case Some(weight) =>
                         val parents =
-                          executeInChunks(ToRun(lostParents.chain, Nil), weight, adoptEachBlock = false, Map.empty, pin)
+                          executeInChunks(
+                            ToRun(lostParents.chain, Nil, lostParents.first.parentHash),
+                            weight,
+                            adoptEachBlock = false,
+                            Map.empty,
+                            pin
+                          )
                         parents.ended match
                           case ChunkedRun.Ended.Faulted(tooLarge: BranchTooLarge) =>
                             Left(
                               atTheCap(
                                 tooLarge,
                                 parents.kept,
-                                ToRun(lostParents.chain.drop(parents.executedCount), newBranch.toList)
+                                ToRun(
+                                  lostParents.chain.drop(parents.executedCount),
+                                  newBranch.toList,
+                                  // the last side block executed: the kept ones end with it
+                                  parents.kept.lastOption.fold(lostParents.first.parentHash)(_.block.header.hash)
+                                )
                               )
                             )
                           case ChunkedRun.Ended.Faulted(fault) => Left(notJudged(fault))
@@ -806,7 +820,7 @@ class ConsensusImpl(
                           case ChunkedRun.Ended.Whole => Right(parents.kept)
                 val parentsRun: Either[ConsensusResult, List[BlockData]] = notHeldUnder match
                   case Some((on, why)) if forkHeader.exists(_.hash == on.hash) =>
-                    Left(atTheCap(why, Nil, ToRun(lost.toOption.flatten.fold(Nil)(_.chain), newBranch.toList)))
+                    Left(atTheCap(why, Nil, ToRun(lost.toOption.flatten.fold(Nil)(_.chain), newBranch.toList, on.hash)))
                   case Some((_, why)) => Left(notJudged(why))
                   case None           => lostParentsRun
                 parentsRun match
@@ -819,7 +833,11 @@ class ConsensusImpl(
                         atTheCap(
                           tooLarge,
                           parentsKept ++ outcome.executed,
-                          ToRun(Nil, newBranch.toList.drop(outcome.executed.size))
+                          ToRun(
+                            Nil,
+                            newBranch.toList.drop(outcome.executed.size),
+                            outcome.executed.lastOption.fold(newBranch.head.header.parentHash)(_.block.header.hash)
+                          )
                         )
                       case _ =>
                         settleOnLayers(
@@ -907,10 +925,8 @@ class ConsensusImpl(
     val branchHashes = newBranch.toList.map(_.header.hash).toSet
     val start: Option[(BlockHeader, ChainWeight)] =
       for
-        parentOfFirst <- remaining.sideParents.headOption match
-          case Some((_, hash)) => blockchainReader.getBlockHeaderByHash(hash).map(_.parentHash)
-          case None            => remaining.branch.headOption.map(_.header.parentHash)
-        on <- blockchainReader.getBlockHeaderByHash(parentOfFirst)
+        _ <- Option.when(remaining.nonEmpty)(())
+        on <- blockchainReader.getBlockHeaderByHash(remaining.standsOn)
         weight <- blockchainReader.getChainWeightByHash(on.hash)
       yield (on, weight)
     // the head as it is now, which must be the one the branch was weighed against: nothing else moved it meanwhile
@@ -1694,7 +1710,9 @@ object ConsensusImpl:
 
   /** How many of the side blocks a reorganisation executes again are read from the store and executed at a time
     * (B-343), when no other number is given. The default of `sync.blocks-batch-size`: no more blocks than one import
-    * already holds in memory, so that a deep side chain (a long private chain, after a restart) costs a chunk of
-    * memory, not its depth. Which blocks are executed, in what order, and on what state is not touched by it.
+    * already holds in memory. What a deep side chain (a long private chain, after a restart) holds in memory at once is
+    * then one chunk, with its receipts while it runs, and at most `newBranchToldAtMost` side blocks already executed,
+    * kept without their receipts for what is told; not its depth. Which blocks are executed, in what order, and on what
+    * state is not touched by it.
     */
   val ReorgChunkBlocks: Int = 50
