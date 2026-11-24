@@ -2818,19 +2818,16 @@ items:
   - id: B-331
     title: TUI Ops pagination hint prints a Unicode ellipsis in ASCII mode (OpsPanels.scala:175; regenerate the ops-*-ascii goldens)
     priority: P3
-    status: review
+    status: done
     area: tui
     opened: 2026-11-17
+    closed: 2026-11-24
     refs: []
     links:
       prs: [1883, 2053]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T06:40:24Z
-      heartbeat: 2026-11-24T06:41:32Z
-      branch: fix/b331-ops-ascii-ellipsis
-    notes: "Copilot on #1883; cosmetic"
+    notes: |-
+      Copilot on #1883; cosmetic
+      2026-11-24 done: merged as 8ab5c6489
   - id: B-332
     title: "SNAP bytecode replies complete with 0 items: the coordinator's release ends a valid reply, so no peer credit and the rate tracker sees 0"
     priority: P1
