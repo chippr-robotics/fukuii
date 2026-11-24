@@ -4939,12 +4939,18 @@ items:
   - id: B-488
     title: "SNAP: a local store fault (account range, bytecode) restarts SNAP without bound; route it through recordCriticalFailure / dormant mode or stop the node"
     priority: P2
-    status: open
+    status: claimed
     area: snap
     size: M
     opened: 2026-11-24
     refs: [B-190]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: vault
+      since: 2026-11-24T11:16:12Z
+      heartbeat: 2026-11-24T11:16:12Z
+      branch: fix/b488-snap-store-fault-bounded
     notes: "vault review of B-190: restartSnapSync has no bound, so a full or read-only disk loops; ByteCodeResponseHandling ~:221 still logs and re-queues a store failure. A dedicated AccountStoreFaulted command."
   - id: B-489
     title: "RPC: 'safe'/'finalized' state reads answer 'not available' on PoS: only EthBlocksService and EthProofService get the ForkChoiceManager"
