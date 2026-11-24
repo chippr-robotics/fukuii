@@ -53,22 +53,22 @@ class StateBusySpec extends AnyFlatSpec with Matchers:
 
   "A writer on another thread while an attempt holds the records" should "be refused as busy, naming the attempt, and never as a StateUnavailable" taggedAs
     (UnitTest, ConsensusTest) in (new Fixture:
-      state.withRecordsHeld(fork) {
-        val refused = busy(elsewhere(state.withRecordsHeld(fork)(fail("a second attempt ran"))))
+      state.withRecordsHeld(fork, state.anchor) {
+        val refused = busy(elsewhere(state.withRecordsHeld(fork, state.anchor)(fail("a second attempt ran"))))
         refused.holder should include(Thread.currentThread().getName)
         refused.holder should include("the records above block")
         refused.reason should include("is moving the head")
         (refused: StateFault) should not be a[StateUnavailable]
       }
       // once the attempt has ended, the same hold is made
-      elsewhere(state.withRecordsHeld(fork)(42)).get shouldBe 42
+      elsewhere(state.withRecordsHeld(fork, state.anchor)(42)).get shouldBe 42
     )
 
   it should "give the observer, once, a way to read the open attempt's age by the store's own clock" taggedAs UnitTest in (new Fixture:
     told.ages should have size 1
     val age = told.ages.head
     age() shouldBe None
-    state.withRecordsHeld(fork) {
+    state.withRecordsHeld(fork, state.anchor) {
       now.addAndGet(7000L)
       state.oldestAttemptAgeMillis shouldBe Some(7000L)
       // read from another thread, with no lock, as the gauge is
@@ -82,15 +82,16 @@ class StateBusySpec extends AnyFlatSpec with Matchers:
     UnitTest in (new Fixture(warnAfterMillis = 60000L):
       def warnings(events: List[ch.qos.logback.classic.spi.ILoggingEvent]): List[String] =
         events.filter(_.getLevel == Level.WARN).map(_.getFormattedMessage).filter(_.contains("[STATE-BUSY]"))
-      state.withRecordsHeld(fork) {
+      state.withRecordsHeld(fork, state.anchor) {
         // young: refused, and nothing said
-        val (_, young) = LogCapture.capture(classOf[PathStateStorage])(busy(elsewhere(state.withRecordsHeld(fork)(()))))
+        val (_, young) =
+          LogCapture.capture(classOf[PathStateStorage])(busy(elsewhere(state.withRecordsHeld(fork, state.anchor)(()))))
         warnings(young) shouldBe empty
         // older than the bound: said once, with its age and the bound
         now.addAndGet(60001L)
         val (_, old) = LogCapture.capture(classOf[PathStateStorage]) {
-          busy(elsewhere(state.withRecordsHeld(fork)(())))
-          busy(elsewhere(state.withRecordsHeld(fork)(())))
+          busy(elsewhere(state.withRecordsHeld(fork, state.anchor)(())))
+          busy(elsewhere(state.withRecordsHeld(fork, state.anchor)(())))
         }
         val said = warnings(old)
         said should have size 1

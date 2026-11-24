@@ -507,7 +507,9 @@ class StateRecovery(
               // whether the hold was taken: one that was refused held nothing and wrote nothing
               var holding = false
               try
-                state.withRecordsHeld(refOf(holdFrom)) {
+                // on the head read as `from`, which a move back leads to: a block committed on it since refuses the hold
+                // as busy, nothing written, and the next fork choice reads the head again (B-463)
+                state.withRecordsHeld(refOf(holdFrom), expectedAnchor = from) {
                   holding = true
                   val movedTo =
                     try
@@ -545,7 +547,8 @@ class StateRecovery(
                 case refused: ReorgTooDeep => Outcome.NotAdopted(refused.getMessage)
                 // another thread's adoption is moving the head (B-294): no fault of this node, and no verdict on the
                 // branch. Superseded, as a state that moved under it: asked for again at once, with no cool-down,
-                // and not counted by the escalation's watch (beacon). The hold refused is a `StateBusy` (B-462)
+                // and not counted by the escalation's watch (beacon). The hold refused is a `StateBusy` (B-462); so it
+                // is when a block was committed on the head since `from` was read (B-463)
                 case _: StateBusy if !holding => Outcome.Superseded
               finally adopting = None
     logEnd(head, why, outcome)

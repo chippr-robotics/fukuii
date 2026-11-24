@@ -48,11 +48,13 @@ final class StateUnavailable(
   * it is never counted by the escalation (forge, 2026-11-24), and it is said at WARN with `[STATE-BUSY]`, not at ERROR.
   *
   * Not a [[StateUnavailable]], whose `askAgain` is also said by refusals that are counted: a move of the head that the
-  * state moved under between two of its batches, or that no plan of could be made. Thrown only where another attempt is
-  * found open ([[PathStateStorage]]`.refuseInAnotherAttempt`).
+  * state moved under between two of its batches, or that no plan of could be made. Thrown where another attempt is
+  * found open ([[PathStateStorage]]`.refuseInAnotherAttempt`), and by a hold of the records asked for on a head that is
+  * not the one its caller read (B-463, [[PathStateStorage.withRecordsHeld]]): a block was committed on it, or it was
+  * moved, since. That too is no fault and no verdict: the caller reads the head again and asks again.
   *
   * @param holder
-  *   who holds the head: the thread of the adoption that is open, and what it holds
+  *   who holds the head: the thread of the adoption that is open, and what it holds; or the writer that moved it
   * @param reason
   *   what was refused, and why
   */

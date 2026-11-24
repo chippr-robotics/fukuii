@@ -523,12 +523,17 @@ class BlockchainWriter(
 
   /** `body` with the changeset records of every block above `fork` kept from retention on the unified layout
     * ([[PathStateStorage.withRecordsHeld]]): for an adoption that moves the head to a branch before the branch is
-    * settled, and may have to move it back. Just `body` on the hash layout.
+    * settled, and may have to move it back. Only while the head is `expectedHead` still, the head the caller read and
+    * weighed its branch against: otherwise it is refused, as busy, with nothing held (B-463). Just `body` on the hash
+    * layout.
     */
-  def withRecordsHeldAbove[A](fork: BlockHeader)(body: => A): A =
+  def withRecordsHeldAbove[A](fork: BlockHeader, expectedHead: BlockHeader)(body: => A): A =
     pathState match
       case Some(state) =>
-        state.withRecordsHeld(BlockRef(fork.hash.value, fork.number.value, fork.stateRoot.value))(body)
+        state.withRecordsHeld(
+          BlockRef(fork.hash.value, fork.number.value, fork.stateRoot.value),
+          Some(BlockRef(expectedHead.hash.value, expectedHead.number.value, expectedHead.stateRoot.value))
+        )(body)
       case None => body
 
   /** Whether the state of `header`'s block is held on the unified layout, so that a block can be executed on it

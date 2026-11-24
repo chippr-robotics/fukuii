@@ -188,7 +188,7 @@ class ClearForResyncSpec extends AnyFlatSpec with Matchers:
       val said = new java.util.concurrent.ConcurrentLinkedQueue[String]()
       def tell(why: String): Unit =
         val _ = said.add(why)
-      chain.state.withRecordsHeld(held) {
+      chain.state.withRecordsHeld(held, chain.state.anchor) {
         source.writes = Vector.empty
         elsewhere(chain.state.recordsHeld).get shouldBe true
         elsewhere(clear()).failed.get shouldBe a[StateClearRefused]

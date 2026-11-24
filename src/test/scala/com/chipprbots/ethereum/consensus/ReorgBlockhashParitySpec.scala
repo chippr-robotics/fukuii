@@ -559,6 +559,57 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     node.bestHash shouldBe next.hash
   )
 
+  // B-463 (forge): the head is settled, and a block is committed on it after the branch was weighed against it and
+  // before the records are held. The adoption is refused as busy with nothing written, the branch is queued again with
+  // no peer blamed, and the next offer weighs it against the head as it is: kept beside a heavier head, or adopted with
+  // the block committed meanwhile told as of the chain it leaves. Before, the stale head was what the branch was weighed
+  // against and what a move back led to, and the block committed meanwhile was left a side block.
+  it should "refuse, as busy, an adoption whose head a block was committed on since it was weighed, and weigh it again against the head as it is" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // heavier than the branch with it (14000 against 13000), and lighter (12500)
+    for (difficulty, heavier) <- Seq(BigInt(2000) -> true, BigInt(500) -> false) do
+      withClue(s"a block of difficulty $difficulty committed meanwhile: ") {
+        new AnchorRacedReorg(difficulty):
+          val untouched = new java.util.concurrent.atomic.AtomicReference[AnyRef]()
+          meanwhile = () =>
+            node.importOne(onTheHead) shouldBe a[BlockImportedToTop]
+            untouched.set(datadir.storage)
+          val (first, said) = com.chipprbots.ethereum.testing.LogCapture.capture(classOf[ConsensusImpl])(offer())
+          ranMeanwhile shouldBe true
+          first match
+            case BlockImportStateFault(refused: StateBusy, Nil) =>
+              refused.reason should include(s"block ${oldChain.last.number.value} ")
+              refused.reason should include(s"block ${onTheHead.number.value} ")
+            case other => fail(s"not refused as busy: $other")
+          // nothing of the adoption was written: the head is the block committed meanwhile, as it was left
+          (datadir.storage eq untouched.get) shouldBe true
+          state.headGeneration % 2 shouldBe 0
+          validHead(node, datadir).hash shouldBe onTheHead.hash
+          // queued again, and said at WARN as busy, never at ERROR
+          branch.foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
+          said.filter(_.getLevel == ch.qos.logback.classic.Level.ERROR) shouldBe empty
+          said.exists(e => e.getFormattedMessage.startsWith("[STATE-BUSY]")) shouldBe true
+          // offered again: weighed against the head as it is
+          val again: BlockImportResult = offer()
+          if heavier then
+            again shouldBe BlockEnqueued
+            validHead(node, datadir).hash shouldBe onTheHead.hash
+          else
+            again match
+              case ChainReorganised(oldBranch, newBranch, _, _) =>
+                oldBranch.map(_.hash) shouldBe (oldChain.drop(3) :+ onTheHead).map(_.hash)
+                newBranch.map(_.hash) shouldBe branch.map(_.hash)
+              case other => fail(s"not adopted: $other")
+            validHead(node, datadir).hash shouldBe branch.last.hash
+            // the branch's next block is executed on its state. What it is answered with is not asserted here: the
+            // queue still holds the branch the refusal queued again, which an adoption by a batch does not take out
+            node.importOne(next) should (be(a[BlockImportedToTop]).or(be(a[ChainReorganised])))
+            node.bestHash shouldBe next.hash
+      }
+  }
+
   "Chain-file import (hive consensus simulator path)" should
     "apply TD fork choice instead of making the last block in the file the head" taggedAs (
       UnitTest,
@@ -895,6 +946,66 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       node.bestHash shouldBe aChain.last.hash
       (1 to 5).foreach(n => node.indexed(n) shouldBe Some(aChain(n - 1).hash))
       node.storagesInstance.storages.pathStateStorage.get.anchor.map(_.hash) shouldBe Some(aChain.last.hash.value)
+    finally recovery.close()
+  )
+
+  // B-463 (forge): the fork choice's recovery reads the head it may move back to, then holds the records. A block
+  // committed on that head in between (here, by an import the sink's first look at the head followed sets off) refuses
+  // the hold, as busy, with nothing written; the recovery answers Superseded, and the next fork choice adopts the
+  // branch from the head as it is.
+  it should "be superseded, with nothing written, when a block is committed on the head between the recovery's read of it and its hold" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture(archiveOfShortViews):
+    val recovery = new StateRecovery(
+      node.blockchainReader,
+      node.blockchainWriter,
+      node.blockExecution,
+      node.storagesInstance.storages.pathStateStorage.get,
+      maxBlocks = 2
+    )(using node.blockchainConfig)
+    val state = node.storagesInstance.storages.pathStateStorage.get
+    val onTheHead: Block = oracle.extendCanonical(aChain.last, 1, difficulty = 0).head
+    // the store as the block committed meanwhile left it
+    val untouched = new java.util.concurrent.atomic.AtomicReference[AnyRef]()
+    @volatile var raced = false
+    val sink: Sink = new StateRecovery.Sink:
+      def executed(
+          block: Block,
+          receipts: Seq[Receipt],
+          accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+      ): Unit = ()
+      def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+      override def requestedHead: Option[ByteString] = namedNow()
+      // asked by the adoption after it read the head it may move back to, before it holds the records
+      override def followedHead: Option[ByteString] =
+        if !raced then
+          raced = true
+          node.importOne(onTheHead) shouldBe a[BlockImportedToTop]
+          untouched.set(node.storagesInstance.dataSource.storage)
+        Some(onTheHead.hash.value)
+    try
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      bChain.foreach(block => node.blockchainWriter.storeBlockByHashOnly(block).commit())
+      named.set(Some(bChain.last.hash.value))
+      recovery
+        .requestFor(bChain.last.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Superseded
+      raced shouldBe true
+      // nothing of the adoption was written: the head is the block committed meanwhile
+      (node.storagesInstance.dataSource.storage eq untouched.get) shouldBe true
+      node.bestHash shouldBe onTheHead.hash
+      state.anchor.map(_.hash) shouldBe Some(onTheHead.hash.value)
+      state.headGeneration % 2 shouldBe 0
+      // the next fork choice: adopted from the head as it is
+      recovery
+        .requestFor(bChain.last.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Adopted(4)
+      node.bestHash shouldBe bChain.last.hash
+      (3 to 6).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 3).hash))
+      reported shouldBe Nil
     finally recovery.close()
   )
 
@@ -1408,6 +1519,53 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       import node.blockchainConfig
       import node.runtime
       consensus.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()
+
+  /** [[KilledReorg]]'s two chains at the cap with nothing kept under the pin, so that the branch is committed in place,
+    * and a block `onTheHead` of `difficulty` on the old head h12 (B-463). The first hold of the records this fixture's
+    * `consensus` asks for runs `meanwhile` first, on the same thread: after the branch was weighed against the head and
+    * the head read, before the hold is opened. The branch is offered through an import adapter over that `consensus`
+    * and the node's queue.
+    */
+  class AnchorRacedReorg(difficulty: BigInt) extends KilledReorg(pinnedCap(1L)):
+    val onTheHead: Block =
+      oracle.extendSide(oldChain.last, 1, difficulty = difficulty, tag = 0x85, miner = OtherMiner).head
+    val datadir = new EphemDataSource(Map.empty)
+    val node = new Node(guard = true, pinnedCap(1L), Some(datadir))
+    node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+    val state: PathStateStorage = node.storagesInstance.storages.pathStateStorage.get
+    @volatile var meanwhile: () => Unit = () => ()
+    @volatile var ranMeanwhile = false
+    private val storages = node.storagesInstance.storages
+    private val writer = new BlockchainWriter(
+      storages.blockHeadersStorage,
+      storages.blockBodiesStorage,
+      storages.blockNumberMappingStorage,
+      storages.transactionMappingStorage,
+      storages.receiptStorage,
+      storages.chainWeightStorage,
+      storages.appStateStorage,
+      storages.blockAccessListStorage,
+      pathState = storages.pathStateStorage
+    ):
+      override def withRecordsHeldAbove[A](fork: BlockHeader, expectedHead: BlockHeader)(body: => A): A =
+        if !ranMeanwhile then
+          ranMeanwhile = true
+          meanwhile()
+        super.withRecordsHeldAbove(fork, expectedHead)(body)
+    val consensus = new ConsensusImpl(node.blockchainReader, writer, node.blockExecution, reorgState = node.blockchain)
+    private val adapter = new ConsensusAdapter(
+      consensus,
+      node.blockchainReader,
+      node.blockQueue,
+      new com.chipprbots.ethereum.ledger.BlockValidation(node.mining, node.blockchainReader, node.blockQueue),
+      node.runtime
+    )
+
+    /** The branch, offered through the import adapter over this fixture's `consensus`. */
+    def offer(): BlockImportResult =
+      import node.blockchainConfig
+      import node.runtime
+      adapter.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
 
   /** Canonical h1..h12 at difficulty 1000; the branch leaves it after h3, 9 blocks below the head, with 10 blocks at
     * 1000 sealed for another miner: heavier, and of another state at every height.

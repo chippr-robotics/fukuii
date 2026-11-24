@@ -394,7 +394,7 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
           net.moved(ours.last)
         if held then
           // the way back reverses four blocks, which is more than the policy allows a move: it is the way back
-          net.chain.state.withRecordsHeld(fork)(reverseThenCommit())
+          net.chain.state.withRecordsHeld(fork, net.chain.state.anchor)(reverseThenCommit())
           net.holds(ours.last)
           // and once the hold is let go the policy is the policy again: three blocks down is one too many
           (the[ReorgTooDeep] thrownBy net.move(net.chain.first)).reason shouldBe ReorgRefusal.Deep
@@ -413,7 +413,9 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
       net.chain.appState.getChangesetPrunedTo() shouldBe Some(next.number - 2 + 1)
 
       // a hold above a block whose records above it are pruned already is refused at once: there is no way back
-      val gone = (the[ReorgTooDeep] thrownBy net.chain.state.withRecordsHeld(net.chain.first)(fail("no attempt")))
+      val gone = (the[ReorgTooDeep] thrownBy net.chain.state.withRecordsHeld(net.chain.first, net.chain.state.anchor)(
+        fail("no attempt")
+      ))
       gone.reason shouldBe ReorgRefusal.Deep
       gone.getMessage should include("cannot be held")
     }
@@ -528,7 +530,7 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
       state.headGeneration shouldBe start + 2
 
       // an attempt: odd for its whole body, whatever moves and commits it makes, and one generation however many
-      state.withRecordsHeld(ours(0)) {
+      state.withRecordsHeld(ours(0), state.anchor) {
         state.headGeneration shouldBe start + 3
         state.awaitHeadSettled(1) shouldBe None
         net.moved(net.chain.first)
@@ -542,7 +544,7 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
 
       // an attempt whose body throws is ended; one that is refused was never open
       an[IllegalArgumentException] should be thrownBy
-        state.withRecordsHeld(net.anchor)(throw new IllegalArgumentException("the body"))
+        state.withRecordsHeld(net.anchor, state.anchor)(throw new IllegalArgumentException("the body"))
       state.headGeneration shouldBe start + 6
       // a move that fails after it wrote is ended where it stopped
       val tip = net.inPlace(net.anchor, slots(carol, 7 -> 7))
@@ -571,7 +573,7 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
       )
       val open = state.headGeneration
       val began = System.nanoTime()
-      state.withRecordsHeld(net.anchor) {
+      state.withRecordsHeld(net.anchor, state.anchor) {
         waiter.start()
         waiting.await()
         // until it waits on the attempt: it is then woken by the attempt's end, not by its own time running out
@@ -1081,7 +1083,7 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
         case other => fail(s"not refused, asking again: $other")
 
       var onTheTip: Option[net.chain.Executed] = None
-      val theirs = state.withRecordsHeld(fork) {
+      val theirs = state.withRecordsHeld(fork, state.anchor) {
         // the head down at the fork, which the attempt does not stay on
         net.moved(fork)
         val generation = state.headGeneration
@@ -1090,7 +1092,7 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
         askedAgain(elsewhere(onTheFork.inPlace()))
         // a move that is no fork choice, and a second attempt
         askedAgain(elsewhere(net.move(ours.last)))
-        askedAgain(elsewhere(state.withRecordsHeld(fork)(fail("a second attempt ran"))))
+        askedAgain(elsewhere(state.withRecordsHeld(fork, state.anchor)(fail("a second attempt ran"))))
         net.chain.everything shouldBe untouched
         net.holds(fork)
         state.headGeneration shouldBe generation
@@ -1124,8 +1126,52 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
       // and a move, and an attempt, from any thread
       elsewhere(net.moved(theirs.last)).get
       net.holds(theirs.last)
-      elsewhere(state.withRecordsHeld(fork)(net.moved(block.ref))).get
+      elsewhere(state.withRecordsHeld(fork, state.anchor)(net.moved(block.ref))).get
       net.holds(block.ref)
+    }
+
+  // B-463 (forge): the head is settled, but a block is committed on it between the caller's read of the head and its
+  // hold. An attempt opened then would weigh its branch against a head that is no longer there, and its way back would
+  // lead to that stale head, leaving the block committed meanwhile a side block. The hold is refused, as busy, with
+  // nothing held or written; asked again with the head as it is, it is made.
+  "A hold asked for on a head that a block was committed on since it was read" should "be refused as busy, naming both heads, with nothing held or written; and be made on the head as it is" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val net = new Net()
+      val ours = grown(net.chain.first, fourBlocks)((p, txs) => net.inPlace(p, txs*))
+      val fork = ours(0)
+      val state = net.chain.state
+      // what the caller read, and weighed its branch against
+      val read = state.anchor
+      read shouldBe Some(ours.last)
+      // a block committed on that head meanwhile, by another writer: the head is settled again, on it
+      val meanwhile = net.inPlace(ours.last, slots(carol, 6 -> 6))
+      val generation = state.headGeneration
+      val untouched = net.chain.everything
+      val refused = the[StateBusy] thrownBy state.withRecordsHeld(fork, read)(fail("an attempt on a stale head ran"))
+      refused.reason should include(ours.last.show)
+      refused.reason should include(meanwhile.show)
+      refused.holder should include(meanwhile.show)
+      (refused: StateFault) should not be a[StateUnavailable]
+      // nothing was held or written, and no attempt was opened
+      state.recordsHeld shouldBe false
+      state.oldestAttemptAgeMillis shouldBe None
+      state.headGeneration shouldBe generation
+      net.chain.everything shouldBe untouched
+      net.holds(meanwhile)
+      // the head as it is: the hold is made, as before
+      state.withRecordsHeld(fork, state.anchor) {
+        state.recordsHeld shouldBe true
+        net.moved(fork)
+        net.moved(meanwhile)
+      }
+      state.recordsHeld shouldBe false
+      net.holds(meanwhile)
+      // and refused, before anything else is looked at, however deep the stale head's records would reach
+      val deep = the[StateBusy] thrownBy state.withRecordsHeld(net.chain.first, Some(fork))(fail("ran"))
+      deep.reason should include(fork.show)
+      // a store with no anchor yet is no head that was read
+      val none = the[StateBusy] thrownBy state.withRecordsHeld(fork, None)(fail("ran"))
+      none.reason should include("no block")
     }
 
   "A store that wrote other bytes than it was given" should "take no further write, by a move or by a commit" taggedAs

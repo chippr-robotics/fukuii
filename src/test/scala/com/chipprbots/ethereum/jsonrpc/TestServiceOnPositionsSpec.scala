@@ -916,7 +916,7 @@ class TestServiceOnPositionsSpec
       rig.mine(Nil) shouldBe Right(MineBlocksResponse())
       val first = rig.head
       // an attempt on the head, as an adoption in place is one: opened and ended while a block is built
-      def attempt(): Unit = rig.pathState.withRecordsHeld(rig.refOf(first.header))(())
+      def attempt(): Unit = rig.pathState.withRecordsHeld(rig.refOf(first.header), rig.pathState.anchor)(())
       val builds = new AtomicInteger(0)
 
       // the first build is overtaken, the second is not: one block is mined, on the head, from the second build
@@ -944,7 +944,7 @@ class TestServiceOnPositionsSpec
         builds.incrementAndGet(); ()
       }
       rig.settleWait.set(Some(1.millis))
-      rig.pathState.withRecordsHeld(rig.refOf(first.header)) {
+      rig.pathState.withRecordsHeld(rig.refOf(first.header), rig.pathState.anchor) {
         rig.mine(Nil).left.map(_.message).left.getOrElse("mined") should include("still being moved")
       }
       builds.get() shouldBe 0
@@ -1008,7 +1008,7 @@ class TestServiceOnPositionsSpec
       val done = new java.util.concurrent.CountDownLatch(1)
       val holder = new Thread(
         () =>
-          onPositions.pathState.withRecordsHeld(onPositions.refOf(firstBlock.header)) {
+          onPositions.pathState.withRecordsHeld(onPositions.refOf(firstBlock.header), onPositions.pathState.anchor) {
             opened.countDown()
             done.await()
           },

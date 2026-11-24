@@ -1764,14 +1764,35 @@ final class PathStateStorage(
     * (but a fork choice) or begins an attempt ([[refuseInAnotherAttempt]]). So `body` must run synchronously on the
     * calling thread, its moves and commits included: one it hands to another thread, or makes on one (an `IO` shifted
     * off this thread, a future), is refused as another thread's write, with a [[StateBusy]].
+    *
+    * '''On the head the caller read''' (B-463): `expectedAnchor` is the block whose state the disk held when the caller
+    * read the head, which it weighed its branch against and which its way back leads to. A block committed on that
+    * head, or a move of it, between that read and this hold is a head the attempt knows nothing of: its branch would be
+    * weighed against the stale head, and a move back would leave the block committed meanwhile a side block. So the
+    * hold is refused unless the anchor is that block still, compared under the state lock where the hold is made: a
+    * [[StateBusy]], with nothing held or written, and the caller reads the head again and asks again.
     */
   @throws[ReorgTooDeep]("when the records above `above` are not all kept already: the way back is not there")
-  @throws[StateBusy]("when another thread's attempt is open: nothing was held, and the caller asks again")
-  def withRecordsHeld[A](above: BlockRef)(body: => A): A =
+  @throws[StateBusy](
+    "when another thread's attempt is open, or the head is not `expectedAnchor` any more: nothing was held, and the " +
+      "caller asks again"
+  )
+  def withRecordsHeld[A](above: BlockRef, expectedAnchor: Option[BlockRef])(body: => A): A =
     val hold = new Object
     // under the lock, so that no commit prunes between the look at what is kept and the hold
     lock.locked(s"a hold of the records above block ${above.show}") {
       refuseInAnotherAttempt(s"the hold of the records above block ${above.show}")
+      // and none moved the head since the caller read it (B-463): checked before the records, which are looked at from
+      // a head the caller may have read stale
+      val anchorNow = clock.anchor
+      if anchorNow.map(_.hash) != expectedAnchor.map(_.hash) then
+        def shown(anchor: Option[BlockRef]): String = anchor.fold("no block")(ref => s"block ${ref.show}")
+        throw new StateBusy(
+          s"the writer that moved the head to ${shown(anchorNow)}",
+          s"the hold of the records above block ${above.show} was not made: the head is at ${shown(anchorNow)}, not " +
+            s"at ${shown(expectedAnchor)}, which it was read at and the branch weighed against. Read the head and ask " +
+            "again"
+        )
       appState.getChangesetPrunedTo().filter(_ > above.number + 1).foreach { prunedTo =>
         throw new ReorgTooDeep(
           ReorgRefusal.Deep,
