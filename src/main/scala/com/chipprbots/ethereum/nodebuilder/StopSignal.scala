@@ -50,7 +50,7 @@ object StopSignal extends Logger:
       why: String,
       stop: () => Boolean,
       exit: Int => Unit,
-      start: Runnable => Unit = run => new Thread(run, "fatal-failure-stop").start()
+      start: Runnable => Unit = run => nonDaemon(run, "fatal-failure-stop").start()
   ): () => Unit =
     val asked = new AtomicBoolean(false)
     () =>
@@ -82,6 +82,42 @@ object StopSignal extends Logger:
       exit: Int => Unit,
       status: Boolean => Int = clean => if clean then CleanExit else UncleanExit,
       halt: Int => Unit = code => Runtime.getRuntime.halt(code)
+  ): Unit =
+    // B-520: every path that asks for this runs on a daemon thread (the TUI's quitter inherits it from the update
+    // thread; the JVM's SIGTERM handler and the Ephemery reset watchdog are daemons). Once the stop's actor-system step
+    // ended Pekko's threads, no thread but daemons was left, and the JVM exited mid-stop, before the database closed (13
+    // of 15 steps, WAL to replay). The stop runs on a thread made non-daemon, which keeps the JVM up until it exits;
+    // the caller waits for it, as it waited for the stop before.
+    val worker = nonDaemon(() => stopThenExitHere(why, stop, exit, status, halt), "node-stop")
+    worker.start()
+    joinUninterruptibly(worker)
+
+  /** A thread that is no daemon whatever its creator is: a new thread takes its creator's daemon flag otherwise. */
+  private[nodebuilder] def nonDaemon(run: Runnable, name: String): Thread =
+    val thread = new Thread(run, name)
+    thread.setDaemon(false)
+    thread
+
+  /** Waits for `thread` to end. An interrupt does not cut the wait short: it is passed on to `thread`, where the stop
+    * runs as it ran here before (its waits outlast an interrupt and set it again, [[StopOnce.run]]), and set again here
+    * after.
+    */
+  private def joinUninterruptibly(thread: Thread): Unit =
+    var interrupted = false
+    while thread.isAlive do
+      try thread.join()
+      catch
+        case _: InterruptedException =>
+          interrupted = true
+          thread.interrupt()
+    if interrupted then Thread.currentThread().interrupt()
+
+  private def stopThenExitHere(
+      why: String,
+      stop: () => Boolean,
+      exit: Int => Unit,
+      status: Boolean => Int,
+      halt: Int => Unit
   ): Unit =
     log.info(s"[SHUTDOWN] $why: stopping the node")
     val stopped: Either[Throwable, Boolean] =
