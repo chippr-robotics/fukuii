@@ -5659,3 +5659,13 @@ items:
     refs: []
     links: {}
     notes: "Every worktree subagent hit this; workaround: untracked .sbt with SbtGit.useReadableConsoleGit / useConsoleForROGit := true"
+  - id: B-528
+    title: "ECIP-1112 Olympia: non-canonical code at the EIP-2935 history address still gets the direct write (B-517 follow-up)"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links: {}
+    notes: "forge: decide whether ETC wants a system call there; ETH side done in #2117"
