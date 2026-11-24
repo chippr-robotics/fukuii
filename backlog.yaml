@@ -309,19 +309,15 @@ items:
   - id: B-028
     title: "#1677 tx fetcher parity: one GetPooledTransactions in flight per peer, 128 KB cap"
     priority: P2
-    status: review
+    status: done
     area: p2p
     size: M
     opened: 2026-11-07
+    closed: 2026-11-24
     refs: [H8]
     links:
       issues: [1677]
       prs: [2086, 2089]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T13:30:05Z
-      heartbeat: 2026-11-24T15:37:24Z
     notes: |-
       herald.
       2026-11-24 rescoped: per-hash dedup and 256-hash batches done; left: one GetPooledTransactions in flight per peer and the 128 KB cap
