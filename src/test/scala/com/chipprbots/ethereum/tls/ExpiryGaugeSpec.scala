@@ -8,8 +8,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -35,17 +33,15 @@ class ExpiryGaugeSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
     TlsServerEngine.rpcHttp(config, new SecureRandom()).fold(e => fail(e.message), identity)
 
   private def warnings[A](body: => A): List[String] =
-    val appender = new ListAppender[ILoggingEvent]()
-    appender.start()
     val logger = LoggerFactory.getLogger("com.chipprbots.ethereum.tls.TlsReloader").asInstanceOf[LogbackLogger]
     val level = logger.getLevel
     logger.setLevel(Level.WARN)
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     try
       body
       appender.list.asScala.toList.filter(_.getLevel == Level.WARN).map(_.getFormattedMessage)
     finally
-      logger.detachAppender(appender)
+      appender.close()
       logger.setLevel(level)
 
   "The expiry gauge" should "count the seconds to the served certificate's notAfter, and follow a reload" taggedAs (

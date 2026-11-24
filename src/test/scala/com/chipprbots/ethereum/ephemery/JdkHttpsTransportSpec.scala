@@ -33,8 +33,6 @@ import javax.net.ssl.TrustManagerFactory
 import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpsConfigurator
 import com.sun.net.httpserver.HttpsServer
@@ -243,16 +241,14 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
 
   private def withLog[A](f: => A): (A, List[String]) =
     val logger = LoggerFactory.getLogger(classOf[JdkHttpsTransport]).asInstanceOf[ch.qos.logback.classic.Logger]
-    val appender = new ListAppender[ILoggingEvent]
     val previous = logger.getLevel
-    appender.start()
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.TRACE)
     val result =
       try f
       finally
         logger.setLevel(previous)
-        logger.detachAppender(appender)
+        appender.close()
     (result, appender.list.asScala.toList.map(_.getFormattedMessage))
 
   "JdkHttpsTransport" should "fetch a body over https from an allow-listed host" taggedAs UnitTest in {

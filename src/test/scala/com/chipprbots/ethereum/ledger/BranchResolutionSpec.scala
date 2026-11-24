@@ -9,8 +9,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalamock.handlers.CallHandler0
 import org.scalamock.handlers.CallHandler1
 import org.scalamock.handlers.CallHandler2
@@ -991,16 +989,14 @@ class BranchResolutionSpec
   /** The events BranchResolution logs at WARN and above while `body` runs: the level and the message. */
   private def capturingLogs[A](body: => A): (A, List[(Level, String)]) =
     val logger = LoggerFactory.getLogger(classOf[BranchResolution]).asInstanceOf[LogbackLogger]
-    val appender = new ListAppender[ILoggingEvent]()
-    appender.start()
     val level = logger.getLevel
     logger.setLevel(Level.WARN)
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     try
       val result = body
       (result, appender.list.asScala.toList.map(e => (e.getLevel, e.getFormattedMessage)))
     finally
-      logger.detachAppender(appender)
+      appender.close()
       logger.setLevel(level)
 
   /** This node's chain 1..10 (`difficulty` each) over `base`, the head at 10, and batches against it. */

@@ -12,7 +12,6 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
 import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.ConsoleAppender
-import ch.qos.logback.core.read.ListAppender
 import org.jline.terminal.Attributes.LocalFlag
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -38,16 +37,14 @@ class TuiSpec extends AnyFlatSpec with Matchers:
     */
   private def tuiLogDuring(f: => Unit): List[(Level, String)] =
     val logger = LoggerFactory.getLogger(classOf[Tui]).asInstanceOf[LogbackLogger]
-    val appender = new ListAppender[ILoggingEvent]
     val previousLevel = logger.getLevel
     val thread = Thread.currentThread().getName
-    appender.start()
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.WARN)
     try f
     finally
       logger.setLevel(previousLevel)
-      logger.detachAppender(appender)
+      appender.close()
     appender.list.asScala.toList.filter(_.getThreadName == thread).map(e => (e.getLevel, e.getFormattedMessage))
 
   private def occurrences(text: String, of: String): Int = text.split(Pattern.quote(of), -1).length - 1

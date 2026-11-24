@@ -17,7 +17,6 @@ import scala.concurrent.duration.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -73,16 +72,14 @@ class BackgroundAuditRepairFlowSpec
 
   private def logsOf[T](f: => T): (T, Seq[ILoggingEvent]) =
     val logger = LoggerFactory.getLogger(BackgroundAudit.LoggerName).asInstanceOf[ch.qos.logback.classic.Logger]
-    val appender = new ListAppender[ILoggingEvent]
-    appender.start()
     val before = logger.getLevel
     logger.setLevel(Level.INFO)
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     try
       val result = f
       (result, appender.list.toArray(Array.empty[ILoggingEvent]).toSeq)
     finally
-      logger.detachAppender(appender)
+      appender.close()
       logger.setLevel(before)
 
   private def fetcherTo(probe: TestProbe[StateNodeFetcher.FetchStateNode]): BackgroundAudit.FetcherFactory = ctx =>

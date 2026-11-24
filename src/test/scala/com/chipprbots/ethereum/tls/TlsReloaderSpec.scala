@@ -13,8 +13,6 @@ import scala.concurrent.Await
 import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -49,12 +47,10 @@ class TlsReloaderSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
     pki.keystore(s"$name-server", Seq("rpc" -> pki.leaf(cn)), "pw")
 
   private def errors[A](body: => A): (A, List[String]) =
-    val appender = new ListAppender[ILoggingEvent]()
-    appender.start()
     val logger = LoggerFactory.getLogger("com.chipprbots.ethereum.tls.TlsReloader").asInstanceOf[LogbackLogger]
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     try (body, appender.list.asScala.toList.map(_.getFormattedMessage))
-    finally logger.detachAppender(appender)
+    finally appender.close()
 
   "A reload" should "serve a valid replacement to new handshakes and count it (scenario 1)" taggedAs (
     UnitTest,

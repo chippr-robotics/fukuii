@@ -4,8 +4,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -37,16 +35,14 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     */
   private def withLoggedWarnings[A](f: => A): (A, List[String]) =
     val logger = LoggerFactory.getLogger(ConfigValidator.getClass).asInstanceOf[LogbackLogger]
-    val appender = new ListAppender[ILoggingEvent]
     val previousLevel = logger.getLevel
-    appender.start()
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.WARN)
     val result =
       try f
       finally
         logger.setLevel(previousLevel)
-        logger.detachAppender(appender)
+        appender.close()
     (result, appender.list.asScala.toList.filter(_.getLevel == Level.WARN).map(_.getFormattedMessage))
 
   "ConfigValidator" should "pass with valid default config" taggedAs UnitTest in {

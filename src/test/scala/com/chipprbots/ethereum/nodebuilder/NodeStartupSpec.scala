@@ -9,7 +9,6 @@ import scala.jdk.CollectionConverters.*
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
 import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.slf4j.LoggerFactory
@@ -39,16 +38,14 @@ class NodeStartupSpec extends AnyFlatSpec with Matchers:
   /** The events NodeStartup logs while `f` runs. */
   private def logged[A](f: => A): (A, List[ILoggingEvent]) =
     val logger = LoggerFactory.getLogger(NodeStartup.getClass).asInstanceOf[LogbackLogger]
-    val appender = new ListAppender[ILoggingEvent]
     val previous = logger.getLevel
-    appender.start()
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.TRACE)
     val result =
       try f
       finally
         logger.setLevel(previous)
-        logger.detachAppender(appender)
+        appender.close()
     (result, appender.list.asScala.toList)
 
   "NodeStartup.startOrExit" should "log at ERROR, restore the terminal, print, shut down and exit 1 when start throws" taggedAs UnitTest in {

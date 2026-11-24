@@ -4,8 +4,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -39,16 +37,14 @@ class DiscoveryAllowlistSpec extends AnyFlatSpec with Matchers:
 
   private def warnings[A](f: => A): (A, List[String]) =
     val logger = LoggerFactory.getLogger(DiscoveryConfig.getClass).asInstanceOf[LogbackLogger]
-    val appender = new ListAppender[ILoggingEvent]
     val previous = logger.getLevel
-    appender.start()
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.TRACE)
     val result =
       try f
       finally
         logger.setLevel(previous)
-        logger.detachAppender(appender)
+        appender.close()
     (result, appender.list.asScala.filter(_.getLevel == Level.WARN).map(_.getFormattedMessage).toList)
 
   "DiscoveryConfig with the allowlist on" should "turn discovery and the DNS walk off though the config enables them" taggedAs (
