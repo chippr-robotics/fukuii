@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.consensus.mining.Protocol
 import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
 import com.chipprbots.ethereum.console.AlertThresholds
 import com.chipprbots.ethereum.console.BundleInputs
+import com.chipprbots.ethereum.console.StorageReader
 import com.chipprbots.ethereum.console.TuiState
 import com.chipprbots.ethereum.console.ops.ActionHandler
 import com.chipprbots.ethereum.console.ops.Actions
@@ -24,6 +25,7 @@ import com.chipprbots.ethereum.console.ops.PeerActions
 import com.chipprbots.ethereum.console.ops.ReportActions
 import com.chipprbots.ethereum.console.ops.RpcServerActions
 import com.chipprbots.ethereum.console.ops.SupportBundle
+import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.jsonrpc.AdminService
 import com.chipprbots.ethereum.jsonrpc.EthMiningService
@@ -231,6 +233,30 @@ object TuiActions:
         )
     )
 
+    // ---- the compaction (B-371) -----------------------------------------------------------------------------------
+    val compaction: Option[DatabaseActions.CompactNode] = node.storagesInstance.dataSource match
+      case rocks: RocksDbDataSource =>
+        Some(
+          DatabaseActions.CompactNode(
+            sstBytes = () => rocks.properties().flatMap(_.sstBytes),
+            stores = rocks.familyCount,
+            compact = onStore =>
+              val named = (ns: IndexedSeq[Byte]) => StorageReader.storeName(ns)
+              def store(c: RocksDbDataSource.CompactedFamily) =
+                DatabaseActions.Compacted(named(c.namespace), c.sstBytesBefore, c.sstBytesAfter)
+              rocks.compactAll((ns, at, of) => onStore(named(ns), at, of)) match
+                case RocksDbDataSource.CompactAllOutcome.AlreadyRunning => DatabaseActions.CompactResult.AlreadyRunning
+                case RocksDbDataSource.CompactAllOutcome.Finished(done, left, cancelled, failure) =>
+                  DatabaseActions.CompactResult.Finished(
+                    done.map(store),
+                    left.map(named),
+                    cancelled,
+                    failure.map(f => DatabaseActions.CompactFailure(named(f.namespace), f.message))
+                  )
+          )
+        )
+      case _ => None
+
     // ---- the addresses --------------------------------------------------------------------------------------------
     val server = node.instanceConfig.Network.Server
     def detection: String =
@@ -368,6 +394,7 @@ object TuiActions:
            .map(_.name -> MiningActions.NotProofOfWork)
            .toMap
       ) ++
+        Option.when(compaction.isEmpty)(Actions.Compact.name -> "this node's database is not RocksDB") ++
         Option.when(dataDir.isEmpty)(Actions.Bundle.name -> "this node has no data directory to write under")
 
     val handlers: (() => TuiState) => Map[String, ActionHandler] = state =>
@@ -376,6 +403,7 @@ object TuiActions:
         mining.fold(Map.empty[String, ActionHandler])(MiningActions.handlers) ++
         RpcServerActions.handlers(servers, serversNotMade) ++
         DatabaseActions.handlers(database) ++
+        compaction.fold(Map.empty[String, ActionHandler])(DatabaseActions.compactHandlers) ++
         Map(
           Actions.Config.name -> ConfigView.handler(() => node.instanceConfig.config, "fukuii"),
           Actions.Tunables.name -> ReportActions.tunables(() => tunables(state())),

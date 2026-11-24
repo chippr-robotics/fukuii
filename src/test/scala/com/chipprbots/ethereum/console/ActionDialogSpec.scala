@@ -130,6 +130,20 @@ class ActionDialogSpec extends AnyFlatSpec with Matchers with OptionValues:
       Update(asked, other, ctx) shouldBe ((asked, Nil))
   }
 
+  it should "ask for the compaction first, and run it only on y (B-371: heavy I/O, so never unconfirmed)" taggedAs (
+    UnitTest
+  ) in {
+    val compact = ActionRequest(Actions.Compact.name)
+    val (opened, effects) = run(synced, "compact")
+    dialog(opened) shouldBe DialogKind.Confirm(compact, RiskClass.Disrupt, None)
+    // Opening it only asks for the preview: nothing runs.
+    effects shouldBe Seq(Effect.Preview(compact))
+    val asked = previewed(opened, compact)
+    Update(asked, Key.Enter, ctx) shouldBe ((asked, Nil))
+    Update(asked, Key.Char('y'), ctx)._2 shouldBe Seq(Effect.Confirm(compact))
+    cancels(asked, Key.Esc, compact)
+  }
+
   // ---- Halt ---------------------------------------------------------------------------------------------------------
 
   "A Halt" should "need its word typed and Enter, and nothing shorter" taggedAs (UnitTest) in {

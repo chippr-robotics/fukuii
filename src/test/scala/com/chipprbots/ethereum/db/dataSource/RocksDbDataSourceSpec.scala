@@ -489,6 +489,125 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
     lockIsFree()
   }
 
+  "RocksDbDataSource.compactAll" should "compact every column family, the one with the most SST bytes first (B-371)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = RocksDbDataSource(config(dbPath, statisticsEnabled = false), Namespaces.nsSeq)
+    try
+      // Three families of three sizes, the smallest the first in the family list and the largest not the last.
+      def put(ns: DataSource.Namespace, n: Int): Unit =
+        // Distinct keys, and values that do not compress, so the SST bytes follow the count.
+        val random = new java.util.Random(n)
+        def distinct(i: Int): Key = ArraySeq.unsafeWrapArray(ByteBuffer.allocate(4).putInt(i).array())
+        def noise: Value = ArraySeq.unsafeWrapArray(Array.fill(256)(random.nextInt().toByte))
+        ds.update(Seq(DataSourceUpdate(ns, Nil, (0 until n).map(i => distinct(i) -> noise))))
+      put(Namespaces.ReceiptsNamespace, 20)
+      put(Namespaces.NodeNamespace, 2000)
+      put(Namespaces.BodyNamespace, 400)
+      ds.flushAll()
+      val told = scala.collection.mutable.Buffer.empty[(DataSource.Namespace, Int, Int)]
+      ds.compactAll((ns, at, of) => told += ((ns, at, of))) match
+        case RocksDbDataSource.CompactAllOutcome.Finished(compacted, notReached, cancelled, _) =>
+          cancelled shouldBe false
+          notReached shouldBe empty
+          compacted.map(_.namespace).take(3) shouldBe Seq(
+            Namespaces.NodeNamespace,
+            Namespaces.BodyNamespace,
+            Namespaces.ReceiptsNamespace
+          )
+          // Every family, once, and each told before it started, from 1.
+          compacted.size shouldBe ds.familyCount
+          Namespaces.nsSeq.toSet.diff(compacted.map(_.namespace).toSet) shouldBe empty
+          told.map(_._1) shouldBe compacted.map(_.namespace)
+          told.map(_._2) shouldBe (1 to ds.familyCount)
+          told.map(_._3).distinct shouldBe Seq(ds.familyCount)
+          compacted.head.sstBytesBefore.exists(_ > 0L) shouldBe true
+          compacted.head.sstBytesAfter should not be empty
+        case other => fail(s"expected a finished compaction, got $other")
+      // The data is intact: the last of the 2000 keys is still there.
+      ds.get(Ns, ArraySeq.unsafeWrapArray(ByteBuffer.allocate(4).putInt(1999).array())) should not be empty
+    finally ds.close()
+    lockIsFree()
+  }
+
+  it should "put the largest first, and a family of unknown size with the empty ones" taggedAs (UnitTest) in {
+    val a = IndexedSeq[Byte]('a'.toByte)
+    val b = IndexedSeq[Byte]('b'.toByte)
+    val c = IndexedSeq[Byte]('c'.toByte)
+    val d = IndexedSeq[Byte]('d'.toByte)
+    RocksDbDataSource.largestFirst(Seq(a -> Some(5L), b -> None, c -> Some(50L), d -> Some(0L))).map(_._1) shouldBe
+      Seq(c, a, b, d)
+  }
+
+  it should "stop between families when close() comes, and say which it did and which it left (B-371)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    // The callback runs between families, with no guard and no lock held: close() here cancels the rest.
+    val outcome = ds.compactAll((_, at, _) => if at == 2 then ds.close())
+    outcome match
+      case RocksDbDataSource.CompactAllOutcome.Finished(compacted, notReached, cancelled, _) =>
+        cancelled shouldBe true
+        compacted.map(_.namespace) shouldBe Seq(Namespaces.NodeNamespace)
+        notReached.size shouldBe ds.familyCount - 1
+        notReached should not contain Namespaces.NodeNamespace
+      case other => fail(s"expected a cancelled compaction, got $other")
+    an[RocksDbDataSourceClosedException] should be thrownBy ds.get(Ns, key(1))
+    // The guard is let go: a later request is not "already running" (it finds the database closed instead).
+    ds.compactAll() should not be RocksDbDataSource.CompactAllOutcome.AlreadyRunning
+    lockIsFree()
+  }
+
+  it should "stop on a failure other than the close, keeping the families done and naming the one that failed (B-371)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    try
+      var calls = 0
+      ds.beforeNativeCompaction = () =>
+        calls += 1
+        if calls == 2 then throw new IllegalStateException("disk full")
+      ds.compactAll() match
+        case RocksDbDataSource.CompactAllOutcome.Finished(compacted, notReached, cancelled, failure) =>
+          cancelled shouldBe false
+          compacted.size shouldBe 1
+          failure.map(_.namespace) shouldBe notReached.headOption
+          failure.exists(_.message.contains("compacting")) shouldBe true
+          notReached.size shouldBe ds.familyCount - 1
+        case other => fail(s"expected a finished compaction, got $other")
+      // The guard is let go: the next request runs.
+      ds.beforeNativeCompaction = () => ()
+      ds.compactAll() shouldBe a[RocksDbDataSource.CompactAllOutcome.Finished]
+    finally ds.close()
+    lockIsFree()
+  }
+
+  it should "answer 'already running' to a second request while one runs, and accept one after (B-371)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    try
+      var second: Option[RocksDbDataSource.CompactAllOutcome] = None
+      // Inside the first family's native call the first request is running: this is the second, on the same thread
+      // and on another.
+      val hook = () =>
+        if second.isEmpty then
+          second = Some(ds.compactAll())
+          onAnotherThread(ds.compactAll()) shouldBe RocksDbDataSource.CompactAllOutcome.AlreadyRunning
+      ds.beforeNativeCompaction = hook
+      ds.compactAll() shouldBe a[RocksDbDataSource.CompactAllOutcome.Finished]
+      second shouldBe Some(RocksDbDataSource.CompactAllOutcome.AlreadyRunning)
+      // It ended, so the flag is free.
+      ds.beforeNativeCompaction = () => ()
+      ds.compactAll() shouldBe a[RocksDbDataSource.CompactAllOutcome.Finished]
+    finally ds.close()
+    lockIsFree()
+  }
+
   "RocksDbDataSource.whileFree" should "let a point read through while a writer waits behind a long read" taggedAs (
     UnitTest,
     DatabaseTest

@@ -7,7 +7,7 @@
                   │ Mode    actions allowed · each is confirmed in its dialog                                           
        ETC        │ Running dbcheck · 42s · checked 12,000 of 21,480 sample points                                      
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
-                  │ Actions 25, by what they can break · Up and Down select · Enter or a types one at the prompt        
+                  │ Actions 26, by what they can break · Up and Down select · Enter or a types one at the prompt        
                   │   Observe  config        the effective configuration, secrets hidden                                
  etc              │   Observe  tunables      what changes without a restart, as it is now                               
  PoW · id 61      │   Observe  deps          each subsystem, what it needs, its health                                  
@@ -29,12 +29,12 @@
                   │   Disrupt  rpc stop      a JSON-RPC server stops; its connections drop                              
                   │   Disrupt  rpc start     a server that was stopped here listens again                               
                   │   Disrupt  dbcheck       the start's database check, run now; it reports                            
+                  │   Disrupt  compact       rewrites the database's files: heavy disk I/O                              
                   │   Disrupt  detect-ip     asks outside services for this node's address                              
                   │   Disrupt  bundle        writes a support bundle under the datadir                                  
                   │   Halt     mining stop   the node's own miner stops until restart (ETC)                             
                   │   Halt     quit          the node process ends                                                      
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
                   │ Last    4 attempts in this session, the newest first                                                
-                  │   11:58:00Z  peer add enode=enode://ab12@203.0.113.7:30303  FAILED: the peer manager refused the e… 
-                  │   … 3 older attempts not shown at this height                                                       
+                  │   … 4 older attempts not shown at this height                                                       
  1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

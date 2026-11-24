@@ -12,7 +12,7 @@ Rules that hold for all of them:
   best block) is shown under the preview and does not restart the dialog.
 - Every attempt writes one INFO line from the logger `fukuii.tui.ops`:
   `action=<name> params=<…> outcome=<confirmed|cancelled|refused: reason|failed: reason> by=tui` (spec FR-051). An
-  action that runs for long (`dbcheck`, `detect-ip`, `bundle`) also writes `outcome=started` when it is confirmed, so
+  action that runs for long (`dbcheck`, `compact`, `detect-ip`, `bundle`) also writes `outcome=started` when it is confirmed, so
   that a node that ends while it runs leaves a record that it began. A parameter that is a secret is never a parameter
   of any action here.
 - With `fukuii.tui.read-only = true` only the Observe rows run (spec FR-053).
@@ -55,6 +55,7 @@ Rules that hold for all of them:
 | `rpc stop` | The address and port; the namespaces served; the open connections that drop; that readiness probes on that port will fail | New: `ServerLifecycle.stop` on the HTTP and WebSocket servers (`jsonrpc/server/http/`) | `rpc start` |
 | `rpc start` | The address and port it will bind; the namespaces; a warning if a sensitive namespace would be reachable from another host. Refused for a transport that was not enabled at the start | New: `ServerLifecycle.start` | `rpc stop` |
 | `dbcheck` | What it reads; that it is the check run at start; that on finding an inconsistency it reports it and stops nothing; that it says nothing on a node that took its state by SNAP or takes its blocks from a consensus client | New: `StorageConsistencyChecker.scan`, which returns its result instead of ending the node | Nothing to undo |
+| `compact` | That it rewrites every store's files, the largest first, one at a time, and reads and writes a great deal: import, sync and RPC slow, and on a large database it takes hours; the free disk it needs (about the size of the largest store, worst case the whole database); the database's size now; that nothing is locked across it, that it ends by itself or when the node stops (quitting the console does not stop it), and that only one runs at a time (a second is answered `already running`). A store whose compaction fails ends the run, shown as a failure with its error, the stores done and those not reached | New: `RocksDbDataSource.compactAll`, one `compactRange` per column family (B-371) | Nothing to undo |
 | `detect-ip` | The services it contacts, by host name, and that they will see this node's address; that it reports and changes nothing the node advertises | `ExternalIPDetector.detect` | Nothing to undo |
 | `bundle` | The directory; every file it will write; that it holds peer addresses and the node id; that it goes nowhere. The size is said when it is written | New in `console/`: `SupportBundle` | Delete the file |
 
@@ -85,5 +86,4 @@ Shown in the Ops view (spec FR-056).
 | Restart the Engine API server, peer discovery or sync | None can be stopped and started again without ending the process (research §7.2) |
 | Reload configuration from file | No key is re-read after start; `tunables` lists what changes at run time |
 | Create a snapshot | Spec 013 has no code |
-| Compact the database | A whole-database compaction holds the database's lock for its whole run: the node would import nothing until it ended, which on a large database may take hours and cannot be stopped. Offering it needs a change to how the data source locks (B-281). This departs from spec FR-054, which lists it |
 | Change the pruning mode or the state scheme | Needs a restart, and for the scheme a resync |

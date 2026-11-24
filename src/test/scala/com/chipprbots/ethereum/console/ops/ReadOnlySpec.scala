@@ -63,7 +63,7 @@ class ReadOnlySpec extends AnyFlatSpec with Matchers with OptionValues:
   ) in {
     observe.map(_.name) shouldBe Vector("config", "tunables", "deps", "test-rpc", "net", "art", "lookup")
     above.map(_.risk).toSet shouldBe Set(RiskClass.Adjust, RiskClass.Disrupt, RiskClass.Halt)
-    above should have size 18
+    above should have size 19
   }
 
   "A read-only runner" should "refuse every action above Observe with the one reason, and run none" taggedAs (UnitTest) in {
@@ -168,6 +168,7 @@ class ReadOnlySpec extends AnyFlatSpec with Matchers with OptionValues:
     "rpc stop http" -> request(Actions.RpcStop, "transport" -> "http"),
     "rpc start ws" -> request(Actions.RpcStart, "transport" -> "ws"),
     "dbcheck" -> request(Actions.DbCheck),
+    "compact" -> request(Actions.Compact),
     "detect-ip" -> request(Actions.DetectIp),
     "bundle" -> request(Actions.Bundle),
     "mining stop" -> request(Actions.MiningStop),
