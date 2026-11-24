@@ -5019,7 +5019,7 @@ items:
   - id: B-496
     title: ConsensusAdapter OfTheState logs a StateBusy as [STATE-FAULT] ERROR; tag it [STATE-BUSY] WARN through tagOf (B-440 + B-462 both merged)
     priority: P3
-    status: claimed
+    status: in-progress
     area: consensus
     size: S
     opened: 2026-11-24
@@ -5030,5 +5030,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T07:40:10Z
-      heartbeat: 2026-11-24T07:40:10Z
-    notes: "Left for whichever of #2045/#2049 merged second (both merged 2026-11-24)."
+      heartbeat: 2026-11-24T07:40:14Z
+    notes: |-
+      Left for whichever of #2045/#2049 merged second (both merged 2026-11-24).
+      2026-11-24 in-progress: forge agent, clone-d
