@@ -4328,3 +4328,14 @@ items:
     refs: [B-230]
     links: {}
     notes: Unchanged by B-230 (operator file import, not RPC-reachable). An invalid block in a chain file leaves its code and nodes behind.
+  - id: B-456
+    title: "hive adapter: map HIVE_BPO3..5_TIMESTAMP and HIVE_BPO3..5_BLOB_* (hive mapper.jq exports them) in fukuii.sh"
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links: {}
+    depends_on: [B-443]
+    notes: fukuii.sh maps BPO1/BPO2 only; HiveAdapterForkEnvSpec canonical set needs the hive mapper names, not only forkenv.json.
