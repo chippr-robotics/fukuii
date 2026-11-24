@@ -4111,16 +4111,17 @@ items:
   - id: B-423
     title: "EngineCallLog.observe counts a call before it records the CL identity and capability count: a snapshot can show the call without them (record first, then add)"
     priority: P3
-    status: claimed
+    status: review
     area: engine
     opened: 2026-11-22
     refs: []
-    links: {}
+    links:
+      prs: [2079]
     claim:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T12:42:01Z
-      heartbeat: 2026-11-24T12:42:01Z
+      heartbeat: 2026-11-24T12:46:05Z
       branch: fix/b419-engine-api-parity
     notes: "Made EngineApiHttpServerObservationSpec flaky (PR #1982 CI, line 258); the spec now waits for the values. Reordering is under consensus/engine: route via beacon."
   - id: B-424
