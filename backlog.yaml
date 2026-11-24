@@ -4774,3 +4774,14 @@ items:
     links:
       spec: 018
     notes: "After B-316 (branch fix/b316-cl-branch-below-view) the fork choice's recovery adopts such a branch by the records. ConsensusImpl ~:721 still hands off only BranchTooLarge (comment says the walk cannot reach the fork) and queues a p2p-fetched below-view branch again unstored; widen the condition, flip the 'not hand off a fork below the views' case in ReorgBlockhashParitySpec, update BranchHandOff/handOffBranch docs. Held back: ConsensusImpl was in review on other branches."
+  - id: B-479
+    title: "StateRecovery: the move back after a refused first move (adopt ~:508) still has the asked() TOCTOU that B-464 closed for the commit path"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: [B-464]
+    links:
+      spec: 018
+    notes: "B-464 admits the move back after an invalid/faulted commit only from the block the adoption left the head on (plan admit, under the moves lock). The refused-first-move path checks asked() then moves back with no admit: a fork choice that names and moves to another head between the two is undone. The head there may be anywhere along the partial move, so the set of positions to admit from must be collected from the move (e.g. the observer or the chunk heads)."
