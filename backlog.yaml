@@ -4894,21 +4894,18 @@ items:
   - id: B-486
     title: "JsonRpcError.StateBusy text says 'too many reads behind the head': wrong for a write refused while another adoption holds the head (B-462)"
     priority: P3
-    status: review
+    status: done
     area: rpc
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2045]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T05:52:22Z
-      heartbeat: 2026-11-24T06:20:06Z
     notes: |-
       B-462 maps StateBusy (adoption holds the head) to JsonRpcError.StateBusy (-32005), whose message names reads in flight. Same code, ask-again semantics; only the text misleads. Changing client-visible text: decide whether to split into a second -32005 error or generalise the message (StateReadRetrySpec, RpcReadersBehindHeadSpec pin it).
       2026-11-24 in-progress: folded into B-462 round 2 (HeadBusy -32005 message)
+      2026-11-24 done: merged b25d311051
   - id: B-487
     title: Lenient chain import (hive loader / start-up import) on the unified layout ends with an ERROR on StateBusy instead of a typed, retryable stop (B-462)
     priority: P3
