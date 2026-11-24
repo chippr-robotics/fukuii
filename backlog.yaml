@@ -3149,17 +3149,18 @@ items:
   - id: B-350
     title: "FastSyncBranchResolverActorSpec: scripted binary-search tests flake ~1 in 3 (reply published before the request handler subscribes)"
     priority: P2
-    status: claimed
+    status: review
     area: test
     opened: 2026-11-18
     refs: []
     links:
+      prs: [2096]
       spec: specs/016-snap-controller-split
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T15:36:30Z
-      heartbeat: 2026-11-24T15:36:30Z
+      heartbeat: 2026-11-24T15:36:55Z
     notes: "Seen on origin/staging 18194e219 alone: 'No common block is found' failed 1 of 3 runs; on the B-298 branch 'highest common block is in the first half' failed once. NetworkPeerManagerAutoPilot answers by request count; a reply lost to the bus race times out, the resolver restarts, and the script is off by one. Found by forge-b298."
   - id: B-351
     title: "Hash layout: check a re-SNAP for a heavier fork below the SYNC-FORK floor lands on the peer's branch (canonical index from the common block to the pivot)"
