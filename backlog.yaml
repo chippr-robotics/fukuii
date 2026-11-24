@@ -5114,3 +5114,14 @@ items:
     links:
       spec: 018
     notes: forge, found during B-463 (incl. StateBusy re-queues; adopted via evaluateBranch). Head ends correct; cost is wasted re-execution and a misleading reorg event to the pool/announcements.
+  - id: B-504
+    title: "B-463 PoS tests: fork-choice move in the read-to-hold window, anchor read between move batches, Engine API-level SYNCING + no escalation"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: beacon, review of B-463 (APPROVE); nice-to-have coverage. Also reword StateRecovery:510/550 comments to 'a block committed on it, or a move of it'.
