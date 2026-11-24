@@ -299,17 +299,18 @@ items:
   - id: B-026
     title: "Trace and error-text parity with geth: structLog CALL order and gasCost, tracer error text, eth_call/estimateGas revert suffix; re-pin goldens once"
     priority: P2
-    status: claimed
+    status: review
     area: rpc
     size: M
     opened: 2026-11-07
     refs: [10b, B-171, B-172]
-    links: {}
+    links:
+      prs: [2077]
     claim:
       by: cloud-719c6644
       agent: conduit
       since: 2026-11-24T11:38:03Z
-      heartbeat: 2026-11-24T11:38:03Z
+      heartbeat: 2026-11-24T11:54:59Z
       branch: fix/b026-trace-error-parity
     notes: |-
       conduit + forge. Regenerate src/test/resources/trace-goldens/ in the same commit.
