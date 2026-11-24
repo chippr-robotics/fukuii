@@ -4,15 +4,23 @@ import java.nio.charset.StandardCharsets
 
 import org.apache.pekko.util.ByteString
 
+import scala.jdk.CollectionConverters.*
+
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger as LogbackLogger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import org.bouncycastle.util.encoders.Hex
 import org.json4s.*
 import org.json4s.native.JsonMethods.*
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.Fixtures.Blocks as BlockFixtures
 import com.chipprbots.ethereum.crypto.KzgTestSetup
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.crypto.sha256
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -612,6 +620,42 @@ class PrecompileFailureReasonSpec extends AnyFlatSpec with Matchers with BeforeA
   }
 
   // ── An input go-ethereum would run ───────────────────────────────────────────────────────────────────────────
+
+  // B-176: where failureReason finds no go-ethereum reason, fukuii failed an input go-ethereum runs. The message stays
+  // the fallback; the operator gets one WARN (contract, input length and hash, never the input) and a counter.
+  "ProgramErrorText.vmErrorMessage" should "count and log a precompile failure with no go-ethereum reason" taggedAs (
+    VMTest,
+    OlympiaTest
+  ) in {
+    val appender = new ListAppender[ILoggingEvent]()
+    appender.start()
+    val logger = LoggerFactory.getLogger(PrecompileDivergence.getClass).asInstanceOf[LogbackLogger]
+    val level = logger.getLevel
+    logger.setLevel(Level.WARN) // as logback.xml sets it; the tests' ROOT is ERROR
+    logger.addAppender(appender)
+    try
+      val counter = PrecompileDivergence.UnexplainedCounter
+      val before = counter.count()
+      // the generator: BN254 ADD runs it, so a failure of it has no go-ethereum reason
+      val input = word(1) ++ word(2)
+      val unexplained = PreCompiledContractFail(PrecompiledContracts.Bn128Add, input)
+      ProgramErrorText.vmErrorMessage(unexplained) shouldBe PrecompiledContracts.UnexplainedFailure
+      counter.count() shouldBe before + 1
+      val warned = appender.list.asScala.filter(_.getLevel == Level.WARN).map(_.getFormattedMessage)
+      warned should have size 1
+      warned.head should include("contract=Bn128Add inputLength=64")
+      warned.head should include("inputKeccak=0x" + Hex.toHexString(kec256(input.toArray)))
+
+      // a reason go-ethereum gives is no divergence: no count, no WARN
+      ProgramErrorText.vmErrorMessage(
+        PreCompiledContractFail(PrecompiledContracts.Bn128Add, word(1) ++ word(1))
+      ) shouldBe NotOnCurve
+      counter.count() shouldBe before + 1
+      appender.list.asScala.count(_.getLevel == Level.WARN) shouldBe 1
+    finally
+      logger.detachAppender(appender)
+      logger.setLevel(level)
+  }
 
   "failureReason" should "name none of go-ethereum's errors for an input go-ethereum runs" taggedAs (
     VMTest,

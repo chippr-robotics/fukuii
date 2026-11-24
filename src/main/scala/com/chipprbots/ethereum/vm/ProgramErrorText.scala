@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.vm
 
+import org.apache.pekko.util.ByteString
+
 /** A VM error as go-ethereum's `core/vm/errors.go` spells it (`err.Error()`), in the `vm` package so the tracers
   * (callTracer, structLog, prestate) report the same text as the RPC endpoints without importing `jsonrpc` (B-026,
   * B-171). `jsonrpc.CallErrors` delegates here.
@@ -18,7 +20,7 @@ object ProgramErrorText:
   def vmErrorMessage(error: ProgramError): String = error match
     case RevertOccurs                             => "execution reverted"
     case OutOfGas                                 => "out of gas"
-    case PreCompiledContractFail(contract, input) => contract.failureReason(input)
+    case PreCompiledContractFail(contract, input) => precompileFailureReason(contract, input)
     // geth `ErrInvalidOpCode`: "invalid opcode: " + `OpCode.String()`. Not the operand form ("DUPN (operand: 0x..)")
     // geth prints for a bad EIP-8024 immediate: InvalidOpCode does not carry the operand.
     case InvalidOpCode(code)                  => s"invalid opcode: ${opCodeName(code)}"
@@ -32,6 +34,14 @@ object ProgramErrorText:
     case MaxCodeSizeExceeded                  => "max code size exceeded"
     case CodeStoreOutOfGas                    => "contract creation code storage out of gas"
     case other                                => other.toString.toLowerCase
+
+  /** The precompile's go-ethereum reason. Where there is none, the fallback "precompiled contract failed" is a
+    * divergence from go-ethereum, said once per message at WARN with a counter (B-176, [[PrecompileDivergence]]).
+    */
+  private def precompileFailureReason(contract: PrecompiledContracts.PrecompiledContract, input: ByteString): String =
+    val reason = contract.failureReason(input)
+    if reason == PrecompiledContracts.UnexplainedFailure then PrecompileDivergence.unexplained(contract, input)
+    reason
 
   /** go-ethereum `OpCode.String()` (`core/vm/opcodes.go`): the name in geth's `opCodeToString`, whether or not the
     * block's fork enables the opcode, else `opcode 0x.. not defined`. So 0xFE is `INVALID` and PUSH0 before Shanghai is

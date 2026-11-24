@@ -508,6 +508,22 @@ class EthSimulateGethParitySpec extends AnyFlatSpec with Matchers with Amsterdam
     (error \ "code") shouldBe JInt(-32015)
   }
 
+  // B-176: a failing precompile is a call error like any VM error, -32015 with go-ethereum's reason
+  it should "report a precompile that rejects its input with -32015 and go-ethereum's reason" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // BN254 ADD (0x06) on the point (1, 1), which is not on the curve
+    val notOnCurve = "0x" + "00" * 31 + "01" + "00" * 31 + "01" + "00" * 64
+    val payload =
+      s"""{"blockStateCalls":[{"calls":[{"from":"$From","to":"0x0000000000000000000000000000000000000006",
+         |"gas":"0x30000","input":"$notOnCurve"}]}]}""".stripMargin
+    val call = arr(new Node().blocks(payload)._2.head \ "calls").head
+    str(call \ "status") shouldBe "0x0"
+    str(call \ "error" \ "message") shouldBe "point is not on curve"
+    (call \ "error" \ "code") shouldBe JInt(-32015)
+  }
+
   it should "name an undefined opcode as geth's OpCode.String() does" taggedAs (UnitTest, RPCTest) in {
     str(callError("0x0c") \ "message") shouldBe "invalid opcode: opcode 0xc not defined"
   }

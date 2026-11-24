@@ -614,6 +614,26 @@ class TypedCallPathSpec
     rpc(undefined) shouldBe Left(JsonRpcError(-32000, "invalid opcode: opcode 0xc not defined", None))
     rpc(reverter).left.value.code shouldBe 3
 
+  // B-176: a precompile that rejects its input is a VM error like any other, worded as go-ethereum's `Run` returns it
+  // (PrecompiledContract.failureReason): eth_call and eth_estimateGas answer -32000 with it, eth_createAccessList puts it
+  // in `error`. BN254 ADD (0x06) on the point (1, 1), which is not on the curve.
+  "A failing precompile" should "be go-ethereum's reason on eth_call, eth_estimateGas and eth_createAccessList" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new Node:
+    val notOnCurve: TxArgs =
+      args(Address(0x06), _.copy(gas = Some(GasAmount(100_000)), data = Some(word(1) ++ word(1) ++ word(0) ++ word(0))))
+    val before: Double = com.chipprbots.ethereum.vm.PrecompileDivergence.UnexplainedCounter.count()
+    service.call(CallRequest(notOnCurve, BlockParam.Latest)).unsafeRunSync() shouldBe
+      Left(JsonRpcError(-32000, "point is not on curve", None))
+    service.estimateGas(CallRequest(notOnCurve.copy(gas = None), BlockParam.Latest)).unsafeRunSync() shouldBe
+      Left(JsonRpcError(-32000, "point is not on curve", None))
+    val listed: CreateAccessListResponse =
+      service.createAccessList(CreateAccessListRequest(notOnCurve, BlockParam.Latest)).unsafeRunSync().value
+    listed.error shouldBe Some("point is not on curve")
+    // a reason go-ethereum gives is no divergence
+    com.chipprbots.ethereum.vm.PrecompileDivergence.UnexplainedCounter.count() shouldBe before
+
   "CallErrors.opCodeName" should "name an opcode as go-ethereum's OpCode.String() does, enabled by the fork or not" taggedAs (
     UnitTest,
     RPCTest
