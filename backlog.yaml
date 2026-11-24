@@ -5111,12 +5111,17 @@ items:
   - id: B-501
     title: BlockImporter offers NewBetterBranch's oldBranch.head to the ommer pool before the reorg runs (offer after success instead)
     priority: P3
-    status: open
+    status: claimed
     area: consensus
     size: S
     opened: 2026-11-24
     refs: []
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T11:07:01Z
+      heartbeat: 2026-11-24T11:07:01Z
     notes: forge, found during B-299; harmless (ancestor filter) but uses a slot.
   - id: B-502
     title: StorageRecoveryActor StorageSlotProgress(_) ignores n and adds 1 per message to the downloaded gauge (same shape as B-494)
