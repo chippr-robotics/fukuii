@@ -4313,3 +4313,14 @@ items:
     links:
       spec: 018
     notes: NodeBuilder.snapPeerPrecondition builds PathLiveSync.SnapPeerPrecondition.declared once from static-nodes.json + snap-server-peers. Runtime admin_addPeer peers (PeerManagerActor maintained set; PeerEventBus MaintainedPeersChanged event, see PeersClient) are not counted in SnapPeerCount.declaredSnapCapable, which only feeds the [SNAP-PEERS] log line and does not change the verdict. Needs a SyncController subscription/adapter or a supplier on the port; log-only effect, so low value.
+  - id: B-454
+    title: Block import writes a block's deployed code in its own write just before the state batch (B-230); move it into the commitWith batch, vault to review
+    priority: P3
+    status: open
+    area: storage
+    size: S
+    opened: 2026-11-24
+    refs: [B-230]
+    links:
+      spec: specs/018-storage-engine-consolidation
+    notes: Kill-safe as is (one RocksDB, one WAL, code first). Same-batch needs the code carried to commitWith/commitApart past the executeAndValidateStaged seam.
