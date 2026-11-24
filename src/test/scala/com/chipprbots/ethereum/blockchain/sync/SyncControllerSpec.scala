@@ -3146,6 +3146,20 @@ class SyncControllerSpec
       testSetup.cleanup()
   }
 
+  // B-441: the JSON-RPC servers, the TUI and the MCP tools are up before StdNode sends Start, so an ask can come first.
+  // The answer is "syncing", never NotSyncing: the miner mines on NotSyncing (a lone miner), and must not before a sync
+  // that has not begun. Start still begins the sync after the ask.
+  it should "answer GetStatus before Start as syncing, not as not syncing, and still start on Start (B-441)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    expectSyncingAnswer(testSetup)
+    snapChildren(testSetup) shouldBe empty
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
+  }
+
   // ---- a refused checkpoint archive at the start (spec 018 C5c, T292 wiring; B-380) ----------------------------------
   //
   // CheckpointImportRetrySpec pins the importer's no-retry rule and recoverInterrupted. These pin the two call sites in
