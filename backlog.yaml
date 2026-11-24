@@ -4519,10 +4519,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:21:30Z
-      heartbeat: 2026-11-24T03:27:38Z
+      heartbeat: 2026-11-24T04:08:21Z
     notes: |-
       forge B-343: commitInPlaceAtTheCap, fault at a side parent then a move back that fails before it wrote leaves the head on the committed side parents (e.g. a6); the answer labels it the old chain and imported=Nil (only branch blocks are checked). Pinned by ReorgBlockhashParitySpec 'middle chunk meets a fault'. Decide wording and whether those side parents are told as the head.
       2026-11-24 in-progress: clone-d consensus lane, branch fix/b461-head-on-lost-side-parents
+      2026-11-24 in-progress: branch pushed; forge/beacon review running
   - id: B-462
     title: "Ask-again refusals during an adoption (B-294): typed answers on the layers move, ChainImporter, testing_commitBlockV1; keep them out of the escalation count"
     priority: P3
