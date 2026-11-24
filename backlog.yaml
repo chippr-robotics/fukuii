@@ -1492,7 +1492,7 @@ items:
   - id: B-161
     title: eth_simulateV1 gas below the EIP-7623 calldata floor throws IllegalStateException; geth answers ErrFloorDataGas before execution
     priority: P2
-    status: claimed
+    status: in-progress
     area: rpc
     size: S
     opened: 2026-11-09
@@ -1502,9 +1502,11 @@ items:
       by: cloud-719c6644
       agent: beacon
       since: 2026-11-24T16:21:03Z
-      heartbeat: 2026-11-24T16:21:23Z
+      heartbeat: 2026-11-24T17:15:35Z
       branch: fix/r4-simulate-parity
-    notes: "From #1727 PR 4 (conduit), read from code, not reproduced: EthSimulateService.preCheck checks intrinsic gas only; a call with gas in [intrinsic, floor) on Prague/Olympia reaches executeTransactionWithOverrides and hits the #1438 guard. Also: the StxLedger estimator ignores maxUsedGas (geth gasestimator.go:155 uses it)."
+    notes: |-
+      From #1727 PR 4 (conduit), read from code, not reproduced: EthSimulateService.preCheck checks intrinsic gas only; a call with gas in [intrinsic, floor) on Prague/Olympia reaches executeTransactionWithOverrides and hits the #1438 guard. Also: the StxLedger estimator ignores maxUsedGas (geth gasestimator.go:155 uses it).
+      2026-11-24 in-progress: committed on fix/r4-simulate-parity (local, not pushed); PR pending
   - id: B-162
     title: "maxUsedGas tests: add an Amsterdam case with non-zero EIP-8037 state gas; mark TxResultMaxUsedGasSpec:155 zero-state-gas-only"
     priority: P3
