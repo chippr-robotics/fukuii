@@ -4660,3 +4660,13 @@ items:
     links:
       spec: 018
     notes: B-440 maps a thrown store failure to ConsensusStateFault on regular sync's batch path only. evaluateBranchBlock (NewBlock, test mode, chain-file import) still throws; the importer logs and goes Running with the branch already dequeued (getBranch dequeue=true).
+  - id: B-473
+    title: Blocks re-queued by a local fault stay in BlockQueue after the batch is adopted; the next announced block re-takes them as a reorganisation onto the same chain
+    priority: P3
+    status: open
+    area: consensus
+    opened: 2026-11-24
+    refs: [B-440, B-336]
+    links:
+      spec: 018
+    notes: "Seen in B-440's test: after the branch is adopted again the queue still holds it; importOne(next) answers ChainReorganised (re-executing b4..b13) instead of BlockImportedToTop. Same for B-336 queuedAgain. Head ends right; work and announcements are wasted."
