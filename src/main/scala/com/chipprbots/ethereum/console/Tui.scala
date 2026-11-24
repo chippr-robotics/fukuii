@@ -374,7 +374,7 @@ class Tui(
       val next = snapshot match
         case Some(polled) => s.nextFrame(Some(polled.agedAt(now, snapshotStaleAfter)))
         case None         => s.nextFrame(None).copy(now = now)
-      logs.fold(next)(next.withLogs)
+      logs.fold(next)(next.withLogs).copy(logFloor = ring.rootLevelAbove)
     }
 
   /** The ring's lines, if it has kept any since the last frame read them; the read takes no lock (FR-021). */

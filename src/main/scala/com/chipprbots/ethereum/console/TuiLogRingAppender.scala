@@ -98,6 +98,15 @@ class TuiLogRingAppender(capacity: Int, threshold: Level, zone: ZoneId = ZoneId.
 
   private def slot(seq: Long): Int = (seq % capacity).toInt
 
+  /** The root logger's level when it is above this ring's threshold (B-265): no line below it is ever logged, so the
+    * Logs view cannot show the levels in between, the TUI's own INFO lines included. None when the root lets every line
+    * the ring keeps through. A read of one field: cheap enough for every frame, and it follows a level changed at run
+    * time.
+    */
+  def rootLevelAbove: Option[String] =
+    val root = TuiLogRingAppender.rootLogger().getEffectiveLevel
+    Option.when(root != null && !threshold.isGreaterOrEqual(root))(root.toString)
+
   /** Started, on the root logger. Open so a test can make it fail (C-11). */
   def attach(): Unit =
     val root = TuiLogRingAppender.rootLogger()

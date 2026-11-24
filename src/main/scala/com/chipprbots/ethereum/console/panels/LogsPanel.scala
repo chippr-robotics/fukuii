@@ -64,16 +64,24 @@ private[console] object LogsPanel:
       if filter.isEmpty then s"${formatNumber(s.logs.size.toLong)} lines"
       else
         s"${formatNumber(lines.size.toLong)} of ${formatNumber(s.logs.size.toLong)} lines match '${TuiText.external(filter, c.g)}'"
+    // B-265: a root logger above the ring's level (LOGSLEVEL=ERROR) logs nothing in between: said, in the title's place
+    // for the level, and as the reason the view is empty.
+    val levels = s.logFloor match
+      case Some(root) => s"$root and above (root logger at $root, not ${c.config.logLevel})"
+      case None       => s"${c.config.logLevel} and above"
     val title = fit(
       text(
-        s" Logs   $counted, ${c.config.logLevel} and above $dot $position $dot " +
+        s" Logs   $counted, $levels $dot $position $dot " +
           "- older  + newer  / filter",
-        c.t.healthy.bold()
+        if s.logFloor.isDefined then c.t.warn else c.t.healthy.bold()
       ),
       w,
       c.g
     )
-    if s.logs.isEmpty then Seq(title, fit(text("   no log line yet", c.t.muted), w, c.g))
+    val none = s.logFloor.fold("   no log line yet")(root =>
+      s"   no log line yet: the root logger is at $root, so nothing below $root is logged"
+    )
+    if s.logs.isEmpty then Seq(title, fit(text(none, c.t.muted), w, c.g))
     else if lines.isEmpty then Seq(title, fit(text("   no line matches the filter", c.t.muted), w, c.g))
     else title +: lines.slice(from, until).map(row(c, _, w))
 

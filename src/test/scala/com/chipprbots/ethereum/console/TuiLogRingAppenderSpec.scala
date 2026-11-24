@@ -155,3 +155,9 @@ class TuiLogRingAppenderSpec extends AnyFlatSpec with Matchers with LoneElement:
       val kept = lines.map(_.text).filter(_.startsWith(s"t$t-")).map(_.stripPrefix(s"t$t-").toInt)
       withClue(s"thread $t: ")(kept.zip(kept.drop(1)).foreach((a, b) => a should be < b))
   }
+
+  // B-265: the test logback configuration's root is at ERROR, so an INFO ring sees nothing below ERROR.
+  it should "say when the root logger is above its level, and not when it is not" taggedAs (UnitTest) in {
+    ring().rootLevelAbove shouldBe Some("ERROR")
+    ring(level = Level.ERROR).rootLevelAbove shouldBe None
+  }
