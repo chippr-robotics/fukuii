@@ -4368,10 +4368,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:21:26Z
-      heartbeat: 2026-11-24T03:27:34Z
+      heartbeat: 2026-11-24T04:08:16Z
     notes: |-
       forge-b336: BranchExecutionFailure/partial arms with Consensus.isLocalStateFault answer BlockImportFailed(At); the importer escalates via ResolvingMissingNode(alreadyExhausted) and holeNotRepaired at the threshold. Check settleOnLayers-style conversion (MPTError -> StateUnavailable) is also wanted in importToTop on the unified layout, so the feed counts it.
       2026-11-24 in-progress: clone-d consensus lane, branch fix/b450-unified-local-fault-feed
+      2026-11-24 in-progress: branch pushed; forge/beacon review running
   - id: B-451
     title: "Proposer pool filter: retry a stale view of the parent like the build does, instead of failing forkchoiceUpdated with no payload"
     priority: P3
