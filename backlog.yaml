@@ -1897,17 +1897,18 @@ items:
   - id: B-205
     title: KeyStoreImplSpec 'keystore dir cannot be initialized' fails when the tests run as root
     priority: P3
-    status: claimed
+    status: review
     area: ci
     size: S
     opened: 2026-11-11
     refs: []
-    links: {}
+    links:
+      prs: [2094]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T15:12:26Z
-      heartbeat: 2026-11-24T15:12:26Z
+      heartbeat: 2026-11-24T15:13:08Z
     notes: "Root can create the directory the test expects to be refused. Seen in a cloud container on staging 0.11.44 and on #1788 alike."
   - id: B-206
     title: "StackTrieSpec: two cases take 3.5 min of Tier 1 because TestMptStorage re-stores the whole trie on every put"
