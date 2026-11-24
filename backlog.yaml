@@ -4778,22 +4778,19 @@ items:
   - id: B-480
     title: "StateRecovery walk (B-316): pin the anchor guard, a fork choice's walk must not stop at an index entry above the anchor"
     priority: P3
-    status: review
+    status: done
     area: consensus
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: [B-316]
     links:
       prs: [2042]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T04:58:22Z
-      heartbeat: 2026-11-24T05:17:30Z
     notes: |-
       B-316's viewless stop requires the block to be canonical AND below the anchor; removing the below-anchor half breaks no test (HeadMoveOnTheChainSpec, ReorgBlockhashParitySpec, EscalationWatch). Stage an index that runs ahead of the anchor (post-SNAP hand-off) and assert the catch-up still walks to the anchor.
       2026-11-24 in-progress: folded into B-316 branch per beacon
+      2026-11-24 done: merged 7683f4ea7 (with B-316)
   - id: B-481
     title: "StateRecovery move back: also refuse when requestedHead equals the plan's anchor (fork choice naming exactly the block the adoption left the head on)"
     priority: P3
