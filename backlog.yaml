@@ -4874,3 +4874,13 @@ items:
     links:
       spec: 018
     notes: B-462 typed StateBusy for importChainFileStrict/admin_importChain only. ChainImporter.importLenientStream/importInPlace let it end the import like any fault. It runs at start before any adoption, so not reachable today; revisit if the lenient import can run beside sync.
+  - id: B-488
+    title: "SNAP: a local store fault (account range, bytecode) restarts SNAP without bound; route it through recordCriticalFailure / dormant mode or stop the node"
+    priority: P2
+    status: open
+    area: snap
+    size: M
+    opened: 2026-11-24
+    refs: [B-190]
+    links: {}
+    notes: "vault review of B-190: restartSnapSync has no bound, so a full or read-only disk loops; ByteCodeResponseHandling ~:221 still logs and re-queues a store failure. A dedicated AccountStoreFaulted command."
