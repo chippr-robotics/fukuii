@@ -675,7 +675,7 @@ object TxAdmission:
     * detailed messages, at blobpool's own bump (blobpool/config.go DefaultConfig.PriceBump 100: "either have patience
     * or be aggressive").
     */
-  private def replacementRejection(
+  private[transactions] def replacementRejection(
       tx: Transaction,
       senderTxs: Seq[Transaction],
       legacyPriceBump: Int,

@@ -446,6 +446,63 @@ class PendingTransactionsManagerSpec
     etcPeerManager.expectNoMessage(200.millis)
 
   // ---- a move of the head (B-253) ---------------------------------------------------------------------------
+  //
+  // These pools have no blockchain reader and no state storage: the state check (nonce and balance at the head) is not
+  // exercised, only the pool's own nonce gate and its pool-state rules.
+
+  /** A pool on ETC's rules, or on ETH's (the pool-state rules, the replacement price bump among them, apply). */
+  class TestSetupOn(eth: Boolean) extends TestSetup:
+    val chainConfig: BlockchainConfig =
+      if eth then
+        com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+          .copy(networkType = com.chipprbots.ethereum.utils.NetworkType.ETH, minTip = BigInt(1))
+      else com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+    override val pendingTransactionsManager: org.apache.pekko.actor.typed.ActorRef[Command] = testKit.spawn(
+      PendingTransactionsManager(
+        txPoolConfig,
+        peerManager.ref,
+        etcPeerManager.ref,
+        peerMessageBus.ref,
+        pendingTxTopic,
+        chainConfig = chainConfig
+      ),
+      s"ptm-test-on-${if eth then "eth" else "etc"}-${java.util.UUID.randomUUID()}"
+    )
+    def at(nonce: BigInt, gasPrice: BigInt, value: BigInt): SignedTransactionWithSender =
+      SignedTransactionWithSender(
+        SignedTransaction.sign(
+          tx.copy(nonce = nonce, gasPrice = GasPrice(gasPrice), value = value, gasLimit = GasAmount(21000)),
+          keyPair1,
+          Some(0x3d)
+        ),
+        Address(keyPair1)
+      )
+    def pooled(): Set[SignedTransactionWithSender] =
+      pendingTransactionsManager
+        .ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
+        .futureValue
+        .pendingTransactions
+        .map(_.stx)
+        .toSet
+
+  // go-ethereum list.Add: a reinjected tx at a pooled tx's sender and nonce replaces it only past the price bump (ETH);
+  // on ETC, with no such rule, the pooled one is kept. Exactly one tx at that nonce either way.
+  for (eth, bumped, kept) <- Seq(
+      (true, true, "reinjected"),
+      (true, false, "pooled"),
+      (false, true, "pooled"),
+      (false, false, "pooled")
+    )
+  do
+    it should s"keep one tx at a nonce it holds when a reset takes back another there: the $kept one (${
+        if eth then "ETH" else "ETC"
+      }, ${if bumped then "" else "no "}price bump)" taggedAs (UnitTest) in new TestSetupOn(eth):
+      val held: SignedTransactionWithSender = at(1, gasPrice = 10, value = 10)
+      val back: SignedTransactionWithSender = at(1, gasPrice = if bumped then 20 else 10, value = 11)
+      pendingTransactionsManager ! AddTransactions(held)
+      pooled() shouldBe Set(held)
+      pendingTransactionsManager ! HeadReset(Nil, Seq(back.tx))
+      pooled() shouldBe Set(if kept == "reinjected" then back else held)
 
   it should "take back a tx it held once a reorganisation moves its block off the chain, behind a later nonce it holds" taggedAs (UnitTest) in new TestSetup:
     // an intrinsic gas the stateless admission takes: a reinjected tx is admitted as an unchecked add is

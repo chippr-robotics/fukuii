@@ -90,6 +90,8 @@ class EngineApiService(
 
   /** Reset the tx pool from the head it was last reset to onto `head`, which a fork choice has just set (B-253). Pool
     * hygiene only: a reset that fails is logged and the fork choice is answered as it would have been, its head set.
+    * Run inline, before the payload build that follows, which then reads the pool as reset: its reads are bounded (a
+    * few hundred point reads at worst, on a reorganisation, which is rare), so it is not moved to a blocking thread.
     */
   private def resetThePool(
       pool: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command],
