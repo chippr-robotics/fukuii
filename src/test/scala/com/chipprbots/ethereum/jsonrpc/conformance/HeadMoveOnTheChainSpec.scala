@@ -1551,6 +1551,53 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.node.forkChoiceManager.getHeadBlockHash shouldBe Some(chain.last.header.hash.value)
     }
 
+  // B-464 (beacon): a fork choice to another head that has moved the head, and not yet recorded the head it followed,
+  // when the adoption finds a block invalid. The head the fork choice followed last is still the old one: moved back to
+  // it, the head would leave the block the consensus client is about to be told VALID for
+  it should "leave the head where a fork choice in flight moved it when a block of it is invalid" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node(overlay = _.copy(maxForwardLayers = 8))
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val branch = blocks.slice(39, 43) // blocks 40 to 43
+      val bad = blocks(43).pipe(b => b.copy(header = b.header.copy(stateRoot = TrieRoot.Empty)))
+      // a competing 40', on 39, which the consensus client goes on to as the adoption commits 44
+      val side = siblingOf(branch.head)
+      val inFlight = new java.util.concurrent.atomic.AtomicBoolean(false)
+      val recovery = new on.Recovery(
+        maxBlocks = 1,
+        fails = block =>
+          Option.when(block.header.hash == bad.header.hash) {
+            // the fork choice to 40', on its own thread: the head it names is recorded as asked for, and the head is
+            // moved to it, and nothing more yet (ForkChoiceManager records the head it followed after the move)
+            val choice = new Thread(() =>
+              on.node.forkChoiceManager.notifyBeaconHead(choiceTo(side))
+              on.writer.moveHeadInPlace(side.header, on.reader, forkChoice = true)
+              inFlight.set(true)
+            )
+            choice.start()
+            choice.join()
+            BlockExecutionError.ValidationAfterExecError("a state root that is not the block's")
+          }
+      )
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      statusOf(choose(chain.last)) shouldBe PayloadStatus.Valid
+      branch.foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      newPayload(side).status shouldBe PayloadStatus.Valid
+      on.writer.storeBlockByHashOnly(bad).commit()
+      // 44 stands on 43, a layer: more than the one block a recovery keeps as layers, so it is committed in place
+      statusOf(choose(bad)) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe a[StateRecovery.Outcome.Invalid]
+      inFlight.get() shouldBe true
+      recovery.adoptedBlocks shouldBe empty
+      // the head is on 40', where the fork choice moved it, and not back on 39, the head it followed before
+      on.holds(side.header, chain :+ side)
+      // the fork choice records the head it followed: 40', the block the head is at
+      on.node.forkChoiceManager.applyForkChoiceState(choiceTo(side)) shouldBe Right(())
+      on.node.forkChoiceManager.getHeadBlockHash shouldBe Some(side.header.hash.value)
+      on.holds(side.header, chain :+ side)
+    }
+
   it should "stop before its next commit when the consensus client names another head" taggedAs
     (UnitTest, ConsensusTest) in {
       val on = tightNode
