@@ -5036,3 +5036,13 @@ items:
     notes: |-
       Left for whichever of #2045/#2049 merged second (both merged 2026-11-24).
       2026-11-24 in-progress: forge agent, clone-d
+  - id: B-497
+    title: "Flaky: PendingTransactionsManagerSpec 'should override transactions with the same sender and nonce' failed once locally, passed on rerun"
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links: {}
+    notes: Seen 2026-11-24 during B-253 (pool actor unchanged). Find the timing assumption; no Thread.sleep fixes.
