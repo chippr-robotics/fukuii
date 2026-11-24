@@ -150,7 +150,7 @@ this writing), wrapped in `cats.effect.IO` inside the Kafka sink only.**
   does not use. Reconsider if a consumer side ever lands in the node (it does not: followers read through 026).
 - *Pekko Connectors Kafka (Alpakka).* Pulls Pekko Streams into a cats-effect component; the exporter is an `IO`
   fiber, not a stream graph (`flow` review would be about a graph that does not exist).
-- *Confluent client / schema registry.* Avro-only value; OQ-3 chose RLP and the indexer owns registry decisions.
+- *Confluent client / schema registry.* Avro-only value; OQ-3 chose RLP and consumers own registry decisions.
 
 ## R-4. Buffer column family and WriteBatch atomicity with the block commit
 
