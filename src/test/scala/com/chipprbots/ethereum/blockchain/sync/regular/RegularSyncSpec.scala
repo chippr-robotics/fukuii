@@ -353,6 +353,12 @@ class RegularSyncSpec
   ) extends Fixture:
     val answer: java.util.concurrent.atomic.AtomicReference[BlockImportResult] =
       new java.util.concurrent.atomic.AtomicReference(BlockEnqueued)
+    // what happens while a batch is evaluated, after its blocks are committed and before the importer tells of them
+    val duringImport: java.util.concurrent.atomic.AtomicReference[() => Unit] =
+      new java.util.concurrent.atomic.AtomicReference(() => ())
+    // the head the pool was last reset to, as the node shares it with the fork choice (B-515)
+    val txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead =
+      new com.chipprbots.ethereum.transactions.TxPoolHead
     // what the importer reported to the consensus layer as invalid, with each block's latest valid hash
     val reportedInvalid: java.util.concurrent.ConcurrentLinkedQueue[(ByteString, ByteString)] =
       new java.util.concurrent.ConcurrentLinkedQueue()
@@ -371,7 +377,7 @@ class RegularSyncSpec
       override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
           blockExecutionScheduler: IORuntime,
           blockchainConfig: BlockchainConfig
-      ): IO[BlockImportResult] = IO { evaluations.incrementAndGet(); answer.get() }
+      ): IO[BlockImportResult] = IO { evaluations.incrementAndGet(); duringImport.get()(); answer.get() }
       // an announced block is answered the same
       override def evaluateBranchBlock(block: Block)(implicit
           blockExecutionScheduler: IORuntime,
@@ -384,11 +390,16 @@ class RegularSyncSpec
     // how many branches were handed to the consensus: a batch whose rest is dropped is not evaluated again
     val evaluations: java.util.concurrent.atomic.AtomicInteger = new java.util.concurrent.atomic.AtomicInteger(0)
 
+    // the old branch the branch resolution predicts the import will move the head off (B-460)
+    val predictedOldBranch: java.util.concurrent.atomic.AtomicReference[List[Block]] =
+      new java.util.concurrent.atomic.AtomicReference(Nil)
+
     override lazy val branchResolution: BranchResolution = new BranchResolution(
       blockchainReader,
       Option.when(followsConsensusLayer)(com.chipprbots.ethereum.consensus.engine.DesignatedHead(() => None))
     ):
-      override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult = NewBetterBranch(Nil)
+      override def resolveBranch(headers: NonEmptyList[BlockHeader]): BranchResolutionResult =
+        NewBetterBranch(predictedOldBranch.get)
 
     val importer: TypedActorRef[BlockImporter.Command] = testKit.spawn(
       BlockImporter.apply(
@@ -411,7 +422,8 @@ class RegularSyncSpec
         blacklist,
         this,
         exhausts = exhausts,
-        importLock = importLock
+        importLock = importLock,
+        txPoolHead = txPoolHead
       ),
       s"$name-importer"
     )
@@ -446,7 +458,8 @@ class RegularSyncSpec
       case _                                                                                       => Nil
     }
 
-    /** The transactions handed back to the pool, but for the empty hand-back of the branch resolution (no old branch).
+    /** The transactions handed back to the pool, by a reset or by a hand-back of their own (the branch resolution's,
+      * which B-460 retired: one would show here as a second entry).
       */
     def takenBackByThePool(): Seq[Seq[SignedTransaction]] = toThePool.collect {
       case com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions(txs)
@@ -455,6 +468,14 @@ class RegularSyncSpec
       case com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset(_, txs) if txs.nonEmpty =>
         txs
     }
+
+    /** Whether the pool was sent anything that hands transactions back besides a reset (B-460: nothing is). */
+    def handedBackAheadOfAReset(): Boolean = toThePool.exists(
+      _.isInstanceOf[com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions]
+    )
+
+    /** The pool is sent nothing for this import (asked once the import is known to be done). */
+    def poolToldNothing(): Unit = pool.expectNoMessage(1.second)
 
     /** The pool's resets: one per move of the head. */
     def resetsOfThePool(): Int =
@@ -4042,6 +4063,208 @@ class RegularSyncSpec
             }
             resetsOfThePool() shouldBe 1
         )
+
+      // B-460: the branch resolution handed the predicted old branch's transactions to the pool before the import, on
+      // the head as it was, even when the import then failed or kept the head. go-ethereum's pool is reset on the head
+      // the import left (LegacyPool.reset): the blocks moved off are taken back once, after the move, and only if the
+      // head moved off them. Each arm, with the resolution predicting `movedOff` as the old branch:
+      "take back the moved-off txs once, after a reorganisation, none ahead of it" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b460-full"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(movedOff))
+          val executed: List[Block] = testBlocks.take(2)
+          answer.set(ChainReorganised(List(movedOff), executed, executed.map(weighed).map(_.weight), branchBlocks = 2))
+
+          importBatch(executed)
+
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+          handedBackAheadOfAReset() shouldBe false
+          resetsOfThePool() shouldBe 1
+      )
+
+      "take back the moved-off txs once after a partial reorganisation (B-338)" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("b460-partial"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(movedOff))
+          val batch: List[Block] = testBlocks.take(3)
+          val executed: List[Block] = batch.take(2)
+          val invalid: String =
+            s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.ValidationAfterExecError("Block has invalid state root")}"
+          answer.set(
+            ImportedPartially(
+              ChainReorganised(List(movedOff), executed, executed.map(weighed).map(_.weight), branchBlocks = 2),
+              batch(2).hash.value,
+              invalid
+            )
+          )
+
+          importBatch(batch)
+
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+          handedBackAheadOfAReset() shouldBe false
+          resetsOfThePool() shouldBe 1
+      )
+
+      "tell the pool nothing when the reorganisation failed and the head stayed" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("b460-failed"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(movedOff))
+          val batch: List[Block] = testBlocks.take(3)
+          val invalid: String =
+            s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.ValidationAfterExecError("Block has invalid state root")}"
+          answer.set(new BlockImportFailedAt(invalid, batch(1).hash.value))
+
+          importBatch(batch)
+
+          // the import is done once the fetcher is sent back
+          fetcherRewound()
+          poolToldNothing()
+      )
+
+      "tell the pool nothing when the branch was not the heavier and the head was kept" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b460-kept"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(movedOff))
+          // KeptCurrentBestBranch: the adapter queues the branch and answers it enqueued
+          answer.set(BlockEnqueued)
+
+          importBatch(testBlocks.take(2))
+
+          importerFetcher.awaitCond(evaluations.get == 1, 5.seconds)
+          poolToldNothing()
+      )
+
+      "take back the moved-off txs once when this node's state failed a block after a reorganisation's prefix became the head" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b460-local-fault"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(movedOff))
+          val batch: List[Block] = testBlocks.take(3)
+          val prefix: Block = batch.head
+          val localFault: String =
+            s"${Consensus.ReorganiseFailurePrefix}${BlockExecutionError.MPTError(new MPTException("Invalid Node"))}"
+          answer.set(new BlockImportFailedAt(localFault, batch(1).hash.value, List(weighed(prefix)), List(movedOff)))
+
+          importBatch(batch)
+
+          removedFromThePool() shouldBe List(prefix.body.transactionList)
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+          handedBackAheadOfAReset() shouldBe false
+          resetsOfThePool() shouldBe 1
+      )
+
+      "take back the moved-off txs once when this node's state could not take a block after a reorganisation's prefix" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b460-state-fault"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          predictedOldBranch.set(List(movedOff))
+          val batch: List[Block] = testBlocks.take(3)
+          val prefix: Block = batch.head
+          answer.set(
+            new StateFaultAfterAMove(
+              new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the head moved under the batch"),
+              List(weighed(prefix)),
+              List(movedOff)
+            )
+          )
+
+          importBatch(batch)
+
+          removedFromThePool() shouldBe List(prefix.body.transactionList)
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+          handedBackAheadOfAReset() shouldBe false
+          resetsOfThePool() shouldBe 1
+      )
+
+      // B-514 (beacon W4): a move back that failed left the head on side blocks the branch stands on, off the chain it
+      // left. The pool is reset onto them, as a move onto them would reset it: their txs leave it, those of the chain
+      // left come back, in one reset; none of them is counted as imported or told to new-head subscribers
+      "reset the pool onto the side blocks a move back that failed left the head on" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b514-side-blocks"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val side: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          answer.set(
+            new StateFaultAfterAMove(
+              new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the move back failed"),
+              Nil,
+              List(movedOff),
+              List(side)
+            )
+          )
+
+          importBatch(testBlocks.take(3))
+
+          removedFromThePool() shouldBe List(side.body.transactionList)
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+          resetsOfThePool() shouldBe 1
+          withClue("the head the pool was reset to, for the fork choice's next reset (B-515): ") {
+            txPoolHead.current shouldBe Some(side.header)
+          }
+          noneTold()
+      )
+
+      // B-515 (beacon W1): the head the importer's move left is recorded as the pool's, in the record the fork choice
+      // resets from, so that a forkchoiceUpdated after it resets the pool from there
+      "record the head a batch moved to as the one the pool was reset to" taggedAs (UnitTest, SyncTest) in sync(
+        new BatchImportTells("b515-pool-head"):
+          val batch: List[Block] = testBlocks.take(2)
+          answer.set(BlockImportedToTop(batch.map(weighed)))
+
+          importBatch(batch)
+
+          resetsOfThePool() shouldBe 1
+          txPoolHead.current shouldBe Some(batch.last.header)
+      )
+
+      // B-515: a fork choice resets the pool between the import's commit and the importer's tell, onto a head above the
+      // batch. The importer resets from the head the pool was last reset to, not from the batch's own branches: from
+      // the fork choice's head onto the head the store holds, which is that one, so it tells nothing more, and the
+      // pool and its recorded head end on the final head
+      "reset nothing more when a fork choice reset the pool between the import's commit and its tell" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b515-interleaved"):
+          import com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset
+          import com.chipprbots.ethereum.transactions.TxPoolReset
+          val batch: List[Block] = testBlocks.take(2)
+          val above: Block = testBlocks(2)
+          // the pool stands on genesis, where the batch starts
+          txPoolHead.told(Some(BlockHelpers.genesis.header), pool.ref, TxPoolReset.Reset.empty)
+          duringImport.set { () =>
+            // the import commits the batch, and the fork choice moves the head on to `above` and resets the pool
+            (batch :+ above).foldLeft(ChainWeight.totalDifficultyOnly(0)) { (weight, block) =>
+              val next = weight.increase(block.header)
+              blockchainWriter.save(block, Nil, next, saveAsBestBlock = true)
+              next
+            }
+            txPoolHead.resetOnto(above.header, pool.ref)(from =>
+              TxPoolReset.between(from, above.header, blockchainReader)
+            )
+          }
+          answer.set(BlockImportedToTop(batch.map(weighed)))
+
+          importBatch(batch)
+
+          // the fork choice's reset, of the three blocks, and none after it
+          pool.expectMessage(5.seconds, HeadReset((batch :+ above).map(_.body.transactionList), Nil))
+          newHeads.receiveMessages(2, 5.seconds)
+          pool.expectNoMessage(500.millis)
+          txPoolHead.current shouldBe Some(above.header)
+      )
 
       // Spec 018 C4b: the same for a state fault, which carries the adopted prefix itself
       "tell of the adopted prefix only when this node's state could not take a later block" taggedAs (

@@ -727,6 +727,12 @@ trait TxGossipGateBuilder:
 
 trait PendingTransactionsManagerBuilder:
   def pendingTransactionsManager: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command]
+
+  /** The head the pool was last reset to (B-515): one per node, shared by the Engine API's fork choice and regular
+    * sync's importer, which both reset the pool.
+    */
+  lazy val txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead =
+    new com.chipprbots.ethereum.transactions.TxPoolHead
   // Alias kept for callers that reference the Typed ref by the old name.
   def pendingTransactionsManagerTyped: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command] =
     pendingTransactionsManager
@@ -1209,7 +1215,8 @@ trait EngineApiBuilder extends Logger:
       txGossipGate = Some(txGossipGate),
       stateHeldInPlace = storagesInstance.storages.pathStateStorage.map(state => () => state.anchor.map(_.hash)),
       stateRecovery = stateRecovery,
-      escalationWatch = escalationWatch
+      escalationWatch = escalationWatch,
+      txPoolHead = txPoolHead
     )(using blockchainConfig, typedScheduler)
 
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which
@@ -1700,7 +1707,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
               .forSite(instanceConfig.config, "sync.checkpoint-sync-tls-profile", secureRandom)
               .map(com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader.client)
               .left
-              .map(_.message)
+              .map(_.message),
+          txPoolHead = txPoolHead
         ),
         "sync-controller"
       )

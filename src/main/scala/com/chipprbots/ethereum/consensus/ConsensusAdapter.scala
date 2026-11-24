@@ -24,6 +24,8 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
 import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
+import com.chipprbots.ethereum.blockchain.sync.regular.MissingNodeAfterAMove
+import com.chipprbots.ethereum.blockchain.sync.regular.StateFaultAfterAMove
 import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusError
@@ -266,7 +268,8 @@ class ConsensusAdapter(
           val imported = adopted.zip(weights).collect {
             case (block, weight) if ofTheBatch(block.header.hash) => BlockData(block, Nil, weight)
           }
-          new BlockImportFailedAt(error, failingBlockHash, imported)
+          // the blocks the prefix replaced go back to the pool, as a reorganisation's do (B-460)
+          new BlockImportFailedAt(error, failingBlockHash, imported, movedOff = oldBranch)
         case SelectedNewBestBranchPartially(
               oldBranch,
               adopted,
@@ -346,7 +349,9 @@ class ConsensusAdapter(
           madeTheHead(imported.map(_.block))
           // the blocks of the batch that became the head before the missing node (B-337): its followers are told
           toldOfTheHead(imported.lastOption.map(_.block))
-          BlockImportFailedDueToMissingNode(reason, imported)
+          leftBy(newBranch, blocksToEnqueue) match
+            case Nil      => BlockImportFailedDueToMissingNode(reason, imported)
+            case movedOff => new MissingNodeAfterAMove(reason, imported, movedOff)
         case result @ ConsensusStateFault(fault, imported, blocksToEnqueue) =>
           // The blocks were not judged: they wait in the queue to be tried again, and none of them is dropped from it
           // as an invalid block's descendants are.
@@ -367,7 +372,11 @@ class ConsensusAdapter(
             toldTheFeed("a branch that was not judged")(
               _.notJudged(newBranch.toList.drop(imported.size), fault, blockValidation.firstInvalidHeaderNotJudged)
             )
-          BlockImportStateFault(fault, imported)
+          // the pool is reset onto where the head stands, the side blocks a move back that failed left it on included
+          // (B-514), off the blocks it left (B-460)
+          (leftBy(newBranch, blocksToEnqueue), Consensus.headLeftOn(result).map(_.block)) match
+            case (Nil, Nil)            => BlockImportStateFault(fault, imported)
+            case (movedOff, movedOnto) => new StateFaultAfterAMove(fault, imported, movedOff, movedOnto)
       }
 
   private def evaluated(
@@ -629,6 +638,17 @@ class ConsensusAdapter(
     */
   private def madeTheHead(blocks: Iterable[Block]): Unit =
     blockQueue.removeImported(blocks.map(_.header.hash))
+
+  /** The blocks a fault's result queues again that are not of the branch evaluated: those are the blocks the head left
+    * (`ConsensusImpl` queues the old chain's blocks again only once the head has left them: B-337, B-461), and the pool
+    * takes their transactions back as a reorganisation's (B-460). The branch's own blocks were not judged, or are the
+    * head's. None when the head left no block.
+    */
+  private def leftBy(newBranch: NonEmptyList[Block], blocksToEnqueue: List[Block]): List[Block] =
+    if blocksToEnqueue.isEmpty then Nil
+    else
+      val ofTheBranch = newBranch.toList.map(_.header.hash).toSet
+      blocksToEnqueue.filterNot(block => ofTheBranch(block.header.hash))
 
   /** Blocks a fault of this node's own state left unjudged, queued again against the head as it is now (B-336). */
   private def queuedAgain(blocks: List[Block]): Unit =

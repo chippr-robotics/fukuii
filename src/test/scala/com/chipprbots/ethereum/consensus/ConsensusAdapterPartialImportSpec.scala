@@ -15,10 +15,12 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedAt
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedDueToMissingNode
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
+import com.chipprbots.ethereum.blockchain.sync.regular.MovedOff
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusErrorDueToMissingNode
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusResult
@@ -156,6 +158,8 @@ class ConsensusAdapterPartialImportSpec extends AnyFlatSpec with Matchers with M
         at.failingBlockHash shouldBe branch(1).hash.value
         // the blocks of the batch that are the head, with their weights: what the importer counts the batch by
         at.imported shouldBe List(BlockData(branch.head, Nil, weights(1)))
+        // and the blocks the head left, which the pool takes back (B-460)
+        at.movedOff shouldBe List(oldHead)
       case other => fail(s"not the fault, with the prefix: $other")
     queued(oldHead) shouldBe true
     queued(branch(1)) shouldBe true
@@ -215,13 +219,62 @@ class ConsensusAdapterPartialImportSpec extends AnyFlatSpec with Matchers with M
   ) in (new Reorganised:
     queue.enqueueBlock(side)
     queued(side) shouldBe true
-    imported(
+    // ConsensusImpl queues again the chain the head left, oldHead, with the branch, which was not judged
+    val answer: Any = imported(
       new HeadLeftOnSideBlocks(
         new StateUnavailable("the move back failed"),
-        branch,
+        oldHead :: branch,
         List(BlockData(side, Nil, weights.head))
       )
-    ) shouldBe a[BlockImportStateFault]
+    )
+    answer shouldBe a[BlockImportStateFault]
     queued(side) shouldBe false
-    branch.foreach(block => queued(block) shouldBe true)
+    (oldHead :: branch).foreach(block => queued(block) shouldBe true)
+    // B-514: the pool is reset onto the side blocks the head was left on, off the chain it left
+    withClue("the answer names where the head was left, and what it left: ") {
+      MovedOff.onto(answer.asInstanceOf[BlockImportResult]) shouldBe List(side)
+      MovedOff.by(answer.asInstanceOf[BlockImportResult]) shouldBe List(oldHead)
+    }
+  )
+
+  // B-460: a fault of this node's state after a reorganisation's prefix became the head. ConsensusImpl queues the blocks
+  // the head left again together with the blocks not judged; the answer names the ones the head left, which are not
+  // of the branch evaluated, so that the pool takes them back as for a reorganisation that went through.
+  "A missing node met after a reorganisation's prefix became the head" should "name the blocks the head left, and be the missing node as before" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new Reorganised:
+    val reason = new MissingNodeException(branch(1).hash.value)
+    val adopted: List[BlockData] = List(BlockData(branch.head, Nil, weights(1)))
+    val answer: Any = imported(ConsensusErrorDueToMissingNode(List(oldHead), reason, adopted))
+    answer shouldBe BlockImportFailedDueToMissingNode(reason, adopted)
+    MovedOff.by(answer.asInstanceOf[BlockImportResult]) shouldBe List(oldHead)
+    queued(oldHead) shouldBe true
+  )
+
+  it should "name none when the prefix extended the head" taggedAs (UnitTest, ConsensusTest) in (new Setup:
+    val reason = new MissingNodeException(branch(1).hash.value)
+    val answer: Any = imported(ConsensusErrorDueToMissingNode(Nil, reason, prefix))
+    answer shouldBe BlockImportFailedDueToMissingNode(reason, prefix)
+    MovedOff.by(answer.asInstanceOf[BlockImportResult]) shouldBe Nil
+  )
+
+  "A state fault met after a reorganisation's prefix became the head" should "name the blocks the head left, not the blocks of the branch that were not judged" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new Reorganised:
+    val fault = new StateUnavailable("the head moved under the branch")
+    val adopted: List[BlockData] = List(BlockData(branch.head, Nil, weights(1)))
+    val answer: Any = imported(ConsensusStateFault(fault, adopted, List(oldHead) ++ branch.drop(1)))
+    answer shouldBe BlockImportStateFault(fault, adopted)
+    MovedOff.by(answer.asInstanceOf[BlockImportResult]) shouldBe List(oldHead)
+    queued(oldHead) shouldBe true
+    queued(branch(1)) shouldBe true
+  )
+
+  it should "name none when the prefix extended the head" taggedAs (UnitTest, ConsensusTest) in (new Setup:
+    val fault = new StateUnavailable("the head moved under the branch")
+    val answer: Any = imported(ConsensusStateFault(fault, prefix, branch.drop(1)))
+    answer shouldBe BlockImportStateFault(fault, prefix)
+    MovedOff.by(answer.asInstanceOf[BlockImportResult]) shouldBe Nil
   )

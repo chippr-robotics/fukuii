@@ -84,12 +84,16 @@ final case class ImportedPartially(
   * fault of this node's own state (`Consensus.isLocalStateFault`, B-336): those blocks are imported, and are accounted
   * for and announced as any imported blocks are, so that the escalation starts at the failing block. Empty otherwise: a
   * block's own error after a prefix that became the head is answered as [[ImportedPartially]] (B-338).
+  *
+  * `movedOff` ([[MovedOff]]): the blocks the head left when that prefix replaced them (a reorganisation), else empty.
   */
 final class BlockImportFailedAt(
     message: String,
     val failingBlockHash: ByteString,
-    val imported: List[BlockData] = Nil
+    val imported: List[BlockData] = Nil,
+    val movedOff: List[Block] = Nil
 ) extends BlockImportFailed(message)
+    with MovedOff
 
 object BlockImportFailedAt:
   /** The prefix a failed import adopted before its failing block: [[BlockImportFailedAt.imported]], or nothing. */
@@ -97,11 +101,43 @@ object BlockImportFailedAt:
     case at: BlockImportFailedAt => at.imported
     case _                       => Nil
 
+/** A result after which the head stands on blocks it moved onto from `movedOff`, ascending, though the import did not
+  * go through: a prefix of a reorganisation became the head, then a fault of this node's state stopped it (B-337), or a
+  * move back that failed left the head on the side blocks the branch stands on (B-461). The pool takes their
+  * transactions back as for a reorganisation that went through (B-460: the branch resolution no longer hands them to it
+  * ahead of the import). Empty when the head left no block.
+  */
+trait MovedOff:
+  def movedOff: List[Block]
+
+  /** The side blocks the branch stands on, of no batch, that a move back that failed left the head on (B-461), oldest
+    * first: the pool drops their transactions as a move onto them does (B-514). Empty otherwise.
+    */
+  def movedOnto: List[Block] = Nil
+
+object MovedOff:
+  /** The blocks `result` says the head moved off, or none. */
+  def by(result: BlockImportResult): List[Block] = result match
+    case moved: MovedOff => moved.movedOff
+    case _               => Nil
+
+  /** The side blocks `result` says the head was left on ([[MovedOff.movedOnto]]), or none. */
+  def onto(result: BlockImportResult): List[Block] = result match
+    case moved: MovedOff => moved.movedOnto
+    case _               => Nil
+
 /** `imported` is the validated prefix of the batch that was adopted before the missing node was hit; it is announced
   * like any imported blocks, and the retry starts at the first block after it.
   */
 case class BlockImportFailedDueToMissingNode(reason: MissingNodeException, imported: List[BlockData] = Nil)
     extends BlockImportResult
+
+/** A [[BlockImportFailedDueToMissingNode]] whose prefix replaced the blocks `movedOff` (a reorganisation, B-337,
+  * B-460). Equal to, and matched exactly like, the result it extends: only [[MovedOff.by]] reads `movedOff`.
+  */
+final class MissingNodeAfterAMove(reason: MissingNodeException, imported: List[BlockData], val movedOff: List[Block])
+    extends BlockImportFailedDueToMissingNode(reason, imported)
+    with MovedOff
 
 /** This node's own state could not take a block of the batch (spec 018 Track C, C4b): see
   * [[com.chipprbots.ethereum.consensus.Consensus.ConsensusStateFault]]. `imported` is the prefix that was adopted
@@ -112,5 +148,17 @@ case class BlockImportFailedDueToMissingNode(reason: MissingNodeException, impor
   * place that tells the results apart has to say what it does with it.
   */
 case class BlockImportStateFault(fault: StateFault, imported: List[BlockData] = Nil) extends BlockImportResult
+
+/** A [[BlockImportStateFault]] after which the head stands on blocks it moved onto from `movedOff` (B-337, B-461,
+  * B-460): the prefix `imported`, or the side blocks `movedOnto` a move back that failed left it on (B-514). Equal to,
+  * and matched exactly like, the result it extends: only [[MovedOff.by]] and [[MovedOff.onto]] read the two.
+  */
+final class StateFaultAfterAMove(
+    fault: StateFault,
+    imported: List[BlockData],
+    val movedOff: List[Block],
+    override val movedOnto: List[Block] = Nil
+) extends BlockImportStateFault(fault, imported)
+    with MovedOff
 
 case object UnknownParent extends BlockImportResult

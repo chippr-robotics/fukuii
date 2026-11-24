@@ -464,7 +464,9 @@ object SyncController:
       // `checkpoint-sync-tls-profile` names; built only when a download is due, and a profile that does not load is
       // the download's failure.
       checkpointHttpClient: () => Either[String, java.net.http.HttpClient] = () =>
-        Right(com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader.defaultHttpClient)
+        Right(com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader.defaultHttpClient),
+      // The head the tx pool was last reset to, the node's one, shared with the Engine API's fork choice (B-515).
+      txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead = new com.chipprbots.ethereum.transactions.TxPoolHead
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -499,7 +501,8 @@ object SyncController:
           peerScoringManager,
           stateEscalation,
           pathLiveSync,
-          checkpointHttpClient
+          checkpointHttpClient,
+          txPoolHead
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -546,7 +549,8 @@ object SyncController:
       peerScoringManager: Option[PeerScoringManager],
       stateEscalation: Option[StateEscalationPort],
       pathLiveSync: Option[PathLiveSyncPort],
-      checkpointHttpClient: () => Either[String, java.net.http.HttpClient]
+      checkpointHttpClient: () => Either[String, java.net.http.HttpClient],
+      txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead
   ):
     // scalastyle:on parameter.number
 
@@ -2933,7 +2937,8 @@ object SyncController:
             ctx.self,
             importLock,
             reorgState,
-            onCaughtUp = () => txGossipGate.markSynced("regular sync reached the best block peers announced")
+            onCaughtUp = () => txGossipGate.markSynced("regular sync reached the best block peers announced"),
+            txPoolHead = txPoolHead
           ),
           s"regular-sync-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")

@@ -13,6 +13,10 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailedDueToMissingNode
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
+import com.chipprbots.ethereum.blockchain.sync.regular.MovedOff
 import com.chipprbots.ethereum.consensus.Consensus.BranchExecutionFailure
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusErrorDueToMissingNode
 import com.chipprbots.ethereum.consensus.Consensus.ConsensusStateFault
@@ -32,6 +36,7 @@ import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.MPTError
 import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecError
+import com.chipprbots.ethereum.ledger.BlockQueue
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.testing.Tags.*
@@ -724,6 +729,47 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
     }
     blockchainReader.getBestBlock shouldBe Some(reorg.head)
 
+  // B-460 N3 (beacon): the adapter names the blocks the head left (`leftBy`) as the blocks a fault's result queues
+  // again that are not of the branch. That holds only while ConsensusImpl queues the old chain's blocks there once the
+  // head has left them, and no other block not of the branch: pinned here against the real producers, through the
+  // adapter, as the importer reads the answer (MovedOff).
+  "The blocks a fault after a reorganisation's prefix names as left" should "be the old chain the head left, after a missing node" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val reorg: List[Block] = heavierFrom(initialChain(2))
+    setMissingNodeAt(reorg(1))
+    val answer: BlockImportResult = answered(reorg)
+    answer shouldBe a[BlockImportFailedDueToMissingNode]
+    MovedOff.by(answer) shouldBe List(initialChain(3), initialChain(4))
+    MovedOff.onto(answer) shouldBe Nil
+
+  it should "be the old chain the head left, after a fault of this node's state" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val reorg: List[Block] = heavierFrom(initialChain(2))
+    setFailingBlockWith(reorg(1), stateFault)
+    val answer: BlockImportResult = answered(reorg)
+    answer shouldBe a[BlockImportStateFault]
+    MovedOff.by(answer) shouldBe List(initialChain(3), initialChain(4))
+    MovedOff.onto(answer) shouldBe Nil
+
+  it should "be none when the prefix did not outweigh the head and the head did not move" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    val lighter: List[Block] =
+      BlockHelpers.generateChain(3, initialChain(2), b => b.copy(header = b.header.copy(difficulty = Difficulty(1))))
+    val reorg: List[Block] = lighter.take(2) :+ BlockHelpers
+      .generateChain(1, lighter(1), b => b.copy(header = b.header.copy(difficulty = Difficulty(10000000))))
+      .head
+    setMissingNodeAt(reorg(2))
+    val answer: BlockImportResult = answered(reorg)
+    answer shouldBe a[BlockImportFailedDueToMissingNode]
+    MovedOff.by(answer) shouldBe Nil
+    blockchainReader.getBestBlock shouldBe Some(initialBestBlock)
+
   // SCALA 3 MIGRATION: Moved ConsensusSetup inside class to access MockFactory context
   class ConsensusSetup extends EphemBlockchainTestSetup:
     override lazy val blockExecution: BlockExecution = stub[BlockExecution]
@@ -794,6 +840,12 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
 
     def consensusWith(designatedHead: Option[DesignatedHead]): ConsensusImpl =
       new ConsensusImpl(blockchainReader, blockchainWriter, blockExecution, None, designatedHead)
+
+    /** `branch` evaluated through an adapter over this setup's consensus, as the importer is answered. */
+    def answered(branch: List[Block]): BlockImportResult =
+      new ConsensusAdapter(consensus, blockchainReader, new BlockQueue(blockchainReader, 100, 100), null, runtime)
+        .evaluateBranch(NonEmptyList.fromListUnsafe(branch))
+        .unsafeRunSync()
 
 object ConsensusImplSpec:
   val initialChain: List[Block] = BlockHelpers.genesis +: BlockHelpers.generateChain(4, BlockHelpers.genesis)
