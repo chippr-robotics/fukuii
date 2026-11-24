@@ -2008,17 +2008,18 @@ items:
   - id: B-213
     title: "SNAP serving: a trie node that cannot be read (missing, or corrupt) is served as a hole in the range; go-ethereum answers the whole request with nothing"
     priority: P3
-    status: in-progress
+    status: review
     area: p2p
     size: S
     opened: 2026-11-11
     refs: []
-    links: {}
+    links:
+      prs: [2107]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T20:10:36Z
-      heartbeat: 2026-11-24T20:10:40Z
+      heartbeat: 2026-11-24T20:45:14Z
     notes: SnapServer.orAbsent takes any failed read but a StateFault as NullNode, as resolve always did. On a pruned or damaged store the range then leaves out a subtree and its proofs cannot close over it, so the peer finds the response invalid. A corrupt node is not logged either. Found in spec 018 C2b (T058); behaviour unchanged there.
   - id: B-214
     title: "Delete the requesting side of GetNodeData: no eth version this node speaks carries it"
