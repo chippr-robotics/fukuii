@@ -3041,18 +3041,19 @@ items:
   - id: B-352
     title: "RegularSyncSpec timing flakes under load: 'save fetched node' and the ancestor-bodies deadline test each fail about 1 run in 5"
     priority: P3
-    status: claimed
+    status: review
     area: test
     size: S
     opened: 2026-11-18
     refs: []
     links:
+      prs: [2047]
       spec: "016"
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T06:24:39Z
-      heartbeat: 2026-11-24T06:24:39Z
+      heartbeat: 2026-11-24T06:25:47Z
       branch: fix/b352-save-fetched-node-wait
     notes: |-
       Seen on B-349 (#1912): 5 full runs, 2 with one failure each, a different test each time; 'save fetched node' also fails on plain staging. Fixed waits (fishForSpecificMessage 5 s, a 1 ms deadline) race a loaded machine. Find each wait and synchronise on the event instead; never skip.
