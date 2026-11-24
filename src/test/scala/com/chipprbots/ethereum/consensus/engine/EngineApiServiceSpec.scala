@@ -1,9 +1,17 @@
 package com.chipprbots.ethereum.consensus.engine
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime
+
+import scala.concurrent.Await
+import scala.concurrent.Future
+import scala.concurrent.duration.*
 
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
@@ -14,6 +22,7 @@ import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager.BeaconHead
 import com.chipprbots.ethereum.consensus.engine.PayloadStatus.*
 import com.chipprbots.ethereum.consensus.validators.std.StdValidators
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.*
 import com.chipprbots.ethereum.domain.BloomFilter
@@ -325,6 +334,38 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
         // Need to use same txRoot as the original block
         modified.copy(blockHash = header.hash.value)
 
+    /** The setup with a writer that pauses newPayload where it has stored the executed block's receipts, just before
+      * the weight (`keepExecuted`), until `proceed`, and that counts down `childWeightWritten` when the weight of
+      * `watched` is written.
+      */
+    trait LockedWeightSetup extends EngineApiTestSetup:
+      val receiptsStored = new CountDownLatch(1)
+      val proceed = new CountDownLatch(1)
+      val childWeightWritten = new CountDownLatch(1)
+      val watched = new AtomicReference[BlockHash](BlockHash(ByteString.empty))
+
+      override lazy val blockchainWriter: BlockchainWriter =
+        val s = storagesInstance.storages
+        new BlockchainWriter(
+          s.blockHeadersStorage,
+          s.blockBodiesStorage,
+          s.blockNumberMappingStorage,
+          s.transactionMappingStorage,
+          s.receiptStorage,
+          s.chainWeightStorage,
+          s.appStateStorage,
+          s.blockAccessListStorage,
+          pathState = s.pathStateStorage
+        ):
+          override def storeReceipts(blockHash: BlockHash, receipts: Seq[Receipt]): DataSourceBatchUpdate =
+            if blockHash == watched.get then
+              receiptsStored.countDown()
+              proceed.await(30, TimeUnit.SECONDS)
+            super.storeReceipts(blockHash, receipts)
+          override def storeChainWeight(blockHash: BlockHash, weight: ChainWeight): DataSourceBatchUpdate =
+            if blockHash == watched.get then childWeightWritten.countDown()
+            super.storeChainWeight(blockHash, weight)
+
     "give an executed block a ChainWeight, so p2p branch resolution can cross it" taggedAs UnitTest in
       (new EngineApiTestSetup:
         // WHY. `storeBlock`/`storeBlockByHashOnly` write a header and a body and nothing else, and nothing in the
@@ -358,6 +399,39 @@ class EngineApiServiceSpec extends AnyWordSpec with Matchers:
       engineApi.newPayload(blockToPayload(validBlock)).unsafeRunSync().status shouldBe Valid
 
       blockchainReader.getChainWeightByHash(validBlock.header.hash) shouldBe None
+
+    "write an executed block's weight only outside the chain-weight repair's final step (B-122)" taggedAs UnitTest in
+      (new LockedWeightSetup:
+        // #1654: ChainWeightReconcile's finish repairs weights and sets its marker under ChainInsertLock.exclusive.
+        // newPayload reads the parent's weight and writes the child's under the same lock, shared, so it can neither
+        // derive the child from the parent's unrepaired weight nor land between the finish's check and its marker.
+        val unrepaired: ChainWeight = ChainWeight.totalDifficultyOnly(BigInt(7))
+        val repaired: ChainWeight = ChainWeight.totalDifficultyOnly(BigInt(1000))
+        blockchainWriter.storeChainWeight(genesisHeader.hash, unrepaired).commit()
+        val (validBlock, _) = buildValidBlock1()
+        watched.set(validBlock.header.hash)
+
+        val payloadDone: Future[PayloadStatusV1] = engineApi.newPayload(blockToPayload(validBlock)).unsafeToFuture()
+        // newPayload has executed the block and is storing what it keeps of it, the weight next.
+        receiptsStored.await(30, TimeUnit.SECONDS) shouldBe true
+
+        val writtenDuringFinish = new AtomicReference[Option[Boolean]](None)
+        // The finish, as ChainWeightReconcile.finishLocked runs it: the lock held exclusively, then the repair written.
+        ChainInsertLock.exclusive {
+          proceed.countDown()
+          // A bounded wait for something that must NOT happen: the child's weight written while the finish holds the
+          // lock. With the shared lock it cannot be until the finish ends, so this always times out.
+          writtenDuringFinish.set(Some(childWeightWritten.await(2, TimeUnit.SECONDS)))
+          blockchainWriter.storeChainWeight(genesisHeader.hash, repaired).commit()
+        }
+
+        Await.result(payloadDone, 30.seconds).status shouldBe Valid
+        writtenDuringFinish.get shouldBe Some(false)
+        // derived from the repaired parent (a post-merge block adds no difficulty), never from the unrepaired one
+        blockchainReader.getChainWeightByHash(validBlock.header.hash) shouldBe Some(
+          repaired.increase(validBlock.header)
+        )
+      )
 
     "return VALID for a correctly constructed empty block" taggedAs UnitTest in new EngineApiTestSetup:
       val (validBlock, _) = buildValidBlock1()
