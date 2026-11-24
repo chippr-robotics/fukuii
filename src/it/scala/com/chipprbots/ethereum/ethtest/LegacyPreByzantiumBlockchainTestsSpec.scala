@@ -31,6 +31,9 @@ import com.chipprbots.ethereum.utils.NetworkType
   * `FUKUII_LEGACY_TESTS_DIRS` at one or more (colon-separated) `LegacyTests/<Era>/BlockchainTests` checkouts of
   * https://github.com/ethereum/legacytests; the spec cancels when none is present.
   *
+  * CI runs it nightly (`.github/workflows/ethereum-tests-nightly.yml`, job `legacy-blockchain-tests`) over a sparse
+  * checkout of legacytests pinned by commit, with `FUKUII_LEGACY_TESTS_REQUIRED=1`.
+  *
   * Optional: `FUKUII_LEGACY_TESTS_FILTER` (regex on the test name), `FUKUII_LEGACY_TESTS_REPORT` (file receiving one
   * line per failing test), `FUKUII_LEGACY_TESTS_VECTORS` (file appended with one `network, name, file, PASS|FAIL` line
   * per vector run, by both slices, the file relative to the legacytests root; spec 018 T007's per-vector diff) and
@@ -61,6 +64,12 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
     * apply), so such runs are report-only; compare their report with the ETH run's.
     */
   private val etcNetworkType: Boolean = sys.env.get("FUKUII_LEGACY_TESTS_NETWORK_TYPE").contains("ETC")
+
+  /** `FUKUII_LEGACY_TESTS_REQUIRED=1`, as the nightly CI job sets it (B-429): a root of `FUKUII_LEGACY_TESTS_DIRS` that
+    * is not a directory, no root at all, or a slice that runs no vector FAILS the slice instead of cancelling it, so a
+    * checkout that went missing cannot pass as a green run.
+    */
+  private val required: Boolean = sys.env.get("FUKUII_LEGACY_TESTS_REQUIRED").contains("1")
 
   private def configFor(network: String, fixtureChainId: Option[BigInt]): BlockchainConfig =
     val cfg = TestConverter.networkToConfig(network, baseBlockchainConfig)
@@ -114,12 +123,19 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
   private def runSlice(defaultSlice: Set[String], knownFailures: Set[String]): Unit =
     val sliceNetworks = networksOverride.getOrElse(defaultSlice)
     val enforce = networksOverride.isEmpty && !etcNetworkType
-    val roots = sys.env
+    val listed = sys.env
       .get("FUKUII_LEGACY_TESTS_DIRS")
       .toSeq
       .flatMap(_.split(":").toSeq)
+      .filter(_.nonEmpty)
       .map(new File(_))
-      .filter(_.isDirectory)
+    val roots = listed.filter(_.isDirectory)
+    if required then
+      // CI (B-429): a missing or partial checkout fails, it does not cancel
+      withClue("FUKUII_LEGACY_TESTS_REQUIRED is set: every root of FUKUII_LEGACY_TESTS_DIRS must be a directory: ") {
+        listed should not be empty
+        listed.filterNot(_.isDirectory).map(_.getPath) shouldBe empty
+      }
     assume(roots.nonEmpty, "FUKUII_LEGACY_TESTS_DIRS not set or not a directory")
     val nameFilter = sys.env.get("FUKUII_LEGACY_TESTS_FILTER").map(_.r)
 
@@ -194,6 +210,8 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
       info(s"$n: ${p + f} run, $p passed, $f failed")
     }
     val (tp, tf) = counts.values.foldLeft((0, 0)) { case ((a, b), (p, f)) => (a + p, b + f) }
+    if required then
+      withClue("FUKUII_LEGACY_TESTS_REQUIRED is set, and the slice ran no vector: ")(tp + tf should be > 0)
     info(s"TOTAL: ${tp + tf} run, $tp passed, $tf failed")
     info(
       s"POSITION MIRROR: $mirroredFixtures fixtures mirrored (the rest are not one chain), $mirroredUnits units kept, " +
