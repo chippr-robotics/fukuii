@@ -5271,3 +5271,14 @@ items:
     links:
       spec: 018
     notes: "forge, B-460. Also: resolveBranch still offers the predicted old branch's first header as an ommer before the import (see B-501); B-461 side blocks' own txs not removed from the pool; importBlock IO.raiseError inside .tap on non-redownload missing-node does nothing (pre-existing)."
+  - id: B-513
+    title: Post-merge, an invalid block on a branch the CL names is not the serving peer's fault; don't blacklist (followsConsensusLayer)
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "beacon W2 on B-338; geth beacon-mode downloader drops no peer for an invalid chain (from memory, verify). Hive: the only peer gets blacklisted."
