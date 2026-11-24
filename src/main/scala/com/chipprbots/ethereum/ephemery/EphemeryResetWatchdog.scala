@@ -17,7 +17,7 @@ import com.chipprbots.ethereum.ephemery.EphemeryResolver.Line
 import com.chipprbots.ethereum.utils.LazyLogger
 
 /** What the node does when its Ephemery iteration ends (spec 028 R11, FR-016): it logs a WARN and exits with code 75,
-  * so a supervisor's restart picks up the next iteration. The shutdown hooks of the node close it cleanly.
+  * so a supervisor's restart picks up the next iteration. The node's own `exit` stops it first (B-452).
   *
   * It wakes in steps of at most [[MaxWake]] and compares the clock each time, instead of sleeping the 28 days at once:
   * a host that was suspended, or a clock that was set, is noticed within one step.
@@ -25,7 +25,7 @@ import com.chipprbots.ethereum.utils.LazyLogger
   * State (data-model.md): idle, armed, fired, cancelled; `WarnOnly` and `Prepared` warn at the reset and do not exit.
   *
   * @param exit
-  *   the way out, `StartupDeps.exit`
+  *   the way out: `StartupDeps.exit` after the node's stop (`Fukuii.run`)
   * @param report
   *   where the WARN goes
   */

@@ -650,10 +650,9 @@ abstract class BaseNode extends Node:
   private def startTuiFrames(): Unit =
     // Tui.current, never getInstance(): a node started without --tui has no TUI, and asking must not make one (B-045).
     Tui.current.filter(_.isEnabled).foreach { tui =>
-      // `q` restores the terminal, then exits the JVM; the shutdown hook (ShutdownHooks) runs this node's shutdown(),
-      // which stops the updater. The restore cannot wait for the TuiRestore hook: JLine's hook may close the terminal
-      // first, leaving the user's shell in the alternate screen with the cursor hidden.
-      val quit = TuiUpdater.restoreThenQuit(tui, () => sys.exit(0))
+      // `q` restores the terminal, runs this node's stop (or waits for one under way), then exits with its status
+      // (B-452): the JVM's hook does not wait for a stop under way, so exiting first could cut the database's close.
+      val quit = StdNode.tuiQuit(tui, () => stopForExit(), code => sys.exit(code))
       // The settings Fukuii.main loaded (`fukuii.tui` plus the environment) when it built the TUI.
       val updater = TuiUpdater(tui, tui.config, () => tuiSnapshots.get, Config.blockchains.network, quit)
       // The chain's identity, from the configuration alone, before the first frame: the sidebar's icon and the header
@@ -816,6 +815,13 @@ abstract class BaseNode extends Node:
 
   /** Whether this node's stop has run and closed the database: the exit status of a SIGTERM stop is 0 only then. */
   def stoppedCleanly: Boolean = stopOnce.outcome.exists(_.toOption.exists(_.completed(StdNode.CloseDatabase)))
+
+  /** Runs this node's stop, or waits for the one under way, and says whether it closed the database: what an exit path
+    * that starts once the node is up calls before it exits (SIGTERM, the TUI's `q`, the Ephemery reset; B-452).
+    */
+  def stopForExit(): Boolean =
+    shutdown()
+    stoppedCleanly
 
   private def shutDownOnce(): ShutdownSequence.Outcome =
     import ShutdownSequence.Budget
@@ -1054,6 +1060,18 @@ class StdNode(
   override lazy val instanceConfig: com.chipprbots.ethereum.utils.InstanceConfig = _instanceConfig
 
 object StdNode:
+
+  /** The TUI's `q` (B-452): the terminal is restored first (its raw mode and alternate screen, whatever the stop then
+    * does), then the node stops through [[StopSignal.stopThenExit]], and `exit` comes only once that stop has ended,
+    * with its status (or `halt` when the stop died of a [[VirtualMachineError]]). `stop` is [[BaseNode.stopForExit]].
+    */
+  def tuiQuit(
+      tui: Tui,
+      stop: () => Boolean,
+      exit: Int => Unit,
+      halt: Int => Unit = code => Runtime.getRuntime.halt(code)
+  ): () => Unit =
+    TuiUpdater.restoreThenQuit(tui, () => StopSignal.stopThenExit("TUI quit", stop, exit, halt = halt))
 
   /** The name of the stop's last step, whose completion makes a stop clean (B-426). */
   val CloseDatabase: String = "database close"
