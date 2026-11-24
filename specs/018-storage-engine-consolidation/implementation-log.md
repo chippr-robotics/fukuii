@@ -3822,9 +3822,21 @@ views; a head above the tip; -38002 for a safe or finalized block that is not an
 the broadcast pairing taken, the weight arm's admit left as a follow-up.
 
 **Left**: the consensus layer's branch that forks below what a view reaches is adopted by no one (B-316); a head refused
--38002 is still published to SNAP as a pivot hint (B-317). **Not pinned** (B-318): a fault of the pin's release after a
-hand-off is decided (the hand-off is then not asked for); the `Deep`, `Incomplete` and `Pivot` refusals one by one (the
-finalized one is); a catch-up's move refused for a head ahead of it (an adoption's is).
+-38002 is still published to SNAP as a pivot hint (B-317). **Not pinned**: a catch-up's move refused for a head ahead of
+it (an adoption's is).
+
+**Pinned since (B-318, #2074, 2026-11-24)**: the `Deep`, `Incomplete` and `Pivot` refusals one by one, each met for real
+(`ReorgBlockhashParitySpec`, "be refused for this head, not queued, and nothing of it written but its blocks by hash
+(Deep | Incomplete | Pivot)"): refused for this head, nothing queued, nothing written but the branch's headers and
+bodies by hash. A fault of the pin's release after a hand-off ("be neither handed off nor set aside when its pin's
+release fails, and be handed off at the next attempt"): a state fault queues the branch again, anything else is
+thrown, and neither hands it off. **Found with it, and fixed**: the branch was set aside inside the pin, before the
+release, so a release that failed left what hung from it set aside with no hand-off made; it is now set aside only once
+the hand-off is what was answered. **And (B-516)**: a head already past the branch's tip when the branch is weighed
+took the move to the tip back down below it, and told the block it left as the chain left. A move with nothing forward
+is now refused on the consensus layer's arm whenever it is met, answered as a head moved there meanwhile is (the head's
+own chain, nothing written; its blocks told once more, which is harmless) ("not move the head back down when it is past
+the branch's tip already as the branch is weighed"). Mutation runs: 6 of 6 caught (B-318), 4 of 4 (B-516).
 
 **Tests**: `ReorgBlockhashParitySpec` (+7: a hand-off adopted by a real recovery; a refusal not queued, what hangs
 from it refused, a move of the head ending it; set aside after a hand-off, and no hand-off below the views; the head
@@ -3834,7 +3846,7 @@ two cases extended), `RegularSyncSpec` (+2), `ForkChoiceManagerSpec` (+2), `Engi
 **The mutation run**: 24 rules broken one at a time, 22 caught. The two that survive are the not-pinned ones above: a
 catch-up's check of a head ahead of the block it moves to (its race needs a head that is not the block the catch-up
 stands on, which a hand-off's catch-up never has), and `Deep` taken out of the refusals that hold while the head stays
-(B-318).
+(caught since B-318).
 
 #### C5a part 9c: a heavier branch that is the shorter, and a lighter one fetched again and again (B-300, in part) (2026-11-16)
 
