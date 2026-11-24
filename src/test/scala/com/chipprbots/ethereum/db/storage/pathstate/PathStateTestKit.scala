@@ -134,7 +134,7 @@ object PathStateTestKit:
 
     /** `changes` made to the state at `from` and persisted; the new state root. */
     def change(from: ByteString)(changes: World => World): ByteString =
-      InMemoryWorldStateProxy.persistState(changes(world(from))).stateRootHash
+      InMemoryWorldStateProxy.persistStateAndWriteCode(changes(world(from))).stateRootHash
 
     val root: ByteString = change(EmptyRoot) { empty =>
       val peopled = crowd.zipWithIndex.foldLeft(empty) { case (world, (address, i)) =>

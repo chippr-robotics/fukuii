@@ -70,6 +70,47 @@ class StateReadByHeaderSpec
     ethUserService.getBalance(GetBalanceRequest(address, BlockParam.Pending)).unsafeRunSync() shouldEqual
       Right(GetBalanceResponse(123))
 
+  // B-230: a build writes no code; the code a pending block deploys is in its world, and only there.
+  it should "answer eth_getCode for pending from the pending block's world, which holds the code its build deployed" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val created: Address = Address(0xc0de)
+    val createdCode: ByteString = ByteString(Hex.decode("60026001556000"))
+    val pendingWorld: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(
+      InMemoryWorldStateProxy(
+        storagesInstance.storages.evmCodeStorage,
+        blockchain.getBackingMptStorage(-1),
+        (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+        UInt256.Zero,
+        header.stateRoot.value,
+        noEmptyAccounts = false,
+        ethCompatibleStorage = true
+      ).newEmptyAccount(created).saveCode(created, createdCode)
+    )
+    val pendingHeader: BlockHeader =
+      header.copy(
+        number = header.number + 1,
+        parentHash = header.hash,
+        stateRoot = TrieRoot(pendingWorld.stateRootHash)
+      )
+    (() => blockGenerator.getPendingBlockAndState)
+      .expects()
+      .returns(
+        Some(
+          com.chipprbots.ethereum.consensus.blocks.PendingBlockAndState(
+            com.chipprbots.ethereum.consensus.blocks.PendingBlock(Block(pendingHeader, body), Nil),
+            pendingWorld
+          )
+        )
+      )
+      .anyNumberOfTimes()
+    storagesInstance.storages.evmCodeStorage.get(crypto.kec256(createdCode)) shouldBe None
+    ethUserService.getCode(GetCodeRequest(created, BlockParam.Pending)).unsafeRunSync() shouldEqual
+      Right(GetCodeResponse(createdCode))
+    ethUserService.getCode(GetCodeRequest(address, BlockParam.Pending)).unsafeRunSync() shouldEqual
+      Right(GetCodeResponse(code))
+
   it should "answer eth_getCode, eth_getStorageAt, eth_getTransactionCount and the storage root and values" taggedAs (
     UnitTest,
     RPCTest

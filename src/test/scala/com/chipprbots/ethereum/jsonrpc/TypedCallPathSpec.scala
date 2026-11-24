@@ -147,7 +147,7 @@ class TypedCallPathSpec
         (AddressEcho, AddressEchoCode),
         (Collector, CollectorCode)
       ).foldLeft(funded) { case (w, (a, c)) => withContract(w, a, c) }
-      InMemoryWorldStateProxy.persistState(
+      InMemoryWorldStateProxy.persistStateAndWriteCode(
         extraState(withContract(contracts, SlotReader, SlotReaderCode, Map(1 -> 42)))
       )
 

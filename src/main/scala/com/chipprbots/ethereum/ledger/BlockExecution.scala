@@ -90,6 +90,16 @@ class BlockExecution(
           result
     })
 
+  /** Writes the code `world` deployed to the code store, for a path that commits the block's state: see
+    * [[InMemoryWorldStateProxy.deployedCodeWrite]]. Every other execution leaves its code in its world (B-230).
+    */
+  def writeDeployedCode(world: InMemoryWorldStateProxy): Unit =
+    InMemoryWorldStateProxy.deployedCodeWrite(world).foreach(_.commit())
+
+  /** [[writeDeployedCode]] of code taken out of its world: a proposer's build, kept as a block's state. */
+  def writeDeployedCode(code: Map[ByteString, ByteString]): Unit =
+    InMemoryWorldStateProxy.deployedCodeWrite(code, evmCodeStorage).foreach(_.commit())
+
   /** Times the block's database commit (one atomic batch since #1465), which `[IMPORT-TIMING]` ends before. */
   private def timedCommit[A](block: Block)(body: => A): A =
     val t = System.nanoTime()
@@ -133,7 +143,12 @@ class BlockExecution(
         )
         _ <- validateRequestsHash(block, result.executionRequests)
         _ <- validateBlockAccessList(block, result.blockAccessList)
-      yield (result.receipts, result.executionRequests, result.blockAccessList)
+      yield
+        // The block is valid: the code it deployed goes to the code store now, before the caller commits the state
+        // that refers to it (B-230). A block that failed above wrote none. The caller can still refuse the commit (a
+        // head that moved, a branch too large to hold): what is written then is code nothing refers to.
+        writeDeployedCode(result.worldState)
+        (result.receipts, result.executionRequests, result.blockAccessList)
 
     if blockExecResult.isRight then
       log.debug(s"Block ${block.header.number} (with hash: ${block.header.hashAsHexString}) executed correctly")
@@ -160,6 +175,9 @@ class BlockExecution(
       blockchainConfig: BlockchainConfig
   ): Either[BlockExecutionError, (Seq[Receipt], BigInt, ByteString, Seq[ByteString], Option[BlockAccessList])] =
     executeBlock(block).map { result =>
+      // This path writes the block's trie nodes straight through as it executes, and its caller validates and stores
+      // the block afterwards; the block's code is written here, as `persistState` wrote it before B-230.
+      writeDeployedCode(result.worldState)
       (
         result.receipts,
         result.gasUsed,
@@ -239,9 +257,9 @@ class BlockExecution(
     *
     * Where what it persists goes depends on the state layout; see [[buildInitialWorld]]. On the hash store the trie
     * nodes reach the store, by their hashes, where the import of the same block finds them already written. On the
-    * unified layout they go to a layer of this execution's own and are dropped with it: nothing is written but contract
-    * code, which is kept by its hash on both. Either way no block, receipt or head is written here, and a block that
-    * was built is executed again when it is imported.
+    * unified layout they go to a layer of this execution's own and are dropped with it. Contract code is written on
+    * neither: it stays in the returned world (`deployedCode`, B-230). Either way no block, receipt or head is written
+    * here, and a block that was built is executed again when it is imported, which writes its code.
     */
   def executeForProposer(
       block: Block

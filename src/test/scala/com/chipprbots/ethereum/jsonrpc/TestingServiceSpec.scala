@@ -201,6 +201,26 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       head.header.hash.value shouldBe second.blockHash
       head.header.parentHash.value shouldBe first.blockHash
 
+    // B-230: a build writes no code. On the hash store this commit keeps the build's own writes as the block's state,
+    // so it writes the code the build deployed, or the head refers to a contract with none.
+    "write the code the committed block deploys" taggedAs UnitTest in new Setup:
+      // PUSH4 0xdeadbeef PUSH1 0 MSTORE PUSH1 4 PUSH1 28 RETURN: deploys the 4 bytes deadbeef
+      val runtime: ByteString = ByteString(org.bouncycastle.util.encoders.Hex.decode("deadbeef"))
+      val runtimeHash: ByteString = crypto.kec256(runtime)
+      storagesInstance.storages.evmCodeStorage.get(runtimeHash) shouldBe None
+      service
+        .commitBlock(
+          CommitBlockRequest(
+            attrs(),
+            Some(Seq(rawTx(nonce = 0, to = None, gas = 100000, data = "63deadbeef6000526004601cf3"))),
+            Some(ByteString.empty)
+          )
+        )
+        .unsafeRunSync()
+        .getOrElse(fail("commit failed"))
+      blockchainReader.getBestBlockNumber shouldBe BigInt(1)
+      storagesInstance.storages.evmCodeStorage.get(runtimeHash) shouldBe Some(runtime)
+
     "NOT move the head when a transaction cannot be applied" taggedAs UnitTest in new Setup:
       val res: Either[JsonRpcError, CommitBlockResponse] = service
         .commitBlock(CommitBlockRequest(attrs(), Some(Seq(rawTx(nonce = 999))), Some(ByteString.empty)))
@@ -526,16 +546,21 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       * y-parity signing schema sidesteps the legacy EIP-155 `v = chainId*2+35` encoding, which does not fit this
       * chain's id.
       */
-    def rawTx(nonce: BigInt): ByteString =
+    def rawTx(
+        nonce: BigInt,
+        to: Option[Address] = Some(Address(0x42)),
+        gas: BigInt = 21000,
+        data: String = ""
+    ): ByteString =
       val tx = TransactionWithDynamicFee(
         chainId = blockchainConfig.chainId.value,
         nonce = nonce,
         maxPriorityFeePerGas = BigInt(500),
         maxFeePerGas = BigInt(2_000_000_000L),
-        gasLimit = GasAmount(21000),
-        receivingAddress = Some(Address(0x42)),
+        gasLimit = GasAmount(gas),
+        receivingAddress = to,
         value = BigInt(1),
-        payload = ByteString.empty,
+        payload = ByteString(org.bouncycastle.util.encoders.Hex.decode(data)),
         accessList = Nil
       )
       val stx = SignedTransaction.sign(tx, senderKeys, Some(blockchainConfig.chainId.value))

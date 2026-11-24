@@ -151,7 +151,7 @@ class EthereumTestHelper(using bc: BlockchainConfig) extends ScenarioSetup:
         }
 
         // Persist the initial state into the blockchain's storage
-        val persistedWorld = InMemoryWorldStateProxy.persistState(world)
+        val persistedWorld = InMemoryWorldStateProxy.persistStateAndWriteCode(world)
         positionMirror.foreach(_.ended(Some(persistedWorld.stateRootHash), loadNode))
 
         // Step 2: Execute blocks using the same storage

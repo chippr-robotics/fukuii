@@ -160,7 +160,7 @@ class TestingAmsterdamSpec extends AnyWordSpec with Matchers:
         parentHash = BlockHash(Zero32),
         ommersHash = BlockHash(BlockHeader.EmptyOmmers),
         beneficiary = ByteString(new Array[Byte](20)),
-        stateRoot = TrieRoot(InMemoryWorldStateProxy.persistState(funded).stateRootHash),
+        stateRoot = TrieRoot(InMemoryWorldStateProxy.persistStateAndWriteCode(funded).stateRootHash),
         transactionsRoot = TrieRoot(BlockHeader.EmptyMpt),
         receiptsRoot = TrieRoot(BlockHeader.EmptyMpt),
         logsBloom = BloomFilter.Empty,

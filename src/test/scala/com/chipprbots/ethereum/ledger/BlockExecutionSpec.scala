@@ -711,6 +711,47 @@ class BlockExecutionSpec
 
     }
 
+    // B-230: the code a block deploys reaches the code store only when its state is committed, never from a block that
+    // fails, nor from a proposer's build. Persisting a world wrote it to disk at once, before.
+    "write the code a block deploys" should {
+
+      "write it when the block is committed, readable by a store opened afresh" taggedAs (
+        UnitTest,
+        StateTest
+      ) in new DeployedCodeSetup(failAfterExecution = false):
+        val (blocks, error) = blockExecution.executeAndValidateBlocks(List(block), defaultChainWeight)
+        error shouldBe None
+        blocks.map(_.block) shouldBe List(block)
+        blockchainStorages.evmCodeStorage.get(codeHash) shouldBe Some(code)
+        // a second storage over the same data source, with none of the first one's caches: a restart
+        new com.chipprbots.ethereum.db.storage.EvmCodeStorage(blockchainStorages.evmCodeStorage.dataSource)
+          .getForExecution(codeHash) shouldBe Some(code)
+
+      "not write it for a block that fails validation after execution" taggedAs (
+        UnitTest,
+        StateTest
+      ) in new DeployedCodeSetup(failAfterExecution = true):
+        val (blocks, error) = blockExecution.executeAndValidateBlocks(List(block), defaultChainWeight)
+        blocks shouldBe Nil
+        error.isDefined shouldBe true
+        blockchainStorages.evmCodeStorage.get(codeHash) shouldBe None
+
+      "not write it for a proposer's build, whose world holds it" taggedAs (
+        UnitTest,
+        StateTest
+      ) in new DeployedCodeSetup(failAfterExecution = false):
+        val built: Either[BlockExecutionError, BlockResult] = blockExecution.executeForProposer(block)
+        built.map(_.worldState.deployedCode.get(codeHash)) shouldBe Right(Some(code))
+        blockchainStorages.evmCodeStorage.get(codeHash) shouldBe None
+
+      "write it through executeBlockNoValidation, whose caller keeps the state it wrote through" taggedAs (
+        UnitTest,
+        StateTest
+      ) in new DeployedCodeSetup(failAfterExecution = false):
+        blockExecution.executeBlockNoValidation(block).isRight shouldBe true
+        blockchainStorages.evmCodeStorage.get(codeHash) shouldBe Some(code)
+    }
+
     "EIP-4895 withdrawal processing" should {
 
       "credit the withdrawal amount exactly once per block" taggedAs UnitTest in new BlockExecutionTestSetup:
@@ -783,3 +824,44 @@ class BlockExecutionSpec
         mining.blockPreparator,
         blockValidation
       )
+
+  /** One block of one transaction whose (mocked) execution deploys `code` at `deployed`. */
+  class DeployedCodeSetup(failAfterExecution: Boolean) extends BlockchainSetup:
+    val code: ByteString = ByteString(Hex.decode("60016000556002600155"))
+    val codeHash: ByteString = com.chipprbots.ethereum.crypto.kec256(code)
+    val deployed: Address = Address(0xc0de)
+
+    override lazy val vm: MockVM = new MockVM(c =>
+      createResult(
+        context = c.copy(world = c.world.newEmptyAccount(deployed).saveCode(deployed, code)),
+        gasUsed = UInt256(0),
+        gasLimit = UInt256(defaultGasLimit),
+        gasRefund = UInt256.Zero
+      )
+    )
+    // the mocked execution reaches no header's roots: the check after execution is the test's to answer
+    private val validators = new Mocks.MockValidatorsAlwaysSucceed:
+      override def validateBlockAfterExecution(
+          block: Block,
+          stateRootHash: ByteString,
+          receipts: Seq[Receipt],
+          gasUsed: BigInt
+      )(implicit
+          blockchainConfig: com.chipprbots.ethereum.utils.BlockchainConfig
+      ): Either[BlockExecutionError, BlockExecutionSuccess] =
+        if failAfterExecution then Left(BlockExecutionError.ValidationAfterExecError("state root"))
+        else Right(BlockExecutionSuccess)
+    private val codeMining: TestMining = mining.withVM(vm).withValidators(validators)
+    override lazy val blockValidation =
+      new BlockValidation(codeMining, blockchainReader, BlockQueue(blockchainReader, syncConfig))
+    override lazy val blockExecution =
+      new BlockExecution(
+        blockchain,
+        blockchainReader,
+        blockchainWriter,
+        blockchainStorages.evmCodeStorage,
+        codeMining.blockPreparator,
+        blockValidation
+      )
+    val block: Block =
+      Block(validBlockHeader, validBlockBodyWithNoTxs.copy(transactionList = Seq(validStxSignedByOrigin)))

@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.ledger
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.*
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage.Code
 import com.chipprbots.ethereum.domain
@@ -108,9 +109,15 @@ object InMemoryWorldStateProxy:
           throw new MissingStorageNodeException(e.hash, address.bytes, e.location)
 
   /** Updates state trie with current changes but does not persist them into the storages. To do so it:
-    *   - Commits code (to get account's code hashes)
+    *   - Moves the code deployed since the last persist into [[InMemoryWorldStateProxy.deployedCode]] by its hash, and
+    *     sets each account's code hash
     *   - Commits constract storages (to get account's contract storage root)
     *   - Updates state tree
+    *
+    * Code is not written to the code store here (B-230). Execution that is thrown away (an `eth_call`, an estimate, a
+    * simulation, a trace, a proposer's build, a block that fails validation) persists its world too, and used to write
+    * every contract it deployed to disk, without bound. The code stays in the world, read back from there, and the path
+    * that commits a block's state writes it ([[deployedCodeWrite]]).
     *
     * @param worldState
     *   Proxy to commit
@@ -121,11 +128,11 @@ object InMemoryWorldStateProxy:
     def persistCode(worldState: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
       worldState.accountCodes.foldLeft(worldState) { case (updatedWorldState, (address, code)) =>
         val codeHashBs = kec256(code)
-        updatedWorldState.evmCodeStorage.put(codeHashBs, code).commit()
         updatedWorldState.copyWith(
           accountsStateTrie = updatedWorldState.accountsStateTrie +
             (address -> updatedWorldState.getGuaranteedAccount(address).copy(codeHash = CodeHash(codeHashBs))),
-          accountCodes = Map.empty
+          accountCodes = Map.empty,
+          deployedCode = updatedWorldState.deployedCode + (codeHashBs -> code)
         )
       }
 
@@ -159,6 +166,34 @@ object InMemoryWorldStateProxy:
       .andThen(resetReplacedStorage)
       .andThen(persistContractStorage)
       .andThen(persistAccountsStateTrie)(worldState)
+
+  /** The write of the code `world` deployed, to its code store, or `None` when it deployed none. For the paths that
+    * commit a block's state, and only them: committed BEFORE the state that refers to the code, or in the same batch,
+    * never after, so that a kill between the two leaves at most code nothing refers to (content-addressed, harmless),
+    * never an account whose code is missing. Expects a persisted world: code deployed since the last [[persistState]]
+    * is not in it yet.
+    *
+    * Why a write of its own, ahead of the state batch, is safe today: the code store and the state are column families
+    * of ONE RocksDB, and every write goes through its one write-ahead log (no write bypasses it:
+    * `scripts/check-wal-writes.sh`). The log is written in commit order and recovery replays a prefix of it, so a crash
+    * can keep the code and lose the state batch after it, never the reverse. That stops holding if the code store moves
+    * to another database, or if the code or the state is ever written round the log (`disableWAL`, an ingested SST):
+    * then a crash can keep a state whose code is gone, and the code must go into the state's own batch (B-454).
+    */
+  def deployedCodeWrite(world: InMemoryWorldStateProxy): Option[DataSourceBatchUpdate] =
+    deployedCodeWrite(world.deployedCode, world.evmCodeStorage)
+
+  /** [[persistState]], then the write of the world's code ([[deployedCodeWrite]]): for a world that is a state kept
+    * whole, as a pre-state or a genesis a test or a tool builds and then reads back from the stores.
+    */
+  def persistStateAndWriteCode(worldState: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
+    val persisted = persistState(worldState)
+    deployedCodeWrite(persisted).foreach(_.commit())
+    persisted
+
+  /** [[deployedCodeWrite]] of code a world deployed, taken out of it (a proposer's build hands back only that). */
+  def deployedCodeWrite(code: Map[ByteString, Code], to: EvmCodeStorage): Option[DataSourceBatchUpdate] =
+    Option.when(code.nonEmpty)(to.update(Nil, code.toSeq))
 
   /** Returns an [[InMemorySimpleMapProxy]] of the accounts state trie "The world state (state), is a mapping between
     * Keccak 256-bit hashes of the addresses (160-bit identifiers) and account states (a data structure serialised as
@@ -252,7 +287,12 @@ class InMemoryWorldStateProxy(
     // The accounts whose storage trie this world has replaced as a whole and has not yet told its storage about (spec
     // 018 data-model 3 rule 6). A value of the world, like everything it has not persisted: a world that is thrown
     // away (a call frame that reverts) takes its resets with it.
-    val storageResets: Set[Address] = Set.empty
+    val storageResets: Set[Address] = Set.empty,
+    // Code this world has persisted ([[InMemoryWorldStateProxy.persistState]]), by its hash, and not written to
+    // `evmCodeStorage`: a world is a value, and only the path that commits a block's state writes its code
+    // ([[InMemoryWorldStateProxy.deployedCodeWrite]], B-230). Read before the code store. Kept whole through a
+    // `deleteAccount`, as the store kept it: content-addressed, and another account may have the same code.
+    val deployedCode: Map[ByteString, Code] = Map.empty
 ) extends WorldStateProxy[InMemoryWorldStateProxy, InMemoryWorldStateProxyStorage]:
 
   override def getAccount(address: Address): Option[Account] =
@@ -313,8 +353,9 @@ class InMemoryWorldStateProxy(
     */
   override def getCode(address: Address): ByteString = getCodeAndHash(address)._1
 
-  /** [[getCode]] plus the account's `codeHash` when the code came from `EvmCodeStorage` under that hash. Code deployed
-    * earlier in the block and not yet persisted (`accountCodes`) has no hash at hand, so `None`.
+  /** [[getCode]] plus the account's `codeHash` when the code came from `EvmCodeStorage` under that hash, or from
+    * [[deployedCode]], the code this world persisted and has not written. Code deployed earlier in the block and not
+    * yet persisted (`accountCodes`) has no hash at hand, so `None`.
     */
   override def getCodeAndHash(address: Address): (ByteString, Option[ByteString]) =
     ImportProfile.code {
@@ -325,7 +366,7 @@ class InMemoryWorldStateProxy(
             case None => (ByteString.empty, None)
             case Some(account) =>
               val hash = account.codeHash.value
-              evmCodeStorage.getForExecution(hash) match
+              deployedCode.get(hash).orElse(evmCodeStorage.getForExecution(hash)) match
                 case Some(code) =>
                   ImportProfile.codeBytesRead(code.length)
                   (code, Some(hash))
@@ -346,7 +387,7 @@ class InMemoryWorldStateProxy(
           case Some(account) =>
             ImportProfile.code {
               val hash = account.codeHash.value
-              evmCodeStorage.getSizeForExecution(hash) match
+              deployedCode.get(hash).map(_.length).orElse(evmCodeStorage.getSizeForExecution(hash)) match
                 case Some(size) => size
                 case None       => throw new MissingCodeException(hash, address.bytes)
             }
@@ -408,7 +449,8 @@ class InMemoryWorldStateProxy(
       evmCodeStorage: EvmCodeStorage = evmCodeStorage,
       accountCodes: Map[Address, Code] = accountCodes,
       touchedAccounts: Set[Address] = touchedAccounts,
-      storageResets: Set[Address] = storageResets
+      storageResets: Set[Address] = storageResets,
+      deployedCode: Map[ByteString, Code] = deployedCode
   ): InMemoryWorldStateProxy =
     new InMemoryWorldStateProxy(
       stateStorage,
@@ -423,7 +465,8 @@ class InMemoryWorldStateProxy(
       ethCompatibleStorage,
       flatSlotStorage,
       readMemos,
-      storageResets
+      storageResets,
+      deployedCode
     )
 
   override def getBlockHash(number: UInt256): Option[UInt256] = getBlockByNumber(number).map(UInt256(_))
