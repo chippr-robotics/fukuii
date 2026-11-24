@@ -610,6 +610,72 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
             node.bestHash shouldBe next.hash
       }
   }
+  // B-503: a batch the store was busy for is queued again (B-440), and regular sync fetches it again and adopts it
+  // with `evaluateBranch`. The blocks it made the head must leave the queue, as a branch the queue resolved does: left
+  // in it, the next block announced is resolved with them as its branch, and the node reorganises onto its own chain,
+  // executes them again and tells a reorganisation whose old blocks are the new ones, then queues them again.
+  for (layout, guard) <- Seq(("the hash layout", false), ("the unified layout", true)) do
+    (s"A batch queued again after the store was busy, then made the head by a batch that extends it ($layout)" should
+      "leave the queue, so that the next block is imported to the top and none is executed again").taggedAs(
+      UnitTest,
+      ConsensusTest
+    ) in (new BusyOnce(guard):
+      val chain: List[Block] = oracle.extendCanonical(oracle.genesis, 3, difficulty = 1000)
+      val batch: List[Block] = oracle.extendCanonical(chain.last, 10, difficulty = 1000)
+      val child: Block = oracle.extendCanonical(batch.last, 1, difficulty = 1000).head
+      node.importAll(chain) shouldBe a[BlockImportedToTop]
+
+      busyFor(1)
+      inBatch(batch) match
+        case BlockImportStateFault(_, imported) => imported shouldBe Nil
+        case other                              => fail(s"not a store that was busy: $other")
+      batch.foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
+
+      inBatch(batch) match
+        case BlockImportedToTop(imported) => imported.map(_.block.hash) shouldBe batch.map(_.hash)
+        case other                        => fail(s"the batch is not imported to the top: $other")
+
+      evaluated.clear()
+      announced(child) match
+        case BlockImportedToTop(imported) => imported.map(_.block.hash) shouldBe List(child.hash)
+        case other                        => fail(s"the announced block is not imported to the top: $other")
+      // the consensus was handed the announced block alone: no block of the batch was executed again
+      evaluated.toList shouldBe List(List(child.hash))
+      node.bestHash shouldBe child.hash
+      (child :: batch).foreach(block => node.blockQueue.isQueued(block.hash) shouldBe false)
+    )
+
+    (s"A side branch queued again after the store was busy, then made the head by a reorganisation ($layout)" should
+      "leave the queue, the blocks it left queued again, and the next block be imported to the top").taggedAs(
+      UnitTest,
+      ConsensusTest
+    ) in (new BusyOnce(guard):
+      // canonical h1..h6; the side branch s3..s8 leaves it after h2, heavier (6,000 > 4,000)
+      val oldChain: List[Block] = oracle.extendCanonical(oracle.genesis, 6, difficulty = 1000)
+      val side: List[Block] = oracle.extendSide(oldChain(1), 6, difficulty = 1000, tag = 0x91)
+      val child: Block = oracle.extendSide(side.last, 1, difficulty = 1000, tag = 0x92).head
+      node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+
+      busyFor(1)
+      inBatch(side) shouldBe a[BlockImportStateFault]
+      side.foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
+
+      inBatch(side) match
+        case ChainReorganised(oldBranch, newBranch, _, _) =>
+          oldBranch.map(_.hash) shouldBe oldChain.drop(2).map(_.hash)
+          newBranch.map(_.hash) shouldBe side.map(_.hash)
+        case other => fail(s"the side branch is not adopted: $other")
+
+      evaluated.clear()
+      announced(child) match
+        case BlockImportedToTop(imported) => imported.map(_.block.hash) shouldBe List(child.hash)
+        case other                        => fail(s"the announced block is not imported to the top: $other")
+      evaluated.toList shouldBe List(List(child.hash))
+      node.bestHash shouldBe child.hash
+      (child :: side).foreach(block => node.blockQueue.isQueued(block.hash) shouldBe false)
+      // as for any reorganisation, the blocks the head left are queued again
+      oldChain.drop(2).foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
+    )
 
   "Chain-file import (hive consensus simulator path)" should
     "apply TD fork choice instead of making the last block in the file the head" taggedAs (
@@ -1883,6 +1949,55 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       validHead(node, datadir).hash shouldBe branch.last.hash
       node.importOne(next) shouldBe a[BlockImportedToTop]
       node.bestHash shouldBe next.hash
+
+  /** A [[Fixture]] with an import's adapter over the node's queue and a consensus over its stores, through which the
+    * store can be made busy (B-440, B-503): the next evaluations asked for throw RocksDB's `Busy` before any block is
+    * executed, as a write the store refused for now would. Every branch the consensus is handed is recorded.
+    */
+  class BusyOnce(guard: Boolean) extends Fixture(guard):
+    val evaluated: ArrayBuffer[List[BlockHash]] = ArrayBuffer.empty
+    private var busyLeft: Int = 0
+    private val consensus = new ConsensusImpl(
+      node.blockchainReader,
+      node.blockchainWriter,
+      node.blockExecution,
+      reorgState = node.blockchain
+    )
+    private val busyWhenAsked: Consensus = new Consensus:
+      override def evaluateBranch(branch: NonEmptyList[Block])(implicit
+          blockExecutionScheduler: IORuntime,
+          blockchainConfig: BlockchainConfig
+      ): cats.effect.IO[ConsensusResult] =
+        cats.effect.IO.defer {
+          evaluated += branch.toList.map(_.hash)
+          if busyLeft > 0 then
+            busyLeft -= 1
+            val status = new org.rocksdb.Status(org.rocksdb.Status.Code.Busy, org.rocksdb.Status.SubCode.None, "busy")
+            cats.effect.IO.raiseError(new org.rocksdb.RocksDBException("injected: the store is busy", status))
+          else consensus.evaluateBranch(branch)
+        }
+    val adapter = new ConsensusAdapter(
+      busyWhenAsked,
+      node.blockchainReader,
+      node.blockQueue,
+      new com.chipprbots.ethereum.ledger.BlockValidation(node.mining, node.blockchainReader, node.blockQueue),
+      node.runtime
+    )
+
+    /** The next `times` evaluations find the store busy. */
+    def busyFor(times: Int): Unit = busyLeft = times
+
+    /** As regular sync imports a fetched batch. */
+    def inBatch(blocks: List[Block]): BlockImportResult =
+      import node.blockchainConfig
+      import node.runtime
+      adapter.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()
+
+    /** As regular sync imports a block a peer announced. */
+    def announced(block: Block): BlockImportResult =
+      import node.blockchainConfig
+      import node.runtime
+      adapter.evaluateBranchBlock(block).unsafeRunSync()
 
   class Fixture(guard: Boolean = false, cap: StateConfig => StateConfig = identity):
     val oracle = new Oracle

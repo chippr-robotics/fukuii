@@ -243,6 +243,7 @@ class ConsensusAdapter(
       .map {
         case SelectedNewBestBranch(oldBranch, adopted, weights, branchBlocks) =>
           oldBranch.foreach(blockQueue.enqueueBlock(_))
+          madeTheHead(adopted)
           toldOfTheHead(adopted.lastOption)
           ChainReorganised(oldBranch, adopted, weights, branchBlocks)
         case SelectedNewBestBranchPartially(
@@ -258,6 +259,7 @@ class ConsensusAdapter(
           // now as imported, so that the escalation starts at the failing block and blames no peer.
           oldBranch.foreach(blockQueue.enqueueBlock(_))
           queuedAgain(blocksToEnqueue)
+          madeTheHead(adopted)
           toldOfTheHead(adopted.lastOption)
           val ofTheBatch = newBranch.toList.map(_.header.hash).toSet
           val imported = adopted.zip(weights).collect {
@@ -277,9 +279,11 @@ class ConsensusAdapter(
           // update for the blocks moved off and onto is B-338's.
           oldBranch.foreach(blockQueue.enqueueBlock(_))
           blockQueue.removeSubtree(BlockHash(failingBlockHash))
+          madeTheHead(adopted)
           toldOfTheHead(adopted.lastOption)
           new BlockImportFailedAt(error, failingBlockHash)
         case ExtendedCurrentBestBranch(blockImportData) =>
+          madeTheHead(blockImportData.map(_.block))
           toldOfTheHead(blockImportData.lastOption.map(_.block))
           BlockImportedToTop(blockImportData)
         case ExtendedCurrentBestBranchPartially(
@@ -292,6 +296,7 @@ class ConsensusAdapter(
           // as the fault it is, with the prefix, so that the importer escalates it from the failing block and blames
           // no peer.
           queuedAgain(blocksToEnqueue)
+          madeTheHead(blockImportData.map(_.block))
           log.warn(
             "extended best branch by {} block(s), then met a fault of this node's own state: {}",
             blockImportData.size,
@@ -305,6 +310,7 @@ class ConsensusAdapter(
             ) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           blockQueue.removeSubtree(BlockHash(failingBlockHash))
+          madeTheHead(blockImportData.map(_.block))
           log.warn("extended best branch partially because of error: {}", error)
           toldOfTheHead(blockImportData.lastOption.map(_.block))
           BlockImportedToTop(blockImportData)
@@ -329,6 +335,7 @@ class ConsensusAdapter(
           if Consensus.isUnknownParent(error) then UnknownParent else BlockImportFailed(error)
         case ConsensusErrorDueToMissingNode(blocksToEnqueue, reason, imported) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
+          madeTheHead(imported.map(_.block))
           // the blocks of the batch that became the head before the missing node (B-337): its followers are told
           toldOfTheHead(imported.lastOption.map(_.block))
           BlockImportFailedDueToMissingNode(reason, imported)
@@ -336,6 +343,8 @@ class ConsensusAdapter(
           // The blocks were not judged: they wait in the queue to be tried again, and none of them is dropped from it
           // as an invalid block's descendants are.
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
+          // the blocks of the batch the head stands on now, and the side blocks a move back that failed left it on
+          madeTheHead(imported.map(_.block) ++ Consensus.headLeftOn(result).map(_.block))
           // A store that refused a write, or was busy, says nothing of this node's state: not counted (B-440), and no
           // feed call of a counted fault is made for it, the side blocks' head of B-461 included (forge N3)
           val counted = !result.isInstanceOf[ConsensusAdapter.NotCounted]
@@ -602,6 +611,16 @@ class ConsensusAdapter(
       .takeWhile(_.isDefined)
       .flatten
       .toList
+
+  /** Blocks the head's chain holds now leave the queue (B-503). A branch the queue resolved left it to be evaluated
+    * ([[enqueueAndGetBranch]]); a batch of regular sync never passed through it, but its blocks are there when a fault
+    * of this node's state, a store that was busy among them, queued them again before the batch was fetched again. Left
+    * there, the next block that hangs from them is resolved with them as its branch, which then leaves the chain below
+    * the head: they are executed again and a reorganisation onto the node's own chain is told. Called after the blocks
+    * the head left are queued again: a block of both lists is the head's.
+    */
+  private def madeTheHead(blocks: Iterable[Block]): Unit =
+    blockQueue.removeImported(blocks.map(_.header.hash))
 
   /** Blocks a fault of this node's own state left unjudged, queued again against the head as it is now (B-336). */
   private def queuedAgain(blocks: List[Block]): Unit =

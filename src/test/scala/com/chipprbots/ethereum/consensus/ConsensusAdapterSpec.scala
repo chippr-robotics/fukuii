@@ -96,6 +96,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     blockQueue.enqueueBlock.expects(block, bestNum).returning(Some(Leaf(hash, newWeight)))
     blockQueue.getBranch.expects(BlockHash(hash), true).returning(List(block))
+    // the block that became the head leaves the queue (B-503)
+    blockQueue.removeImported.expects(List(BlockHash(hash))).returning(())
 
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
     // BlockExecution asks for the block's staged state storage first (the stubbed execution below never uses it) ...

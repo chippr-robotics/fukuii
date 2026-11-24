@@ -138,6 +138,25 @@ class BlockQueue(
       parentToChildren -= block.header.hash
     }
 
+  /** Takes out of the queue the blocks that became the head's (B-503), as [[getBranch]] takes out a branch it resolves
+    * for evaluation. Only those blocks: what hangs from them stays queued, with its weight, and is rooted on the chain
+    * now, as a block whose parent is stored is. A block that was not queued is passed over.
+    *
+    * A block of the head's chain left queued is resolved as part of the branch of the next block that hangs from it,
+    * and that branch then leaves the chain below the head: it is executed again as a reorganisation onto the node's own
+    * chain.
+    *
+    * @param imported
+    *   the hashes of the blocks that became the head's
+    */
+  def removeImported(imported: Iterable[BlockHash]): Unit =
+    imported.foreach { hash =>
+      blocks.remove(hash).foreach { case QueuedBlock(block, _) =>
+        val parentHash = block.header.parentHash
+        parentToChildren.get(parentHash).foreach(siblings => parentToChildren += parentHash -> (siblings - hash))
+      }
+    }
+
   /** Clear the BlockQueue
     */
   def clear(): Unit =

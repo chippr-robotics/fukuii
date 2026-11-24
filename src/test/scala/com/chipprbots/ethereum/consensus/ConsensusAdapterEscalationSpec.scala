@@ -77,7 +77,8 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
   private class Rig(
       result: NonEmptyList[Block] => ConsensusResult,
       reader: com.chipprbots.ethereum.domain.BlockchainReader = null,
-      queue: com.chipprbots.ethereum.ledger.BlockQueue = null
+      // an empty queue: the blocks a result makes the head leave it (B-503), and a queue with none reads no store
+      queue: com.chipprbots.ethereum.ledger.BlockQueue = new com.chipprbots.ethereum.ledger.BlockQueue(null, 1000, 1000)
   ):
     val escalated: mutable.ArrayBuffer[EscalationKind] = mutable.ArrayBuffer.empty
     val validated: mutable.ArrayBuffer[List[BigInt]] = mutable.ArrayBuffer.empty
