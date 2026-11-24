@@ -687,22 +687,29 @@ class BlockExecution(
     Right(newBlockData)
 
   /** `commit`, the rows of a block committed as the head, with what clears the index of blocks by number above it where
-    * the block leaves the chain the index names (B-482): on the unified layout only, and only where the index names
-    * another block at the block's height.
+    * the block leaves the chain the index names (B-482, B-492): on the unified layout only.
     *
     * On the unified layout the index is the ancestry of the head (I6), but for what a sync leaves above the pivot it
     * hands off at: the index runs ahead of the head there, and a catch-up (`StateRecovery.catchUp`) commits the blocks
-    * above the head one by one, with no move of the head to clear it. A block whose height the index names with another
-    * block leaves that chain: its entries above the block, and the lookups of the transactions only the blocks they
-    * name hold, go in the block's own batch, as a move of the head clears them
-    * ([[BlockchainWriter.canonicalHeadUpdate]], go-ethereum's `reorg`). In the same batch, so that no stop between two
-    * writes leaves them behind. Where the index names the block itself, or nothing, the entries above it are of its own
-    * chain, and stay until each is committed over.
+    * above the head one by one, with no move of the head to clear it. A block leaves the chain the index names where
+    * the index names another block at its height, or names none there and names one at the height above (a gap, left by
+    * a removal that stopped at the first height with no entry): its entries above the block, and the lookups of the
+    * transactions only the blocks they name hold, go in the block's own batch, as a move of the head clears them
+    * (`BlockchainWriter.canonicalHeadUpdate`, go-ethereum's `reorg`). In the same batch, so that no stop between two
+    * writes leaves them behind. Where the index names the block itself, the entries above it are of its own chain, and
+    * stay until each is committed over; where it names nothing at the block's height nor at the one above, there is
+    * nothing to clear. The height above is read only when the block's own height has no entry.
     *
     * Those rows come first in the batch, and the block's own after them: a batch is written in order, so the block's
     * index entry, its best-block rows and its transactions' lookups are the block's own whatever the clean-up reads. It
     * reads the block's body by its hash, and a block not stored yet would have the lookups of the transactions it
     * shares with the blocks it drops deleted, after its own were written, if the clean-up came last.
+    *
+    * Its size: one delete per height above the block that the index names, up to the first height it does not, and one
+    * per distinct transaction of the blocks dropped. That is the index a sync ran ahead of the head, which the bound of
+    * a catch-up (`state.recovery.max-catch-up`) does not limit: the sync's index may run past the head the catch-up
+    * goes to. All of it is written as the one batch of the block's commit, under the state lock, which is held for that
+    * one write; so it is said, at INFO, and at WARN from `BlockExecution.IndexLeftWarnRows` rows.
     *
     * The rows are read before the state lock is taken; the commit refuses there unless the block's parent is still the
     * block whose state the disk holds, and on this layout only a commit or a move of the head writes the index, each
@@ -710,9 +717,22 @@ class BlockExecution(
     * and the rows then delete what is gone already.
     */
   private def withIndexLeft(block: Block, commit: DataSourceBatchUpdate): DataSourceBatchUpdate =
-    val leaves = blockchainReader.holdsStateInPlace &&
-      blockchainReader.getCanonicalHashByNumber(block.header.number.value).exists(_ != block.header.hash)
-    if leaves then blockchainWriter.canonicalHeadUpdate(block.header, blockchainReader).batch.and(commit) else commit
+    val number = block.header.number.value
+    def leaves: Boolean =
+      blockchainReader.getCanonicalHashByNumber(number) match
+        case Some(named) => named != block.header.hash
+        case None        => blockchainReader.getCanonicalHashByNumber(number + 1).isDefined
+    if !blockchainReader.holdsStateInPlace || !leaves then commit
+    else
+      val update = blockchainWriter.canonicalHeadUpdate(block.header, blockchainReader)
+      val rows = update.cleared + update.droppedTxLookups
+      val line =
+        s"Block ${block.idTag} leaves the index of blocks by number: ${update.cleared} height(s) above it and " +
+          s"${update.droppedTxLookups} transaction lookup(s) of the blocks dropped are deleted in its commit"
+      if rows >= BlockExecution.IndexLeftWarnRows then
+        log.warn(s"$line, $rows rows in the one batch written under the state lock")
+      else log.info(line)
+      update.batch.and(commit)
 
   /** One block onto the head, for an operator chain import holding [[ChainInsertLock.exclusive]], and for the adoption
     * of a long branch on the unified layout (`StateRecovery`, which holds it shared, as any import): the same
@@ -845,6 +865,11 @@ class BlockExecution(
     BlockExecution.depositRequests(receipts)
 
 object BlockExecution:
+
+  /** From how many rows the clean-up of the index a block leaves (B-482) is said at WARN: all of them are written in
+    * the block's one commit batch, under the state lock.
+    */
+  val IndexLeftWarnRows: Int = 10000
 
   /** How a batch of blocks ended ([[BlockExecution.executeAndValidateBlocksWithAccessLists]]), with the fault of this
     * node's own state told apart from an error of the block.

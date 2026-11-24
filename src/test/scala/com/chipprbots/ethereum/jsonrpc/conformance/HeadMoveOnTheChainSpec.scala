@@ -2091,6 +2091,26 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       dropped.foreach(tx => on.lookup(tx) shouldBe None)
     }
 
+  // B-492 (vault): a gap at the block's height, left by a removal that stopped at the first height with no entry, with
+  // another chain's entries above it
+  it should "clear the index above it where the index names nothing at its height and names a block above it" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      blocks.take(20).foreach(on.imports)
+      (21 to 25).foreach(n => on.writer.storeBlock(blocks(n - 1)).commit())
+      on.dropIndex(21)
+      val competing = siblingOf(blocks(20))
+      val writesBefore = on.source.writes.get
+      on.imports(competing)
+      on.source.writes.get - writesBefore shouldBe 1
+      on.holds(competing.header, blocks.take(20) :+ competing)
+      (22 to 25).foreach(n => on.reader.getCanonicalHashByNumber(n) shouldBe None)
+      on.txsOf(competing).foreach(tx => on.lookup(tx) shouldBe Some(competing.header.hash.value))
+      val dropped = blocks.slice(21, 25).flatMap(on.txsOf)
+      dropped should not be empty
+      dropped.foreach(tx => on.lookup(tx) shouldBe None)
+    }
+
   it should "leave the index above it where the index names the block itself: its own chain, committed over in turn" taggedAs
     (UnitTest, ConsensusTest) in {
       val on = new Node
