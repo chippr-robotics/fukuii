@@ -254,7 +254,7 @@ trait KnownNodesManagerBuilder:
 
 trait PeerDiscoveryManagerBuilder:
   self: ActorSystemBuilder & NodeStatusBuilder & DiscoveryConfigBuilder & DiscoveryServiceBuilder & StorageBuilder &
-    BlockchainBuilder & InstanceConfigProvider =>
+    BlockchainBuilder & InstanceConfigProvider & BlacklistBuilder =>
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
@@ -295,6 +295,7 @@ trait PeerDiscoveryManagerBuilder:
               tcpPort = instanceConfig.Network.Server.port,
               nodeStatusHolder,
               storagesInstance.storages.knownNodesStorage,
+              isBlocked = address => blockedIPRegistry.isBlocked(address),
               forkIdTag = Some(
                 new com.chipprbots.ethereum.network.discovery.ForkIdTag(
                   genesisHash = () => blockchainReader.genesisHeader.hash.value,
@@ -319,6 +320,8 @@ trait PeerDiscoveryManagerBuilder:
     )
 
 trait BlacklistBuilder:
+  self: InstanceConfigProvider =>
+
   private val blacklistSize: Int = 1000
 
   /** Spec 027 slice 4a: the one peer scorer of the node, exporting its scores to [[NetworkMetrics]]. It observes: no
@@ -334,10 +337,14 @@ trait BlacklistBuilder:
       blockedIPRegistry
     )
 
-  /** The addresses the operator blocked (`admin_blockIP`); the blacklist above refuses them. In memory: it lasts until
-    * the node restarts (the `blocked-ips` config is not read yet).
+  /** The addresses the operator blocked: `network.peer.blocked-ips` at start, then `admin_blockIP` / the TUI's peer
+    * block until the node restarts. The blacklist above refuses them, and discovery drops their packets (B-288). An
+    * entry that is not an IP address refuses the start.
     */
-  lazy val blockedIPRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set.empty)
+  lazy val blockedIPRegistry: BlockedIPRegistry =
+    BlockedIPRegistry.fromConfig(instanceConfig.config) match
+      case Right(registry) => registry
+      case Left(why)       => throw new IllegalStateException(s"Refusing to start: $why")
 
 trait NodeStatusBuilder:
 

@@ -533,9 +533,10 @@ class AdminService(
     }
 
   /** Blocks an IP address (B-277): the node refuses inbound connections from it, does not dial it (any path, maintained
-    * and trusted peers included) and disconnects the peers connected from it now. Discovery (UDP) packets are not
-    * blocked. The block lasts until the node restarts. The address must be an IP literal (never resolved); it is kept
-    * in its canonical form. The response is whether the address was newly blocked.
+    * and trusted peers included) and disconnects the peers connected from it now. Discovery drops its UDP packets and
+    * sends it none (B-288). The block lasts until the node restarts; `network.peer.blocked-ips` keeps one across
+    * restarts. The address must be an IP literal (never resolved); it is kept in its canonical form. The response is
+    * whether the address was newly blocked.
     */
   def blockIP(req: AdminBlockIPRequest): ServiceResponse[AdminBlockIPResponse] =
     canonicalIp(req.ip) match

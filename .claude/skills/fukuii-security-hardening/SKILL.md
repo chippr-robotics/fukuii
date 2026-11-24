@@ -48,7 +48,10 @@ when one is enabled on a non-loopback HTTP/WS endpoint. `admin_blockIP` needs `a
 2. **Block an abusive IP** (🟡) — `admin_blockIP("<ip>")`; verify with
    `admin_listBlockedIPs`; reverse with `admin_unblockIP("<ip>")`. (Equivalent
    `net_addToBlacklist` / `net_removeFromBlacklist` / `net_listBlacklistedPeers`
-   are served with the same `admin` namespace.)
+   are served with the same `admin` namespace.) The block refuses RLPx dial and
+   accept, and discovery drops the address's UDP packets. It lasts until the
+   node restarts; to keep it, also list the address in
+   `network.peer.blocked-ips` (🔴, restart).
 3. **Pin / drop peers** (🟡) — `admin_addTrustedPeer` to keep a vetted peer;
    `admin_removePeer` to drop a bad one (→ `fukuii-peer-management`).
 4. **Protect secrets** (🔴) — `node.key` and `keystore/` must be permission-

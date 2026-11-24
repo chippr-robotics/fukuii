@@ -30,6 +30,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   explicitly. ADR OPS-005 records the posture.
 
 ### Changed
+- **The operator's IP block reaches discovery and can be configured (B-288, B-286).** `network.peer.blocked-ips` (IP
+  literals, empty by default) is read at start; an entry that is not an IP address refuses the start. A blocked
+  address, configured or added with `admin_blockIP` or the TUI's peer block, now also loses discovery: its UDP packets
+  are dropped before they are decoded, and no ping, FINDNODE or ENR request is sent to it. A block added at run time
+  still lasts until the node restarts unless it is also in the config.
 - **Per-peer routine events are DEBUG; one INFO line a minute sums them (B-415).** A mining node on Mordor wrote 12.5 GB
   of log in about ten hours, almost all of it INFO lines per peer or per discovered record: `FORKID_VALIDATION: Validation
   result` (once per handshake and per ENR or DNS record), `PEER_HANDSHAKE_SUCCESS`, `PEER_DISCONNECTED`,
