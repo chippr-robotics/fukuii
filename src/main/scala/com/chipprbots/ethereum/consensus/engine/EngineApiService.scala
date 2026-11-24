@@ -1722,7 +1722,14 @@ class EngineApiService(
     blockExecution
       .executeForProposer(block)
       .map(r =>
-        ProposerExecution(r.receipts, r.gasUsed, r.worldState.stateRootHash, r.executionRequests, r.blockAccessList)
+        ProposerExecution(
+          r.receipts,
+          r.gasUsed,
+          r.worldState.stateRootHash,
+          r.executionRequests,
+          r.blockAccessList,
+          r.worldState.deployedCode
+        )
       )
 
   /** `engine_forkchoiceUpdated`'s build: always a payload, and one that executes.
@@ -1836,7 +1843,9 @@ class EngineApiService(
       stateRoot: ByteString,
       executionRequests: Seq[ByteString],
       // EIP-7928: the access list execution built (`BlockResult.blockAccessList`), Some exactly for an Amsterdam block.
-      blockAccessList: Option[BlockAccessList]
+      blockAccessList: Option[BlockAccessList],
+      // The code the build deployed, by its hash: a build writes none (B-230).
+      deployedCode: Map[ByteString, ByteString] = Map.empty
   )
 
   /** Derive the proposer's header for exactly `transactions`, in order, executing the skeleton block with `execute`.
@@ -1997,7 +2006,8 @@ class EngineApiService(
     import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
     import com.chipprbots.ethereum.domain.Receipt
     execute(skeletonBlock).map { executed =>
-      val ProposerExecution(receipts, gasUsedTotal, finalStateRoot, executionRequests, blockAccessList) = executed
+      val ProposerExecution(receipts, gasUsedTotal, finalStateRoot, executionRequests, blockAccessList, deployedCode) =
+        executed
 
       val receiptsLogs =
         BloomFilter.Empty.toArray +: receipts.map(_.logsBloomFilter.toArray)
@@ -2074,8 +2084,14 @@ class EngineApiService(
         gasUsed = GasAmount(gasUsedTotal),
         extraFields = finalExtraFields
       )
-      BuiltBlock(skeletonBlock.copy(header = updatedHeader), receipts, executionRequests, blockAccessList)
+      BuiltBlock(skeletonBlock.copy(header = updatedHeader), receipts, executionRequests, blockAccessList, deployedCode)
     }
+
+  /** Writes the code a build deployed to the code store, for `testing_commitBlockV1` on the hash store, which keeps the
+    * build's own writes as the block's state instead of importing it. Before the block is stored (B-230).
+    */
+  def writeBuiltCode(built: BuiltBlock): Unit =
+    blockExecution.writeDeployedCode(built.deployedCode)
 
   /** The payload currently held for `payloadId`, exactly as stored — nothing is rebuilt. engine_getPayload answers with
     * [[resolvePayload]]; the controller reads this first only to check the method version against the payload's fork.

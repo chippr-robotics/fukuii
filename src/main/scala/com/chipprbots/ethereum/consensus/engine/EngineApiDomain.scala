@@ -129,7 +129,10 @@ case class BuiltBlock(
     executionRequests: Seq[ByteString],
     // EIP-7928: the access list the block's execution built — what an Amsterdam header's blockAccessListHash commits to
     // and what engine_getPayloadV6 serves. None before Amsterdam.
-    blockAccessList: Option[com.chipprbots.ethereum.domain.BlockAccessList] = None
+    blockAccessList: Option[com.chipprbots.ethereum.domain.BlockAccessList] = None,
+    // The code the build deployed, by its hash. A build writes no code (B-230): the import of the block writes it, and
+    // `testing_commitBlockV1` on the hash store, which keeps the build's writes as the block's state, writes this.
+    deployedCode: Map[ByteString, ByteString] = Map.empty
 )
 
 /** One engine_getPayload answer, whole: the block and everything its envelope carries that the block cannot give back —

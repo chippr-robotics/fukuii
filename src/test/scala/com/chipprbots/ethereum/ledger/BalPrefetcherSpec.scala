@@ -64,7 +64,7 @@ class BalPrefetcherSpec extends AnyFlatSpec with Matchers:
         w = w.saveStorage(a, st)
       }
       w = w.saveAccount(eoa, Account(UInt256.Zero, UInt256(100)))
-      InMemoryWorldStateProxy.persistState(w).stateRootHash
+      InMemoryWorldStateProxy.persistStateAndWriteCode(w).stateRootHash
 
     def bal: BlockAccessList =
       BlockAccessList(

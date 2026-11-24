@@ -163,7 +163,9 @@ class TestingService(
               // Same write sequence engine_newPayload + engine_forkchoiceUpdated perform for a
               // canonical-extending payload: store block, store receipts, promote to canonical head.
               // The world state is already persisted — buildBlockOnParent ran executeForProposer,
-              // which calls InMemoryWorldStateProxy.persistState against the writable backing.
+              // which calls InMemoryWorldStateProxy.persistState against the writable backing. Its code it
+              // does not write (B-230): that is written here, before the block that refers to it.
+              engineApiService.writeBuiltCode(built)
               blockchainWriter.storeBlock(block).commit()
               blockchainWriter.storeReceipts(hash, built.receipts).commit()
               // EIP-7928: keep the list the header commits to, as engine_newPayload does for an Amsterdam block, so

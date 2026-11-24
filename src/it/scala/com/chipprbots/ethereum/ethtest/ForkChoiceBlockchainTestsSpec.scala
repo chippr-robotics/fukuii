@@ -178,7 +178,7 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
         ww.saveStorage(address, ww.getStorage(address).store(big(k), big(v)))
       }
     }
-    val genesisRoot = InMemoryWorldStateProxy.persistState(world1).stateRootHash
+    val genesisRoot = InMemoryWorldStateProxy.persistStateAndWriteCode(world1).stateRootHash
     if genesisHeader.stateRoot.value != genesisRoot then Some("genesis pre-state root mismatch")
     else
       blockchainWriter.save(

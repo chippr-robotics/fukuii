@@ -46,19 +46,23 @@ class EthUserService(
 
   def getCode(req: GetCodeRequest): ServiceResponse[GetCodeResponse] =
     IO {
-      resolveHeader(req.block).flatMap { case ResolvedHeader(header, _) =>
-        StateRead.at(blockchainReader, header) { state =>
-          val world = InMemoryWorldStateProxy(
-            evmCodeStorage,
-            state,
-            (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
-            blockchainConfig.accountStartNonce,
-            header.stateRoot.value,
-            noEmptyAccounts = false,
-            ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
-          )
-          GetCodeResponse(world.getCode(req.address))
-        }
+      resolveHeader(req.block).flatMap {
+        // The pending block's world: the code its build deployed is there and nowhere else, since a build writes no
+        // code (B-230). Read over the stores by the pending header, a contract the pending block creates is missing.
+        case ResolvedHeader(_, Some(pendingWorld)) => Right(GetCodeResponse(pendingWorld.getCode(req.address)))
+        case ResolvedHeader(header, None) =>
+          StateRead.at(blockchainReader, header) { state =>
+            val world = InMemoryWorldStateProxy(
+              evmCodeStorage,
+              state,
+              (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+              blockchainConfig.accountStartNonce,
+              header.stateRoot.value,
+              noEmptyAccounts = false,
+              ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
+            )
+            GetCodeResponse(world.getCode(req.address))
+          }
       }
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)

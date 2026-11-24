@@ -70,7 +70,7 @@ class EthSimulateLimitsSpec extends AnyFlatSpec with Matchers with AmsterdamFixt
           .saveAccount(address, Account(codeHash = CodeHash(kec256(RequestContractStubs.Stop))))
           .saveCode(address, RequestContractStubs.Stop)
       }
-      InMemoryWorldStateProxy.persistState(stubs).stateRootHash
+      InMemoryWorldStateProxy.persistStateAndWriteCode(stubs).stateRootHash
 
     blockchainWriter.save(
       Block(

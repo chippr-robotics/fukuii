@@ -203,7 +203,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
         w.saveAccount(contract, Account(balance = UInt256(1), codeHash = CodeHash(crypto.kec256(code))))
           .saveCode(contract, code)
       }
-      InMemoryWorldStateProxy.persistState(deployed).stateRootHash
+      InMemoryWorldStateProxy.persistStateAndWriteCode(deployed).stateRootHash
 
     val genesisHeader: BlockHeader = BlockHeader(
       parentHash = BlockHash(ByteString(new Array[Byte](32))),

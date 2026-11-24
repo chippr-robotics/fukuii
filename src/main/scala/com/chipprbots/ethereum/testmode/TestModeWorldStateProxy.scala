@@ -37,7 +37,8 @@ case class TestModeWorldStateProxy(
     override val noEmptyAccountsCond: Boolean,
     override val ethCompatibleStorage: Boolean,
     saveStoragePreimage: (UInt256) => Unit,
-    override val storageResets: Set[Address] = Set.empty
+    override val storageResets: Set[Address] = Set.empty,
+    override val deployedCode: Map[ByteString, Code] = Map.empty
 ) extends InMemoryWorldStateProxy(
       stateStorage,
       accountsStateTrie,
@@ -49,7 +50,8 @@ case class TestModeWorldStateProxy(
       touchedAccounts,
       noEmptyAccountsCond,
       ethCompatibleStorage,
-      storageResets = storageResets
+      storageResets = storageResets,
+      deployedCode = deployedCode
     ):
 
   override protected def copyWith(
@@ -59,7 +61,8 @@ case class TestModeWorldStateProxy(
       evmCodeStorage: EvmCodeStorage,
       accountCodes: Map[Address, Code],
       touchedAccounts: Set[Address],
-      storageResets: Set[Address]
+      storageResets: Set[Address],
+      deployedCode: Map[ByteString, Code]
   ): InMemoryWorldStateProxy =
     copy(
       stateStorage = stateStorage,
@@ -68,7 +71,8 @@ case class TestModeWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
       accountCodes = accountCodes,
       touchedAccounts = touchedAccounts,
-      storageResets = storageResets
+      storageResets = storageResets,
+      deployedCode = deployedCode
     )
 
   override def saveStorage(address: Address, storage: InMemoryWorldStateProxyStorage): InMemoryWorldStateProxy =

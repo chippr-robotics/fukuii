@@ -340,6 +340,33 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
 
     result.vmError shouldBe None
 
+  // B-230: an eth_call or an estimate that deploys a contract left its code in the code store, so an RPC user could grow
+  // the database without bound. The code stays in the call's world.
+  it should "leave the code store as it was after an eth_call or an estimate that deploys a contract" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new ScenarioSetup:
+    // PUSH4 0xdeadbeef PUSH1 0 MSTORE PUSH1 4 PUSH1 28 RETURN: deploys the 4 bytes deadbeef
+    val initCode: ByteString = ByteString(Hex.decode("63deadbeef6000526004601cf3"))
+    val runtime: ByteString = ByteString(Hex.decode("deadbeef"))
+    val runtimeHash: ByteString = com.chipprbots.ethereum.crypto.kec256(runtime)
+    val tx: LegacyTransaction = LegacyTransaction(0, GasPrice.Zero, lastBlockGasLimit, None, 0, initCode)
+    val stx: SignedTransactionWithSender =
+      SignedTransactionWithSender(SignedTransaction(tx, noSignature), fromAddress)
+    val codeStore = storagesInstance.storages.evmCodeStorage
+
+    val result: TxResult = stxLedger.simulateTransaction(stx, genesisHeader, stxLedger.worldAt(genesisHeader))
+    result.vmError shouldBe None
+    codeStore.get(runtimeHash) shouldBe None
+    // it did deploy, in its own world; and persisting that world, as eth_simulateV1, a trace replay and a build do
+    // with theirs, still writes nothing
+    val persisted: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(result.worldState)
+    persisted.deployedCode.get(runtimeHash) shouldBe Some(runtime)
+    codeStore.get(runtimeHash) shouldBe None
+
+    stxLedger.binarySearchGasEstimation(stx, genesisHeader, stxLedger.worldAt(genesisHeader)) should be > BigInt(0)
+    codeStore.get(runtimeHash) shouldBe None
+
   // migrated from old LedgerSpec
   "binaryChop" should "properly find minimal required gas limit to execute transaction" in new BinarySimulationChopSetup:
     testGasValues.foreach { minimumRequiredGas =>
@@ -441,6 +468,8 @@ trait ScenarioSetup extends EphemBlockchainTestSetup:
       .saveAccount(existingAddress, existingAccount)
       .saveCode(existingAddress, failingCode)
   )
+  // the genesis state is committed: its code too, which persisting a world does not write (B-230)
+  InMemoryWorldStateProxy.deployedCodeWrite(worldWithAccount).foreach(_.commit())
 
   val someGenesisBlock: Array[Byte] =
     Hex.decode(

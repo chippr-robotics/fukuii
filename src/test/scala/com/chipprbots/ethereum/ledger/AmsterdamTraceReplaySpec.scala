@@ -171,7 +171,7 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
         Stop -> ByteString(0x00)
       ).foldLeft(funded) { case (w, (address, code)) => withCode(w, address, code) }
       val emit = withCode(contracts, Emit, EmitCode, balance = 16)
-      InMemoryWorldStateProxy.persistState(
+      InMemoryWorldStateProxy.persistStateAndWriteCode(
         emit.saveStorage(Emit, emit.getStorage(Emit).store(UInt256(0), UInt256(8)))
       )
 

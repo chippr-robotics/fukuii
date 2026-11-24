@@ -110,7 +110,7 @@ object EthereumTestExecutor:
       }
 
       // Persist the initial state
-      val persistedWorld = InMemoryWorldStateProxy.persistState(world)
+      val persistedWorld = InMemoryWorldStateProxy.persistStateAndWriteCode(world)
       Right(persistedWorld)
     catch case e: Exception => Left(s"Failed to setup initial state: ${e.getMessage}")
 
