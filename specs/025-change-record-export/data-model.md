@@ -15,7 +15,7 @@ Schema version of this model: **1** (`0x01`).
 | # | Field | Type | Notes |
 |---|-------|------|-------|
 | — | `schemaVersion` | 1 byte, **outside** the RLP | `0x01`. A consumer that sees another value stops (FR-011). |
-| 0 | `type` | byte | `0` block, `1` retraction, `2` finality, `3` witness (reserved, FR-012). |
+| 0 | `type` | byte | `0` block, `1` retraction, `2` finality, `3` witness (reserved, FR-012); amendment 2026-11-24: `4` poolAdd, `5` poolRemove (pool topic only, §5a), `6` safe (§4.1), `7` chainStart (§4.2). |
 | 1 | `chainKey` | UTF-8 string | 024 DC-3; partition identity. Until 024 lands, the value of `fukuii.blockchains.network`. |
 | 2 | `chainId` | unsigned integer (BigInt; Platåberget is wider than 32 bits) | informational (024 DC-3). |
 | 3 | `blockNumber` | unsigned integer | the block this record is about; for finality, the finalized block. |
@@ -23,7 +23,9 @@ Schema version of this model: **1** (`0x01`).
 | 5 | `parentHash` | 32 bytes | identity only; lets a consumer check continuity without decoding the body. |
 | 6 | `body` | RLP list, per type | §2–§5. Empty list for a retraction. |
 
-Identity = `(chainKey, type, blockNumber, blockHash)`; a duplicate identity is a no-op for consumers (DC-3).
+Identity = `(chainKey, type, blockNumber, blockHash)`; a duplicate identity is a no-op for consumers (DC-3). Pool
+records: identity = `(chainKey, nodeId, session, seq)`, and fields 3 to 5 name the node's canonical head at the pool
+event (context only).
 
 ## 2. Block record body (`type = 0`)
 
@@ -96,6 +98,22 @@ Body: empty list. `blockNumber`/`blockHash` are the finalized block, `parentHash
 genesis, on the first start with export enabled. ETH family: one per change of `finalizedBlockHash` in an applied
 `engine_forkchoiceUpdated`.
 
+### 4.1 Safe record (`type = 6`, amendment 2026-11-24)
+
+Body: empty list. `blockNumber`/`blockHash` are the applied `safeBlockHash` (`ForkChoiceManager.getSafeBlockHash`,
+`consensus/engine/ForkChoiceManager.scala:87`), `parentHash` its parent. ETH family, one per change; ETC never.
+Advisory (DC-5). Logged in the emission log beside finality (§6.1 kind `3`).
+
+### 4.2 Chain-start record (`type = 7`, amendment 2026-11-24)
+
+| # | Field | Type | Notes |
+|---|-------|------|-------|
+| 0 | `iteration` | unsigned integer | Ephemery: `N` of `ephemery-N` (spec 028); 0 for a chain without iterations. |
+
+Envelope: `blockNumber = 0`, `blockHash` = genesis hash, `parentHash` = 32 zero bytes, `chainId` the instance's.
+Written to the emission log (§6.1 kind `4`) the first time the exporter starts on a datadir, before anything else
+(DC-11, FR-017); `export.chainStart` (§6.2) records that it was.
+
 ## 5. Witness record (`type = 3`, reserved)
 
 | # | Field | Type | Notes |
@@ -104,6 +122,50 @@ genesis, on the first start with export enabled. ETH family: one per change of `
 | 1 | `witness` | bytes | opaque to this spec. |
 
 Never produced unless `fukuii.export.witness.enabled = true`; this spec ships the codec and the type byte only.
+
+## 5a. Pool records (`type = 4, 5`, amendment 2026-11-24; pool topic only)
+
+Never staged, never in the emission log, never covered by the export position (DC-10). Built by `PoolRecorder` in the
+pool actor and offered to `PoolQueue`; a separate drain fiber publishes them to the pool topic.
+
+### 5a.1 Shared prefix
+
+| # | Field | Type | Notes |
+|---|-------|------|-------|
+| 0 | `nodeId` | bytes | `fukuii.export.node-id`, default the first 8 bytes of the node ID (OQ-9) |
+| 1 | `session` | unsigned integer | process start, ms since the Unix epoch |
+| 2 | `seq` | unsigned integer | per `(nodeId, session)`, both pool types; assigned when the record is **built**, so a drop leaves a hole |
+| 3 | `observedAt` | unsigned integer | node wall clock, ms since the Unix epoch |
+| 4 | `txHash` | 32 bytes | |
+| 5 | `sender` | 20 bytes | `SignedTransactionWithSender.senderAddress` |
+
+### 5a.2 `poolAdd` (`type = 4`)
+
+| # | Field | Type | Source in the node |
+|---|-------|------|--------------------|
+| 6 | `tx` | the block-body transaction item (§2 `transactions`) | `SignedTransactionWithSender.tx` |
+| 7 | `source` | unsigned integer: `0` peer, `1` local, `2` reorg | `admit` from `ProperSignedTransactions` / pooled-tx replies → peer; `addOrOverride` → local; `admit(replacing(reinjected))` in `HeadReset` → reorg (`transactions/PendingTransactionsManager.scala`) |
+
+### 5a.3 `poolRemove` (`type = 5`)
+
+| # | Field | Type | Source in the node |
+|---|-------|------|--------------------|
+| 6 | `nonce` | unsigned integer | the pooled transaction |
+| 7 | `reason` | unsigned integer, below | |
+| 8 | `replacedBy` | 32 bytes or empty | the replacing hash when `reason = 1` |
+
+| `reason` | Name | Where the pool decides it |
+|----------|------|---------------------------|
+| 0 | `included` | `HeadReset(included, …)` → `remove(included.flatten)` |
+| 1 | `replaced` | `addOrOverride` (`obsoleteTxs`), `replacing` (reinjected tx over a pooled one) |
+| 2 | `evicted` | cache `RemovalCause.SIZE`; blob-sidecar budget in `storeSidecar` |
+| 3 | `expired` | cache `RemovalCause.EXPIRED` (`txPoolConfig.transactionTimeout`) |
+| 4 | `dropped` | `RemoveTransactions`, `ClearPendingTransactions`, any other `RemovalCause.EXPLICIT` without a reason set |
+
+The cache's removal listener is the one place every exit passes through, so it emits the `poolRemove`. The callers
+that know the reason (`HeadReset`, `addOrOverride`, `replacing`, `storeSidecar`) set it in a per-hash reason map just
+before they invalidate; the listener reads and clears it, and falls back to the cache's cause (SIZE → evicted,
+EXPIRED → expired, otherwise dropped). `RemovalCause.REPLACED` (a put over the same hash) emits nothing.
 
 ---
 
@@ -114,7 +176,7 @@ Never produced unless `fukuii.export.witness.enabled = true`; this spec ships th
 | Key space | Key (bytes) | Value | Written by | Deleted by |
 |-----------|-------------|-------|------------|------------|
 | Staged record | `0x01 ++ blockNumber (8, BE) ++ blockHash (32)` | full block record bytes (§1–§2) | execution-commit batch (`BlockExecution.executeAndCommit` line 698; `executeAndValidateBlockFull` line 82) | drain housekeeping, once `blockNumber < position.blockNumber − buffer.side-block-retention` |
-| Emission log | `0x02 ++ seq (8, BE)` | RLP `[kind, blockNumber, blockHash]`, kind `0` block / `1` retraction / `2` finality | canonical-commit batch of the family (plan.md GT-2 table) | drain housekeeping, `deleteRange` up to the position's `seq` |
+| Emission log | `0x02 ++ seq (8, BE)` | RLP `[kind, blockNumber, blockHash]`, kind `0` block / `1` retraction / `2` finality / `3` safe / `4` chainStart (3 and 4: amendment 2026-11-24) | canonical-commit batch of the family (plan.md GT-2 table); safe in the FCU batch beside finality; chainStart on the exporter's first start | drain housekeeping, `deleteRange` up to the position's `seq` |
 
 Both key spaces are scanned with `scanRange`/`seekFrom` (never `get` in a loop; storage protocol). `seq` is a
 monotonic 64-bit counter kept in memory and seeded from the log's last key at start.
@@ -127,6 +189,8 @@ monotonic 64-bit counter kept in memory and seeded from the log's last key at st
 | `export.finality` | RLP `[blockNumber, blockHash]` of the last emitted watermark | in the batch that logs the finality entry |
 | `export.bufferBytes` | decimal string, total bytes of staged records | in every batch that adds/deletes a staged record; recomputed by scan at start |
 | `export.halted` | reason string, absent when running | when the exporter halts (bound reached, below-finality retraction, pruned readopted record, oversize record); cleared by `unfence` or restart with the cause removed |
+| `export.safe` | RLP `[blockNumber, blockHash]` of the last emitted safe watermark (amendment) | in the batch that logs the safe entry |
+| `export.chainStart` | RLP `[chainId, genesisHash, iteration]` (amendment) | in the batch that logs the chainStart entry; present = already emitted for this datadir |
 
 ### 6.3 In-memory state of the exporter
 
@@ -137,6 +201,15 @@ monotonic 64-bit counter kept in memory and seeded from the log's last key at st
 | `watermark` | `(blockNumber, blockHash)` | mirror of `export.finality` |
 | `wake` | `cats.effect.std.Queue[IO, Unit]` of capacity 1 | the hook `tryOffer`s after a batch commits; the drain loop reads the log, not the queue (DC-6: the hook never waits) |
 | `state` | `Running \| Halted(reason) \| Fenced` | `Fenced` is set by 023's fence; `Halted` by this spec's bounds and refusals |
+
+### 6.4 Pool export state (amendment 2026-11-24; in memory only)
+
+| Field | Type | Notes |
+|-------|------|-------|
+| `session` | `Long` | process start ms; fixed for the process |
+| `seq` | `AtomicLong` | next pool `seq`; incremented when a record is built, whether or not it is queued |
+| `reasons` | `mutable.Map[ByteString, (Reason, Option[ByteString])]` | owned by the pool actor (§5a.3); cleared by the listener |
+| `queue` | bounded queue of encoded pool records, `pool.queue-size` | `offer` never blocks; a full queue drops and counts |
 
 ---
 
@@ -151,6 +224,9 @@ monotonic 64-bit counter kept in memory and seeded from the log's last key at st
 | `fukuii_export_records_total{type}` | — | counter | records acknowledged by the sink, by type |
 | `fukuii_export_sink_latency_seconds` | — | timer | `publish` call duration |
 | `fukuii_export_state` | `exportState` | gauge (0 running, 1 halted, 2 fenced) | |
+| `fukuii_export_pool_records_total{type}` | — | counter | pool records acknowledged by the broker, by type (amendment) |
+| `fukuii_export_pool_dropped_total{why}` | `exportPoolDropped` | counter | pool records built but not published: `why` = `queue_full` \| `broker` \| `stopped` |
+| `fukuii_export_pool_queue_depth` | — | gauge | records waiting in the pool queue |
 
 Until 023 T-005 lands, the health fields are added as `HealthcheckResult` entries on the existing `/healthcheck`
 (`healthcheck/HealthcheckResult.scala`), named exactly as above so 023's shape adopts them unchanged.
@@ -197,6 +273,16 @@ fukuii {
     witness {
       enabled = false                     # FR-012: reserved type; 017 decides production
     }
+
+    node-id = ""                          # amendment: pool records' nodeId; "" = first 8 bytes of the node ID (OQ-9)
+
+    pool {                                # amendment 2026-11-24 (DC-10, FR-013..FR-016); needs sink = "kafka"
+      enabled = false
+      topic-template = "fukuii.{chainKey}.txpool.v1"   # contracts/topic.md §8
+      queue-size = 65536                  # records; full = drop and count (OQ-8)
+      acks = "1"                          # "1" | "all"; durability is not promised either way
+      delivery-timeout = 10s
+    }
   }
 }
 ```
@@ -222,3 +308,4 @@ outage; 7 days default; `cleanup.policy = delete`, never `compact` (contracts/to
 | `ReferenceConsumer` | `src/test/scala/com/chipprbots/ethereum/export/ReferenceConsumer.scala` | folds records into flat maps, recomputes roots, exposes `balance(address, blockNumber)` (FR-010) |
 | `ReorgFixtures` | `src/test/scala/com/chipprbots/ethereum/export/fixtures/ReorgFixtures.scala` | the five FR-009 shapes, deterministic seed (research R-8) |
 | Golden vectors | `src/test/resources/export/golden/v1/` | one `.hex` per record type plus `manifest.json` (contracts/golden-vectors.md) |
+| `PoolFixtures` | `src/test/scala/com/chipprbots/ethereum/export/fixtures/PoolFixtures.scala` | amendment: admit, local submit, replace, include, retract and re-admit, evict, expire; expected pool records (SC-006) |

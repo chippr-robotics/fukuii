@@ -33,7 +33,13 @@ src/test/resources/export/golden/v1/
 ├── retraction.hex
 ├── finality-genesis.hex         # ETC genesis watermark
 ├── finality-eth.hex             # ETH-family watermark at a non-zero height
-└── witness-reserved.hex         # type 3 with witnessFormat 0 and 4 opaque bytes
+├── witness-reserved.hex         # type 3 with witnessFormat 0 and 4 opaque bytes
+│                                # amendment 2026-11-24 (types 4-7, added before GT-1 freezes 0x01):
+├── safe-eth.hex                 # type 6, ETH-family safe watermark above the finality watermark
+├── chain-start-ephemery.hex     # type 7, Ephemery iteration N: chainId 39438000+N, genesis hash, iteration N
+├── pool-add-dynamic-fee.hex     # type 4, source local, a 0x02 transaction with a two-entry access list
+├── pool-remove-replaced.hex     # type 5, reason replaced, replacedBy set
+└── pool-remove-evicted.hex      # type 5, reason evicted, replacedBy ""
 ```
 
 Each `.hex` file is lowercase hex of the complete message value (version byte included), one line, no `0x` prefix, no
