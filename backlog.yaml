@@ -5559,21 +5559,18 @@ items:
   - id: B-521
     title: "Shipped logback.xml sets the snap package to ERROR, so ChainDownloader never logs: header progress and the post-SNAP backfill are invisible"
     priority: P2
-    status: review
+    status: done
     area: ops
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: ["sync reports v0.12.117, 2026-11-23/24"]
     links:
       prs: [2110, 2112]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T22:16:32Z
-      heartbeat: 2026-11-24T22:27:47Z
     notes: |-
       src/main/resources/logback.xml:235 sets com.chipprbots.ethereum.blockchain.sync.snap to ERROR and opens only snap.actors and SNAPSyncController; ChainDownloader logs through context.log in that package, so nothing in 4 h 50 min (mainnet) or on Mordor.
       ops/cirith-ungol/conf/logback.xml already sets snap.ChainDownloader to INFO. Add it to the shipped config; check its per-batch lines are not too chatty at INFO first.
+      2026-11-24 done: merged ddedc2372; ChainDownloader INFO now on, B-522/B-526 need logs from a run on it
   - id: B-522
     title: "SNAP on ETC: the header download from genesis is the critical path (state ready at 63 min, finalisation then held 47 min on mainnet)"
     priority: P3
