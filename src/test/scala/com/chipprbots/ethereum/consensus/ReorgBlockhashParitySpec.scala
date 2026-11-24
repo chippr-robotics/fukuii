@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.consensus
 
+import java.nio.ByteBuffer
+
 import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
@@ -812,7 +814,7 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     state.headGeneration % 2 shouldBe 0
     state.anchor.map(_.hash) shouldBe Some(oldChain(9).hash.value)
     node.bestHash shouldBe oldChain.last.hash
-    val written = (datadir.storage.keySet ++ before.get.keySet).filterNot(key =>
+    val written: Set[ByteBuffer] = (datadir.storage.keySet ++ before.get.keySet).filterNot(key =>
       java.util.Arrays.equals(datadir.storage.getOrElse(key, null), before.get.getOrElse(key, null))
     )
     written.map(_.get(0)) should contain noneOf (

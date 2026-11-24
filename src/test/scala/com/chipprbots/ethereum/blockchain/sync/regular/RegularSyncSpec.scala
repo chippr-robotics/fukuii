@@ -3099,10 +3099,8 @@ class RegularSyncSpec
           val logger: Logger = org.slf4j.LoggerFactory
             .getLogger("com.chipprbots.ethereum.blockchain.sync.regular")
             .asInstanceOf[Logger]
-          val appender = new ListAppender[ILoggingEvent]
           val previousLevel = logger.getLevel
-          appender.start()
-          logger.addAppender(appender)
+          val appender: Capture = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
           logger.setLevel(Level.WARN)
           def said: List[ILoggingEvent] =
             import scala.jdk.CollectionConverters.*
@@ -3141,7 +3139,7 @@ class RegularSyncSpec
           finally
             BlockImporter.exhaustBackoff = 5.minutes
             logger.setLevel(previousLevel)
-            logger.detachAppender(appender)
+            appender.close()
       )
 
       // Spec 018 C5a, B-297: the consensus layer's branch refused for what no attempt changes while the head stays (the
