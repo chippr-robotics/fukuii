@@ -4249,11 +4249,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:21:22Z
-      heartbeat: 2026-11-24T04:08:12Z
+      heartbeat: 2026-11-24T04:40:59Z
     notes: |-
-      Found in B-439. importWith handleError (BlockImporter.scala:1927) logs and goes Running, so no crash; but ConsensusAdapter's re-queue is skipped and no LocalFault is told the feed. ReorgBlockhashParitySpec pins the rethrow as intended (#2001); decide whether the adapter should map a thrown write failure to a StateFault.
       2026-11-24 in-progress: clone-d consensus lane, branch fix/b440-evaluate-branch-throw
       2026-11-24 in-progress: branch pushed; forge/beacon review running
+      2026-11-24 in-progress: forge re-review CHANGES (C1 stop before reads, C2 latch after stop, W1 busy bound); rebuild by cherry-pick after #2034; brief in session scratchpad b440-rebuild-brief.md
   - id: B-441
     title: SyncController idle() drops GetStatus before Start; answer it (NotSyncing/starting)
     priority: P3
