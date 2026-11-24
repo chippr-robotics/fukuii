@@ -16,7 +16,6 @@ import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
-import com.chipprbots.ethereum.ledger.BlockValidation
 import com.chipprbots.ethereum.ledger.ChainInsertLock
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteStringUtils
@@ -32,9 +31,7 @@ import com.chipprbots.ethereum.utils.Logger
   */
 class ChainImporter(
     blockchainReader: BlockchainReader,
-    blockchainWriter: BlockchainWriter,
     blockExecution: BlockExecution,
-    blockValidation: BlockValidation,
     // The node's own fork choice for a block that does NOT extend the current head: queue it as a side branch and
     // reorganise once that branch outweighs the head (ConsensusAdapter.evaluateBranchBlock -> BlockQueue ->
     // ConsensusImpl). `None` keeps the old last-block-wins behaviour and exists only for direct test construction.
@@ -191,18 +188,18 @@ class ChainImporter(
           log.error(s"Chain import: block $blockNum rejected by fork choice — $other")
           LenientOutcome.Failed
     else
-      importBlock(block) match
-        case Right((receipts, blockAccessList)) =>
-          // Block was fully validated and executed, including all transactions (blob ones
-          // included). Sidecars don't participate in the consensus state transition — they
-          // are network-layer attachments verified separately at gossip time. The hive
-          // consensus / consume-engine fixtures expect head to advance over blob blocks;
-          // mainnet ingestion uses Engine API + sidecar verification, not chain.rlp.
-          saveImported(block, receipts, blockAccessList)
-          LenientOutcome.Imported(1)
-
+      // B-455: the node's own import of one block onto the head, as on the unified layout and as an operator's restore:
+      // the same checks before and after execution as before, and the block's state, its code, its receipts, weight
+      // and access list and the head in ONE batch, written only once the block is valid. A block that fails leaves
+      // nothing behind (an archive store's trie nodes are written straight through, by design: inert there). Executed
+      // on its parent's state wherever that is: after the merge the last valid block of the file is the head.
+      // Blob sidecars take no part in the state transition: the hive consensus / consume-engine fixtures expect the
+      // head to advance over blob blocks.
+      val parentWeight = blockchainReader.getChainWeightByHash(block.header.parentHash).getOrElse(ChainWeight.zero)
+      blockExecution.executeAndAdoptBlockIf(block, parentWeight, () => None) match
+        case Right(_) => LenientOutcome.Imported(1)
         case Left(error) =>
-          log.error(s"Chain import: block $blockNum failed — $error")
+          log.error(s"Chain import: block $blockNum failed — ${error.describe}")
           LenientOutcome.Failed
 
   /** Blocks refused on the unified state layout in the import that is running because they are not built on the head:
@@ -267,16 +264,6 @@ class ChainImporter(
             log.error(s"Chain import: block ${header.number} failed — ${error.describe}")
             LenientOutcome.Failed
     }
-
-  private def saveImported(block: Block, receipts: Seq[Receipt], blockAccessList: Option[BlockAccessList]): Unit =
-    val parentWeight = blockchainReader
-      .getChainWeightByHash(block.header.parentHash)
-      .getOrElse(ChainWeight.zero)
-    val newWeight = parentWeight.increase(block.header)
-    blockchainWriter.save(block, receipts, newWeight, saveAsBestBlock = true)
-    // EIP-7928: the list the block just validated against.
-    blockAccessList.foreach(bal => blockchainWriter.storeBlockAccessList(block.header.hash, bal).commit())
-    blockchainReader.recordBlockDifficulty(block.header.difficulty)
 
   /** Import a chain file the way go-ethereum's `geth import` / `admin_importChain` does, stopping at the first problem.
     *
@@ -438,35 +425,6 @@ class ChainImporter(
       blockchainReader.getBlockBodyByHash(header.hash).isDefined &&
       blockchainReader.getReceiptsByHash(header.hash).isDefined &&
       (blockchainReader.getBestBlockNumber != header.number.value || blockchainReader.holdsStateOf(header))
-
-  private def importBlock(
-      block: Block
-  )(implicit blockchainConfig: BlockchainConfig): Either[Any, (Seq[Receipt], Option[BlockAccessList])] =
-    // Validate header/body pre-execution (ommers, difficulty, nonce, withdrawals/blob fields, etc.),
-    // then execute, then validate post-execution (gasUsed, receiptsRoot, stateRoot).
-    // Invalid blocks are rejected and the previous chain head is preserved.
-    blockValidation.validateBlockBeforeExecution(block) match
-      case Left(err) =>
-        Left(s"pre-execution validation failed: $err")
-      case Right(_) =>
-        blockExecution.executeBlockNoValidationWithRequests(block).flatMap {
-          case (receipts, gasUsed, stateRootHash, requests, blockAccessList) =>
-            blockValidation.validateBlockAfterExecution(block, stateRootHash, receipts, gasUsed) match
-              case Left(err) =>
-                receipts.zipWithIndex.foreach { case (r, i) =>
-                  log.error(s"Chain import: block ${block.header.number} tx[$i] cumulativeGas=${r.cumulativeGasUsed}")
-                }
-                Left(s"post-execution validation failed: $err")
-              case Right(_) =>
-                // EIP-7685: the header's requestsHash must match the requests execution produced; EIP-7928: its
-                // blockAccessListHash, the access list execution produced.
-                blockExecution
-                  .validateRequestsHash(block, requests)
-                  .flatMap(_ => blockExecution.validateBlockAccessList(block, blockAccessList))
-                  .left
-                  .map(err => s"post-execution validation failed: ${err.describe}")
-                  .map(_ => (receipts, blockAccessList))
-        }
 
 object ChainImporter:
 
