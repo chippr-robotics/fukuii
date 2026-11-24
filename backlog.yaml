@@ -4227,17 +4227,18 @@ items:
   - id: B-441
     title: SyncController idle() drops GetStatus before Start; answer it (NotSyncing/starting)
     priority: P3
-    status: in-progress
+    status: review
     area: sync
     opened: 2026-11-23
     refs: []
     links:
+      prs: [2030]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:17:49Z
-      heartbeat: 2026-11-24T03:27:42Z
+      heartbeat: 2026-11-24T03:52:21Z
     notes: |-
       B-435 follow-up: idle() has no GetStatus arm (unhandled), so an ask before Start times out. Rare (Start is sent at boot) but the same class.
       2026-11-24 in-progress: clone-e lane, branch fix/b441-idle-get-status
