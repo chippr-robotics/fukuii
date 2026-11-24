@@ -23,9 +23,11 @@ import com.chipprbots.ethereum.crypto.keyPairFromPrvKey
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeader.HeaderExtraFields.HefEmpty
 import com.chipprbots.ethereum.jsonrpc.EthInfoService.*
+import com.chipprbots.ethereum.jsonrpc.EthSimulateService.*
 import com.chipprbots.ethereum.jsonrpc.EthUserService.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -37,7 +39,8 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
   *
   * The pending block is the real proof-of-work block generator's, on the shipped Mordor config. Its trie nodes are in
   * the build's own buffer, not the store, so a method that reads "pending" through the stores by the pending header
-  * finds neither its state nor its code: eth_simulateV1 does (B-458).
+  * finds neither its state nor its code. eth_simulateV1 did ("State node doesn't exist"); it now reads the pending
+  * world through an overlay of its own (B-458).
   */
 // scalastyle:off magic.number
 class PendingBlockCodeSpec extends AnyFlatSpec with Matchers:
@@ -179,5 +182,44 @@ class PendingBlockCodeSpec extends AnyFlatSpec with Matchers:
       .map(_.proofAccount)
     proved.map(_.nonce.toBigInt) shouldBe Right(start + 1)
     proved.map(_.balance) shouldBe balance(Sender, BlockParam.Pending)
+  }
+
+  // B-458: eth_simulateV1 opened a scratch state by the pending header, where the build left no node, and answered
+  // "State node doesn't exist" (-32000 NodeNotFound). It now starts from the pending world, as eth_call does.
+  "eth_simulateV1 on pending" should "run on the pending block's state and code, and write nothing into its buffer" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val node = new Node
+    val service = new EthSimulateService(
+      node.blockchain,
+      node.blockchainReader,
+      node.storagesInstance.storages.evmCodeStorage,
+      node.mining.blockPreparator,
+      node.mining,
+      mordor
+    )
+    def simulate(at: BlockParam) =
+      service
+        .ethSimulate(EthSimulateRequest(Seq(BlockStateCall(calls = Some(Seq(callArgs)))), blockTag = at))
+        .unsafeRunSync()
+    val pending = node.mining.blockGenerator.getPendingBlockAndState.getOrElse(fail("no pending block"))
+
+    val onPending = simulate(BlockParam.Pending).fold(err => fail(s"eth_simulateV1 on pending: $err"), identity)
+    val block = onPending.blocks.head
+    block.header.number shouldBe pending.pendingBlock.block.header.number + 1
+    block.header.parentHash shouldBe pending.pendingBlock.block.header.hash
+    block.calls.map(c => (c.status, c.returnData)) shouldBe Seq((BigInt(1), FortyTwo))
+
+    // the simulated block's state is the simulation's own: none of its nodes reached the build's shared buffer, which
+    // still answers for the pending block
+    a[MissingNodeException] should be thrownBy pending.worldState.stateStorage.get(block.header.stateRoot.value.toArray)
+    node.ethInfoService.call(CallRequest(callArgs, BlockParam.Pending)).unsafeRunSync() shouldBe
+      Right(CallResponse(FortyTwo))
+    // a second simulation on pending answers the same
+    simulate(BlockParam.Pending).map(_.blocks.head.header.stateRoot) shouldBe Right(block.header.stateRoot)
+
+    // at the head the contract does not exist
+    simulate(BlockParam.Latest).map(_.blocks.head.calls.map(_.returnData)) shouldBe Right(Seq(ByteString.empty))
   }
 // scalastyle:on magic.number

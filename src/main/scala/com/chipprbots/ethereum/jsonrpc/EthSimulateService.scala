@@ -160,6 +160,33 @@ object EthSimulateService:
         removals: MptStorageDecorator.Removals
     ): Option[com.chipprbots.ethereum.mpt.MptNode] = super.update(newRoot, removals.none)
 
+  /** The simulation's trie-node store on the PENDING block (B-458): reads fall through to the pending world's own
+    * store, and every node the simulation writes stays here.
+    *
+    * A pending block's state is in its build's buffer and nowhere else (B-210, B-230), so a store taken by the pending
+    * header does not have it ("State node doesn't exist"). The build's buffer is shared and not thread-safe, so the
+    * simulation must never write into it: it reads it, and keeps its own nodes in this request's map. As
+    * [[RetainingMptStorage]], a removal is ignored (nodes are content-addressed, and the access list reads a world
+    * after the next one persisted) and nothing is ever persisted anywhere.
+    */
+  final private[jsonrpc] class PendingOverlayMptStorage(pending: MptStorage) extends MptStorage:
+    private val written = mutable.HashMap.empty[ByteString, Array[Byte]]
+
+    override def get(nodeId: Array[Byte]): com.chipprbots.ethereum.mpt.MptNode =
+      written.get(ByteString(nodeId)) match
+        case Some(encoded) => MptStorage.decodeNode(encoded, nodeId)
+        case None          => pending.get(nodeId)
+
+    override def updateNodesInStorage(
+        newRoot: Option[com.chipprbots.ethereum.mpt.MptNode],
+        toRemove: Seq[com.chipprbots.ethereum.mpt.MptNode]
+    ): Option[com.chipprbots.ethereum.mpt.MptNode] =
+      val (collapsed, toUpsert) = MptStorage.collapseNode(newRoot)
+      toUpsert.foreach((hash, encoded) => written.update(hash, encoded))
+      collapsed
+
+    override def persist(): Unit = ()
+
   /** The address a contract creation by `sender` at account nonce `nonce` deploys to (yellow paper equation 82), as
     * [[com.chipprbots.ethereum.vm.WorldStateProxy.createAddress]] derives it after the nonce increment.
     */
@@ -378,11 +405,12 @@ class EthSimulateService(
         )
 
     // Resolve base block
-    val baseHeader = resolveHeader(req.blockTag) match
-      case Right(resolved) => resolved.header
+    val resolved = resolveHeader(req.blockTag) match
+      case Right(resolved) => resolved
       case Left(_)         =>
         // Return -32000 for block not found (not -32602)
         break(Left(JsonRpcError.LogicError(s"header not found")))
+    val baseHeader = resolved.header
 
     // Pre-validate block number/timestamp ordering
     val validationResult = validateBlockOrdering(req.blockStateCalls, baseHeader)
@@ -395,18 +423,26 @@ class EthSimulateService(
 
     // Create initial world state from base block
     val evmConfig = EvmConfig.forBlock(baseHeader.number.value, baseHeader.unixTimestamp, blockchainConfig)
+    // One store of the base block's state for the whole request: each simulated block reads the root the one before
+    // it persisted, which is no header's root, so the blocks have to share the storage that holds it.
+    //   - A stored block: a scratch state of it.
+    //   - The pending block (B-458): its state is in its build's buffer, not in the stores, so it is read from the
+    //     pending world, as eth_call, eth_estimateGas and the traces read it (`ResolvedHeader.pendingState`), under an
+    //     overlay that keeps the simulation's writes out of that shared buffer; and the code the build deployed is in
+    //     that world alone (B-230). Reading it by the pending header gave "State node doesn't exist".
+    val (baseStorage, baseRoot) = resolved.pendingState match
+      case Some(pending) => (new PendingOverlayMptStorage(pending.stateStorage), pending.stateRootHash)
+      case None => (new RetainingMptStorage(blockchainReader.scratchStateAt(baseHeader)), baseHeader.stateRoot.value)
     var world = InMemoryWorldStateProxy(
       evmCodeStorage = evmCodeStorage,
-      // One scratch state of the base block for the whole request: each simulated block reads the root the one
-      // before it persisted, which is no header's root, so the blocks have to share the storage that holds it.
-      mptStorage = new RetainingMptStorage(blockchainReader.scratchStateAt(baseHeader)),
+      mptStorage = baseStorage,
       getBlockHashByNumber =
         (n: BigInt) => simulatedBlockHashes.get(n).orElse(blockchainReader.getBlockHeaderByNumber(n).map(_.hash.value)),
       accountStartNonce = blockchainConfig.accountStartNonce,
-      stateRootHash = baseHeader.stateRoot.value,
+      stateRootHash = baseRoot,
       noEmptyAccounts = evmConfig.noEmptyAccounts,
       ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
-    )
+    ).withDeployedCode(resolved.pendingState.fold(Map.empty)(_.deployedCode))
 
     var parentHeader = baseHeader
     val blockResults = mutable.ArrayBuffer[SimulateBlockResult]()
