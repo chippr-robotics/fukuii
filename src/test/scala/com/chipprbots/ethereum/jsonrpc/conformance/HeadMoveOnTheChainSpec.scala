@@ -1704,6 +1704,41 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.holds(branch(4).header, chain ++ branch)
     }
 
+  // B-490: the blocks an adoption makes canonical, by its move up the layers and by its commits in place, took their
+  // weights from their parents' when they were executed, or when the adoption read the parent's weight, before the
+  // commit's lock. A chain-weight repair (ChainWeightReconcile) that rewrote the canonical weights in between, and whose
+  // final step checked the index and set its marker before they were canonical, would leave them their parents' old
+  // ones. The adoption re-derives them, as a fork choice does (B-126).
+  it should "re-derive the weights of the blocks it makes canonical from their parents' as they are then (B-490)" taggedAs
+    (UnitTest, ConsensusTest) in {
+      for during <- Seq(false, true) do
+        withClue(if during then "repaired as block 44 is committed: " else "repaired before the fork choice: ") {
+          val on = tightNode
+          val chain = blocks.take(39)
+          chain.foreach(on.imports)
+          val base = chain.last.header
+          val branch = blocks.slice(39, 44) // blocks 40 to 44
+          val repaired = repairedWeightOf(on, base)
+          val recovery = new on.Recovery(
+            maxBlocks = 1,
+            // the commit of 44, whose parent's weight the adoption has read already
+            adopting = block => if during && block.header.hash == branch(4).header.hash then repairCanonical(on, base)
+          )
+          val (newPayload, choose) = recoveringEngine(on, recovery)
+          branch.take(4).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+          newPayload(branch(4)).status shouldBe PayloadStatus.Accepted
+          if !during then repairCanonical(on, base)
+          // the head is moved up the layers to 42 (40 to 42 made canonical), and 43 and 44 are committed in place
+          statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+          recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(2)
+          on.holds(branch(4).header, chain ++ branch)
+          weightsOf(on, branch) shouldBe weightsOn(repaired, branch)
+          // the next fork choice confirms the head, and leaves them so
+          statusOf(choose(branch(4))) shouldBe PayloadStatus.Valid
+          weightsOf(on, branch) shouldBe weightsOn(repaired, branch)
+        }
+    }
+
   /** An attempt that holds the records above the head, open on a thread of its own until what is returned is called: an
     * adoption on another thread, as an import's reverse-then-commit is (B-294).
     */
@@ -2067,6 +2102,89 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       // the next fork choice confirms the head
       statusOf(choose(blocks(43))) shouldBe PayloadStatus.Valid
     }
+
+  // B-490: a catch-up makes canonical the blocks kept as layers above the head (by its move up to them) and the blocks
+  // it commits in place, a chunk at a time. So does the p2p import path's hand-off of the consensus layer's branch
+  // (`BranchHandOff`, `EngineApiService.handOffBranch`), which asks the same recovery. Their weights are re-derived
+  // from their parents' as they are then, as a fork choice's are (B-126): a repair of the canonical weights between
+  // their execution, or the read of a parent's weight, and their commit leaves none of them the old one.
+  it should "re-derive the weights of the blocks it makes canonical from their parents' as they are then (B-490)" taggedAs
+    (UnitTest, ConsensusTest) in {
+      for
+        byHandOff <- Seq(false, true)
+        during <- Seq(false, true)
+      do
+        withClue(
+          (if byHandOff then "handed off by the p2p import path, " else "for a fork choice, ") +
+            (if during then "repaired as block 47 is committed: " else "repaired before: ")
+        ) {
+          val on = new Node
+          blocks.take(39).foreach(on.imports)
+          val base = blocks(38).header
+          val repaired = repairedWeightOf(on, base)
+          val recovery = new on.Recovery(
+            maxBlocks = 1,
+            maxAdopted = 4,
+            catchUp = 30,
+            chunk = 5,
+            // the first block of the second chunk, whose parent's weight the catch-up has read already
+            adopting = block => if during && block.header.hash == blocks(46).header.hash then repairCanonical(on, base)
+          )
+          val engine =
+            on.engine(() => on.pathState.anchor.map(_.hash), recovery = Some(recovery))
+          given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+          // 40 and 41 executed as layers on the head, with their weights; 42 to 60 stored by their hashes only
+          blocks
+            .slice(39, 41)
+            .foreach(block => engine.newPayload(payloadOf(block)).unsafeRunSync().status shouldBe PayloadStatus.Valid)
+          blocks.slice(41, 60).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+          if !during then repairCanonical(on, base)
+          val tip = blocks(59)
+          if byHandOff then
+            on.node.forkChoiceManager.notifyBeaconHead(choiceTo(tip))
+            engine.handOffBranch(tip.header.hash.value, "a test") shouldBe true
+          else
+            statusOf(
+              engine
+                .forkchoiceUpdated(choiceTo(tip), None)
+                .unsafeRunSync()
+            ) shouldBe PayloadStatus.Syncing
+          // the head is moved up the layers to 41, and 42 to 60 are committed in place
+          recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(19)
+          on.holds(tip.header, blocks.take(60))
+          val above = blocks.slice(39, 60)
+          weightsOf(on, above) shouldBe weightsOn(repaired, above)
+        }
+    }
+
+  /** A weight for `base` that is not the one stored: what a chain-weight repair would write. */
+  private def repairedWeightOf(on: Node, base: BlockHeader): ChainWeight =
+    ChainWeight.totalDifficultyOnly(on.reader.getChainWeightByHash(base.hash).get.totalDifficulty.value + 1000)
+
+  /** What a chain-weight repair (ChainWeightReconcile) writes: `base`'s weight repaired, and every canonical block
+    * above it (those the index names, up to the best block) re-derived from it. Blocks the index does not name it never
+    * sees.
+    */
+  private def repairCanonical(on: Node, base: BlockHeader): Unit =
+    val to = repairedWeightOf(on, base)
+    on.storages.chainWeightStorage.put(base.hash.value, to).commit()
+    (base.number.value + 1 to on.reader.getBestBlockNumber)
+      .map(n => on.reader.getBlockHeaderByNumber(n))
+      .takeWhile(_.isDefined)
+      .flatten
+      .foldLeft(to) { (weight, header) =>
+        val next = weight.increase(header)
+        on.storages.chainWeightStorage.put(header.hash.value, next).commit()
+        next
+      }
+
+  /** The stored weight of each of `chain`. */
+  private def weightsOf(on: Node, chain: Seq[Block]): Seq[Option[ChainWeight]] =
+    chain.map(block => on.reader.getChainWeightByHash(block.header.hash))
+
+  /** Each of `chain`'s exact weight, `chain` standing on a block of weight `from`. */
+  private def weightsOn(from: ChainWeight, chain: Seq[Block]): Seq[Option[ChainWeight]] =
+    chain.scanLeft(from)((weight, block) => weight.increase(block.header)).tail.map(Some(_))
 
   // B-316/B-480 (beacon): after a hand-off the index of blocks by number runs ahead of the anchor, over blocks whose
   // state no view reaches. A fork choice's walk stops by the records only where the head's chain leaves the index
