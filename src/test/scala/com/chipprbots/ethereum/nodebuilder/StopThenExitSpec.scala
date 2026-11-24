@@ -178,3 +178,29 @@ class StopThenExitSpec extends AnyFlatSpec with Matchers:
     // the clean status is the other stop's outcome: only a wait that lasted to its end could see it
     exits.asScala.toList shouldBe List((StopSignal.CleanExit, true, true))
   }
+
+  // B-440: a write of the store refused during an import stops the node. The import holds what the database's close
+  // waits for, so the stop runs on a thread of its own and the call returns at once; the exit is unclean whatever the
+  // stop ends in, and a second failure starts no second stop
+  "A failure that ends the node" should "stop it aside, once, and exit with the unclean status even after a clean stop" taggedAs UnitTest in {
+    val started = new ConcurrentLinkedQueue[Runnable]()
+    val stops = new java.util.concurrent.atomic.AtomicInteger(0)
+    val exits = new ConcurrentLinkedQueue[Int]()
+    val fail = StopSignal.stopThenExitAside(
+      "a write of the store was refused",
+      () =>
+        stops.incrementAndGet()
+        true
+      ,
+      code => exits.add(code): Unit,
+      started.add(_): Unit
+    )
+    fail()
+    // nothing ran on the caller's thread: the stop is the started thread's
+    (stops.get, exits.isEmpty) shouldBe (0, true)
+    fail()
+    started.size shouldBe 1
+    started.peek().run()
+    stops.get shouldBe 1
+    exits.asScala.toList shouldBe List(StopSignal.UncleanExit)
+  }

@@ -823,6 +823,14 @@ abstract class BaseNode extends Node:
     shutdown()
     stoppedCleanly
 
+  /** A write of the store refused during an import (B-440, the user's decision of 2026-11-24): the node stops, on a
+    * thread of its own, and exits non-zero ([[StopSignal.stopThenExitAside]]).
+    */
+  override lazy val onFatalStoreFailure: Throwable => Unit =
+    val stop =
+      StopSignal.stopThenExitAside("a write of the store was refused", () => stopForExit(), code => sys.exit(code))
+    _ => stop()
+
   private def shutDownOnce(): ShutdownSequence.Outcome =
     import ShutdownSequence.Budget
     import ShutdownSequence.Step

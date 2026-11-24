@@ -508,6 +508,11 @@ trait ConsensusBuilder:
       )
     }
 
+  /** What stops the node when a write of its store is refused during an import (B-440): nothing but a log line here;
+    * [[BaseNode]] wires its stop.
+    */
+  def onFatalStoreFailure: Throwable => Unit = ConsensusAdapter.NoStopWired
+
   lazy val consensusAdapter: ConsensusAdapter =
     new ConsensusAdapter(
       consensus,
@@ -516,7 +521,8 @@ trait ConsensusBuilder:
       blockValidation,
       IORuntime.global,
       Some(invalidChainReporter),
-      powEscalationFeed
+      powEscalationFeed,
+      onFatalStoreFailure
     )
 
 trait ForkResolverBuilder:
