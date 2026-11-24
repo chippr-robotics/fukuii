@@ -4593,10 +4593,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T04:08:25Z
-      heartbeat: 2026-11-24T04:08:30Z
+      heartbeat: 2026-11-24T04:54:39Z
     notes: |-
       beacon review of B-294, StateRecovery.scala:508-511; CL told VALID for X while head elsewhere until next FCU; fix: if asked() then moveBack(...); changes which head is kept after an invalid branch -> beacon decision
       2026-11-24 in-progress: clone-d consensus lane batch 2
+      2026-11-24 in-progress: branch pushed; beacon review running
   - id: B-465
     title: clearForResync can run while a ConsensusImpl adoption hold is open on ETC; refuse it while any attempt is open
     priority: P3
