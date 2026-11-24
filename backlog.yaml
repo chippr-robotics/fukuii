@@ -4460,3 +4460,13 @@ items:
     refs: [B-452]
     links: {}
     notes: "Follow-up of B-452. StopSignal.stopThenExit (and SIGTERM before it) exits only when stop() returns or throws NonFatal; an OOM/StackOverflow in the stop kills the exiting thread with no exit. Decide: exit(UncleanExit) in a finally, or halt. Also: Fukuii.run's Ephemery stop-then-exit wiring has no unit seam (stopThenExit itself is tested)."
+  - id: B-468
+    title: Test log captures that attach an appender (testing/LogCapture, ad-hoc ListAppenders) can lose it to logback's COWArrayList race
+    priority: P3
+    status: open
+    area: test
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: "016"
+    notes: "B-256 root cause: logback 1.5.34 COWArrayList lost update; an appender added while another thread logs through the logger can receive nothing. SnapLogCapture now uses a turbo filter (fix/b256-snap-log-capture). testing/LogCapture.capture and ~15 specs attaching ListAppenders to shared loggers (network, sync, jsonrpc) have the same latent race when actors log during attach; move them onto a shared turbo-filter capture."
