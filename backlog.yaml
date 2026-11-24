@@ -2684,7 +2684,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-18T00:57:40Z
-      heartbeat: 2026-11-24T03:27:54Z
+      heartbeat: 2026-11-24T11:35:06Z
     notes: |-
       hive client has no switch for fukuii.state.path-live; needs one, and a host
       2026-11-18 blocked: The hive client switch for path-live landed (#1910). Remaining: the gate run itself, which needs a hive host or a dispatch: gh workflow run hive-engine.yml --ref staging -f path_live=true -f sim_limit='/re-?org' (or scripts/hive/local.sh ethereum/engine --limit '/re-?org' --path-live).
