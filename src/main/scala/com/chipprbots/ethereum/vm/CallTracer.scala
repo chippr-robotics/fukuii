@@ -75,7 +75,7 @@ class CallTracer(onlyTopCall: Boolean = false) extends ExecutionTracer:
       frame.output = output
       frame.error = error
       if error.exists(_.contains("execution reverted")) && output.length >= 4 then
-        frame.revertReason = parseRevertReason(output)
+        frame.revertReason = RevertReason.decode(output)
 
   override def onCallEnter(
       opCode: String,
@@ -103,7 +103,7 @@ class CallTracer(onlyTopCall: Boolean = false) extends ExecutionTracer:
       frame.output = output
       frame.error = error
       if error.exists(_.contains("execution reverted")) && output.length >= 4 then
-        frame.revertReason = parseRevertReason(output)
+        frame.revertReason = RevertReason.decode(output)
 
       if callStack.nonEmpty then callStack.top.calls += frame
 
@@ -141,18 +141,3 @@ class CallTracer(onlyTopCall: Boolean = false) extends ExecutionTracer:
   private def encodeHexBytes(bs: ByteString): JString =
     if bs.isEmpty then JString("0x")
     else JString("0x" + Hex.toHexString(bs.toArray))
-
-  /** Parse Solidity revert reason from ABI-encoded error data. Format: 0x08c379a0 + offset + length + utf8 string
-    */
-  private def parseRevertReason(data: ByteString): Option[String] =
-    if data.length < 68 then None
-    else
-      val selector = data.take(4)
-      if selector != ByteString(0x08, 0xc3, 0x79, 0xa0) then None
-      else
-        try
-          val offset = BigInt(1, data.slice(4, 36).toArray).toInt
-          val length = BigInt(1, data.slice(36 + offset, 68 + offset).toArray).toInt
-          if data.length < 68 + offset + length then None
-          else Some(new String(data.slice(68 + offset, 68 + offset + length).toArray, "UTF-8"))
-        catch case _: Exception => None

@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.ExecutionTracer
 import com.chipprbots.ethereum.vm.OutOfGas
 import com.chipprbots.ethereum.vm.ProgramError
+import com.chipprbots.ethereum.vm.ProgramErrorText
 import com.chipprbots.ethereum.vm.RevertOccurs
 
 class StxLedger(
@@ -93,7 +94,9 @@ class StxLedger(
         world.saveAccount(sender, world.getAccount(sender).getOrElse(Account.empty(blockchainConfig.accountStartNonce)))
       tracer.foreach(_.onTxStart(sender, tx.receivingAddress, tx.gasLimit.value, tx.value, tx.payload))
       val result = blockPreparator.executeTransaction(stx.tx, sender, blockHeader, worldWithSender, tracer = tracer)
-      tracer.foreach(_.onTxEnd(result.gasUsed, result.vmReturnData, result.vmError.map(_.toString)))
+      tracer.foreach(
+        _.onTxEnd(result.gasUsed, result.vmReturnData, result.vmError.map(ProgramErrorText.vmErrorMessage))
+      )
       result
 
   /** Like `simulateTransaction` but threads an optional EVM tracer into the run. Used by `debug_traceTransaction` /
@@ -169,7 +172,7 @@ class StxLedger(
     val result = blockPreparator.runVMWithTracer(tx, senderAddress, blockHeader, worldForTx, tracer)
     val totalGasToRefund = blockPreparator.calcTotalGasToRefund(tx, result, blockHeader.number.value)
     val gasUsed = tx.tx.gasLimit.value - totalGasToRefund
-    tracer.onTxEnd(gasUsed, result.returnData, result.error.map(_.toString))
+    tracer.onTxEnd(gasUsed, result.returnData, result.error.map(ProgramErrorText.vmErrorMessage))
 
     TxResult(result.world, gasUsed, result.logs, result.returnData, result.error)
 
@@ -293,7 +296,7 @@ class StxLedger(
     callPreCheck(stx, blockHeader, world1, options).map { _ =>
       val (result, authRefund) = runCallFrame(stx, blockHeader, world1, options, tracer)
       val gasUsed = callGasUsed(stx, blockHeader, result, authRefund)
-      tracer.foreach(_.onTxEnd(gasUsed, result.returnData, result.error.map(_.toString)))
+      tracer.foreach(_.onTxEnd(gasUsed, result.returnData, result.error.map(ProgramErrorText.vmErrorMessage)))
       StxLedger.CallOutcome(
         TxResult(result.world, gasUsed, result.logs, result.returnData, result.error),
         codeDepositShortfall = result.codeDepositShortfall
@@ -322,12 +325,12 @@ class StxLedger(
       hi <- affordableCeiling(stx, world1)
       stxHi = withGas(stx, hi)
       _ <- callPreCheck(stxHi, blockHeader, world1, options).left.map { e =>
-        // the refusal of a type the block does not admit comes back as "failed with %d gas: %w" (execution-apis
-        // estimate-fork-inactive-access-list); the other refusals keep geth's bare message
+        // go-ethereum v1.17.9 eth/gasestimator: `run` wraps every core.ApplyMessage refusal as
+        // "failed with %d gas: %w" (call.GasLimit, here the ceiling), and `execute` turns only ErrIntrinsicGas (and
+        // ErrGasLimitTooHigh) into a failure that Estimate answers "gas required exceeds allowance (%d)". The EIP-7623
+        // floor (ErrFloorDataGas) is not special-cased there, so it is wrapped too (B-026, from B-172).
         if e.gasShortfall then PreCheck(s"gas required exceeds allowance ($hi)")
-        else if e.message.startsWith(StxLedger.TypeNotSupportedPrefix) then
-          PreCheck(s"failed with $hi gas: ${e.message}")
-        else PreCheck(e.message)
+        else PreCheck(s"failed with $hi gas: ${e.message}")
       }
       atHi = runCallFrame(stxHi, blockHeader, world1, options, tracer = None)._1
       // gasestimator.Estimate (gasestimator.go:139-143): a failure at the ceiling that is not out-of-gas is the answer

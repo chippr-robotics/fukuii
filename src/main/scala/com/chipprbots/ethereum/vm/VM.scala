@@ -138,7 +138,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
             _.onCallExit(
               context.startGas - exitResult.gasRemaining,
               exitResult.returnData,
-              exitResult.error.map(_.toString)
+              exitResult.error.map(exitErrorText(context, _, isCreate = false))
             )
           )
     result
@@ -288,7 +288,7 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
             _.onCallExit(
               context.startGas - exitResult.gasRemaining,
               exitResult.returnData,
-              exitResult.error.map(_.toString)
+              exitResult.error.map(exitErrorText(context, _, isCreate = true))
             )
           )
     (result, newAddress)
@@ -298,6 +298,8 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
     val byte = state.program.getByte(state.pc)
     state.config.opCodeFor(byte) match
       case Some(opCode) =>
+        tracer.foreach(_.onStepStart(opCode, state))
+        state.env.tracer.foreach(_.onStepStart(opCode, state))
         val newState = opCode.execute(state)
         // Per-opcode hook. VM-level `tracer` and the tracer carried in state.env.tracer
         // may both be set (VM ctor vs. per-context wiring); fire both so consumers wired
@@ -336,6 +338,25 @@ class VM[W <: WorldStateProxy[W, S], S <: Storage[S]](
   protected def isValidCall(context: PC): Boolean =
     context.endowment <= context.world.getBalance(context.callerAddr) &&
       context.callDepth <= EvmConfig.MaxCallDepth
+
+  /** A sub-call's error as go-ethereum's tracers report it (`err.Error()`, B-026). `InvalidCall` is one result for the
+    * refusals before a frame starts, which go-ethereum names apart: "max call depth exceeded" (ErrDepth), "insufficient
+    * balance for transfer" (ErrInsufficientBalance) and, for a creation, "nonce uint64 overflow"
+    * (ErrNonceUintOverflow), checked in core/vm/evm.go's order. Read-only and run only for a tracer, so execution does
+    * not change.
+    */
+  private def exitErrorText(context: PC, error: ProgramError, isCreate: Boolean): String =
+    if error != InvalidCall then ProgramErrorText.vmErrorMessage(error)
+    else if context.callDepth > EvmConfig.MaxCallDepth then "max call depth exceeded"
+    else
+      // Runs in a `finally`: a read that throws (a pruned node) must not replace an exception already in flight.
+      scala.util
+        .Try {
+          if context.endowment > context.world.getBalance(context.callerAddr) then "insufficient balance for transfer"
+          else if isCreate && creatorNonceOverflowed(context) then "nonce uint64 overflow"
+          else ProgramErrorText.vmErrorMessage(error)
+        }
+        .getOrElse(ProgramErrorText.vmErrorMessage(error))
 
   /** EIP-2681: a creation whose creator nonce would overflow uint64 fails before it starts. go-ethereum core/vm/evm.go
     * create() returns ErrNonceUintOverflow with the gas unchanged, after the depth and balance checks and BEFORE

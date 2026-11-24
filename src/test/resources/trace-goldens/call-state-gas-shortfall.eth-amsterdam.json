@@ -64,10 +64,10 @@
       "pc":34,
       "op":"CALL",
       "gas":99979,
-      "gasCost":99979,
+      "gasCost":79835,
       "depth":1,
       "stack":["0x0","0x0","0x0","0x0","0x1","0xdead","0xffff"],
-      "error":"OutOfGas"
+      "error":"out of gas"
     }]
   },
   "structLogWithMemory":{
@@ -134,11 +134,11 @@
       "pc":34,
       "op":"CALL",
       "gas":99979,
-      "gasCost":99979,
+      "gasCost":79835,
       "depth":1,
       "stack":["0x0","0x0","0x0","0x0","0x1","0xdead","0xffff"],
       "memory":[],
-      "error":"OutOfGas"
+      "error":"out of gas"
     }]
   },
   "callTracer":{
