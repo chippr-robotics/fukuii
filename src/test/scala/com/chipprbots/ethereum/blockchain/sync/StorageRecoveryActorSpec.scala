@@ -47,6 +47,8 @@ import com.chipprbots.ethereum.utils.Config
   *
   *   - Bug 30b abandon: repeated `PivotStateUnservable` with no progress eventually triggers `RecoveryComplete`, and a
   *     `ProgressStorageSlotsSynced` between events resets the abandon timer.
+  *   - Progress counts (B-502): the log and the downloaded gauge count storage roots from the coordinator's
+  *     `ProgressStorageContracts`; each `ProgressStorageSlotsSynced` adds its slots to a separate tally.
   *   - Recent-root roll (Task #5): when the saved pivot root has aged out of every peer's serve window, the actor asks
   *     SyncController for a recent root and, on receiving one, sends `StoragePivotRefreshed` to the coordinator instead
   *     of abandoning — so the resync can't get permanently wedged on a stale pivot. Bounded + falls back to abandon.
@@ -128,7 +130,8 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
       syncController: TestProbe,
       coordinator: TestProbe,
       abandonAfter: FiniteDuration,
-      maxRolls: Int = 8
+      maxRolls: Int = 8,
+      missing: Seq[(ByteString, ByteString)] = missingOne
   ): (org.apache.pekko.actor.typed.ActorRef[StorageRecoveryActor.Command], AppStateStorage) =
     val networkPeerManager = TestProbe(s"npm_$testLabel")
     val (stateStorage, appStateStorage, flatSlots) = newStorages()
@@ -141,7 +144,7 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
           syncController = syncController.ref.toTyped[Any],
           pivotBlockNumber = BigInt(100),
           snapSyncConfig = newConfig(abandonAfter, maxRolls),
-          missing = missingOne,
+          missing = missing,
           coordinatorForTesting = Some(coordinator.ref)
         ),
         s"storage-recovery-spec-$testLabel"
@@ -286,6 +289,71 @@ class StorageRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatS
     // after progress, so abandon is still pending — we only assert it did not PREMATURELY fire.
     syncController.expectNoMessage((abandonAfter.toMillis / 2).millis)
     appStateStorage.isStorageRecoveryDone() shouldBe false
+    testKit.stop(actor)
+  }
+
+  it should "take slot progress from the slot message and root progress from the coordinator's root count (B-502)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    // ProgressStorageSlotsSynced carries the slots one chunk applied; ProgressStorageContracts the roots completed.
+    StorageRecoveryActor.fromCoordinator(
+      snap.SNAPSyncController.ProgressStorageSlotsSynced(7L)
+    ) shouldBe StorageRecoveryActor.StorageSlotProgress(7L)
+    StorageRecoveryActor.fromCoordinator(
+      snap.SNAPSyncController.ProgressStorageContracts(3, 10)
+    ) shouldBe StorageRecoveryActor.StorageRootsProgress(3L)
+  }
+
+  it should "count recovered storage roots by the coordinator's root count, and slots by each chunk's count (B-502)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in {
+    import org.apache.pekko.actor.testkit.typed.scaladsl.LoggingTestKit
+    val syncController = TestProbe("syncController_counts")
+    val coordinator = TestProbe("coordinator_counts")
+    val missingTen: Seq[(ByteString, ByteString)] =
+      (1 to 10).map(i => (ByteString(Array.fill[Byte](32)(i.toByte)), fakeStorageRoot))
+    val (actor, _) =
+      downloadingActor("counts", syncController, coordinator, abandonAfter = 1.minute, missing = missingTen)
+
+    def downloadedGauge: Double =
+      com.chipprbots.ethereum.metrics.Metrics.get().registry.find("recovery.storage.downloaded.gauge").gauge().value()
+    def rootsLine(percent: Int, roots: Int, slots: Long): LoggingTestKit =
+      LoggingTestKit.empty
+        .withLogLevel(org.slf4j.event.Level.INFO)
+        .withMessageRegex(
+          s"\\[SNAP-PROGRESS\\] STORAGE-RECOVERY $percent% — $roots / 10 storage roots \\| \\d+ roots/s \\| $slots slots"
+        )
+
+    // logback-test.xml keeps the root at ERROR, which drops the actor's INFO progress line before LoggingTestKit can
+    // see it; admit INFO for the actor's logger (its object's class) for this test only.
+    val actorLogger = org.slf4j.LoggerFactory
+      .getLogger(StorageRecoveryActor.getClass)
+      .asInstanceOf[ch.qos.logback.classic.Logger]
+    val previousLevel = actorLogger.getLevel
+    actorLogger.setLevel(ch.qos.logback.classic.Level.INFO)
+    try
+      // Two chunks of one root are slots, not roots: no root progress is logged for them.
+      LoggingTestKit.info("STORAGE-RECOVERY").withOccurrences(0).expect {
+        actor ! StorageRecoveryActor.StorageSlotProgress(500L)
+        actor ! StorageRecoveryActor.StorageSlotProgress(250L)
+        syncController.expectNoMessage(200.millis)
+      }
+      // Three roots complete: 3 of 10, with the 750 slots so far.
+      rootsLine(30, 3, 750L).expect {
+        actor ! StorageRecoveryActor.StorageRootsProgress(3L)
+      }
+      eventually(downloadedGauge shouldBe 3d)
+      // The counts accumulate: 50 more slots, then a fourth root.
+      rootsLine(40, 4, 800L).expect {
+        actor ! StorageRecoveryActor.StorageSlotProgress(50L)
+        actor ! StorageRecoveryActor.StorageRootsProgress(4L)
+      }
+      eventually(downloadedGauge shouldBe 4d)
+      syncController.expectNoMessage(100.millis)
+    finally actorLogger.setLevel(previousLevel)
+
     testKit.stop(actor)
   }
 

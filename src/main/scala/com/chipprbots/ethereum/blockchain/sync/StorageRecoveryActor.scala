@@ -57,7 +57,12 @@ object StorageRecoveryActor:
   case class StoragePeerAvailable(peer: Peer) extends Command
   // Adapter-mapped SSC replies — private[sync] so tests can inject them directly
   private[sync] case object StorageRangeDone extends Command
+  // The slots one applied chunk carried (a delta; StorageOrderedApply's ProgressStorageSlotsSynced). One storage root
+  // is many chunks, so this is liveness and a slot tally, never the root count (B-502).
   private[sync] case class StorageSlotProgress(n: Long) extends Command
+  // The storage roots (accounts) the coordinator has completed so far: an absolute count, from its
+  // ProgressStorageContracts. This is what the progress log and the downloaded gauge count (B-502).
+  private[sync] case class StorageRootsProgress(completed: Long) extends Command
   private[sync] case class PivotUnservable(rootHash: ByteString, reason: String, emptyResponses: Int) extends Command
   // Catch-all for unexpected SSC messages arriving via the adapter
   private case object DroppedSrcMsg extends Command
@@ -194,6 +199,14 @@ object StorageRecoveryActor:
       Behaviors.stopped
     }
 
+  /** What the coordinator's messages to its controller become here. */
+  private[sync] def fromCoordinator(msg: snap.SNAPSyncController.Command): Command = msg match
+    case snap.SNAPSyncController.StorageRangeSyncComplete                => StorageRangeDone
+    case snap.SNAPSyncController.ProgressStorageSlotsSynced(n)           => StorageSlotProgress(n)
+    case snap.SNAPSyncController.ProgressStorageContracts(completed, _)  => StorageRootsProgress(completed.toLong)
+    case snap.SNAPSyncController.PivotStateUnservable(r, reason, cnt, _) => PivotUnservable(r, reason, cnt)
+    case _                                                               => DroppedSrcMsg
+
   private def startingOnTheHashLayout(
       stateRoot: ByteString,
       stateIngest: StateIngest,
@@ -222,12 +235,7 @@ object StorageRecoveryActor:
             RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseDownloading)
 
             val srcAdapter: org.apache.pekko.actor.typed.ActorRef[snap.SNAPSyncController.Command] =
-              ctx.messageAdapter {
-                case snap.SNAPSyncController.StorageRangeSyncComplete                => StorageRangeDone
-                case snap.SNAPSyncController.ProgressStorageSlotsSynced(n)           => StorageSlotProgress(n)
-                case snap.SNAPSyncController.PivotStateUnservable(r, reason, cnt, _) => PivotUnservable(r, reason, cnt)
-                case _                                                               => DroppedSrcMsg
-              }
+              ctx.messageAdapter(fromCoordinator)
             val coordinator: org.apache.pekko.actor.typed.ActorRef[actors.StorageRangeCoordinator.Command] =
               coordinatorForTesting match
                 case Some(testRef) => testRef.toTyped[actors.StorageRangeCoordinator.Command]
@@ -305,7 +313,7 @@ object StorageRecoveryActor:
   ): Behavior[Command] =
     val expectedCount = missing.size
     var progressSeq = 0L
-    var downloadedCount = 0L
+    var slotsDownloaded = 0L
     var lastProgressNanos = System.nanoTime()
     var unservableCount = 0
     var recoveredCount = 0L
@@ -354,11 +362,17 @@ object StorageRecoveryActor:
           RecoveryMetrics.setStorageDownloaded(expectedCount.toLong)
           finishRecovery(s"downloaded storage for $expectedCount contracts")
 
-        case StorageSlotProgress(_) =>
-          downloadedCount += 1
-          RecoveryMetrics.setStorageDownloaded(downloadedCount)
+        // n is the slots one chunk carried. It was ignored, and each message was counted as a recovered storage root,
+        // so the log and the gauge ran at the chunk rate and passed the root total on a large contract (B-502).
+        case StorageSlotProgress(n) =>
+          slotsDownloaded += n
           recordProgress()
-          recoveredCount += 1
+          Behaviors.same
+
+        // Roots completed is absolute; max keeps the count from going back if a restarted coordinator starts over.
+        case StorageRootsProgress(completed) =>
+          recoveredCount = math.max(recoveredCount, completed)
+          RecoveryMetrics.setStorageDownloaded(recoveredCount)
           val (newM, crossed) =
             ProgressMilestones.crossed(recoveredCount, expectedCount.toLong, lastStorageRecoveryMilestone)
           lastStorageRecoveryMilestone = newM
@@ -369,7 +383,8 @@ object StorageRecoveryActor:
               lastRateNanos = System.nanoTime()
               lastRateRecovered = recoveredCount
             ctx.log.info(
-              s"[SNAP-PROGRESS] STORAGE-RECOVERY $m% — $recoveredCount / $expectedCount storage roots | $rate roots/s"
+              s"[SNAP-PROGRESS] STORAGE-RECOVERY $m% — $recoveredCount / $expectedCount storage roots | $rate roots/s | " +
+                s"$slotsDownloaded slots"
             )
           }
           Behaviors.same
