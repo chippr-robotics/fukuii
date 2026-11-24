@@ -2284,22 +2284,18 @@ items:
   - id: B-253
     title: A move of the head drops only the head block's transactions from the pool and puts back none of a reversed block's
     priority: P3
-    status: review
+    status: done
     area: rpc
     size: M
     opened: 2026-11-14
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2066]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T07:27:46Z
-      heartbeat: 2026-11-24T09:04:42Z
     notes: |-
-      2026-11-24 in-progress: beacon round 2: C1/W1/W2 resolved; one Warning (same sender+nonce double-pooled on reinject); round 3 queued
       2026-11-24 in-progress: round 3 in clone-d
       2026-11-24 review: beacon round 3 fix in (936de27aed)
+      2026-11-24 done: merged
   - id: B-255
     title: "Spec 018 T156: child-JVM kill -9 between newPayload and forkchoiceUpdated on RocksDB, restart with no peers, real consensus client reaches VALID"
     priority: P2
