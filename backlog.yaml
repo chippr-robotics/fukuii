@@ -5215,3 +5215,14 @@ items:
     links:
       spec: 018
     notes: "forge, found during B-503. Partial arms: state fault, missing node, side blocks a failed move-back left the head on. Weightless child never resolved (pre-existing); recompute from the stored parent."
+  - id: B-510
+    title: "B-490 nits: StateRecovery re-derive skipped on a non-fault exception (move into finally); WARN when the 8192 walk limit drops the moved blocks"
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "vault review of B-490. adopt: rederiveWeights after try/finally; catchUp: after commitEach. Note B-491 too: closing fix is same-batch weight write or a pass on restart."
