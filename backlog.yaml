@@ -5326,13 +5326,18 @@ items:
   - id: B-515
     title: "Pool reset: the Engine API path and the importer don't share the pool's last head; an FCU after an importer reorg leaves the pool stale"
     priority: P3
-    status: open
+    status: claimed
     area: rpc
     size: S
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T11:15:45Z
+      heartbeat: 2026-11-24T11:15:45Z
     notes: beacon W1 on B-338 (EngineApiService.poolHead only moves on FCU). Pool contents/RPC only, never a build. One shared tracker for both paths.
   - id: B-516
     title: "CL branch evaluated while the head is already past its tip: the head is moved back below the named head and told as ChainReorganised"
