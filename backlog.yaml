@@ -5177,3 +5177,13 @@ items:
     links:
       spec: 018
     notes: Found during B-495; reuse CanonicalTxLookup. MCP deps may need blockchainReader.
+  - id: B-508
+    title: "EngineApiHttpServerObservationSpec still flakes in CI after #2029 (B-374 reopened shape); seen on #2063 run 45356110651"
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links: {}
+    notes: "B-374 is done (#1927, #2029) but the spec failed again in Test and Build on 2026-11-24 for a PR that doesn't touch the Engine API HTTP server. Find the remaining timing assumption; no Thread.sleep fixes."
