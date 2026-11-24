@@ -2463,7 +2463,7 @@ items:
   - id: B-294
     title: "Writer-side exclusion: an import onto an intermediate head during an in-place adoption (test mode today)"
     priority: P2
-    status: claimed
+    status: in-progress
     area: consensus
     size: M
     opened: 2026-11-15
@@ -2474,8 +2474,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-23T21:03:09Z
-      heartbeat: 2026-11-24T01:04:29Z
-    notes: "forge, C4e part 4 pre-code: refuse with ask-again, not wait (BlockImportGate deadlock); needs beacon; C4e part 5 or C5a"
+      heartbeat: 2026-11-24T02:13:48Z
+    notes: |-
+      forge, C4e part 4 pre-code: refuse with ask-again, not wait (BlockImportGate deadlock); needs beacon; C4e part 5 or C5a
+      2026-11-24 in-progress: agent in clone-e
   - id: B-295
     title: "T183 remainder: a node killed during reverse-then-commit restarts on a valid head and adopts the heavier chain when offered again"
     priority: P1
