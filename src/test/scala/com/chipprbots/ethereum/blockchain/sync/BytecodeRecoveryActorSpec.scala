@@ -41,9 +41,9 @@ import com.chipprbots.ethereum.utils.Config
   * `RecoveryScansVerdictSpec`'s).
   *
   * T1: No missing bytecodes → immediate RecoveryComplete, flag committed. T2: Missing present → coordinator receives
-  * StartByteCodeSync, completes normally, and nothing is settled before. T4: Coordinator crashes mid-download →
-  * Terminated handler commits flag and fires RecoveryComplete. T5: No peer/progress arrives within timeout → abandon
-  * fires, RecoveryComplete emitted.
+  * StartByteCodeSync, completes normally, and nothing is settled before. T3: progress counts each message's count, once
+  * (B-494). T4: Coordinator crashes mid-download → Terminated handler commits flag and fires RecoveryComplete. T5: No
+  * peer/progress arrives within timeout → abandon fires, RecoveryComplete emitted.
   */
 class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers with Eventually:
 
@@ -156,6 +156,58 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
 
       syncController.expectMsg(3.seconds, BytecodeRecoveryActor.RecoveryComplete)
       appStateStorage.isBytecodeRecoveryDone() shouldBe true
+
+      testKit.stop(actor)
+    }
+
+  it should
+    "count downloaded bytecodes by each progress message's count, once (B-494)" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in {
+      val syncController = TestProbe("syncController_t3")
+      val networkPeerManager = TestProbe("networkPeerManager_t3")
+      val coordinatorProbe = TestProbe("coordinator_t3")
+      val (stateStorage, appStateStorage, evmCodeStorage) = newStorages()
+      val missingTen: Seq[ByteString] = (1 to 10).map(i => ByteString(Array.fill[Byte](32)(i.toByte)))
+
+      val actor: TypedActorRef[BytecodeRecoveryActor.Command] = testKit
+        .spawn(
+          BytecodeRecoveryActor.testApply(
+            stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
+            networkPeerManager = networkPeerManager.ref,
+            syncController = syncController.ref.toTyped[Any],
+            snapSyncConfig = newConfig(),
+            missing = missingTen,
+            coordinatorForTesting = Some(coordinatorProbe.ref)
+          ),
+          "bytecode-recovery-spec-t3"
+        )
+
+      coordinatorProbe.expectMsgType[snap.actors.ByteCodeCoordinator.StartByteCodeSync](2.seconds)
+
+      // logback-test.xml keeps the root at ERROR, which drops the actor's INFO progress line before LoggingTestKit can
+      // see it; admit INFO for the actor's logger (its object's class) for this test only.
+      val actorLogger = org.slf4j.LoggerFactory
+        .getLogger(BytecodeRecoveryActor.getClass)
+        .asInstanceOf[ch.qos.logback.classic.Logger]
+      val previousLevel = actorLogger.getLevel
+      actorLogger.setLevel(ch.qos.logback.classic.Level.INFO)
+      try
+        // One response carrying 3 codes is 3 of 10, not 1 (the message) nor 2 (the message counted twice).
+        org.apache.pekko.actor.testkit.typed.scaladsl.LoggingTestKit
+          .info("BYTECODE-RECOVERY 30% — 3 / 10 bytecodes")
+          .expect {
+            actor ! BytecodeRecoveryActor.ByteCodeDownloadProgress(3L)
+          }
+        // The count accumulates: one more code is 4 of 10.
+        org.apache.pekko.actor.testkit.typed.scaladsl.LoggingTestKit
+          .info("BYTECODE-RECOVERY 40% — 4 / 10 bytecodes")
+          .expect {
+            actor ! BytecodeRecoveryActor.ByteCodeDownloadProgress(1L)
+          }
+        syncController.expectNoMessage(100.millis)
+      finally actorLogger.setLevel(previousLevel)
 
       testKit.stop(actor)
     }
