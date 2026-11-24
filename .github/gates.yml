@@ -302,10 +302,16 @@ gates:
     issue: 1402
     promote_by: 2027-03-31
     covers: >-
-      Nightly ethereum/tests across the full ETC and ETH fork schedules.
+      Nightly ethereum/tests across the full ETC and ETH fork schedules, and
+      (job legacy-blockchain-tests, B-429) LegacyPreByzantiumBlockchainTestsSpec
+      over ethereum/legacytests pinned by commit: the Frontier..EIP158 slice
+      (6,817 vectors, a state root per receipt) and Byzantium..Berlin (54,497).
+      That job fails on any failing vector and on a missing or partial corpus.
     status_note: >-
-      Runs with continue-on-error today. Promotion requires removing that and
-      establishing a baseline pass count first.
+      The ethereum/tests job runs with continue-on-error today. Promotion requires
+      removing that and establishing a baseline pass count first. The legacy job's
+      baseline is all 61,314 vectors passing at legacytests 1f581b8
+      (spec 018 baselines/ethtests-2026-11-22.txt).
 
   - id: eest-amsterdam
     workflow: eest-amsterdam.yml
