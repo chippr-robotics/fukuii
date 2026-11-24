@@ -4580,18 +4580,19 @@ items:
   - id: B-464
     title: "StateRecovery: moveBack after an invalid branch or local fault skips the asked() check and may undo a fork choice in flight"
     priority: P3
-    status: in-progress
+    status: review
     area: consensus
     size: S
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2039]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T04:08:25Z
-      heartbeat: 2026-11-24T04:54:39Z
+      heartbeat: 2026-11-24T04:58:10Z
     notes: |-
       beacon review of B-294, StateRecovery.scala:508-511; CL told VALID for X while head elsewhere until next FCU; fix: if asked() then moveBack(...); changes which head is kept after an invalid branch -> beacon decision
       2026-11-24 in-progress: clone-d consensus lane batch 2
