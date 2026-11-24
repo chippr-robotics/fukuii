@@ -5548,3 +5548,15 @@ items:
     notes: |-
       v0.12.117: mainnet 25.8M headers in 110 min, 2,870/s while the state downloaded and 5,330/s after; Mordor 4,430/s and 6,980/s, held 41 min. Both runs are header-bound.
       Once ChainDownloader logs (B-521): look at the SNAP-era header budget (boostHeaderDownload), chain-download-timeout (10 s) and how many peers serve headers during the state download.
+  - id: B-523
+    title: SNAP keeps the accounts-complete task files after finalisation (4.4 GB on ETC mainnet); the storage file also holds every code account with an empty root
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-24
+    refs: ["sync reports v0.12.117, 2026-11-23/24", "#1601"]
+    links: {}
+    notes: |-
+      SnapFinalization.scala:796 keeps the getSnapSyncStorageFilePath/CodeHashesPath files ('not re-read'); delete them and clear those AppState paths once SnapSyncDone is durable. Mordor leaves 13 MB, mainnet 4.4 GB.
+      ContractWorkCarry.identifyContractAccounts writes hasCode || hasRoot, and the replays and sweep skip an empty root, so the mainnet file's 73.5M entries carry every code account. Check the checkpoint counts before dropping those. #1601 is the contract-accounts file's leak.
