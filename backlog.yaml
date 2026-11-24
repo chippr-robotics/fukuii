@@ -4670,3 +4670,13 @@ items:
     links:
       spec: 018
     notes: "Seen in B-440's test: after the branch is adopted again the queue still holds it; importOne(next) answers ChainReorganised (re-executing b4..b13) instead of BlockImportedToTop. Same for B-336 queuedAgain. Head ends right; work and announcements are wasted."
+  - id: B-474
+    title: "Head left on a reorg's side blocks (B-461): tell pool/newHeads of HeadLeftOnSideBlocks.headOn, and the pool of the old-chain blocks moved off (with B-338)"
+    priority: P3
+    status: open
+    area: consensus
+    opened: 2026-11-24
+    refs: [B-461, B-338]
+    links:
+      spec: 018
+    notes: B-461 tells the escalation head feed only. The importer (NewBlock path announceAdopted; batch path tells nobody) does not read headOn; forge to rule on broadcast (the head is lighter than what it left) vs pool + newHeads only.
