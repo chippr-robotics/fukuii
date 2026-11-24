@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.domain.CanonicalHeadLock
 import com.chipprbots.ethereum.ledger.AdoptedChainWeights
 import com.chipprbots.ethereum.utils.Logger
 
@@ -131,11 +132,17 @@ class ForkChoiceManager(
       // above the head deleted) and the best-block pointer moves to the head — whether the head moved up, sideways,
       // or DOWN to an ancestor or a shorter side chain.
       maybeHeader.foreach { header =>
-        val move = blockchainWriter.promoteToCanonicalHead(header, blockchainReader)
-        // Reference counts follow the canonical index: a block is applied exactly while it is canonical (see
-        // ReorgStateHandler). Abandon first, then re-adopt, as ConsensusImpl.settleHead does; both are idempotent.
-        reorgState.abandonBlockStates(move.dropped.map { case (n, h) => (n, h.value) })
-        reorgState.readoptBlockStates(move.adopted.map { case (n, h) => (n, h.value) })
+        // Under the head's lock (B-511), the move with the reference counts that follow it: a branch the p2p import
+        // executes and settles holds it, so this moves the head from the index that settle leaves, and the settle
+        // never sees the head moved under it.
+        val move = CanonicalHeadLock.held {
+          val move = blockchainWriter.promoteToCanonicalHead(header, blockchainReader)
+          // Reference counts follow the canonical index: a block is applied exactly while it is canonical (see
+          // ReorgStateHandler). Abandon first, then re-adopt, as ConsensusImpl.settleHead does; both are idempotent.
+          reorgState.abandonBlockStates(move.dropped.map { case (n, h) => (n, h.value) })
+          reorgState.readoptBlockStates(move.adopted.map { case (n, h) => (n, h.value) })
+          move
+        }
         rederiveWeights(move.adopted.map(_._2))
       }
 

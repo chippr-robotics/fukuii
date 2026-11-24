@@ -3,6 +3,7 @@ package com.chipprbots.ethereum.consensus
 import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
+import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.collection.mutable.ArrayBuffer
@@ -30,6 +31,8 @@ import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.consensus.Consensus.*
 import com.chipprbots.ethereum.consensus.engine.BranchHandOff
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
 import com.chipprbots.ethereum.crypto.generateKeyPair
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
@@ -1831,6 +1834,85 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     node.lookup(Shared) shouldBe Some(TransactionLocation(prefix(1).hash.value, 0))
     node.lookup(OnlyB) shouldBe Some(TransactionLocation(prefix(1).hash.value, 1))
     reported shouldBe Nil
+  )
+
+  // B-511 (a): the head the consensus layer names is asked again with the write of the index, under the head's lock, as
+  // the unified layout asks it again inside the move. Read once to select the branch, once when it is found whole, and
+  // once as the index is written: another head named after any of them is not adopted over.
+  it should "not move the head when the consensus layer names another head after the branch was found whole" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    for readsOfTheBranchsHead <- 1 to 2 do
+      new DesignatedOnTheHashLayout:
+        @volatile var counting = false
+        lazy val reads = new java.util.concurrent.atomic.AtomicInteger(0)
+        override def namedNow(): Option[ByteString] =
+          if !counting then named.get()
+          else if reads.incrementAndGet() <= readsOfTheBranchsHead then Some(prefix.last.hash.value)
+          else Some(left.last.hash.value)
+        counting = true
+        withClue(s"another head after $readsOfTheBranchsHead read(s): ") {
+          evaluate(prefix) shouldBe KeptCurrentBestBranch
+          reads.get() should be > readsOfTheBranchsHead
+          keptTheOldHead()
+          reported shouldBe Nil
+        }
+  }
+
+  it should "hold a fork choice that comes while it is executed until it is settled, and let it move the head then" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedOnTheHashLayout:
+    val forkChoiceManager = new ForkChoiceManager(node.blockchainReader, node.blockchainWriter)
+    named.set(Some(prefix.last.hash.value))
+    @volatile var forkChoice: Option[Thread] = None
+    @volatile var heldBack = false
+    // As the branch's first block is executed, the consensus layer moves the head to block 3 of the old chain. Its
+    // fork choice waits for the head's lock, which the branch holds until it is settled.
+    onExecute = block =>
+      if block.hash == prefix.head.hash then
+        val thread = new Thread(() =>
+          forkChoiceManager.applyForkChoiceState(
+            ForkChoiceState(left.head.hash.value, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash)
+          ): Unit
+        )
+        forkChoice = Some(thread)
+        thread.start()
+        val deadline = System.nanoTime() + 30_000_000_000L
+        while !CanonicalHeadLock.isWaiting(thread) && thread.isAlive && System.nanoTime() < deadline do
+          Thread.onSpinWait()
+        heldBack = CanonicalHeadLock.isWaiting(thread)
+    evaluate(prefix) shouldBe a[SelectedNewBestBranch]
+    heldBack shouldBe true
+    forkChoice.foreach(_.join(30_000))
+    forkChoice.exists(_.isAlive) shouldBe false
+    // then the fork choice moved the head from the index the settle left: the old chain's block 3, and nothing above
+    node.bestHash shouldBe left.head.hash
+    (1 to 2).foreach(n => node.indexed(n) shouldBe Some(common(n - 1).hash))
+    node.indexed(3) shouldBe Some(left.head.hash)
+    (4 to 6).foreach(n => node.indexed(n) shouldBe None)
+    node.lookup(Shared) shouldBe Some(TransactionLocation(left.head.hash.value, 0))
+    node.lookup(OnlyA) shouldBe None
+    node.lookup(OnlyB) shouldBe None
+  )
+
+  it should "be weighed against the head as it is when a fork choice moved the head after the branch was weighed" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedOnTheHashLayout:
+    import node.blockchainConfig
+    import node.runtime
+    named.set(Some(prefix.last.hash.value))
+    // weighed against the old head, block 4 of `left`, as the importer hands it over
+    val evaluation: IO[ConsensusResult] = consensus.evaluateBranch(NonEmptyList.fromListUnsafe(prefix))
+    // a fork choice moves the head to the block the branch stands on before the branch is executed
+    node.blockchainWriter.promoteToCanonicalHead(common.last.header, node.blockchainReader)
+    evaluation.unsafeRunSync() match
+      case ExtendedCurrentBestBranch(imported) => imported.map(_.block.hash) shouldBe prefix.map(_.hash)
+      case other                               => fail(s"not weighed against the head as it is: $other")
+    node.bestHash shouldBe prefix.last.hash
+    (3 to 5).foreach(n => node.indexed(n) shouldBe Some(prefix(n - 3).hash))
   )
 
   // B-506: `engine_newPayload` writes the entry of a payload that extends the index, above the best block, until a fork

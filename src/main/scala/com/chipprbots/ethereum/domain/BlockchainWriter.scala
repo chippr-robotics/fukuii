@@ -240,6 +240,9 @@ class BlockchainWriter(
     * `rawdb.DeleteTxLookupEntry`; B-088). `ConsensusImpl.reorganise` uses it both to adopt a new head and to put the
     * old head's entries back when it keeps the old head.
     *
+    * Under [[CanonicalHeadLock]], as the fork choice's [[promoteToCanonicalHead]]: `admit` and the read of the entries
+    * above `clearAbove` are made there, with the write, so no fork choice lands between them (B-511).
+    *
     * @param left
     *   the blocks the rewrite takes off the chain, as the caller read them before anything overwrote the index: on the
     *   hash layout the executed blocks of a branch have already written their own entries over the heights they share
@@ -253,8 +256,10 @@ class BlockchainWriter(
     *   canonical chain", as [[canonicalHeadUpdate]] deletes them. `engine_newPayload` writes the entry of a payload
     *   that extends the index above the best block, so the old best block is not where the old chain's entries end
     *   (B-506)
+    * @param admit
+    *   asked first: a reason given refuses the rewrite, and nothing is written
     * @return
-    *   how many transaction lookups were deleted
+    *   how many transaction lookups were deleted; or the reason `admit` gave
     */
   def rewriteCanonicalIndex(
       put: Seq[(BigInt, BlockHash)],
@@ -263,13 +268,19 @@ class BlockchainWriter(
       left: Seq[BlockHash],
       chain: Seq[BlockHash],
       reader: BlockchainReader,
-      clearAbove: Option[BigInt] = None
-  ): Int =
+      clearAbove: Option[BigInt] = None,
+      admit: () => Option[String] = () => None
+  ): Either[String, Int] =
     refuseOnTheUnifiedLayout("rewriteCanonicalIndex")
-    val cleared = clearAbove.fold(List.empty[(BigInt, BlockHash)])(indexAbove(_, reader))
-    val (staleLookups, dropped) = staleLookupRemoval(left ++ cleared.map(_._2), chain, reader)
-    canonicalIndexUpdate(put, remove ++ cleared.map(_._1), newBest, reader).and(staleLookups).commit()
-    dropped
+    CanonicalHeadLock.held {
+      admit() match
+        case Some(refused) => Left(refused)
+        case None =>
+          val cleared = clearAbove.fold(List.empty[(BigInt, BlockHash)])(indexAbove(_, reader))
+          val (staleLookups, dropped) = staleLookupRemoval(left ++ cleared.map(_._2), chain, reader)
+          canonicalIndexUpdate(put, remove ++ cleared.map(_._1), newBest, reader).and(staleLookups).commit()
+          Right(dropped)
+    }
 
   /** The entries of the index above `number`, from `number + 1` up to the first height that has none, in order: what a
     * writer of the head's ancestry deletes above it (go-ethereum `reorg`), and [[canonicalHeadUpdate]] reads.
@@ -343,9 +354,15 @@ class BlockchainWriter(
     * block that had left the chain.
     *
     * Only the index, the lookups and the best-block pointer move; headers, bodies and receipts stay where they are.
+    *
+    * Under [[CanonicalHeadLock]], read and write alike: a branch being executed and settled holds it, and the fork
+    * choice moves the head from the index that settle leaves, not from one it is about to put back over (B-511).
     */
   def promoteToCanonicalHead(head: BlockHeader, reader: BlockchainReader): CanonicalMove =
     refuseOnTheUnifiedLayout(s"promoteToCanonicalHead to block ${head.number.value}")
+    CanonicalHeadLock.held(promoteUnderTheLock(head, reader))
+
+  private def promoteUnderTheLock(head: BlockHeader, reader: BlockchainReader): CanonicalMove =
     val update = canonicalHeadUpdate(head, reader)
     // A plain extension rewrites only heights above the old best and clears nothing: not worth a line.
     if update.reorganises then

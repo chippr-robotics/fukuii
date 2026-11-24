@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.domain.CanonicalHeadLock
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
@@ -202,19 +203,49 @@ class ConsensusImpl(
           )
         )
       else
+        // on the hash layout the branch is executed and settled under the head's lock, as go-ethereum's insertChain
+        // holds `chainmu`: a fork choice or a payload's entry waits for it, and the head it is weighed against is the
+        // head as it is once the lock is held (B-511)
         IO
           .delay(
-            importToNewBranch(
-              branch,
-              currentBestHeader.number.value,
-              currentBestBlockWeight,
-              accessLists,
-              currentBestHeader.hash
+            CanonicalHeadLock.held(
+              againstTheHeadNow(branch, currentBestHeader, currentBestBlockWeight, accessLists)
             )
           )
           .evalOn(blockExecutionScheduler.compute)
 
     consensusResult.flatTap(result => IO(measureBlockMetrics(result)))
+
+  /** A branch that does not extend the head it was weighed against, on the hash layout, under [[CanonicalHeadLock]]:
+    * weighed again against the head as it is now, when a fork choice moved the head since (B-511). Nothing else moves
+    * it while the lock is held, so the head the branch is executed and settled against stays the head it was read as.
+    */
+  private def againstTheHeadNow(
+      branch: NonEmptyList[Block],
+      weighedHeader: BlockHeader,
+      weighedWeight: ChainWeight,
+      accessLists: Map[ByteString, BlockAccessList]
+  )(implicit blockchainConfig: BlockchainConfig): ConsensusResult =
+    // the header alone: the old head is read whole only if its blocks are told (B-296)
+    blockchainReader.getBestBlockHeader match
+      case Some(now) if now.hash == weighedHeader.hash =>
+        importToNewBranch(branch, weighedHeader.number.value, weighedWeight, accessLists, weighedHeader.hash)
+      case Some(now) =>
+        blockchainReader.getChainWeightByHash(now.hash) match
+          case Some(weight) =>
+            log.info(
+              "REORG: the head moved to {} {} since the branch [{}-{}] was weighed against {}: it is weighed against " +
+                "the head as it is",
+              now.number,
+              now.hashAsHexString,
+              branch.head.number,
+              branch.last.number,
+              weighedHeader.number
+            )
+            if now.hash == branch.head.header.parentHash then importToTop(branch, weight, accessLists)
+            else importToNewBranch(branch, now.number.value, weight, accessLists, now.hash)
+          case None => noTotalDifficultyForHeader(now)
+      case None => noBestBlock()
 
   private def importToNewBranch(
       branch: NonEmptyList[Block],
@@ -1414,7 +1445,8 @@ class ConsensusImpl(
         oldCanonical,
         aheadOfTheHead,
         selectedByWeight,
-        designatedAdopts
+        designatedAdopts,
+        stillNamed = () => leadsToDesignatedHead(newBranch)
       )
 
     outcome.stateFault match
@@ -1543,20 +1575,23 @@ class ConsensusImpl(
     newBranch.foldLeft(parentWeight)((w, b) => w.increase(b.header))
 
   private def returnNoTotalDifficultyForHeader(bestHeader: BlockHeader): IO[ConsensusError] =
+    IO.pure(noTotalDifficultyForHeader(bestHeader))
+
+  private def noTotalDifficultyForHeader(bestHeader: BlockHeader): ConsensusError =
     log.error(
       "Getting total difficulty for current best block with hash: {} failed",
       bestHeader.hashAsHexString
     )
-    IO.pure(
-      ConsensusError(
-        Nil,
-        s"Couldn't get total difficulty for current best block with hash: ${bestHeader.hashAsHexString}"
-      )
+    ConsensusError(
+      Nil,
+      s"Couldn't get total difficulty for current best block with hash: ${bestHeader.hashAsHexString}"
     )
 
-  private def returnNoBestBlock(): IO[ConsensusError] =
+  private def returnNoBestBlock(): IO[ConsensusError] = IO.pure(noBestBlock())
+
+  private def noBestBlock(): ConsensusError =
     log.error("Getting current best block failed")
-    IO.pure(ConsensusError(Nil, "Couldn't find the current best block"))
+    ConsensusError(Nil, "Couldn't find the current best block")
 
   private def measureBlockMetrics(importResult: ConsensusResult): Unit =
     importResult match
@@ -1580,9 +1615,10 @@ class ConsensusImpl(
     * Branch chosen by the designated head alone (`selectedByWeight` false — the post-merge PoS arm, never taken on a
     * PoW chain): the last executed block becomes the head, written as the weight arm below writes an adoption (B-088),
     * only when `designatedAdopts`: the whole branch executed, valid, and still leading to the head the consensus layer
-    * names. Otherwise the old head stays and the index is put back, as for a lighter prefix below (B-505; the unified
-    * layout and go-ethereum's SetCanonical alike). It used to move only the best block, as before this method existed,
-    * and then (B-088 to B-505) adopted whatever prefix was executed.
+    * names, asked once more by `stillNamed` with the write, under the head's lock (B-511). Otherwise the old head stays
+    * and the index is put back, as for a lighter prefix below (B-505; the unified layout and go-ethereum's SetCanonical
+    * alike). It used to move only the best block, as before this method existed, and then (B-088 to B-505) adopted
+    * whatever prefix was executed.
     *
     * Every arm that writes the index deletes, in the same batch, the lookups of the transactions that only the blocks
     * leaving the chain include (core-geth `reorg`: `types.HashDifference(deletedTxs, addedTxs)`; B-088).
@@ -1611,7 +1647,8 @@ class ConsensusImpl(
       oldCanonical: List[(BigInt, BlockHash)],
       aheadOfTheHead: List[(BigInt, BlockHash)],
       selectedByWeight: Boolean,
-      designatedAdopts: Boolean
+      designatedAdopts: Boolean,
+      stillNamed: () => Boolean
   ): Boolean =
     var adopted = false
     executedBlocks.lastOption.foreach { last =>
@@ -1646,40 +1683,51 @@ class ConsensusImpl(
       // tip, and the transactions only the blocks the head left include lose their lookups, all in one batch (B-088).
       // The executed blocks wrote their own entries and lookups as they were committed, over the old chain's at the
       // heights the two share, so which blocks left is `displaced` and `aheadLeft`, captured before execution, not what
-      // the index names now.
-      def adoptTip(): Unit =
-        val droppedTxLookups = blockchainWriter.rewriteCanonicalIndex(
+      // the index names now. For the consensus layer's branch the write is refused if the head it names no longer
+      // descends from the tip, asked under the head's lock with the write (B-511): a fork choice that came after the
+      // caller asked waits for that lock, and its head is not adopted over.
+      def adoptTip(): Boolean =
+        blockchainWriter.rewriteCanonicalIndex(
           put = fork.parentSideChain,
           remove = ((tip.number.value + 1) to oldBestNumber).toList,
           newBest = Some((tip.hash, tip.number.value)),
           left = (displaced ++ aheadLeft).map(_._2),
           chain = fork.parentSideChain.map(_._2) ++ executedBlocks.map(_.block.hash),
           reader = blockchainReader,
-          clearAbove = Some(tip.number.value.max(oldBestNumber))
-        )
-        if droppedTxLookups > 0 then
-          log.info(
-            "REORG-SETTLE: head=#{} {}: {} transaction lookup(s) of the {} block(s) it left dropped",
-            tip.number,
-            tip.hash.toHexString,
-            droppedTxLookups,
-            displaced.size + aheadLeft.size
-          )
+          clearAbove = Some(tip.number.value.max(oldBestNumber)),
+          admit = () =>
+            Option.when(!selectedByWeight && !stillNamed())(
+              "the consensus layer names another head, which does not descend from the tip"
+            )
+        ) match
+          case Right(droppedTxLookups) =>
+            if droppedTxLookups > 0 then
+              log.info(
+                "REORG-SETTLE: head=#{} {}: {} transaction lookup(s) of the {} block(s) it left dropped",
+                tip.number,
+                tip.hash.toHexString,
+                droppedTxLookups,
+                displaced.size + aheadLeft.size
+              )
+            true
+          case Left(refused) =>
+            log.info("REORG-SUPERSEDED: the head is not moved to block {}: {}", tip.number, refused)
+            false
       // Whether the executed blocks become the head. The post-merge arm: when the caller found the whole branch valid
-      // and still leading to the head the consensus layer names (B-505). The weight arm: when they outweigh the old
-      // head, recomputed from the headers rather than read from BlockData: it is exactly what BlockExecution computes,
-      // and it does not depend on the executor having filled the weight in.
+      // and still leading to the head the consensus layer names (B-505), and it still does as the index is written
+      // (B-511). The weight arm: when they outweigh the old head, recomputed from the headers rather than read from
+      // BlockData: it is exactly what BlockExecution computes, and it does not depend on the executor having filled
+      // the weight in.
       val adopt =
         if selectedByWeight then
           executedBlocks.foldLeft(parentWeight)((w, b) => w.increase(b.block.header)) > oldBestWeight
         else designatedAdopts
-      if adopt then
+      // The post-merge arm writes what the weight arm writes when it adopts (B-088): it used to move only the best
+      // block, leaving the old chain's entries above the tip and below it at the side blocks' heights, and the
+      // lookups of the transactions only the old chain held. A forkchoiceUpdated to the tip then found the index
+      // naming the tip and rewrote nothing below it.
+      if adopt && adoptTip() then
         adopted = true
-        // The post-merge arm writes what the weight arm writes when it adopts (B-088): it used to move only the best
-        // block, leaving the old chain's entries above the tip and below it at the side blocks' heights, and the
-        // lookups of the transactions only the old chain held. A forkchoiceUpdated to the tip then found the index
-        // naming the tip and rewrote nothing below it.
-        adoptTip()
         // The old head's blocks left the canonical chain with their state changes applied: take them back out, or a
         // node only they replaced stays at zero references while the new chain uses it, and is pruned. The side blocks
         // the new branch builds on are canonical again (their changes were taken out when they were executed as a side
