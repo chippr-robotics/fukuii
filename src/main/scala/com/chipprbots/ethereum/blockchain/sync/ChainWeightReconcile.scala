@@ -76,10 +76,10 @@ import com.chipprbots.ethereum.utils.Hex
   * actor's thread, but it does not set the marker: the base is trusted, not derived from genesis. It ends
   * [[Outcome.Seeded]] with no saved place, and the next pass checks from genesis once the headers below are in.
   *
-  * '''Not covered.''' A side payload stored by hash only (no number entry) during a repair keeps the weight its parent
-  * had then. A forkchoiceUpdated reorg that later makes it canonical does not rewrite it. Its weight is then off by its
-  * parent's repair; only the TD it advertises is affected, since fork choice on a PoS chain follows the consensus
-  * layer.
+  * '''Payloads stored by hash only.''' A side payload (and on the unified layout every payload) has no number entry, so
+  * the pass never sees it, and it keeps the weight its parent had when `newPayload` ran. The forkchoiceUpdated that
+  * makes it canonical re-derives it from its parent's weight then (`ForkChoiceManager.rederiveWeights`, B-126), under
+  * the chain insert lock (shared), so never between the finish's check and its marker.
   */
 object ChainWeightReconcile:
 

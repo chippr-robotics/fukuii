@@ -870,6 +870,49 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.source.offTheLock.toArray.toSeq shouldBe empty
     }
 
+  // B-126: every payload here is stored by its hash only, so ChainWeightReconcile's final step, which checks the
+  // heights the index names, never sees one; a payload's weight is its parent's when newPayload ran. The fork choice
+  // that moves the head to it re-derives it from the parent's weight as it is then.
+  it should "have the weights of the blocks a fork choice moves the head to re-derived from their parents' (B-126)" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+      given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+      val (forty, fortyOne) = (blocks(39), blocks(40))
+      Seq(forty, fortyOne).foreach(block =>
+        engine.newPayload(payloadOf(block)).unsafeRunSync().status shouldBe
+          PayloadStatus.Valid
+      )
+      val held = on.reader.getChainWeightByHash(chain.last.header.hash).get
+      on.reader.getChainWeightByHash(fortyOne.header.hash) shouldBe Some(
+        held
+          .increase(forty.header)
+          .increase(
+            fortyOne.header
+          )
+      )
+      // a repair rewrites the held block's weight after the payloads took theirs from it
+      val repaired = ChainWeight.totalDifficultyOnly(held.totalDifficulty.value + 1000)
+      on.storages.chainWeightStorage.put(chain.last.header.hash.value, repaired).commit()
+
+      engine
+        .forkchoiceUpdated(
+          ForkChoiceState(fortyOne.header.hash.value, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash),
+          None
+        )
+        .unsafeRunSync()
+        .map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Valid)
+
+      on.holds(fortyOne.header, chain :+ forty :+ fortyOne)
+      on.reader.getChainWeightByHash(forty.header.hash) shouldBe Some(repaired.increase(forty.header))
+      on.reader.getChainWeightByHash(fortyOne.header.hash) shouldBe Some(
+        repaired.increase(forty.header).increase(fortyOne.header)
+      )
+      on.source.offTheLock.toArray.toSeq shouldBe empty
+    }
+
   it should "be executed on a block behind the held one, as a side branch, and answer ACCEPTED on a parent it does not know" taggedAs
     (UnitTest, ConsensusTest) in {
       val on = new Node
