@@ -4293,18 +4293,19 @@ items:
   - id: B-452
     title: "Exit paths that bypass StopOnce can cut a DB close: TUI 'q' sys.exit(0) (StdNode ~:656); route them through the stop"
     priority: P3
-    status: in-progress
+    status: review
     area: node
     size: S
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2028]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:00:55Z
-      heartbeat: 2026-11-24T03:12:29Z
+      heartbeat: 2026-11-24T03:21:15Z
     notes: "vault re-review of #2012 (B-426). Pre-existing, not a regression."
   - id: B-453
     title: "SNAP-peer precondition counts admin_addPeer peers: declared set is read at start only (split from B-386)"
