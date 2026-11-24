@@ -9,8 +9,6 @@ import scala.concurrent.Await
 import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpec
@@ -132,13 +130,11 @@ class HandshakeFailureClassifierSpec extends AnyFlatSpec with Matchers with Befo
     UnitTest,
     RPCTest
   ) in {
-    val appender = new ListAppender[ILoggingEvent]()
-    appender.start()
     val logger = LoggerFactory.getLogger("com.chipprbots.ethereum.tls.TlsHandshake").asInstanceOf[LogbackLogger]
     // the tests' root logger is at ERROR
     val level = logger.getLevel
     logger.setLevel(ch.qos.logback.classic.Level.WARN)
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     try
       val failureLog = new HandshakeFailureLog()
       val before = count(HandshakeFailureReason.NoClientCert)
@@ -150,7 +146,7 @@ class HandshakeFailureClassifierSpec extends AnyFlatSpec with Matchers with Befo
       lines should have size 1
       lines.head should startWith("TLS handshake refused on rpc-http from 127.0.0.1: no_client_cert")
     finally
-      logger.detachAppender(appender)
+      appender.close()
       logger.setLevel(level)
   }
 

@@ -9,8 +9,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 import org.slf4j.LoggerFactory
@@ -36,9 +34,7 @@ class AdaptiveResponseBytesSpec extends AnyFlatSpec with Matchers:
     val targets: mutable.Map[String, BigInt] = mutable.Map.empty
     private val logger =
       LoggerFactory.getLogger(s"test.AdaptiveResponseBytesSpec.$label.${System.nanoTime()}").asInstanceOf[LogbackLogger]
-    private val appender = new ListAppender[ILoggingEvent]()
-    appender.start()
-    logger.addAppender(appender)
+    private val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.DEBUG)
     logger.setAdditive(false)
     val window = new AdaptiveResponseBytes(label, initial, min, targets, logger)

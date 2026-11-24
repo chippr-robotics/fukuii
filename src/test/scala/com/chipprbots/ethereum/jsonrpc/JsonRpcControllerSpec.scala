@@ -14,8 +14,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.json4s.DefaultFormats
 import org.json4s.Formats
 import org.json4s.JArray
@@ -52,6 +50,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.nodebuilder.TestNode
+import com.chipprbots.ethereum.testing.LogCapture.Capture
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.testmode.TestModeComponentsProvider
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
@@ -316,10 +315,8 @@ class JsonRpcControllerSpec
     val logger: LogbackLogger = LoggerFactory.getLogger(classOf[JsonRpcController]) match
       case logback: LogbackLogger => logback
       case other                  => fail(s"expected a logback logger, got $other")
-    val appender: ListAppender[ILoggingEvent] = new ListAppender[ILoggingEvent]
     val previousLevel: Level = logger.getLevel
-    appender.start()
-    logger.addAppender(appender)
+    val appender: Capture = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.INFO)
     try
       val perTransport = jsonRpcController.perTransport
@@ -332,7 +329,7 @@ class JsonRpcControllerSpec
       }
       deprecations should have size 1
     finally
-      logger.detachAppender(appender)
+      appender.close()
       logger.setLevel(previousLevel)
 
   it should "let the test namespace answer miner_setEtherbase when test and miner are both enabled, in any order" taggedAs (

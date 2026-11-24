@@ -11,8 +11,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalatest.BeforeAndAfterEach
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -43,16 +41,14 @@ class JwtSecretFileSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEac
   /** Every message the object under test logs while `f` runs. */
   private def logged[A](f: => A): (A, List[String]) =
     val logger = LoggerFactory.getLogger(JwtSecretFile.getClass).asInstanceOf[LogbackLogger]
-    val appender = new ListAppender[ILoggingEvent]
     val previous = logger.getLevel
-    appender.start()
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.TRACE)
     val result =
       try f
       finally
         logger.setLevel(previous)
-        logger.detachAppender(appender)
+        appender.close()
     (result, appender.list.asScala.toList.map(_.getFormattedMessage))
 
   "JwtSecretFile.loadOrCreate" should "create the file at 0600 with 64 hex characters when it is absent" taggedAs UnitTest in {

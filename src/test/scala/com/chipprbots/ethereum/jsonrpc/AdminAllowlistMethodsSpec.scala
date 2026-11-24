@@ -13,8 +13,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import com.typesafe.config.ConfigFactory
 import org.json4s.*
 import org.scalatest.BeforeAndAfterAll
@@ -78,12 +76,10 @@ class AdminAllowlistMethodsSpec extends AnyFlatSpec with Matchers with BeforeAnd
     svc.editAllowlist(op, AdminAllowlistEditRequest(entries), "ops").unsafeRunSync()
 
   "admin_addNodesToAllowlist" should "add, persist and log the caller's rule" taggedAs (UnitTest, RPCTest) in {
-    val appender = new ListAppender[ILoggingEvent]()
-    appender.start()
     val logger = LoggerFactory.getLogger(classOf[AdminService]).asInstanceOf[LogbackLogger]
     val level = logger.getLevel
     logger.setLevel(Level.INFO)
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     try
       withFile(s"""["$hb"]""") { (f, svc) =>
         edit(svc, AllowlistEdit.Add, s"enode://$hd@10.0.0.4:30303") shouldBe Right(AdminAllowlistEditResponse(true))
@@ -93,7 +89,7 @@ class AdminAllowlistMethodsSpec extends AnyFlatSpec with Matchers with BeforeAnd
         )
       }
     finally
-      logger.detachAppender(appender)
+      appender.close()
       logger.setLevel(level)
   }
 

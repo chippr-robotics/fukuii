@@ -6,8 +6,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigValueFactory
 import org.scalatest.EitherValues
@@ -53,16 +51,14 @@ class CheckpointV2TrustSpec extends AnyWordSpec with Matchers with EitherValues:
     "accept an estimated total difficulty, with a WARN naming the block and the TD" taggedAs UnitTest in {
       val estimated = Raw.rebuild(headerA.copy(tdExact = false), entriesA)
       val logger = LoggerFactory.getLogger(classOf[CheckpointImporter]).asInstanceOf[LogbackLogger]
-      val appender = new ListAppender[ILoggingEvent]
       val previous = logger.getLevel
-      appender.start()
-      logger.addAppender(appender)
+      val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
       logger.setLevel(Level.TRACE)
       val target = new Chain
       try importInto(target, estimated, trustA).value
       finally
         logger.setLevel(previous)
-        logger.detachAppender(appender)
+        appender.close()
       val warned = appender.list.asScala.filter(_.getLevel == Level.WARN).map(_.getFormattedMessage)
       warned.exists(m => m.contains(s"block ${tipA.number}") && m.contains(headerA.totalDifficulty.toString)) shouldBe
         true

@@ -25,7 +25,6 @@ import scala.math.BigInt
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger
 import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalamock.scalatest.AsyncMockFactory
 import org.scalatest.Assertion
 import org.scalatest.diagrams.Diagrams
@@ -90,6 +89,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.Ne
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
+import com.chipprbots.ethereum.testing.LogCapture.Capture
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
@@ -2999,10 +2999,8 @@ class RegularSyncSpec
           val logger: Logger = org.slf4j.LoggerFactory
             .getLogger("com.chipprbots.ethereum.blockchain.sync.regular")
             .asInstanceOf[Logger]
-          val appender = new ListAppender[ILoggingEvent]
           val previousLevel = logger.getLevel
-          appender.start()
-          logger.addAppender(appender)
+          val appender: Capture = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
           logger.setLevel(Level.WARN)
           def said: List[ILoggingEvent] =
             import scala.jdk.CollectionConverters.*
@@ -3042,7 +3040,7 @@ class RegularSyncSpec
           finally
             BlockImporter.exhaustBackoff = 5.minutes
             logger.setLevel(previousLevel)
-            logger.detachAppender(appender)
+            appender.close()
       )
 
       // Spec 018 C5a, B-297: the consensus layer's branch refused for what no attempt changes while the head stays (the

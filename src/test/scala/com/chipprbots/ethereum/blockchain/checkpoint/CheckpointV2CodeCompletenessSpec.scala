@@ -6,8 +6,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalatest.EitherValues
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
@@ -37,16 +35,14 @@ class CheckpointV2CodeCompletenessSpec extends AnyWordSpec with Matchers with Ei
   /** Every message the importer logs at WARN or above while `f` runs. */
   private def warnings[A](f: => A): (A, List[String]) =
     val logger = LoggerFactory.getLogger(classOf[CheckpointImporter]).asInstanceOf[LogbackLogger]
-    val appender = new ListAppender[ILoggingEvent]
     val previous = logger.getLevel
-    appender.start()
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.TRACE)
     val result =
       try f
       finally
         logger.setLevel(previous)
-        logger.detachAppender(appender)
+        appender.close()
     (result, appender.list.asScala.toList.filter(_.getLevel.isGreaterOrEqual(Level.WARN)).map(_.getFormattedMessage))
 
   "The importer" should {
