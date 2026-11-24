@@ -146,8 +146,9 @@ object EestBuilderReplay:
             stateHeldInPlace = storagesInstance.storages.pathStateStorage.map(state => () => state.anchor.map(_.hash))
           )(using config, null)
 
-          // What makes a block that was built the head. On the hash store the build wrote its state, and the block is
-          // saved over it. On the unified layout a build writes nothing: the block is imported.
+          // What makes a block that was built the head. On the hash store the build wrote its trie nodes, and the block
+          // is saved over them with the build's code. On the unified layout a build writes nothing: the block is
+          // imported.
           val commit: BuiltBlock => Either[String, Unit] = built =>
             val header = built.block.header
             val weight = blockchainReader.getChainWeightByHash(header.parentHash).getOrElse(ChainWeight.zero)
@@ -157,6 +158,9 @@ object EestBuilderReplay:
                 case (_, Some(error)) => Left(s"import refused the block that was built: ${error.describe}")
                 case (other, None)    => Left(s"import took ${other.size} blocks of one")
             else
+              // as testing_commitBlockV1 on the hash store: the build wrote its trie nodes and no code (B-230), so the
+              // code it deployed is written before the block that refers to it, or a later block cannot run it
+              service.writeBuiltCode(built)
               blockchainWriter.save(built.block, built.receipts, weight.increase(header), saveAsBestBlock = true)
               Right(())
 

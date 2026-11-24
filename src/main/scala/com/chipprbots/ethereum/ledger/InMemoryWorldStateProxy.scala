@@ -172,6 +172,13 @@ object InMemoryWorldStateProxy:
     * never after, so that a kill between the two leaves at most code nothing refers to (content-addressed, harmless),
     * never an account whose code is missing. Expects a persisted world: code deployed since the last [[persistState]]
     * is not in it yet.
+    *
+    * Why a write of its own, ahead of the state batch, is safe today: the code store and the state are column families
+    * of ONE RocksDB, and every write goes through its one write-ahead log (no write bypasses it:
+    * `scripts/check-wal-writes.sh`). The log is written in commit order and recovery replays a prefix of it, so a crash
+    * can keep the code and lose the state batch after it, never the reverse. That stops holding if the code store moves
+    * to another database, or if the code or the state is ever written round the log (`disableWAL`, an ingested SST):
+    * then a crash can keep a state whose code is gone, and the code must go into the state's own batch (B-454).
     */
   def deployedCodeWrite(world: InMemoryWorldStateProxy): Option[DataSourceBatchUpdate] =
     deployedCodeWrite(world.deployedCode, world.evmCodeStorage)
