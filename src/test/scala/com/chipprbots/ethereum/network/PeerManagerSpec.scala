@@ -83,6 +83,21 @@ class PeerManagerSpec
     start()
     handleInitialNodesDiscovery()
 
+  it should "not dial a discovered node that has no TCP port (B-237)" taggedAs (UnitTest, NetworkTest) in new TestSetup:
+    start()
+    testScheduler.timePasses(6000.millis)
+    val noTcp = Node(ByteString(Array.fill[Byte](64)(1)), java.net.InetAddress.getByName("10.0.0.1"), 0, 30303)
+    val dialable = Node(ByteString(Array.fill[Byte](64)(2)), java.net.InetAddress.getByName("10.0.0.2"), 30303, 30303)
+    val req = peerDiscoveryManager.expectMsgClass(classOf[PeerDiscoveryManager.GetDiscoveredNodesInfoReq])
+    req.replyTo ! PeerDiscoveryManager.DiscoveredNodesInfo(Set(noTcp, dialable))
+    val knownReq = knownNodesManager.expectMsgType[KnownNodesManager.GetKnownNodesReq]
+    knownReq.replyTo ! KnownNodesManager.KnownNodes(Set.empty)
+
+    // Both arrive in one message, so once the dialable node's peer is made, the other has been decided too.
+    assert(createdPeerQueue.poll(3, TimeUnit.SECONDS) ne null, "peerFactory not called within 3s")
+    createdPeers.head.probe.expectMsgType[PeerActor.ConnectTo].uri.getPort shouldBe 30303
+    createdPeers.size shouldBe 1
+
   it should "blacklist peer that sent a status msg with invalid genesisHash" taggedAs (
     UnitTest,
     NetworkTest

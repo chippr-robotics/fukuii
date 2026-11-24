@@ -388,7 +388,9 @@ object PeerManagerActor:
           connectedPeers.isConnectionHandled(socketAddress) ||
             connectedPeers.hasHandshakedWith(node.id)
 
-        !alreadyConnected && !blacklist.isBlacklisted(PeerAddress(socketAddress.getHostString)) &&
+        // A node with no TCP port (an enode written `...:0?discport=N`, a discovery-only record) cannot be dialled: it
+        // takes no connection slot (B-237; DnsDiscovery and StaticNodesLoader already skip it).
+        node.tcpPort > 0 && !alreadyConnected && !blacklist.isBlacklisted(PeerAddress(socketAddress.getHostString)) &&
         !isExcludedWrongNetwork(node.id) && allowlist.permits(node.id)
 
     // -----------------------------------------------------------------------
@@ -774,6 +776,14 @@ object PeerManagerActor:
           Behaviors.same
 
     private def connectWith(uri: URI, connectedPeers: ConnectedPeers, explicit: Boolean = false): Behavior[Command] =
+      if uri.getPort <= 0 then
+        // Every dial comes here (bootstrap, discovered, random, maintained, admin_addPeer): one with no TCP port would
+        // open a connection to port 0 (B-237).
+        log.debug("Not dialling {}: it has no TCP port", uri)
+        Behaviors.same
+      else connectWithPort(uri, connectedPeers, explicit)
+
+    private def connectWithPort(uri: URI, connectedPeers: ConnectedPeers, explicit: Boolean): Behavior[Command] =
       val nodeIdHex = uri.getUserInfo.toLowerCase
       val nodeId = ByteString(Hex.decode(nodeIdHex))
       val host = bareHost(uri)
