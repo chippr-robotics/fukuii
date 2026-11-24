@@ -291,11 +291,14 @@ final class PendingAnnouncements(
     if entry.announcers.isEmpty then remove(hash)
     else next ++= entry.announcers.keysIterator
 
-  /** `hash` was delivered or expired: forget it, alternates included. */
+  /** `hash` was delivered or expired: forget it, alternates included, and take it out of its requester's request. That
+    * request stays in flight, emptied or not, until the peer answers or is gone, as a timed-out one does.
+    */
   def remove(hash: ByteString): Unit =
     val entry = entries.remove(hash)
     if entry != null then
       inFlight.remove(hash)
+      entry.requestedFrom.foreach(requester => requests.get(requester).foreach(_ -= hash))
       entry.announcers.keysIterator.foreach(unindex(hash, _))
 
   private def unindex(hash: ByteString, peerId: PeerId): Unit =
