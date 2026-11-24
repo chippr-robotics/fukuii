@@ -103,16 +103,21 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     ConfigValidator.removedKeyWarnings(cfg("sync.pivot-block-offset = 32")) should have size 1
   }
 
-  // B-217: the legacy per-phase recovery scans were retired, and the combined scan always runs. The shipped sync.conf
-  // still sets the key true until its own change removes it, so only `false`, the one setting that asked for the
-  // legacy scans, is reported.
-  it should "warn that parallel-recovery-scan = false is ignored, and say nothing of the shipped true" taggedAs UnitTest in {
-    val warnings = ConfigValidator.removedKeyWarnings(cfg("sync.snap-sync.parallel-recovery-scan = false"))
-    warnings should have size 1
-    warnings.head should include("fukuii.sync.snap-sync.parallel-recovery-scan = false is ignored")
-    warnings.head should include("combined recovery scan")
+  // B-217 retired the legacy per-phase recovery scans, and the combined scan always runs; B-493 removed the key from
+  // the shipped sync.conf, so whatever value an operator's config sets is ignored and reported.
+  it should "warn that parallel-recovery-scan is ignored whatever its value, naming B-217" taggedAs UnitTest in {
+    for value <- Seq("false", "true", "\"yes\"") do
+      val warnings = ConfigValidator.removedKeyWarnings(cfg(s"sync.snap-sync.parallel-recovery-scan = $value"))
+      withClue(s"parallel-recovery-scan = $value: ") {
+        warnings should have size 1
+        warnings.head should include("fukuii.sync.snap-sync.parallel-recovery-scan is ignored")
+        warnings.head should include("retired by B-217")
+        warnings.head should include("combined recovery scan")
+      }
+  }
 
-    ConfigValidator.removedKeyWarnings(cfg("sync.snap-sync.parallel-recovery-scan = true")) shouldBe empty
+  it should "say nothing of parallel-recovery-scan when the key is not set" taggedAs UnitTest in {
+    ConfigValidator.removedKeyWarnings(cfg("sync.snap-sync.recovery-scan-concurrency = 3")) shouldBe empty
   }
 
   it should "not warn about a config that sets no removed key" taggedAs UnitTest in {
