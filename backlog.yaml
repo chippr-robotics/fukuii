@@ -1103,17 +1103,13 @@ items:
   - id: B-105
     title: "JSON-RPC: route single and batch requests separately and parse each body once"
     priority: P3
-    status: review
+    status: done
     area: rpc
     opened: 2026-09-27
+    closed: 2026-11-24
     refs: [P-003]
     links:
       prs: [2099]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T16:27:01Z
-      heartbeat: 2026-11-24T16:27:20Z
     notes: JsonRpcHttpServer.scala:90-91.
   - id: B-106
     title: "SNAP work-stealing: split the largest active account range when a worker goes idle"
