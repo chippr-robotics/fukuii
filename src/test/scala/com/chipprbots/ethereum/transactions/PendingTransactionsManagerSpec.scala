@@ -515,11 +515,36 @@ class PendingTransactionsManagerSpec
         peer1.id
       )
     )
-    val requests: Seq[(PeerId, Seq[ByteString])] = Seq.fill(3)(requestedFrom(this))
+    // One request in flight per peer (B-028): the next goes out once the peer answers. These hashes name no real tx,
+    // so each answer is empty, and gives up what it was asked for.
+    val requests: Seq[(PeerId, Seq[ByteString])] = Seq.fill(3) {
+      val request = requestedFrom(this)
+      etcPeerManager.expectNoMessage(100.millis) // nothing more until it answers
+      answerEmpty(pendingTransactionsManager, peer1)
+      request
+    }
     requests.map(_._1).distinct shouldBe Seq(peer1.id)
     requests.map(_._2.size) shouldBe Seq(256, 256, 88)
     requests.flatMap(_._2) shouldBe hashes
     etcPeerManager.expectNoMessage(200.millis)
+
+  // B-028: go-ethereum's maxTxRetrievalSize, 128 KiB of announced txs per request.
+  it should "ask for at most 128 KiB of announced txs per GetPooledTransactions" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val hashes: Seq[ByteString] =
+      (1 to 10).map(i => ByteString(java.nio.ByteBuffer.allocate(32).putInt(28, i).array()))
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets
+          .NewPooledTransactionHashes(hashes.map(_ => Transaction.Type02), hashes.map(_ => BigInt(40000)), hashes),
+        peer1.id
+      )
+    )
+    requestedFrom(this) shouldBe ((peer1.id, hashes.take(4))) // 160,000 bytes once the fourth is in
+    etcPeerManager.expectNoMessage(200.millis)
+    answerEmpty(pendingTransactionsManager, peer1)
+    requestedFrom(this) shouldBe ((peer1.id, hashes.slice(4, 8)))
 
   // go-ethereum eth/fetcher/tx_fetcher.go (c6e3a0d7): `maxTxAnnounces = 4096`, the most hashes tracked for one peer at
   // once; the excess of an announcement is dropped. Without it an announcement is bounded only by the 16 MiB message
@@ -548,16 +573,20 @@ class PendingTransactionsManagerSpec
 
     val hashes: Seq[ByteString] = hashesFrom(1, 5000)
     announce(peer1, hashes)
-    val requests: Seq[(PeerId, Seq[ByteString])] = Seq.fill(16)(requestedFrom(this))
-    requests.map(_._1).distinct shouldBe Seq(peer1.id)
-    requests.map(_._2.size) shouldBe Seq.fill(16)(256)
-    requests.flatMap(_._2) shouldBe hashes.take(4096) // the first 4096, in announcement order
-    etcPeerManager.expectNoMessage(200.millis) // the other 904 are dropped, not requested
-
     // peer1 is at the cap: its next announcement is dropped whole.
     val more: Seq[ByteString] = hashesFrom(10001, 10)
     announce(peer1, more)
-    etcPeerManager.expectNoMessage(200.millis)
+    // One request in flight per peer (B-028): each answer (empty: these hashes name no real tx) lets the next go out.
+    val requests: Seq[(PeerId, Seq[ByteString])] = Seq.fill(16) {
+      val request = requestedFrom(this)
+      answerEmpty(ptm, peer1)
+      request
+    }
+    requests.map(_._1).distinct shouldBe Seq(peer1.id)
+    requests.map(_._2.size) shouldBe Seq.fill(16)(256)
+    requests.flatMap(_._2) shouldBe hashes.take(4096) // the first 4096, in announcement order
+    etcPeerManager.expectNoMessage(200.millis) // the other 904, and `more`, were dropped, not requested
+
     // The cap is per peer: another peer announcing the same hashes is asked for them.
     announce(peer2, more)
     requestedFrom(this) shouldBe ((peer2.id, more))
@@ -576,6 +605,10 @@ class PendingTransactionsManagerSpec
     cmd.message.underlyingMsg match
       case ETHPackets.GetPooledTransactions(_, hashes) => (cmd.peerId, hashes)
       case other                                       => fail(s"Expected GetPooledTransactions, got $other")
+
+  /** `peer` answers its request with no txs: it has none of them. */
+  private def answerEmpty(ptm: org.apache.pekko.actor.typed.ActorRef[Command], peer: Peer): Unit =
+    ptm ! WrappedPeerEvent(PeerEvent.MessageFromPeer(ETHPackets.PooledTransactions(BigInt(1), Seq.empty), peer.id))
 
   private def announceFrom(
       ptm: org.apache.pekko.actor.typed.ActorRef[Command],
