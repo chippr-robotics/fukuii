@@ -2063,8 +2063,11 @@ final private class BlockImporterLogic(
         )
         Right(extension)
       case NoChainSwitch =>
-        // Add first block from branch as an ommer
-        ommersPool ! AddOmmers(blocks.head.header)
+        // The branch's first block not on this node's chain is offered as an ommer: a sibling of one of its blocks. A
+        // block of this node's own chain is none (B-299): after a fetcher reset from the common block the batch opens
+        // with them, and core-geth offers only side blocks as uncles. A batch that is this node's chain whole offers
+        // nothing.
+        blocks.toList.drop(canonicalPrefixLength(blocks)).headOption.foreach(b => ommersPool ! AddOmmers(b.header))
         // On the unified layout the blocks of a branch that is not taken are not stored, so the batch that follows
         // hangs from a block this node does not know: remembered here, it is weighed with what follows (B-300 f). The
         // one guard of the memo: elsewhere nothing is remembered, so nothing is found.
