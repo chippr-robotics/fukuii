@@ -4344,3 +4344,14 @@ items:
       spec: specs/028-ephemery
     depends_on: [B-443]
     notes: Renderer output is golden-tested; adding keys changes the committed ephemery-16x fixtures.
+  - id: B-458
+    title: "eth_simulateV1 on pending reads the pending header's state from the store, where a PoW build left none: State node doesn't exist"
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      prs: [2018]
+    notes: "Pre-existing, found in B-230 (#2018). PoW pending build runs over getReadOnlyMptStorage (in-memory buffer); EthSimulateService opens scratchStateAt(pendingHeader). Fix: base on the pending world's storage via a fresh overlay (do NOT write into the shared, non-thread-safe pending buffer) plus its deployedCode. eth_call/estimate/trace already use pendingState."
