@@ -3947,6 +3947,72 @@ class RegularSyncSpec
           resetsOfThePool() shouldBe 1
       )
 
+      // B-513: the same for a batch whose first block is invalid, for the strikes against it, and for an announced
+      // block that is invalid. Following a consensus layer no peer is blacklisted or evicted; the fetcher is still
+      // rewound to the failing block. On a proof-of-work chain (ETC) the peer is blamed at once and evicted at the
+      // third strike, as before
+      for follows <- Seq(false, true) do
+        s"blame the peer of an invalid batch, and evict it at the third strike, only on a proof-of-work chain (follows a consensus layer: $follows)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new BatchImportTells(s"batch-invalid-$follows", followsConsensusLayer = follows):
+            val batch: List[Block] = testBlocks.take(2)
+            val invalid: String = BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString
+            answer.set(BlockImportFailed(invalid))
+            val evictions = new java.util.concurrent.atomic.AtomicInteger(0)
+            // the rewind, then the pick the importer asks for once the import is done: a batch handed to it before
+            // that is deferred while it imports, following a consensus layer, and dropped with the rewind
+            def rewoundOnce(): InvalidateBlocksFrom =
+              var rewound: Option[InvalidateBlocksFrom] = None
+              importerFetcher.fishForMessage(5.seconds) {
+                case _: BlockFetcher.BlockImportFailed =>
+                  evictions.incrementAndGet()
+                  false
+                case invalidated: InvalidateBlocksFrom =>
+                  rewound = Some(invalidated)
+                  false
+                case _: BlockFetcher.PickBlocks => rewound.isDefined
+                case _                          => false
+              }
+              rewound.get
+
+            for strike <- 1 to 3 do
+              importBatch(batch)
+              val rewound = rewoundOnce()
+              withClue(s"strike $strike: ") {
+                rewound.fromBlock shouldBe batch.head.number.value
+                rewound.toBlacklist shouldBe (if follows then None else Some(batch.head.number.value))
+              }
+            withClue("the peer evicted at the third strike: ")(evictions.get shouldBe (if follows then 0 else 1))
+        )
+
+        s"blame the peer of an invalid announced block only on a proof-of-work chain (follows a consensus layer: $follows)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new BatchImportTells(s"announce-invalid-$follows", followsConsensusLayer = follows):
+            val announced: Block = testBlocks.head
+            answer.set(
+              BlockImportFailed(BlockExecutionError.ValidationAfterExecError("Block has invalid state root").toString)
+            )
+
+            importer ! BlockImporter.ImportNewBlock(announced, PeerId("announcer"))
+
+            importerFetcher.fishForMessage(5.seconds) {
+              case BlockFetcher.BlockImportFailed(number, _) if !follows =>
+                number shouldBe announced.number.value
+                true
+              case InvalidateBlocksFrom(number, _, toBlacklist) if follows =>
+                number shouldBe announced.number.value
+                toBlacklist shouldBe None
+                true
+              case _: BlockFetcher.BlockImportFailed | _: InvalidateBlocksFrom =>
+                fail("the fetcher was told of the failure in the other chain's way")
+              case _ => false
+            }
+        )
+
       // B-513 (beacon W3): an announced block on a queued branch whose block 2 failed after block 1 became the head.
       // The fetcher is told of the failing block, whose peer served it, not of the announced block
       for follows <- Seq(false, true) do

@@ -1502,7 +1502,7 @@ final private class BlockImporterLogic(
                     fetcher ! BlockFetcher.InvalidateBlocksFrom(
                       invalidBlockNr,
                       err.toString,
-                      shouldBlacklist = blamesThePeerFor(err)
+                      shouldBlacklist = blamesTheServingPeer
                     )
                     RunningAfterFetcherRewind
               case UnknownParent =>
@@ -1608,16 +1608,22 @@ final private class BlockImporterLogic(
                 // failed. The fetcher goes back to it and the peer that served it is blamed, as for a batch whose first
                 // block failed; the blocks after it, dropped from the queue with it, are fetched again from there. A
                 // gas-used mismatch took the arm above first, which fetches missing code before it blames anyone.
-                // Following a consensus layer, no peer is blamed (B-513, `blamesThePeerFor`).
+                // Following a consensus layer, no peer is blamed (B-513, `blamesTheServingPeer`).
                 fetcher ! BlockFetcher.InvalidateBlocksFrom(
                   notImportedBlocks.head.number.value,
                   partial.error,
-                  shouldBlacklist = blamesThePeerFor(partial)
+                  shouldBlacklist = blamesTheServingPeer
                 )
                 RunningAfterFetcherRewind
               case _ =>
+                // a block of the batch failed on its own error: its peer is blamed, but following a consensus layer
+                // (B-513, `blamesTheServingPeer`)
                 val invalidBlockNr = notImportedBlocks.head.number.value
-                fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
+                fetcher ! BlockFetcher.InvalidateBlocksFrom(
+                  invalidBlockNr,
+                  err.toString,
+                  shouldBlacklist = blamesTheServingPeer
+                )
                 RunningAfterFetcherRewind
       }
 
@@ -1693,14 +1699,15 @@ final private class BlockImporterLogic(
             IO.pure((importedBlocks, Some(err)))
         }
 
-  /** Is the peer that served the block a partial import ([[ImportedPartially]]) failed on blamed for it (B-513)? On a
-    * proof-of-work chain, yes, as core-geth's downloader drops the peer that served the block it could not insert.
-    * Following a consensus layer, no: the branch is the one the consensus layer named, which every peer serves alike,
-    * so blaming the peer that served it drops an honest peer, and the consensus layer is told the verdict instead
-    * (`reportInvalidChain`). Any other result is blamed as before.
+  /** Is the peer that served a block found invalid blamed for it (B-513)? On a proof-of-work chain, yes, as core-geth's
+    * downloader drops the peer that served the block it could not insert: blacklisted at once, and evicted at
+    * [[BadBlockEvictionThreshold]] strikes. Following a consensus layer, no: the branch is the one the consensus layer
+    * named, which every peer serves alike, so blaming the peer that served it drops an honest peer; the fetcher is
+    * still rewound to the failing block, and the consensus layer told the verdict (`reportInvalidChain`). Whole
+    * batches, partial imports, announced blocks and the strikes alike. A block whose parent this node lacks is no
+    * invalid block, and is not concerned.
     */
-  private def blamesThePeerFor(err: Any): Boolean =
-    !(branchResolution.followsConsensusLayer && err.isInstanceOf[ImportedPartially])
+  private def blamesTheServingPeer: Boolean = !branchResolution.followsConsensusLayer
 
   /** A block of a batch failed, or hangs from a block this node lacks: a strike against it, by its hash. At
     * [[BadBlockEvictionThreshold]] the peer that serves it is evicted; at [[ForkDetectThreshold]] a fork recovery is
@@ -1718,7 +1725,16 @@ final private class BlockImporterLogic(
     )
     val strikes = unknownParentStrikes.getOrElse(failedBlock.hash.value, 0) + 1
     unknownParentStrikes = unknownParentStrikes + (failedBlock.hash.value -> strikes)
-    if strikes == BadBlockEvictionThreshold then
+    // following a consensus layer, an invalid block is no fault of the peer that serves it (B-513); one whose parent this
+    // node lacks still evicts its peer at the threshold, as before
+    if strikes == BadBlockEvictionThreshold && !blamesTheServingPeer && err != UnknownParent then
+      log.warning(
+        "BAD-BLOCK-EVICT: block {} (hash={}) import failure x{}: the consensus layer's branch, so no peer is evicted",
+        failedBlock.number,
+        failedBlock.header.hashAsHexString,
+        strikes
+      )
+    else if strikes == BadBlockEvictionThreshold then
       log.warning(
         "BAD-BLOCK-EVICT: block {} (hash={}) import failure x{} — evicting peer",
         failedBlock.number,
@@ -1942,11 +1958,11 @@ final private class BlockImporterLogic(
           // move is told as above, and the failure as a failed import is (this block stands on the failing one)
           // The failing block is the one on the head the move left (B-513, beacon W3): the peer that served it is the
           // one blamed, not the one that served the announced block; following a consensus layer, no peer is.
-          case partial @ ImportedPartially(headMove, _, error) =>
+          case ImportedPartially(headMove, _, error) =>
             headMoved(headMove)
             if informFetcherOnFail then
               val failingNumber = BlockImporter.failingBlockNumber(headMove).getOrElse(block.number.value)
-              if blamesThePeerFor(partial) then
+              if blamesTheServingPeer then
                 fetcher ! BlockFetcher.BlockImportFailed(failingNumber, BlacklistReason.BlockImportError(error))
               else fetcher ! BlockFetcher.InvalidateBlocksFrom(failingNumber, error, shouldBlacklist = false)
           case BlockImportFailedDueToMissingNode(missingNodeException, adopted)
@@ -1958,7 +1974,10 @@ final private class BlockImporterLogic(
             announceAdopted(adopted, internally)
             IO.raiseError(missingNodeException)
           case BlockImportFailed(error) if informFetcherOnFail && !Consensus.isLocalStateFault(error) =>
-            fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
+            // following a consensus layer the peer that served it is not blamed (B-513)
+            if blamesTheServingPeer then
+              fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
+            else fetcher ! BlockFetcher.InvalidateBlocksFrom(block.number.value, error, shouldBlacklist = false)
           // a fault of this node's own state after a prefix became the head (B-336): nothing is said of the failing
           // block, and the prefix is announced as any imported blocks are
           case failed @ BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
