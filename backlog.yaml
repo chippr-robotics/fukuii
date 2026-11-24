@@ -3862,19 +3862,17 @@ items:
   - id: B-401
     title: enterprise launch modifier forces use-bootstrap-nodes=false and rpc.http.interface=localhost, overriding config, contrary to its comment and template
     priority: P2
-    status: review
+    status: done
     area: ops
     size: S
     opened: 2026-11-19
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2113]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T22:28:13Z
-      heartbeat: 2026-11-24T22:28:40Z
-    notes: Found by spec 030 S11's docs pass (App.scala); the runbook now says to launch without the modifier to expose RPC.
+    notes: |-
+      Found by spec 030 S11's docs pass (App.scala); the runbook now says to launch without the modifier to expose RPC.
+      2026-11-24 done: merged 3ca765e93
   - id: B-402
     title: "Spec 030 T081: three-node P2P allowlist IT (A,B,C on a dev chain; C refused, never dialled) — SC-005, last gate before Done"
     priority: P2
