@@ -458,21 +458,21 @@ class RegularSyncSpec
       case _                                                                                       => Nil
     }
 
-    /** The transactions handed back to the pool, by a reset or by a hand-back of their own (the branch resolution's,
-      * which B-460 retired: one would show here as a second entry).
-      */
+    /** The transactions handed back to the pool by its resets, one entry per reset that hands any back. */
     def takenBackByThePool(): Seq[Seq[SignedTransaction]] = toThePool.collect {
-      case com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions(txs)
-          if txs.nonEmpty =>
-        txs
       case com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset(_, txs) if txs.nonEmpty =>
         txs
     }
 
-    /** Whether the pool was sent anything that hands transactions back besides a reset (B-460: nothing is). */
+    /** Whether the pool was sent anything besides its resets (B-460: the branch resolution's hand-back ahead of the
+      * import is retired, and B-512 deleted the message it was sent as; anything else told here is a new one).
+      */
     def handedBackAheadOfAReset(): Boolean = toThePool.exists(
-      _.isInstanceOf[com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions]
+      !_.isInstanceOf[com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset]
     )
+
+    /** The pool is sent nothing for this import (asked once the import is known to be done). */
+    def poolToldNothing(): Unit = pool.expectNoMessage(1.second)
 
     /** The headers the next offer to the ommer pool held (B-501), and that no other offer follows it. */
     def offeredAsOmmers(): Seq[BlockHeader] =
@@ -491,9 +491,6 @@ class RegularSyncSpec
       ommersPool.receiveWhile(max = 1.second, idle = 1.second) {
         case com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers(headers) => headers
       } shouldBe empty
-
-    /** The pool is sent nothing for this import (asked once the import is known to be done). */
-    def poolToldNothing(): Unit = pool.expectNoMessage(1.second)
 
     /** The pool's resets: one per move of the head. */
     def resetsOfThePool(): Int =
@@ -4201,6 +4198,9 @@ class RegularSyncSpec
           removedFromThePool() shouldBe List(prefix.body.transactionList)
           takenBackByThePool() shouldBe List(movedOff.body.transactionList)
           handedBackAheadOfAReset() shouldBe false
+          resetsOfThePool() shouldBe 1
+      )
+
       // B-501: the branch resolution offered its prediction's first old block to the ommer pool ahead of the import,
       // whether or not the import then moved the head off it. core-geth's `reorg` sends a side event for each block of
       // the old chain once the new one is written, and its miner keeps them as uncle candidates; only the lowest has a
@@ -4306,7 +4306,71 @@ class RegularSyncSpec
           offeredAsOmmers() shouldBe List(movedOff.header)
       )
 
+      // B-512: a reorganisation onto a branch that stands on side blocks stored before makes them canonical with it.
+      // The hash layout's answer lists the branch alone, so their transactions stayed in the pool though the chain now
+      // includes them. go-ethereum's pool reset walks the new chain down to the fork: the importer reads them from the
+      // store, down to the parent of the lowest block moved off, and they leave the pool with the branch, oldest first.
+      for follows <- Seq(false, true) do
+        s"drop the transactions of the side blocks a reorganisation made canonical (follows a consensus layer: $follows)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new BatchImportTells(s"b512-side-blocks-$follows", followsConsensusLayer = follows):
+            val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+            val side: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+            blockchainWriter.storeBlock(side).commit()
+            val branch: Block = BlockHelpers.generateBlock(side)
+            answer.set(ChainReorganised(List(movedOff), List(branch), List(weighed(branch).weight), branchBlocks = 1))
+
+            importBatch(List(branch))
+
+            // following a consensus layer the reset is as it was (the fork choice's own reset walks the chain)
+            removedFromThePool() shouldBe
+              (if follows then List(branch.body.transactionList)
+               else List(side.body.transactionList, branch.body.transactionList))
+            takenBackByThePool() shouldBe List(movedOff.body.transactionList)
+            resetsOfThePool() shouldBe 1
+        )
+
+      "drop the transactions of the side blocks under the branch a fault stopped the head on" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b512-fault-on-branch"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val sides: List[Block] = BlockHelpers.generateChain(2, BlockHelpers.genesis)
+          sides.foreach(blockchainWriter.storeBlock(_).commit())
+          val branch: List[Block] = BlockHelpers.generateChain(2, sides.last)
+          // the head stopped on the branch's first block (whereTheHeadIsLeft), off the chain it left
+          answer.set(
+            new StateFaultAfterAMove(
+              new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the move back failed"),
+              List(weighed(branch.head)),
+              List(movedOff)
+            )
+          )
+
+          importBatch(branch)
+
+          removedFromThePool() shouldBe (sides ++ branch.take(1)).map(_.body.transactionList)
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
           resetsOfThePool() shouldBe 1
+      )
+
+      "drop no more than the result lists when a block between it and the fork is not stored" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b512-side-not-stored"):
+          val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val side: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+          val branch: Block = BlockHelpers.generateBlock(side)
+          answer.set(ChainReorganised(List(movedOff), List(branch), List(weighed(branch).weight), branchBlocks = 1))
+
+          importBatch(List(branch))
+
+          removedFromThePool() shouldBe List(branch.body.transactionList)
+          takenBackByThePool() shouldBe List(movedOff.body.transactionList)
       )
 
       // B-514 (beacon W4): a move back that failed left the head on side blocks the branch stands on, off the chain it

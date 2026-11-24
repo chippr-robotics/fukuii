@@ -17,10 +17,6 @@ case class PendingTransactionsManagerAutoPilot(pendingTransactions: Set[PendingT
 
   def run(sender: ActorRef, msg: Any): AutoPilot =
     msg match
-      case AddUncheckedTransactions(transactions) =>
-        val validTxs = SignedTransactionWithSender.getSignedTransactions(transactions, Timestamp.Zero)
-        this.addTransactions(validTxs.toSet)
-
       case AddTransactions(signedTransactions) =>
         this.addTransactions(signedTransactions)
 
