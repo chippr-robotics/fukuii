@@ -5416,20 +5416,16 @@ items:
   - id: B-516
     title: "CL branch evaluated while the head is already past its tip: the head is moved back below the named head and told as ChainReorganised"
     priority: P2
-    status: review
+    status: done
     area: consensus
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2074]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T11:13:55Z
-      heartbeat: 2026-11-24T13:43:32Z
     notes: |-
-      2026-11-24 in-progress: beacon agent clone-e (after #2074; refuse backward-only move)
       2026-11-24 in-progress: folded into B-318 / PR #2074 (user: fix in the PR, don't split)
       2026-11-24 review: folded into #2074
+      2026-11-24 done: merged b8f7338ad1
