@@ -5649,3 +5649,13 @@ items:
       Mainnet account download ran at 23,000 accounts/s against 36,600/s on Mordor; not caused by the contract classification, which only feeds the storage file.
       Check per-peer timeout counts (AccountRangeWorker:200) and whether the 512 KB starting response size is too large for mainnet peers within the 30 s timeout.
       2026-11-24 blocked: needs logs from a live ETC mainnet SNAP run on a build with #2112
+  - id: B-527
+    title: sbt-git JGit fails to load in a linked git worktree (NoWorkTreeException); note workaround in worktree-protocol.md or fix build
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links: {}
+    notes: "Every worktree subagent hit this; workaround: untracked .sbt with SbtGit.useReadableConsoleGit / useConsoleForROGit := true"
