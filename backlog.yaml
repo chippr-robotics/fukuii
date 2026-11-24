@@ -4831,7 +4831,7 @@ items:
   - id: B-471
     title: "Flaky under CI load: JsonRpcHttpServerLifecycleSpec (22 fixed waits); capture the failure text from the full job log when it recurs"
     priority: P3
-    status: claimed
+    status: blocked
     area: ci
     size: S
     opened: 2026-11-24
@@ -4841,8 +4841,10 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T15:40:25Z
-      heartbeat: 2026-11-24T15:40:25Z
-    notes: "Split from B-374 (closes with #2029: LookupsSpec #1927, ObservationSpec cherry-pick). Failed once on #1921 (2026-11-18). Synchronise on events; never skip."
+      heartbeat: 2026-11-24T15:40:29Z
+    notes: |-
+      Split from B-374 (closes with #2029: LookupsSpec #1927, ObservationSpec cherry-pick). Failed once on #1921 (2026-11-18). Synchronise on events; never skip.
+      2026-11-24 blocked: Blocked on a recurrence (2026-11-24): the spec's 22 'waits' are Await.result on futures with a 10 s deadline, not sleeps, so it already synchronises on events. Candidate cause, unconfirmed: freePort() is choose-then-bind, so another suite can take the port in between (and refused(port) can then see it bound). No change without the failure text.
   - id: B-472
     title: "NewBlock path (evaluateBranchBlock): a store failure thrown out of the import drops the block dequeued from BlockQueue; map it as B-440 does"
     priority: P3
