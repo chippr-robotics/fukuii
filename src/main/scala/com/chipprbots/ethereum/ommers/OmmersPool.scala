@@ -62,6 +62,11 @@ object OmmersPool:
         case GetOmmers(parentBlockHash, replyTo) =>
           val ancestors = collectAncestors(blockchainReader, parentBlockHash, ommerGenerationLimit)
           val ancestorHashes = ancestors.map(_.hash).toSet
+          // An ommer of block N is a child of a block from N - 2 down to N - 7: of one of the parents of the ancestors
+          // walked (YP 11.1, the rule StdOmmersValidator.validateOmmersAncestors applies). A child of the parent itself is
+          // a sibling of block N, never its ommer. As core-geth's `commitUncle`: "uncle is sibling", and the uncle's
+          // parent among the seven blocks from the parent down.
+          val ommerParents = ancestors.map(_.parentHash).toSet
           // What the ancestors' bodies hold already: an ommer is included once (B-500). One handed out again failed the
           // ommers check of the block built with it. As core-geth's worker, whose `family` (`makeEnv`) holds the
           // ancestors and the uncles they included, and `commitUncle` refuses an uncle in it ("uncle already included").
@@ -69,7 +74,7 @@ object OmmersPool:
           val ommers = ommersPool
             .filter { b =>
               val notAncestor = !ancestorHashes.contains(b.hash)
-              ancestors.find(_.hash == b.parentHash).isDefined && notAncestor && !included.contains(b.hash)
+              ommerParents.contains(b.parentHash) && notAncestor && !included.contains(b.hash)
             }
             .take(returnedOmmersSizeLimit)
           logStatus(context, event = s"Ommers given parent block ${Hex.toHexString(parentBlockHash.toArray)}", ommers)
