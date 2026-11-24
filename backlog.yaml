@@ -5094,17 +5094,18 @@ items:
   - id: B-500
     title: Ommer pool hands out ommers already included in the last 6 blocks; PoWBlockGenerator then drops the whole set, so one stale ommer costs both slots
     priority: P3
-    status: in-progress
+    status: review
     area: consensus
     size: S
     opened: 2026-11-24
     refs: []
-    links: {}
+    links:
+      prs: [2073]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T10:48:50Z
-      heartbeat: 2026-11-24T10:48:54Z
+      heartbeat: 2026-11-24T11:07:13Z
     notes: |-
       forge, found during B-299. core-geth filters included uncles per candidate.
       2026-11-24 in-progress: forge agent clone-d
