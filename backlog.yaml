@@ -5523,3 +5523,15 @@ items:
       TuiQuit inherits daemon from TuiUpdateThread (TuiUpdater.scala:46,87); the JVM's SIGTERM handler thread and ephemery-reset-watchdog are daemons. Once the actor system step ends Pekko's threads, the JVM exits (status 0) and the hook leaves the stop under way.
       Seen on both q quits of v0.12.117 (Mordor 6 GB, ETC mainnet 44 GB): 13 of 15 steps, no metrics or DB close, 239 MB of WAL to replay. Unchanged on staging 0.12.164. SIGTERM checked on JDK 21: handler thread is a daemon, the JVM exits 0 mid-stop.
       Fix: start stopThenExit on a thread made non-daemon (setDaemon(false)) on all three paths, and set stopThenExitAside's thread non-daemon explicitly (it inherits today); a test asserts the stop's thread is not a daemon.
+  - id: B-521
+    title: "Shipped logback.xml sets the snap package to ERROR, so ChainDownloader never logs: header progress and the post-SNAP backfill are invisible"
+    priority: P2
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-24
+    refs: ["sync reports v0.12.117, 2026-11-23/24"]
+    links: {}
+    notes: |-
+      src/main/resources/logback.xml:235 sets com.chipprbots.ethereum.blockchain.sync.snap to ERROR and opens only snap.actors and SNAPSyncController; ChainDownloader logs through context.log in that package, so nothing in 4 h 50 min (mainnet) or on Mordor.
+      ops/cirith-ungol/conf/logback.xml already sets snap.ChainDownloader to INFO. Add it to the shipped config; check its per-batch lines are not too chatty at INFO first.
