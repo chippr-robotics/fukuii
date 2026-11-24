@@ -8,6 +8,7 @@ import org.apache.pekko.actor.PoisonPill
 import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
+import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 import cats.effect.Deferred
@@ -230,7 +231,12 @@ class RegularSyncPipelineSpec extends WordSpecBase with Matchers with AsyncMockF
         (() => blockchainReader.getBestBlockNumber).when().returns(BigInt(20))
         (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)
         (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(BigInt(0)).returns(Some(BlockHelpers.genesis.header))
-        (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(*).returns(None)
+        // the index names the genesis at the floor, as the rewind reads it under the head's lock (B-511): a rewind that
+        // finds another block there moves nothing, and fetches from above the head instead
+        (blockchainReader
+          .getCanonicalHashByNumber(_: BigInt))
+          .when(*)
+          .onCall((n: BigInt) => Option.when(n == 0)(BlockHelpers.genesis.header.hash))
         override lazy val blockchainWriter: BlockchainWriter = stub[BlockchainWriter]
 
         val importerFetcher: TestProbe = TestProbe("resolverImporterFetcher")
@@ -248,6 +254,44 @@ class RegularSyncPipelineSpec extends WordSpecBase with Matchers with AsyncMockF
         importerFetcher
           .fishForSpecificMessage(10.seconds) { case m: BlockFetcher.InvalidateBlocksFrom => m }
           .fromBlock shouldBe 1
+        testKit.stop(importer)
+    )
+
+    // B-511: the rewind reads the index under the head's lock. When a fork choice moved the head to another chain since
+    // the importer read it, the index no longer names the block it was to rewind to: nothing is rewound, and the
+    // fetcher goes on from above the head as it is, not from above that block, which is no longer this node's chain.
+    "fetch from above the head when the blind rewind finds the index on another chain" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in sync(
+      new PipelineFixture:
+        override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
+        (() => blockchainReader.getBestBlockNumber).when().returns(BigInt(20))
+        (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)
+        (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(BigInt(0)).returns(Some(BlockHelpers.genesis.header))
+        // a fork choice moved the head: the index names another block at the floor
+        (blockchainReader
+          .getCanonicalHashByNumber(_: BigInt))
+          .when(*)
+          .onCall((n: BigInt) => Option.when(n == 0)(BlockHash(ByteString(Array.fill(32)(0x5a.toByte)))))
+        override lazy val blockchainWriter: BlockchainWriter = stub[BlockchainWriter]
+
+        val importerFetcher: TestProbe = TestProbe("noOpRewindImporterFetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(importerFetcher, "no-op-rewind-importer")
+        importerFetcher.expectMsgClass(10.seconds, classOf[BlockFetcher.Start])
+
+        importer ! BlockImporter.StartForkRecovery(BigInt(15))
+        networkPeerManager.fishForMessage(10.seconds) {
+          case _: GetHandshakedPeersCmd => true
+          case _                        => false
+        }
+        system.actorSelection(s"${importer.path}/*") ! PoisonPill
+
+        importerFetcher
+          .fishForSpecificMessage(10.seconds) { case m: BlockFetcher.InvalidateBlocksFrom => m }
+          .fromBlock shouldBe 21
+        // nothing was rewound
+        (blockchainWriter.setCanonicalChainHead(_: BigInt, _: BlockHash, _: BigInt)).verify(*, *, *).never()
         testKit.stop(importer)
     )
 

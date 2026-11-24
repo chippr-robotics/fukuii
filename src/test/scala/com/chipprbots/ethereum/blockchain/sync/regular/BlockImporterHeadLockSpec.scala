@@ -90,16 +90,21 @@ class BlockImporterHeadLockSpec extends AnyFlatSpec with Matchers:
       UnitTest,
       ConsensusTest
     ) in (new Fixture:
-      raced(side.last)(
-        BlockImporter.rewindCanonicalChain(
-          blockchainReader,
-          blockchainWriter,
-          ReorgStateHandler.NoOp,
-          target = 7,
-          targetHash = main(6).hash,
-          currentBest = 10
+      @volatile var rewound: Option[Boolean] = None
+      raced(side.last) {
+        rewound = Some(
+          BlockImporter.rewindCanonicalChain(
+            blockchainReader,
+            blockchainWriter,
+            ReorgStateHandler.NoOp,
+            target = 7,
+            targetHash = main(6).hash,
+            currentBest = 10
+          )
         )
-      ) shouldBe true
+      } shouldBe true
+      // it says it rewound nothing, so that the importer fetches from above the head as it is (B-511)
+      rewound shouldBe Some(false)
       blockchainReader.getBestBlockHeader.map(_.hash) shouldBe Some(side.last.hash)
       oneChain()
     )
@@ -109,16 +114,20 @@ class BlockImporterHeadLockSpec extends AnyFlatSpec with Matchers:
     ConsensusTest
   ) in (new Fixture:
     // the fork choice moves the head up to block 12 after the importer read block 10 as the best
-    raced(main.last)(
-      BlockImporter.rewindCanonicalChain(
-        blockchainReader,
-        blockchainWriter,
-        ReorgStateHandler.NoOp,
-        target = 7,
-        targetHash = main(6).hash,
-        currentBest = 10
+    @volatile var rewound: Option[Boolean] = None
+    raced(main.last) {
+      rewound = Some(
+        BlockImporter.rewindCanonicalChain(
+          blockchainReader,
+          blockchainWriter,
+          ReorgStateHandler.NoOp,
+          target = 7,
+          targetHash = main(6).hash,
+          currentBest = 10
+        )
       )
-    ) shouldBe true
+    } shouldBe true
+    rewound shouldBe Some(true)
     blockchainReader.getBestBlockHeader.map(_.hash) shouldBe Some(main(6).hash)
     oneChain()
   )

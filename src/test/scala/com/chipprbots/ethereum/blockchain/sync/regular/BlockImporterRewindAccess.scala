@@ -15,4 +15,5 @@ object BlockImporterRewindAccess:
       targetHash: BlockHash,
       currentBest: BigInt,
       discarded: Seq[(BigInt, org.apache.pekko.util.ByteString)] = Nil
-  ): Unit = BlockImporter.rewindCanonicalChain(reader, writer, reorgState, target, targetHash, currentBest, discarded)
+  ): Boolean =
+    BlockImporter.rewindCanonicalChain(reader, writer, reorgState, target, targetHash, currentBest, discarded)
