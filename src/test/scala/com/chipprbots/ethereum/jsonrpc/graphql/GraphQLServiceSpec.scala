@@ -307,6 +307,28 @@ class GraphQLServiceSpec
         (value.isEmpty || value.contains(Json.Null)) shouldBe true
       }
 
+  it should "answer sendRawTransaction with an error when the head's state has a missing trie node, never read the start nonce (B-442)" in new GraphQLTestSetup:
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.SignedTransactionEnc
+    // the fixture's state root is not in the store
+    blockchainWriter.storeBlock(block).and(blockchainWriter.storeChainWeight(block.header.hash, weight)).commit()
+    blockchainWriter.saveBestKnownBlocks(block.hash, block.number.value)
+    val key: AsymmetricCipherKeyPair = com.chipprbots.ethereum.crypto.keyPairFromPrvKey(BigInt(0xa11ce))
+    // nonce 0: read as the start nonce, the nonce check would let it through to the pool
+    val stx: SignedTransaction = SignedTransaction.sign(
+      LegacyTransaction(0, GasPrice(10), GasAmount(21_000), Some(Address(1)), 0, ByteString.empty),
+      key,
+      None
+    )
+    val mutation: String = s"""mutation { sendRawTransaction(data: "0x${Hex.toHexString(stx.toBytes)}") }"""
+
+    val (_, body) = service.execute(mutation, None, None).unsafeRunSync()
+    withClue(body.toString) {
+      val errors = body.hcursor.downField("errors").as[List[Json]].toOption.get
+      errors should not be empty
+      errors.head.hcursor.downField("message").as[String].toOption.get should include("missing trie node")
+      body.hcursor.downField("data").downField("sendRawTransaction").focus.forall(_.isNull) shouldBe true
+    }
+
   // -------------------------------------------------------------------------
   abstract class GraphQLTestSetup(val maxDepth: Int = GraphQLSchema.MaxQueryDepth) extends EphemBlockchainTestSetup:
 

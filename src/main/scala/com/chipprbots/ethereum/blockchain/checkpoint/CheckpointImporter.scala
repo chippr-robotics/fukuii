@@ -718,6 +718,9 @@ object CheckpointImporter:
       *   - There is no anchor and no row: nothing, unless `force`: a failed import clears its key through the same
       *     batch, whether or not a row reached the disk.
       *
+      * May throw [[com.chipprbots.ethereum.db.storage.pathstate.StateClearRefused]] when an attempt holds the records
+      * (B-465): not met in practice, since no adoption runs at a start or during a checkpoint import.
+      *
       * @return
       *   the anchor, when it is a state this must not clear (a block above the genesis): nothing was changed
       */

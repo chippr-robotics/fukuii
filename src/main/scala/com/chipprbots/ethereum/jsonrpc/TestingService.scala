@@ -160,17 +160,17 @@ class TestingService(
                 JsonRpcError.LogicError(s"the block that was built was refused by import: $refused")
               }
             case None =>
-              // Same write sequence engine_newPayload + engine_forkchoiceUpdated perform for a
-              // canonical-extending payload: store block, store receipts, promote to canonical head.
-              // The world state is already persisted — buildBlockOnParent ran executeForProposer,
-              // which calls InMemoryWorldStateProxy.persistState against the writable backing. Its code it
-              // does not write (B-230): that is written here, before the block that refers to it.
-              engineApiService.writeBuiltCode(built)
-              blockchainWriter.storeBlock(block).commit()
-              blockchainWriter.storeReceipts(hash, built.receipts).commit()
-              // EIP-7928: keep the list the header commits to, as engine_newPayload does for an Amsterdam block, so
-              // engine_getPayloadBodies*V2 and eth/71 can serve the committed block. None before Amsterdam.
-              built.blockAccessList.foreach(bal => blockchainWriter.storeBlockAccessList(hash, bal).commit())
+              // The block and its receipts are stored, then the head is promoted, as engine_newPayload and
+              // engine_forkchoiceUpdated do for a canonical-extending payload. The world state is already persisted:
+              // buildBlockOnParent ran executeForProposer, which writes it straight through to the hash store. Its
+              // code it does not write (B-230): that goes in the ONE batch that stores the block, its receipts and,
+              // on an Amsterdam block, the access list the header commits to (EIP-7928; engine_getPayloadBodies*V2
+              // and eth/71 serve it), so a kill leaves all of them or none (B-466).
+              val records = blockchainWriter.storeBlock(block).and(blockchainWriter.storeReceipts(hash, built.receipts))
+              val withList = built.blockAccessList.fold(records)(bal =>
+                records.and(blockchainWriter.storeBlockAccessList(hash, bal))
+              )
+              engineApiService.builtCodeWrite(built).fold(withList)(_.and(withList)).commit()
               Right(())
           stored.map { _ =>
             forkChoiceManager.applyForkChoiceState(

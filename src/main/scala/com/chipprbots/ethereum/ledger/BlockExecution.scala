@@ -100,7 +100,15 @@ class BlockExecution(
 
   /** [[writeDeployedCode]] of code taken out of its world: a proposer's build, kept as a block's state. */
   def writeDeployedCode(code: Map[ByteString, ByteString]): Unit =
-    InMemoryWorldStateProxy.deployedCodeWrite(code, evmCodeStorage).foreach(_.commit())
+    deployedCodeWrite(code).foreach(_.commit())
+
+  /** The write of code taken out of its world, not committed: for a caller that writes it in the batch of the block
+    * that refers to it (`testing_commitBlockV1` on the hash store, B-466). None when there is no code.
+    */
+  def deployedCodeWrite(
+      code: Map[ByteString, ByteString]
+  ): Option[com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate] =
+    InMemoryWorldStateProxy.deployedCodeWrite(code, evmCodeStorage)
 
   /** Times the block's database commit (one atomic batch since #1465), which `[IMPORT-TIMING]` ends before. */
   private def timedCommit[A](block: Block)(body: => A): A =
@@ -158,7 +166,8 @@ class BlockExecution(
     blockExecResult
 
   /** Executes a block without pre/post validation. Returns the execution result including receipts, gasUsed, and the
-    * persisted world state. Used by ChainImporter for trusted block import where only state correctness matters.
+    * persisted world state. It writes the block's trie nodes and code before anything is validated, so no import path
+    * uses it: the chain import goes through [[executeAndAdoptBlockIf]] (B-455). Test harnesses that replay vectors do.
     */
   def executeBlockNoValidation(
       block: Block
@@ -168,8 +177,8 @@ class BlockExecution(
     }
 
   /** [[executeBlockNoValidation]] plus the EIP-7685 requests and the EIP-7928 block access list execution produced, so
-    * an import path that validates after the fact (ChainImporter) can check the header's `requestsHash` with
-    * [[validateRequestsHash]] and its `blockAccessListHash` with [[validateBlockAccessList]].
+    * a caller that validates after the fact can check the header's `requestsHash` with [[validateRequestsHash]] and its
+    * `blockAccessListHash` with [[validateBlockAccessList]].
     */
   def executeBlockNoValidationWithRequests(
       block: Block
@@ -178,7 +187,8 @@ class BlockExecution(
   ): Either[BlockExecutionError, (Seq[Receipt], BigInt, ByteString, Seq[ByteString], Option[BlockAccessList])] =
     executeBlock(block).map { result =>
       // This path writes the block's trie nodes straight through as it executes, and its caller validates and stores
-      // the block afterwards; the block's code is written here, as `persistState` wrote it before B-230.
+      // the block afterwards; the block's code is written here, as `persistState` wrote it before B-230. No import
+      // path runs it (B-455).
       writeDeployedCode(result.worldState)
       (
         result.receipts,

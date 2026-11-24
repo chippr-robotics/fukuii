@@ -713,11 +713,15 @@ class SyncControllerSpec
       refusals.incrementAndGet(); ()
     val branchRetries = new java.util.concurrent.atomic.AtomicInteger(0)
     @volatile var branchRetryFails: Option[RuntimeException] = None
+    // B-465: how many asks of the clear for the branch are refused (an adoption held the records) before one clears
+    @volatile var branchRetryRefusals = 0
+    override def branchRetryClearAgainAfter: scala.concurrent.duration.FiniteDuration =
+      scala.concurrent.duration.FiniteDuration(20, java.util.concurrent.TimeUnit.MILLISECONDS)
     def clearForBranchRetry(): Boolean =
       clearThreads.add(Thread.currentThread.getName)
-      branchRetries.incrementAndGet()
+      val ask = branchRetries.incrementAndGet()
       branchRetryFails.foreach(throw _)
-      true
+      ask > branchRetryRefusals
 
   private def escalationRequest: SyncProtocol.StateEscalationRequested =
     SyncProtocol.StateEscalationRequested(
@@ -815,6 +819,58 @@ class SyncControllerSpec
     port.counted.size() shouldBe 1
   }
 
+  // B-465 (vault): the clear for the branch is refused while an adoption holds the records. The sync is not begun
+  // again over what it wrote while that ends soon: the clear is asked for again, and the sync begun once it clears; or,
+  // when it is refused every time, begun over it after the last ask.
+  Seq(2 -> true, SyncController.BranchRetryClearAsks + 5 -> false).foreach { (refusals, clears) =>
+    it should s"ask again for a clear for the branch that was refused ($refusals refusals), then SNAP again" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in withTestSetup() { testSetup =>
+      import testSetup.*
+      import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+      import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+      import com.chipprbots.ethereum.db.storage.pathstate.StateEscalation
+      val record =
+        StateEscalation(1763236800000L, EscalationKind.Unreachable, ByteString(Array.fill[Byte](32)(0x21)), 4001)
+      val port = new EscalationPort(
+        EscalationHandler.Outcome
+          .Escalate(record, Some(GivenUpBranch(4001, record.headHash)), "a branch cannot be reached")
+      )
+      port.branchRetryRefusals = refusals
+      stateEscalation = Some(port)
+      storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      regularSyncChild(testSetup)
+      val before = snapChildren(testSetup)
+      syncController ! SyncController.WrappedSyncProtocol(escalationRequest)
+      eventually {
+        someTimePasses()
+        assert((snapChildren(testSetup) -- before).nonEmpty)
+      }
+      val first = snapChildren(testSetup)
+      storagesInstance.storages.appStateStorage
+        .putPivotOnBranch(com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch(4001, record.headHash))
+        .commit()
+      val asks = if clears then refusals + 1 else SyncController.BranchRetryClearAsks
+      val said = syncControllerLogsAtLeast(ch.qos.logback.classic.Level.WARN) {
+        syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.PivotOffTheBranch)
+        eventually {
+          someTimePasses()
+          port.branchRetries.get() shouldBe asks
+          assert((snapChildren(testSetup) -- first).nonEmpty)
+        }
+      }
+      // no sync was begun again before the last ask answered
+      someTimePasses()
+      port.branchRetries.get() shouldBe asks
+      (snapChildren(testSetup) -- first).size shouldBe 1
+      said.count(_.contains("an adoption of a heavier branch was moving the head. Asked again")) shouldBe
+        (asks - 1)
+      said.exists(_.contains("is begun again over it")) shouldBe !clears
+    }
+  }
+
   // B-307: a recovery of the state that is still executing a block keeps the clear from beginning
   it should "go on with regular sync, and count nothing, when the state could not be cleared (C5a part 7b)" taggedAs (
     UnitTest,
@@ -839,6 +895,8 @@ class SyncControllerSpec
     }
     someTimePasses()
     errors.exists(_.contains("was not cleared")) shouldBe true
+    // B-465: an adoption that held the records refuses the clear too, and the message says so
+    errors.exists(_.contains("an adoption of a heavier branch was moving the head")) shouldBe true
     port.counted.size() shouldBe 0
     port.refusals.get() shouldBe 1
     snapChildren(testSetup) shouldBe empty
@@ -1398,6 +1456,37 @@ class SyncControllerSpec
     said.head should include("1 snap-capable peer(s) on this chain (1 of them declared by the operator")
     // under the minimum, the line says so (EG-12)
     said.head should include("1 < min 2")
+  }
+
+  // B-453: the files are read once, at the start; a peer the operator adds over admin_addPeer during the wait is in the
+  // peer manager's maintained set, which the precondition reads again at each count.
+  it should "count a peer added over admin_addPeer during the wait as declared, read at each count (B-453)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    val port = new GuardPort(SyncController.SnapStartOnGuard.Begin(clearedGenesis = true))
+    port.onlyGenesis = true
+    val added = new java.util.concurrent.atomic.AtomicReference(Set.empty[ByteString])
+    port.snapPeers = port.snapPeers.copy(declared = Set.empty, added = () => added.get)
+    pathLiveSync = Some(port)
+    answerPeerPollsWith(peersOnTheChain(testSetup, n = 2, snap = 1))
+    val lines = syncControllerLines(ch.qos.logback.classic.Level.INFO) {
+      syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+      (1 to 3).foreach(_ => someTimePasses())
+      port.asked.get() shouldBe 0
+      // the operator adds the one snap peer there is, after the counts at the start were made
+      added.set(Set(nodeIdOf(1)))
+      timePasses(1.minute)
+      eventually {
+        someTimePasses()
+        assert(snapChildren(testSetup).nonEmpty)
+      }
+    }
+    val said = lines.filter(_.contains("[SNAP-PEERS] SNAP starts"))
+    said should have size 1
+    said.head should include("1 snap-capable peer(s) on this chain (1 of them declared by the operator")
+    said.head should include("admin_addPeer")
   }
 
   it should "not wait for peers, nor regular-sync from the genesis, when the node holds more than its genesis" taggedAs (
@@ -3144,6 +3233,20 @@ class SyncControllerSpec
     finally
       release.countDown()
       testSetup.cleanup()
+  }
+
+  // B-441: the JSON-RPC servers, the TUI and the MCP tools are up before StdNode sends Start, so an ask can come first.
+  // The answer is "syncing", never NotSyncing: the miner mines on NotSyncing (a lone miner), and must not before a sync
+  // that has not begun. Start still begins the sync after the ask.
+  it should "answer GetStatus before Start as syncing, not as not syncing, and still start on Start (B-441)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withRecoveryTestSetup() { testSetup =>
+    import testSetup.*
+    expectSyncingAnswer(testSetup)
+    snapChildren(testSetup) shouldBe empty
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    awaitSnapStarted(syncController)
   }
 
   // ---- a refused checkpoint archive at the start (spec 018 C5c, T292 wiring; B-380) ----------------------------------

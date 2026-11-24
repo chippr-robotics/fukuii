@@ -221,6 +221,38 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       blockchainReader.getBestBlockNumber shouldBe BigInt(1)
       storagesInstance.storages.evmCodeStorage.get(runtimeHash) shouldBe Some(runtime)
 
+    // B-466: the code, the block and its receipts are one batch on the hash store: lost whole, none of them is left.
+    // (The access list goes in the same batch on an Amsterdam block; this chain's block has none.)
+    "write the block's code, the block and its receipts in one batch, and none of them when that batch is lost" taggedAs UnitTest in new RecordingSetup:
+      val runtime: ByteString = ByteString(org.bouncycastle.util.encoders.Hex.decode("deadbeef"))
+      val runtimeHash: ByteString = crypto.kec256(runtime)
+      val deploys: CommitBlockRequest = CommitBlockRequest(
+        attrs(),
+        Some(Seq(rawTx(nonce = 0, to = None, gas = 100000, data = "63deadbeef6000526004601cf3"))),
+        Some(ByteString.empty)
+      )
+      import com.chipprbots.ethereum.db.storage.Namespaces
+      val (code, header, body, receipts) =
+        (Namespaces.CodeNamespace, Namespaces.HeaderNamespace, Namespaces.BodyNamespace, Namespaces.ReceiptsNamespace)
+      recorder.batches.clear() // the setup's own writes (its genesis) are not the block's
+      // the block's write is lost, as a kill at it would lose it
+      recorder.refuse = _.contains(header)
+      a[RecordingDataSource.Refused] should be thrownBy service.commitBlock(deploys).unsafeRunSync()
+      storagesInstance.storages.evmCodeStorage.get(runtimeHash) shouldBe None
+      recorder.batches.filter(batch => Seq(code, header, body, receipts).exists(batch.contains)) shouldBe empty
+      blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+
+      // and written, it is one batch with all four in it
+      recorder.refuse = _ => false
+      val res: CommitBlockResponse = service.commitBlock(deploys).unsafeRunSync().getOrElse(fail("commit failed"))
+      val written: List[Set[IndexedSeq[Byte]]] =
+        recorder.batches.filter(batch => Seq(code, header, body, receipts).exists(batch.contains)).toList
+      written should have size 1
+      (written.head should contain).allOf(code, header, body, receipts)
+      storagesInstance.storages.evmCodeStorage.get(runtimeHash) shouldBe Some(runtime)
+      blockchainReader.getReceiptsByHash(BlockHash(res.blockHash)).isDefined shouldBe true
+      blockchainReader.getBestBlockNumber shouldBe BigInt(1)
+
     "NOT move the head when a transaction cannot be applied" taggedAs UnitTest in new Setup:
       val res: Either[JsonRpcError, CommitBlockResponse] = service
         .commitBlock(CommitBlockRequest(attrs(), Some(Seq(rawTx(nonce = 999))), Some(ByteString.empty)))
@@ -418,6 +450,18 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
   /** Harness modelled on EngineApiGasLimitElasticitySpec: real VM, ephemeral storage, a funded genesis, and a stub
     * transaction pool that answers immediately.
     */
+  /** [[Setup]] over a data source that records the namespaces of each batch, and can lose one whole (B-466). */
+  private trait RecordingSetup extends Setup:
+    trait Recording extends com.chipprbots.ethereum.db.components.EphemDataSourceComponent:
+      override val dataSource: RecordingDataSource = new RecordingDataSource
+    override lazy val storagesInstance
+        : com.chipprbots.ethereum.db.components.EphemDataSourceComponent & LocalPruningConfigBuilder & com.chipprbots.ethereum.db.components.Storages.DefaultStorages =
+      new Recording
+        with LocalPruningConfigBuilder
+        with com.chipprbots.ethereum.db.components.Storages.DefaultStorages
+        with com.chipprbots.ethereum.TestInstanceConfigProvider
+    def recorder: RecordingDataSource = storagesInstance.dataSource.asInstanceOf[RecordingDataSource]
+
   private trait Setup extends EphemBlockchainTestSetup:
 
     implicit override def blockchainConfig: BlockchainConfig =
