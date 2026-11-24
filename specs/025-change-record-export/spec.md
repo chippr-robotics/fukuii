@@ -39,7 +39,7 @@ Four consumers need the same per-block facts and none can get them today:
 
 - **Followers** (026) need, per canonical block, every state change with enough information to apply it and verify
   the resulting root.
-- **The Chain Intelligence indexer** (separate service, Scala 3 on Kafka/Flink) needs headers, receipts, logs and
+- **Downstream consumers** (separate services, such as an indexer) need headers, receipts, logs and
   state diffs with explicit reorg and finality semantics, so derived tables (historical balances) are exact.
 - **The `archive` role** (026) needs the same stream to retain every block's state.
 - **Rollback** inside the node (018 FR-010) needs the previous value of every key a block changed.
@@ -50,7 +50,7 @@ execution's in-memory world (`InMemoryWorldStateProxy.scala:184-196`: pending ac
 codes, touched accounts), which is discarded after persist; and 018's planned changeset store, which records
 **previous** values of trie nodes and flat keys for rollback, without `chainKey` or a schema version. Spec 018 Track H
 also plans a `ColdStore` whose first adapter writes ClickHouse directly from the node, which would make the node a
-second writer to the analytics schema.
+writer to an external analytics store.
 
 The write set is the record. Because it exists on today's storage layout, the exporter does not wait for spec 018's
 engine or flat-layout work (alignment review §2).
@@ -68,8 +68,8 @@ engine or flat-layout work (alignment review §2).
 
 ## Non-goals
 
-- The indexer's schemas, tables and correlation logic.
-- Historical balance tables (derived by the indexer from these records).
+- Downstream consumers' schemas, tables and processing.
+- Historical balance tables (derived by downstream consumers from these records).
 - Transport-level multi-tenancy, ACLs or encryption policy on the broker (deployment; Orbita or the platform).
 - Changing any consensus output. The exporter is an observer of committed state.
 - Exporting pre-sync history on first start (backfill of blocks the node imported before the exporter existed is
@@ -150,7 +150,7 @@ or an unavailable broker produces **lag** (a metric) and durable buffering (FR-0
 health signal (023 FR-004 `sourceLag` on the consumer side; an `exportLag` gauge here); import continues.
 
 **DC-7: The node writes no analytics store.** The only sink the node writes is the record topic (and the file sink in
-tests). ClickHouse or any other analytics database is written by the indexer from the records (018 amendment request
+tests). Any analytics database is written by downstream consumers from the records (018 amendment request
 3). 018's `ColdStore` *read* adapter is unaffected.
 
 **DC-8: Consensus-neutral.** The exporter reads committed state and committed changesets. It adds no step to block
@@ -290,7 +290,7 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
 - **023 fleet-topology**: fence (FR-005 there) stops export; health shape carries FR-006 fields.
 - **024 chain-registry**: `finalityRule`, `chainKey`, `chainId`.
 - **026 follower-roles**: the primary in-house consumer; DC-2's root check is 026 DC-1.
-- **Chain Intelligence** (separate service): the primary external consumer.
+- **Downstream consumers** (separate services): the external consumers of the records.
 
 ## Known tasks (seed for `/speckit-tasks`)
 

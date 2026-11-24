@@ -2,8 +2,8 @@
 
 **Date**: 2026-10-30. **Tree**: `staging` 9e003ab (0.10.18). **Scope**: every candidate spec after 016, read against
 the end goal recorded in [spec 023](./spec.md): a fleet of single-role fukuii processes per chain (`ingest`, `replica`,
-`archive`, `sim`), a per-block change-record stream on Kafka, an indexer that owns analytics, Orbita as the control
-plane. **Output**: per-spec verdicts, the amendments each needs (applied to 023–026, which are unimplemented drafts
+`archive`, `sim`), a per-block change-record stream on Kafka, downstream consumers that own analytics, Orbita as the
+control plane. **Output**: per-spec verdicts, the amendments each needs (applied to 023–026, which are unimplemented drafts
 from this sprint; recorded as *pending* on 013, 017 and 018; sequencing-only for 019–022), and a sequenced plan.
 Decisions that are the user's are collected in §5.
 
