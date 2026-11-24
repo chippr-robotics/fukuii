@@ -1828,18 +1828,14 @@ items:
   - id: B-199
     title: Cap Hello clientId length at decode (today bounded only by the 16 MiB message cap)
     priority: P3
-    status: review
+    status: done
     area: p2p
     size: S
     opened: 2026-11-11
+    closed: 2026-11-24
     refs: ["prism review of 027 slice 4, 2026-11-10"]
     links:
       prs: [2084]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T13:16:09Z
-      heartbeat: 2026-11-24T13:16:36Z
     notes: "WireProtocol.scala:50 decodes clientId unbounded; NodeClientType.recognize (NetworkPeerManagerActor.scala:748) lowercases it in full and Hello.toString quotes it. A cap at decode (geth: none; devp2p norm well under 1 KiB) removes the class for every consumer. herald owns."
   - id: B-200
     title: Grafana dashboards query *_total names the Prometheus exporter does not expose for gauges (e.g. app_engine_newpayload_total)
