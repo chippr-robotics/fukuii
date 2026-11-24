@@ -2430,7 +2430,7 @@ items:
       2026-11-18: #1928 fixed a race in #1923's close-during-compaction test (it waited 30 s when close() started late on CI); no production change.
   - id: B-284
     title: "PoW tie rule: on equal total difficulty core-geth prefers the lower number then random; fukuii keeps its head (strict >)"
-    priority: P3
+    priority: P2
     status: open
     area: evm
     size: S
@@ -2440,6 +2440,7 @@ items:
     notes: |-
       Recorded by forge at spec 018 C4e; pre-existing on both layouts; a decision, not a defect to fix silently.
       2026-11-24 user 2026-11-24: adopt core-geth's tie rule (equal TD: lower number, then random); consensus protocol, forge first
+      2026-11-24 priority P3->P2 by cloud-719c6644: user decided to adopt core-geth's tie rule; consensus change now scheduled
   - id: B-285
     title: StorageConsistencyChecker never reads the best block's own entry, and best.intValue wraps past 2^31-1
     priority: P3
