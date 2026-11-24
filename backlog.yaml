@@ -2942,23 +2942,19 @@ items:
   - id: B-338
     title: One import result for both partial arms (extension and reorganisation) that blames the invalid block's peer and updates the pool
     priority: P3
-    status: review
+    status: done
     area: sync
     size: M
     opened: 2026-11-17
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2080]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T09:53:40Z
-      heartbeat: 2026-11-24T12:51:08Z
     notes: |-
-      2026-11-24 in-progress: pushed 1af6249ed9; beacon review (ETH regular sync impact)
       2026-11-24 in-progress: beacon APPROVE (ETH) on condition B-460 lands with it; round 2 after #2069 merges: rebase, madeTheHead in partial arms, queue test, gas-used extension report test
       2026-11-24 in-progress: round 2 pushed 57aafeda72 (B-338+B-509+B-513), B-460 6b0f77ce41 (B-460+B-514+B-515); round 3: post-merge blame consistency + importer pool reset from shared head
+      2026-11-24 done: merged b95b59db5e
   - id: B-339
     title: SecureRandomBuilder reads secure-random-algo from the global ConfigFactory.load(), not the instance config
     priority: P3
