@@ -1156,7 +1156,7 @@ class ConsensusImpl(
                   newBranch.head.number,
                   newBranch.last.number
                 )
-                SelectedNewBestBranch(Nil, executed.map(_.block), executed.map(_.weight))
+                SelectedNewBestBranch(Nil, executed.map(_.block), executed.map(_.weight), executed.size)
               case None => superseded()
               case Some(moved) =>
                 log.info(
@@ -1257,7 +1257,13 @@ class ConsensusImpl(
     maybeError match
       case None =>
         val told = newBranchTold(sideParents ++ executedBlocks)
-        SelectedNewBestBranch(oldBranchTold(oldCanonical), told.map(_.block), told.map(_.weight))
+        // the branch's own blocks are the last told: the side blocks it stands on come first, and are cut first
+        SelectedNewBestBranch(
+          oldBranchTold(oldCanonical),
+          told.map(_.block),
+          told.map(_.weight),
+          math.min(executedBlocks.size, told.size)
+        )
 
       case Some(MPTError(reason: MissingNodeException)) =>
         log.error(
@@ -1330,7 +1336,7 @@ class ConsensusImpl(
     importResult match
       case ExtendedCurrentBestBranch(blockImportData) =>
         blockImportData.foreach(blockData => BlockMetrics.measure(blockData.block, blockchainReader.getBlockByHash))
-      case SelectedNewBestBranch(_, newBranch, _) =>
+      case SelectedNewBestBranch(_, newBranch, _, _) =>
         newBranch.foreach(block => BlockMetrics.measure(block, blockchainReader.getBlockByHash))
       case SelectedNewBestBranchPartially(_, newBranch, _, _) =>
         newBranch.foreach(block => BlockMetrics.measure(block, blockchainReader.getBlockByHash))
@@ -1512,7 +1518,9 @@ class ConsensusImpl(
   private def newBranchToldAtMost: Int = math.max(1, oldBranchToldAtMost)
 
   /** What of the blocks that became canonical with a reorganisation is told (oldest first, the new head last): to the
-    * subscribers of new heads, one each, and to the pool, whose copies of their transactions are dropped.
+    * pool, whose copies of their transactions are dropped, and, for those of the branch executed in this call only
+    * (`branchBlocks`), to the subscribers of new heads, one each; a stored side block made canonical gets no new-head
+    * event, as core-geth sends a chain event only for a block it inserts (B-344).
     *
     * '''Bounded''' (B-344), as the old branch is ([[oldBranchTold]]): at most the `oldBranchToldAtMost` nearest the new
     * head, at least the new head itself. A branch that stands on thousands of side blocks is not told block by block;
@@ -1524,8 +1532,8 @@ class ConsensusImpl(
     val told = newCanonical.takeRight(newBranchToldAtMost)
     if told.size < newCanonical.size then
       log.warn(
-        "REORG: {} block(s) became canonical, {} to {}; the {} nearest the new head are told to new-head subscribers " +
-          "and the pool, the {} below are not",
+        "REORG: {} block(s) became canonical, {} to {}; the {} nearest the new head are told to the pool (and those " +
+          "executed now to new-head subscribers), the {} below are not",
         newCanonical.size,
         newCanonical.head.block.number,
         newCanonical.last.block.number,

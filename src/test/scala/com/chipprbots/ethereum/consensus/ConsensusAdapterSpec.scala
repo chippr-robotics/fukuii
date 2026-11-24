@@ -235,7 +235,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       _ shouldEqual BlockEnqueued
     )
     whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock2).unsafeToFuture()) { result =>
-      result shouldEqual ChainReorganised(oldBranch, newBranch, List(newWeight2, newWeight3))
+      result shouldEqual ChainReorganised(oldBranch, newBranch, List(newWeight2, newWeight3), 2)
     }
 
     // Saving new blocks, because it's part of executeBlocks method mechanism
@@ -435,7 +435,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       _ shouldEqual BlockEnqueued
     )
     whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock3WithOmmer).unsafeToFuture()) { result =>
-      result shouldEqual ChainReorganised(oldBranch, newBranch, List(newWeight2, newWeight3))
+      result shouldEqual ChainReorganised(oldBranch, newBranch, List(newWeight2, newWeight3), 2)
     }
 
     // Saving new blocks, because it's part of executeBlocks method mechanism

@@ -121,7 +121,12 @@ class BlockImporterMetricsSpec extends WordSpecBase with Matchers with AsyncMock
         setImportResult(
           block,
           IO.sleep(30.millis) *> IO.pure(
-            ChainReorganised(oldBranch, newBranch, newBranch.map(b => ChainWeight.totalDifficultyOnly(b.number.value)))
+            ChainReorganised(
+              oldBranch,
+              newBranch,
+              newBranch.map(b => ChainWeight.totalDifficultyOnly(b.number.value)),
+              newBranch.size
+            )
           )
         )
         RegularSyncMetrics.clearLastImport()

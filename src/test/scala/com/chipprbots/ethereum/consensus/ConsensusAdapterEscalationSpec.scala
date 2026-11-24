@@ -114,7 +114,11 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     val corrupt = new ReorgTooDeep(ReorgRefusal.Corrupt, "a record is not what it should be")
     Seq[(String, NonEmptyList[Block] => ConsensusResult, Class[?])](
       ("extension", blocks => ExtendedCurrentBestBranch(blocks.toList.map(data)), classOf[BlockImportedToTop]),
-      ("reorganisation", blocks => SelectedNewBestBranch(Nil, blocks.toList, Nil), classOf[ChainReorganised])
+      (
+        "reorganisation",
+        blocks => SelectedNewBestBranch(Nil, blocks.toList, Nil, blocks.size),
+        classOf[ChainReorganised]
+      )
     ).foreach { case (how, moved, answer) =>
       withClue(s"$how: ") {
         var refuse = true

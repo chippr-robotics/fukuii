@@ -177,7 +177,7 @@ class ChainImporter(
       forkChoice.get(block, blockchainConfig).unsafeRunSync()(using IORuntime.global) match
         case BlockImportedToTop(data) =>
           LenientOutcome.Imported(data.size)
-        case ChainReorganised(_, newBranch, _) =>
+        case ChainReorganised(_, newBranch, _, _) =>
           log.info(s"Chain import: block $blockNum reorganised to a heavier branch of ${newBranch.size} block(s)")
           LenientOutcome.Imported(newBranch.size)
         case BlockEnqueued | DuplicateBlock =>

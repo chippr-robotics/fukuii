@@ -1,6 +1,9 @@
 package com.chipprbots.ethereum.blockchain.sync.regular
 import org.apache.pekko.actor.ActorRef
+import org.apache.pekko.actor.testkit.typed.FishingOutcome
+import org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe as TypedTestProbe
 import org.apache.pekko.actor.typed.ActorRef as TypedActorRef
+import org.apache.pekko.actor.typed.pubsub.Topic
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestActor.AutoPilot
 import org.apache.pekko.testkit.TestProbe
@@ -47,6 +50,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
+import com.chipprbots.ethereum.jsonrpc.NewBlockImported
 import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.mpt.BranchNode
 import com.chipprbots.ethereum.mpt.HashNode
@@ -3353,17 +3357,23 @@ class RegularSyncSpec
 
     // B-297 (forge): a reorganisation on the unified layout tells the side blocks it stands on too. B-344 (the user's
     // decision of 2026-11-23, core-geth): peers are told of the new head only, with its own total difficulty, never
-    // another block's (two lists combined by `mapN` were every pairing); the pool is told of every block told.
+    // another block's (two lists combined by `mapN` were every pairing); the pool is told of every block told; new-head
+    // subscribers are told of the blocks the import executed only, not of a stored side block it made canonical.
     "broadcasting blocks told together" should {
-      "send the new head only, with its own total difficulty, and tell the pool of every block" in sync(
+      "send the new head only, with its own total difficulty, tell the pool of every block and subscribers of the executed" in sync(
         new OnTopFixture:
+          val newHeads: TypedTestProbe[Topic.Command[NewBlockImported]] =
+            testKit.createTestProbe[Topic.Command[NewBlockImported]]()
+          override lazy val blockTopic: TypedActorRef[Topic.Command[NewBlockImported]] = newHeads.ref
           val sideParent: Block = BlockHelpers.generateBlock(testBlocks.init.last)
           val told: Block = BlockHelpers.generateBlock(sideParent)
           override def newBlockResult: BlockImportResult =
             ChainReorganised(
               Nil,
               List(sideParent, told),
-              List(ChainWeight.totalDifficultyOnly(1111), ChainWeight.totalDifficultyOnly(2222))
+              List(ChainWeight.totalDifficultyOnly(1111), ChainWeight.totalDifficultyOnly(2222)),
+              // `told` was executed by this import; `sideParent` is a stored side block the branch stands on
+              branchBlocks = 1
             )
           goToTop()
 
@@ -3390,6 +3400,16 @@ class RegularSyncSpec
           toThePool.count(
             _.isInstanceOf[com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions]
           ) shouldBe 2
+          // a new-head event for the executed head, none for the side parent (core-geth's chain event); the events
+          // before are goToTop's own imports
+          // compared by equality: the message Topic.Publish builds has no public extractor
+          val ofTheHead: Topic.Command[NewBlockImported] = Topic.Publish(NewBlockImported(told))
+          val published: Seq[Topic.Command[NewBlockImported]] = newHeads.fishForMessage(5.seconds) { message =>
+            if message == ofTheHead then FishingOutcome.Complete else FishingOutcome.Continue
+          }
+          published.last shouldBe ofTheHead
+          published should not contain Topic.Publish(NewBlockImported(sideParent))
+          newHeads.expectNoMessage(1.second)
       )
     }
 

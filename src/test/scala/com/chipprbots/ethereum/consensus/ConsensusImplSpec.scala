@@ -121,7 +121,7 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       )
 
     whenReady(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(newBetterBranch)).unsafeToFuture()) {
-      case SelectedNewBestBranch(oldBranch, newBranch, weights) =>
+      case SelectedNewBestBranch(oldBranch, newBranch, weights, _) =>
         oldBranch shouldBe initialChain.takeRight(2)
         newBranch shouldBe newBetterBranch.takeRight(2)
         weights.size shouldBe 2
