@@ -1796,17 +1796,18 @@ items:
   - id: B-197
     title: eth_getBalance on pruned state answers code 3 "Execution error" (the revert code); geth answers missing state with -32000
     priority: P3
-    status: claimed
+    status: review
     area: rpc
     size: S
     opened: 2026-11-10
     refs: ["#1655 part 2, 2026-11-10"]
-    links: {}
+    links:
+      prs: [2078]
     claim:
       by: cloud-719c6644
       agent: conduit
       since: 2026-11-24T11:48:42Z
-      heartbeat: 2026-11-24T11:48:42Z
+      heartbeat: 2026-11-24T12:18:29Z
       branch: fix/b025-rpc-error-status-codes
     notes: fukuii returns {code:3, message:Execution error, data:[{code:100, message:State node doesn't exist}]} for a block 335 back on a pruned Ephemery node. Code 3 means execution reverted; geth uses -32000 (missing trie node / historical state not available). conduit owns.
   - id: B-198
