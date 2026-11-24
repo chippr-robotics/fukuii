@@ -4229,7 +4229,7 @@ items:
   - id: B-448
     title: "Batch imports (tryImportBlocks) tell no one: no newHeads event, pool removal or announce for BlockImportedToTop or ChainReorganised"
     priority: P2
-    status: claimed
+    status: in-progress
     area: sync
     opened: 2026-11-23
     refs: []
@@ -4239,7 +4239,7 @@ items:
       by: cloud-dc960fdc
       agent: forge-b448
       since: 2026-11-24T01:54:16Z
-      heartbeat: 2026-11-24T01:54:31Z
+      heartbeat: 2026-11-24T01:54:38Z
     notes: "forge-b344: BlockImporter.tryImportBlocks handles ChainReorganised/BlockImportedToTop with progress and strikes only; only importBlock (NewBlock/mined path) and announceAdopted publish NewBlockImported, update the pool and broadcast. Check against B-245 (Engine API newHeads); core-geth insertChain posts ChainEvent per canonical block."
   - id: B-449
     title: RegularSyncSpec 'ask again for ancestor bodies ... within the deadline' fails in testOnly *RegularSync* once a test is added before it (timing)
