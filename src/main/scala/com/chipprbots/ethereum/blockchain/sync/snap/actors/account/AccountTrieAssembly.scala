@@ -8,6 +8,8 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
+import scala.util.Try
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
 import com.chipprbots.ethereum.blockchain.sync.snap.AccountTask
@@ -248,25 +250,29 @@ private[actors] trait AccountTrieAssembly:
       else
         // Mark task done / re-enqueue BEFORE potentially spawning async flush — so the
         // task tracking is up to date by the time we re-enter `receive` after flushing.
-        storingTasks.remove(task.last)
         if isTaskRangeComplete then
-          completedTasks += task.copy(done = true)
           // On the StackTrie path, the task's per-range StackTrie has accumulated all of
           // this range's accounts; commit it to finalise the right boundary and flush the
           // remaining pending batch to RocksDB. The fragment root is logged for diagnostics
           // — it does NOT match the pivot's claimed root (each task produces only a
           // partial trie); healing reconciles fragments against the pivot root.
-          taskStackTries.remove(task.last).foreach { trie =>
-            val fragmentRoot = trie.commit()
+          // The commit comes first, and the trie stays registered until it returns: a range whose final flush fails is
+          // not marked complete, and the catch below can still reset its trie (B-190).
+          val fragmentRoot = taskStackTries.get(task.last).map(_.commit())
+          taskStackTries.remove(task.last)
+          storingTasks.remove(task.last)
+          completedTasks += task.copy(done = true)
+          fragmentRoot.foreach { root =>
             log.info(
               s"Account range COMPLETE: ${task.rangeString} " +
                 s"(${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total, " +
-                s"fragment root ${fragmentRoot.take(4).toArray.map("%02x".format(_)).mkString})"
+                s"fragment root ${root.take(4).toArray.map("%02x".format(_)).mkString})"
             )
           }
           // Durable checkpoint: a completed range is the most valuable progress to keep.
           sendProgressSnapshot(durableRequested = true)
         else
+          storingTasks.remove(task.last)
           // Need more requests for the same interval; re-queue with updated `next`. Re-tag with the CURRENT root: a
           // pivot refresh while this response was being stored re-tagged pendingTasks only, not this task.
           pendingTasks.enqueue(task.copy(rootHash = stateRoot))
@@ -282,11 +288,30 @@ private[actors] trait AccountTrieAssembly:
         log.debug(s"Stored all $totalCount accounts via StackTrie ($accountsDownloaded total)")
         ctx.self ! CheckCompletion
     catch
-      case e: Exception =>
-        log.error(s"Failed to store account chunk: ${e.getMessage}", e)
-        // Re-queue task for retry
-        storingTasks.remove(task.last)
-        pendingTasks.enqueue(task.copy(pending = false, done = false))
+      case NonFatal(e) =>
+        // A local fault (B-190): a RocksDB write in the trie's flush or the Path node callbacks, an out-of-order key, or a
+        // missing Path node store. Nothing a peer sent, so no retry. The task's cursor is already past this whole
+        // response (AccountTaskLifecycle advances `next` before the store), so re-queueing it, as this did, skipped the
+        // failed chunk and the unsent rest for good, and the range could still complete with a hole that its committed
+        // fragment claims is whole (spec 022's present-means-complete). Drop the range's trie and stop the run instead:
+        // the controller restarts SNAP (AccountTrieFinalizationFailed), as geth stops on a failed account write
+        // (snap/sync.go forwardAccountTask: log.Crit "Failed to persist accounts").
+        log.error(
+          s"Failed to store account chunk of ${task.rangeString} (${storedSoFar} of $totalCount stored); " +
+            "stopping the account phase",
+          e
+        )
+        // The range stays in storingTasks, with its cursor back at the first account not stored: it still has work, so
+        // the coordinator does not complete without it (isComplete reads tasksWithWork), and a snapshot taken before
+        // the restart records where the range resumes rather than leaving it out, which a resume would read as done
+        // (ResumePolicy.fillResumeLayout). Nothing chains another StoreAccountChunk for it, so it waits for the restart.
+        val firstUnstored = remaining.headOption.map(_._1).getOrElse(task.next)
+        storingTasks.update(task.last, task.copy(next = firstUnstored, pending = false, done = false))
+        // Best effort: on Path, reset deletes the right-boundary stubs through the store that may just have failed.
+        taskStackTries.remove(task.last).foreach(trie => Try(trie.reset()))
+        snapSyncController ! SNAPSyncController.AccountTrieFinalizationFailed(
+          s"account store failed for ${task.rangeString} after $storedSoFar of $totalCount accounts: ${e.getMessage}"
+        )
 
   /** Get-or-create the per-task [[SnapTrie]] for the StackTrie path. Each task gets its own streaming trie keyed by
     * `task.last` (the end-of-range boundary, unique per task).
