@@ -5510,3 +5510,16 @@ items:
     refs: ["forge, #2101 review"]
     links: {}
     notes: "Found by forge while fixing the ETC Olympia activation base fee in #2101 (which uses BaseFeeCalculator.calcBaseFee). ETH path: beacon. Reuse calcBaseFee as #2101 does for ETC; test a simulated block at London activation."
+  - id: B-520
+    title: "Exit paths run the node's stop on daemon threads (TUI q, SIGTERM, Ephemery reset): the JVM ends after the actor system step, before the DB close"
+    priority: P1
+    status: open
+    area: node
+    size: S
+    opened: 2026-11-24
+    refs: [B-452, B-426, "sync reports v0.12.117, 2026-11-23/24"]
+    links: {}
+    notes: |-
+      TuiQuit inherits daemon from TuiUpdateThread (TuiUpdater.scala:46,87); the JVM's SIGTERM handler thread and ephemery-reset-watchdog are daemons. Once the actor system step ends Pekko's threads, the JVM exits (status 0) and the hook leaves the stop under way.
+      Seen on both q quits of v0.12.117 (Mordor 6 GB, ETC mainnet 44 GB): 13 of 15 steps, no metrics or DB close, 239 MB of WAL to replay. Unchanged on staging 0.12.164. SIGTERM checked on JDK 21: handler thread is a daemon, the JVM exits 0 mid-stop.
+      Fix: start stopThenExit on a thread made non-daemon (setDaemon(false)) on all three paths, and set stopThenExitAside's thread non-daemon explicitly (it inherits today); a test asserts the stop's thread is not a daemon.
