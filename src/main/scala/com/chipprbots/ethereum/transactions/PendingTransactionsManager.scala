@@ -50,21 +50,17 @@ object PendingTransactionsManager:
   /** How far a delivered tx's size may differ from its announced size before the peer counts as lying about it. */
   private[transactions] val AnnouncedSizeSlackBytes: Int = 8
 
-  /** The most hashes one GetPooledTransactions asks for: go-ethereum's `maxTxRetrievals` (eth/fetcher/tx_fetcher.go,
-    * 256 at c6e3a0d7, 2026-09-23), "a failsafe against malicious announces which might cause us to request more data
-    * than we'd expect". The hashes a peer has announced (at most [[MaxTxAnnounces]] tracked at once) are all requested,
-    * in batches of at most this many, so a reply (and the per-tx work on it) is bounded by our request.
-    */
-  private[transactions] val MaxTxRetrievals: Int = 256
+  /** The most hashes one GetPooledTransactions asks for: [[PendingAnnouncements.MaxTxRetrievals]]. */
+  private[transactions] val MaxTxRetrievals: Int = PendingAnnouncements.MaxTxRetrievals
 
   /** The most announced hashes tracked for one peer at a time: go-ethereum's `maxTxAnnounces`
     * (eth/fetcher/tx_fetcher.go, 4096 at c6e3a0d7), "the maximum number of unique transaction a peer can announce in a
     * short time". The excess of an announcement is dropped before it is tracked or requested.
     *
     * Without it, one announcement is bounded only by the message size (`MessageCodec.MaxDecompressedLength`, 16 MiB:
-    * hundreds of thousands of hashes), not by `announcement-max-entries`: [[PendingAnnouncements.announce]] asks for
-    * every new hash, including those a later hash of the same announcement then evicts. Counted as go-ethereum's `used`
-    * does ([[PendingAnnouncements.announcedBy]]): hashes requested from the peer and hashes it is an alternate for.
+    * hundreds of thousands of hashes), not by `announcement-max-entries`: every new hash is tracked, including those a
+    * later hash of the same announcement then evicts. Counted as go-ethereum's `used` does
+    * ([[PendingAnnouncements.announcedBy]]): hashes requested from the peer and hashes it is an alternate for.
     */
   private[transactions] val MaxTxAnnounces: Int = 4096
 
@@ -377,6 +373,11 @@ object PendingTransactionsManager:
         clock
       )
 
+    /** Peers that answered while tx gossip was off: the requests they would have been sent next, asked for once gossip
+      * is back (the next fetch-timeout tick after it reopens), never while it is off.
+      */
+    var fetchWhenGossipResumes: Set[PeerId] = Set.empty
+
     /** Announce transaction hashes to connected peers via NewPooledTransactionHashes. */
     def notifyPeersOfTransactions(txs: Seq[SignedTransaction], peers: Seq[Peer]): Unit =
       if txs.nonEmpty && peers.nonEmpty then
@@ -453,28 +454,24 @@ object PendingTransactionsManager:
           used,
           MaxTxAnnounces
         )
-      val toRequest = tracked.collect {
-        case (hash, txType, size) if pendingAnnouncements.announce(hash, txType, size, peerId) => hash
-      }
-      if toRequest.nonEmpty then requestPooledTransactions(peerId, toRequest)
+      tracked.foreach { case (hash, txType, size) => pendingAnnouncements.announce(hash, txType, size, peerId) }
+      fetchFrom(Seq(peerId), "announced")
 
-    /** Ask `peerId` for `hashes`, at most [[MaxTxRetrievals]] per request. Every hash is already recorded as requested
-      * from `peerId` ([[PendingAnnouncements.announce]]), so none may be left out: the excess goes in further requests.
+    /** Send each of `peers` its next GetPooledTransactions, if it has none in flight and something to fetch
+      * ([[PendingAnnouncements.schedule]]: one request per peer, at most [[MaxTxRetrievals]] hashes and 128 KiB of
+      * announced txs, B-028).
       */
-    def requestPooledTransactions(peerId: PeerId, hashes: Seq[ByteString]): Unit =
-      metrics.fetchRequested(hashes.size)
-      hashes.grouped(MaxTxRetrievals).foreach { batch =>
-        networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
-          ETHPackets.GetPooledTransactions(ETHPackets.nextRequestId, batch),
-          peerId
-        )
-      }
-
-    /** Send the requests that moved to another announcer (its predecessor timed out, was dropped or disconnected). */
-    def requestFromAlternates(reassigned: Map[PeerId, Seq[ByteString]], why: String): Unit =
-      reassigned.foreach { case (peerId, hashes) =>
-        context.log.debug("Requesting {} announced tx(s) from alternate peer {} ({})", hashes.size, peerId, why)
-        requestPooledTransactions(peerId, hashes)
+    def fetchFrom(peers: Iterable[PeerId], why: String): Unit =
+      peers.foreach { peerId =>
+        val requestId = ETHPackets.nextRequestId
+        val hashes = pendingAnnouncements.schedule(peerId, requestId)
+        if hashes.nonEmpty then
+          context.log.debug("Requesting {} announced tx(s) from peer {} ({})", hashes.size, peerId, why)
+          metrics.fetchRequested(hashes.size)
+          networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
+            ETHPackets.GetPooledTransactions(requestId, hashes),
+            peerId
+          )
       }
 
     /** Update pendingNonces high-water mark for accepted transactions. */
@@ -628,6 +625,8 @@ object PendingTransactionsManager:
           val hash = t.tx.hash.value
           if poolAdmits(t, checked, senderIndex) then
             putPooled(PendingTransaction(t, timestamp))
+            // Held now: no announcement of it is fetched again, whoever announced it (B-028 review).
+            if pool.containsKey(hash) then pendingAnnouncements.remove(hash)
             // Not built yet: the build will read this tx from the pool.
             if pool.containsKey(hash) then senderIndex.flatMap(_.built).foreach(_.add(t.senderAddress, hash, t.tx.tx))
             blobSidecars.get(hash).foreach(storeSidecar(hash, _))
@@ -731,6 +730,7 @@ object PendingTransactionsManager:
       val timestamp = System.currentTimeMillis()
       val newPendingTx = SignedTransactionWithSender(newStx, newStxSender)
       putPooled(PendingTransaction(newPendingTx, timestamp, receivedFromLocalSource = true))
+      pendingAnnouncements.remove(newStx.hash.value)
       blobRawBytesOpt.foreach(raw => storeSidecar(newStx.hash.value, raw))
       updatePendingNonces(Seq(newPendingTx))
       pendingTxTopic ! Topic.Publish(NewPendingTransaction(newPendingTx))
@@ -752,8 +752,9 @@ object PendingTransactionsManager:
       case WrappedPeerEvent(PeerEvent.PeerDisconnected(peerId)) =>
         connectedPeers -= peerId
         connectedPeerCapabilities -= peerId
+        fetchWhenGossipResumes -= peerId
         // Its outstanding requests will never be answered: ask the peers that also announced those txs.
-        requestFromAlternates(pendingAnnouncements.removePeer(peerId), "requester disconnected")
+        fetchFrom(pendingAnnouncements.removePeer(peerId), "requester disconnected")
         Behaviors.same
 
       case FetchTimeoutTick =>
@@ -762,7 +763,10 @@ object PendingTransactionsManager:
         val unansweredBefore = pendingAnnouncements.unansweredRequests
         val timedOut = pendingAnnouncements.timedOut()
         metrics.fetchTimedOut((pendingAnnouncements.unansweredRequests - unansweredBefore).toInt)
-        requestFromAlternates(timedOut, "request timed out")
+        fetchFrom(timedOut, "request timed out")
+        if fetchWhenGossipResumes.nonEmpty && txGossipGate.acceptTxs then
+          fetchFrom(fetchWhenGossipResumes, "tx gossip resumed")
+          fetchWhenGossipResumes = Set.empty
         Behaviors.same
 
       case AddUncheckedTransactions(transactions) =>
@@ -897,14 +901,28 @@ object PendingTransactionsManager:
             peerManager ! PeerManagerActor.DisconnectPeerFireAndForgetCmd(peerId)
             // Nothing it sent is taken, so the txs are still wanted: ask the other announcers now rather than when its
             // PeerDisconnected arrives (only after the disconnect-poison-pill-timeout).
-            requestFromAlternates(pendingAnnouncements.removePeer(peerId), "requester dropped")
+            fetchFrom(pendingAnnouncements.removePeer(peerId), "requester dropped")
           case None =>
-            msg.txs.foreach(stx => pendingAnnouncements.remove(stx.hash.value))
+            // Its one request is answered: what it left out it does not have, and it may be asked for more (B-028).
+            fetchFrom(
+              pendingAnnouncements.delivered(peerId, msg.requestId, msg.txs.map(_.hash.value)),
+              "request answered"
+            )
             // Sidecars travel with the txs and are kept only for those admitted (see `blobTxNetworkBytes`).
             val validTxs = SignedTransactionWithSender.getSignedTransactions(msg.txs, headTimestamp())
             if validTxs.nonEmpty then
               admit(validTxs.toSet, msg.blobTxRawBytes)
               setPooledTxsKnown(validTxs, peerId)
+        Behaviors.same
+
+      // A reply while the node is not taking peer txs: nothing in it is taken, but it answers the peer's one request in
+      // flight, which must not keep the peer busy for good (B-028). What it was asked for is given up; the peers that
+      // could be asked next are asked once gossip is back, never while it is off.
+      case WrappedPeerEvent(
+            com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
+              .MessageFromPeer(msg: ETHPackets.PooledTransactions, peerId)
+          ) =>
+        fetchWhenGossipResumes ++= pendingAnnouncements.delivered(peerId, msg.requestId, Nil)
         Behaviors.same
 
       // The pool's size without a copy of it (B-196): what a once-a-second watcher needs.
