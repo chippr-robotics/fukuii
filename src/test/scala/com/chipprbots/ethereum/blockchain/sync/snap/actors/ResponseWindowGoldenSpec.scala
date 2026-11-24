@@ -1,8 +1,6 @@
 package com.chipprbots.ethereum.blockchain.sync.snap.actors
 
 import java.net.InetSocketAddress
-import java.util.concurrent.LinkedBlockingQueue
-import java.util.concurrent.TimeUnit
 
 import org.apache.pekko.actor.testkit.typed.scaladsl.ActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.BehaviorTestKit
@@ -15,18 +13,14 @@ import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
-import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
-import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.AppenderBase
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
-import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapLogCapture
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator.Command
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.AccountPeerDispatch
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.account.StubAccountPeerDispatchState
@@ -79,64 +73,24 @@ class ResponseWindowGoldenSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
   private def peer(id: String): Peer =
     Peer(PeerId(id), new InetSocketAddress("127.0.0.1", 30303), TestInbox[PeerActor.Command]().ref, false)
 
-  /** Every line the `snap` package logs while open, with its level (DEBUG and up), without printing it. A local
-    * appender rather than `SnapLogCapture`, which keeps the message only and so cannot pin the level.
+  /** Every line the `snap` package logs while open, with its level (DEBUG and up), without printing it: a
+    * [[SnapLogCapture]], which also takes the DEBUG lines of loggers levelled explicitly above it (the
+    * TrieNodeHealingCoordinator is at INFO in `logback-test.xml`).
     */
   final private class LevelCapture extends AutoCloseable:
-    private val logger =
-      LoggerFactory.getLogger("com.chipprbots.ethereum.blockchain.sync.snap").asInstanceOf[LogbackLogger]
-    private val previousLevel: Level = logger.getLevel
-    private val previousAdditive: Boolean = logger.isAdditive
-    private val events = new LinkedBlockingQueue[(Level, String)]()
-
-    private val appender = new AppenderBase[ILoggingEvent]:
-      override def append(event: ILoggingEvent): Unit = events.put((event.getLevel, event.getFormattedMessage))
-
-    appender.setContext(logger.getLoggerContext)
-    appender.start()
-    logger.addAppender(appender)
-    logger.setLevel(Level.DEBUG)
-    logger.setAdditive(false)
-
-    // `logback-test.xml` pins some loggers under the package explicitly (the TrieNodeHealingCoordinator at INFO), and an
-    // explicit level beats the parent's, so a DEBUG line from the actor would be dropped. Raise every explicitly
-    // levelled logger under the package, and the coordinator's own names whether or not they are configured, to DEBUG.
-    private val snapPrefix = "com.chipprbots.ethereum.blockchain.sync.snap"
-    private val coordinatorNames =
-      Seq("TrieNodeHealingCoordinator", "TrieNodeHealingCoordinator$", "TrieNodeHealingCoordinator$Impl")
-        .map(n => s"$snapPrefix.actors.$n")
-    private val raised: List[(LogbackLogger, Level)] =
-      (logger.getLoggerContext.getLoggerList.asScala.toList
-        .filter(l => l.getName.startsWith(snapPrefix + ".") && l.getLevel != null) ++
-        coordinatorNames.map(n => LoggerFactory.getLogger(n).asInstanceOf[LogbackLogger])).distinct
-        .map(l => (l, l.getLevel))
-    raised.foreach { case (l, _) => l.setLevel(Level.DEBUG) }
+    private val capture = new SnapLogCapture
 
     /** The captured window-shrink lines of one peer (the peer id is unique per case, so parallel suites cannot mix). */
     def reductions(p: Peer): List[(Level, String)] =
-      events.asScala.toList.filter { case (_, m) =>
+      capture.events.filter { case (_, m) =>
         m.startsWith("Reducing ") && m.contains(s"responseBytes target for peer ${p.id.value}:")
       }
 
     /** Wait for the next line containing `substring` (consuming earlier lines), up to `max`. */
     def await(substring: String, max: FiniteDuration = 10.seconds): (Level, String) =
-      val deadline = System.nanoTime() + max.toNanos
-      @annotation.tailrec
-      def loop(): (Level, String) =
-        val remaining = deadline - System.nanoTime()
-        if remaining <= 0 then throw new AssertionError(s"no log line containing '$substring' within $max")
-        val next = events.poll(remaining, TimeUnit.NANOSECONDS)
-        if next == null then throw new AssertionError(s"no log line containing '$substring' within $max")
-        else if next._2.contains(substring) then next
-        else loop()
-      loop()
+      capture.awaitEvent(substring, max)
 
-    override def close(): Unit =
-      logger.detachAppender(appender)
-      appender.stop()
-      raised.foreach { case (l, previous) => l.setLevel(previous) }
-      logger.setLevel(previousLevel)
-      logger.setAdditive(previousAdditive)
+    override def close(): Unit = capture.close()
 
   /** The window of one module, seen through its public members only. */
   private trait Window:
