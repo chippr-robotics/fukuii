@@ -385,7 +385,10 @@ class AdminService(
         val peerInfos = peersResult.peers.map { case (peer, _) =>
           AdminPeerInfo(
             id = peer.nodeId.map(bs => Hex.toHexString(bs.toArray)).getOrElse(peer.id.value),
-            name = names.get(peer.id).filter(_.nonEmpty).getOrElse(s"fukuii-peer/${peer.remoteAddress}"),
+            name = names
+              .get(peer.id)
+              .filter(_.nonEmpty)
+              .getOrElse(s"fukuii-peer/${peer.remoteAddress.getHostString}:${peer.remoteAddress.getPort}"),
             remoteAddress = peer.remoteAddress.toString,
             inbound = peer.incomingConnection
           )

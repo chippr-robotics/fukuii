@@ -159,6 +159,14 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
 
   // ---- B-277: a real IP block ---------------------------------------------------------------------------------
 
+  "AdminService.peers" should "name each peer by the clientId its Hello gave, and one still handshaking by its address (B-093)" taggedAs UnitTest in new FakePeerSetup(
+    peers = Seq(peerAt("p1", "10.0.0.1", 30303, inbound = false), peerAt("p2", "10.0.0.2", 30303, inbound = true)),
+    clientIds = Map(PeerId("p1") -> "Geth/v1.17.9-stable/linux-amd64/go1.25")
+  ):
+    val names: Set[String] =
+      service.peers(AdminService.AdminPeersRequest()).unsafeRunSync().toOption.get.peers.map(_.name).toSet
+    names shouldBe Set("Geth/v1.17.9-stable/linux-amd64/go1.25", "fukuii-peer/10.0.0.2:30303")
+
   "AdminService.blockIP" should "keep the canonical form of an IPv4 or IPv6 literal, and trim it" taggedAs UnitTest in new FakePeerSetup():
     service.blockIP(AdminService.AdminBlockIPRequest(" 8.8.8.8 ")).unsafeRunSync() shouldBe
       Right(AdminBlockIPResponse(true))
@@ -349,8 +357,34 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
 
   class FakePeerSetup(
       peers: Seq[Peer] = Seq.empty,
-      allowlist: com.chipprbots.ethereum.network.NodeAllowlist = com.chipprbots.ethereum.network.NodeAllowlist.Disabled
+      allowlist: com.chipprbots.ethereum.network.NodeAllowlist = com.chipprbots.ethereum.network.NodeAllowlist.Disabled,
+      clientIds: Map[PeerId, String] = Map.empty
   ) extends TestSetup:
+    import com.chipprbots.ethereum.network.NetworkPeerManagerActor
+    // The handshaked peers' Hello clientIds, as NetworkPeerManagerActor holds them (B-093).
+    private val fakeNetworkPeerManager: typed.ActorRef[NetworkPeerManagerActor.Command] = typedKit.spawn(
+      Behaviors.receiveMessage[NetworkPeerManagerActor.Command] {
+        case NetworkPeerManagerActor.GetHandshakedPeersCmd(r) =>
+          val status = NetworkPeerManagerActor.RemoteStatus(
+            com.chipprbots.ethereum.network.p2p.messages.Capability.ETH68,
+            1L,
+            com.chipprbots.ethereum.domain.ChainWeight.zero,
+            org.apache.pekko.util.ByteString.empty,
+            org.apache.pekko.util.ByteString.empty
+          )
+          r ! NetworkPeerManagerActor.HandshakedPeers(
+            peers
+              .filter(p => clientIds.contains(p.id))
+              .map(p =>
+                p -> NetworkPeerManagerActor
+                  .PeerInfo(status.copy(remoteClientId = clientIds(p.id)), forkAccepted = true)
+              )
+              .toMap
+          )
+          Behaviors.same
+        case _ => Behaviors.same
+      }
+    )
     val fakeState: PeerManagerActor.AdminState =
       PeerManagerActor.AdminState(Some(7), 7, Set("aa" * 64), Set("bb" * 64))
     private val received = new java.util.concurrent.ConcurrentLinkedQueue[PeerManagerActor.Command]()
@@ -383,7 +417,9 @@ class AdminServiceSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
       null,
       () => cats.effect.IO.pure(com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.NotSyncing),
       Some(AdminService.PeerLimits(minOutgoing = 10, maxOutgoing = 25, maxIncoming = 50)),
-      allowlist
+      allowlist,
+      clientId = "fukuii/v9.9.9-test",
+      networkPeerManager = Some(fakeNetworkPeerManager)
     )
 
     /** What the peer manager received, in order, once it has handled everything sent before (an ask is answered after

@@ -199,7 +199,10 @@ class JsonRpcHttpServerSpec
       }
     )
 
-  it should "answer 200 with the parse error when a malformed request is received (B-025)" taggedAs (UnitTest, RPCTest) in new TestSetup:
+  it should "answer 200 with the parse error when a malformed request is received (B-025)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
     val jsonRequestInvalid: ByteString = ByteString("""{"jsonrpc":"2.0", "method": "this is not a valid json""")
     val postRequest: HttpRequest =
       HttpRequest(HttpMethods.POST, uri = "/", entity = HttpEntity(MediaTypes.`application/json`, jsonRequestInvalid))
