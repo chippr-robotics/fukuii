@@ -169,7 +169,10 @@ object PendingTransactionsManager:
       stateStorage: com.chipprbots.ethereum.db.storage.StateStorage = null,
       chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig,
       txGossipGate: TxGossipGate = TxGossipGate.alwaysOpen,
-      metrics: TxPoolMetrics = TxPoolMetrics.Node
+      metrics: TxPoolMetrics = TxPoolMetrics.Node,
+      // The clock the announcement tracker reads, in epoch milliseconds: when a request was sent, and so when it times
+      // out. A spec moves it by hand, so that a request times out when the spec says and not when a thread gets to it.
+      clock: () => Long = () => System.currentTimeMillis()
   ): Behavior[Command] = Behaviors.setup { context =>
 
     given blockchainConfig: BlockchainConfig = chainConfig
@@ -370,7 +373,8 @@ object PendingTransactionsManager:
       new PendingAnnouncements(
         txPoolConfig.announcementMaxEntries,
         txPoolConfig.announcementTimeout,
-        txPoolConfig.announcementFetchTimeout
+        txPoolConfig.announcementFetchTimeout,
+        clock
       )
 
     /** Announce transaction hashes to connected peers via NewPooledTransactionHashes. */

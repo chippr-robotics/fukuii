@@ -2,8 +2,11 @@ package com.chipprbots.ethereum.transactions
 
 import java.net.InetSocketAddress
 
+import org.apache.pekko.actor.testkit.typed.scaladsl.BehaviorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import org.apache.pekko.actor.testkit.typed.scaladsl.TestInbox
 import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.pubsub.Topic
 import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
@@ -36,9 +39,11 @@ import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.TransactionWithAccessList
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
+import com.chipprbots.ethereum.jsonrpc.NewPendingTransaction
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessageCmd
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -296,38 +301,51 @@ class PendingTransactionsManagerSpec
     val overrideTx: SignedTransactionWithSender = newStx(1, tx.copy(value = 2 * tx.value), keyPair1)
 
     pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {}))
-
     pendingTransactionsManager ! AddOrOverrideTransaction(firstTx.tx)
     pendingTransactionsManager ! AddOrOverrideTransaction(otherTx.tx)
+
+    // Each add announces its tx through a NotifyPeers the actor sends itself, which announces only what is still pooled
+    // when it is processed. Nothing takes either tx out before the override, and the override is sent only once both
+    // announcements are out: both reach peer1 (B-497: this test used to send the override straight after, and assert
+    // that firstTx was never announced, which held only if the override reached the mailbox before firstTx's NotifyPeers
+    // did, a matter of thread scheduling; the next test pins that case with the order set by hand).
+    announcedTo(this, peer1, count = 2) shouldBe Set(firstTx, otherTx).map(_.tx.hash.value)
+
     pendingTransactionsManager ! AddOrOverrideTransaction(overrideTx.tx)
+    pool(this, pendingTransactionsManager).pendingTransactions.map(_.stx).toSet shouldEqual Set(overrideTx, otherTx)
+    announcedTo(this, peer1, count = 1) shouldBe Set(overrideTx.tx.hash.value)
 
-    eventually {
-      val pendingTxs: Seq[PendingTransaction] = pendingTransactionsManager
-        .ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
-        .futureValue
-        .pendingTransactions
-
-      pendingTxs.map(_.stx).toSet shouldEqual Set(overrideTx, otherTx)
-    }
-
-    // AddOrOverride queues a NotifyPeers self-message whose broadcast list is
-    // filtered to txs still in the pool when processed. Because AddOrOverride
-    // processes in-order but NotifyPeers is deferred, firstTx gets invalidated
-    // (by overrideTx) before its announce fires, so only otherTx and
-    // overrideTx reach peer1. Both land as NewPooledTransactionHashes (ETH/67).
-    val announces: Seq[SendMessageCmd] = etcPeerManager.receiveWhile(Timeouts.normalTimeout, messages = 3) {
-      case m: NetworkPeerManagerActor.SendMessageCmd => m
-    }
-    announces.foreach(_.peerId shouldBe peer1.id)
-    val announcedHashes: Set[ByteString] = announces
-      .flatMap(_.message.underlyingMsg match
-        case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes
-        case SignedTransactions(txs)                             => txs.map(_.hash.value)
-        case _                                                   => Nil
+  // The order the test above cannot arrange from outside the actor: a replacement processed before the NotifyPeers of
+  // the tx it replaces. Run synchronously, the actor's messages to itself held in its self inbox until the test runs
+  // them, so the order is the one written here, whatever the threads do.
+  it should "not announce a transaction replaced before its announcement went out" taggedAs (UnitTest) in new TestSetup:
+    val networkPeers: TestInbox[NetworkPeerManagerActor.Command] = TestInbox()
+    val kit: BehaviorTestKit[Command] = BehaviorTestKit(
+      PendingTransactionsManager(
+        txPoolConfig,
+        TestInbox[PeerManagerActor.Command]().ref,
+        networkPeers.ref,
+        TestInbox[PeerEventBusActor.Command]().ref,
+        TestInbox[Topic.Command[NewPendingTransaction]]().ref
       )
-      .toSet
-    (announcedHashes should contain).allOf(otherTx.tx.hash.value, overrideTx.tx.hash.value)
-    announcedHashes shouldNot contain(firstTx.tx.hash.value)
+    )
+    val firstTx: SignedTransactionWithSender = newStx(1, tx, keyPair1)
+    val overrideTx: SignedTransactionWithSender = newStx(1, tx.copy(value = 2 * tx.value), keyPair1)
+
+    kit.run(WrappedPeerEvent(PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {})))
+    kit.run(AddOrOverrideTransaction(firstTx.tx))
+    kit.run(AddOrOverrideTransaction(overrideTx.tx))
+    networkPeers.hasMessages shouldBe false // every announcement is still a NotifyPeers in the self inbox
+    kit.selfInbox().receiveAll().foreach(kit.run)
+
+    val announced: Seq[(PeerId, Seq[ByteString])] = networkPeers.receiveAll().map {
+      case NetworkPeerManagerActor.SendMessageCmd(enc, peerId) =>
+        enc.underlyingMsg match
+          case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => (peerId, hashes)
+          case other                                               => fail(s"Unexpected: $other")
+      case other => fail(s"Unexpected: $other")
+    }
+    announced shouldBe Seq((peer1.id, Seq(overrideTx.tx.hash.value)))
 
   it should "broadcast pending transactions to newly connected peers" taggedAs (UnitTest) in new TestSetup:
     // When a peer handshakes after the pool already holds transactions, the
@@ -712,6 +730,19 @@ class PendingTransactionsManagerSpec
   // arrives after the 15 s disconnect-poison-pill-timeout. go-ethereum's tx fetcher asks one announcer at a time and
   // moves on after txFetchTimeout.
 
+  /** The hashes in the next `count` announcements the pool sends, each of which must go to `peer`. */
+  private def announcedTo(setup: TestSetup, peer: Peer, count: Int): Set[ByteString] =
+    setup.etcPeerManager
+      .receiveN(count, Timeouts.normalTimeout)
+      .flatMap {
+        case NetworkPeerManagerActor.SendMessageCmd(enc, peerId) if peerId == peer.id =>
+          enc.underlyingMsg match
+            case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes
+            case other                                               => fail(s"Expected an announcement, got $other")
+        case other => fail(s"Expected an announcement to ${peer.id}, got $other")
+      }
+      .toSet
+
   private def requestedFrom(setup: TestSetup): (PeerId, Seq[ByteString]) =
     val cmd = setup.etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
     cmd.message.underlyingMsg match
@@ -740,20 +771,33 @@ class PendingTransactionsManagerSpec
   it should "request an announced hash from one announcer only, and from the next once that request times out" taggedAs (
     UnitTest
   ) in new TestSetup:
+    // The tracker's clock moves only when the test moves it: a request times out once the test says so, never while
+    // the test is still checking that nobody else was asked. It used to run on the wall clock with a 500 ms timeout,
+    // and a test thread that read the first request more than 300 ms late saw peer2's inside its 200 ms window (B-497).
+    val fetchTimeout: FiniteDuration = 500.millis
+    val now: java.util.concurrent.atomic.AtomicLong = new java.util.concurrent.atomic.AtomicLong(0L)
+    def timeOut(): Unit = now.addAndGet(fetchTimeout.toMillis + 1)
     val shortFetchTimeout: TxPoolConfig = new TxPoolConfig:
       override val txPoolSize: Int = 300
       override val pendingTxManagerQueryTimeout: FiniteDuration = Timeouts.veryLongTimeout
       override val transactionTimeout: FiniteDuration = Timeouts.veryLongTimeout
       override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.veryLongTimeout
-      override val announcementFetchTimeout: FiniteDuration = 500.millis
-    val ptm: ActorRef[Command] = spawnPtm(config = shortFetchTimeout)
+      override val announcementTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val announcementFetchTimeout: FiniteDuration = fetchTimeout
+    val ptm: ActorRef[Command] = spawnPtm(config = shortFetchTimeout, clock = () => now.get())
     val hash: ByteString = ByteString(Array.fill[Byte](32)(7))
     Seq(peer1, peer2, peer3).foreach(announceFrom(ptm, _, hash))
 
     requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
-    etcPeerManager.expectNoMessage(200.millis) // not also from peer2 and peer3
+    // Not also from peer2 and peer3: every announcement is processed once the pool answers, and the timeout ticks that
+    // run meanwhile find nothing timed out, the clock not having moved.
+    pool(this, ptm)
+    etcPeerManager.expectNoMessage(200.millis)
+    timeOut()
     requestedFrom(this) shouldBe ((peer2.id, Seq(hash))) // peer1 never answered
+    timeOut()
     requestedFrom(this) shouldBe ((peer3.id, Seq(hash))) // nor did peer2
+    timeOut()
     etcPeerManager.expectNoMessage(1.second) // nobody left to ask
 
   it should "request a hash from the next announcer as soon as its requester disconnects" taggedAs (
@@ -1636,7 +1680,8 @@ class PendingTransactionsManagerSpec
     def spawnPtm(
         config: TxPoolConfig = txPoolConfig,
         gate: TxGossipGate = TxGossipGate.alwaysOpen,
-        metrics: TxPoolMetrics = new TxPoolMetrics
+        metrics: TxPoolMetrics = new TxPoolMetrics,
+        clock: () => Long = () => System.currentTimeMillis()
     ): org.apache.pekko.actor.typed.ActorRef[Command] = testKit.spawn(
       PendingTransactionsManager(
         config,
@@ -1645,7 +1690,8 @@ class PendingTransactionsManagerSpec
         peerMessageBus.ref,
         pendingTxTopic,
         txGossipGate = gate,
-        metrics = metrics
+        metrics = metrics,
+        clock = clock
       ),
       s"ptm-test-custom-${java.util.UUID.randomUUID()}"
     )
