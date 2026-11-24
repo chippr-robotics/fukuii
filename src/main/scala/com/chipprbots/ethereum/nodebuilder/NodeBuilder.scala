@@ -1557,8 +1557,9 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
             forkChoiceManagerForSync.foreach(_.clear())
             // the refusals counted so far are of the state that is gone: the count begins again with the sync
             escalationWatch.foreach(_.stateCleared())
-          // B-465: refused, with nothing written, while an adoption holds the records; asked for again after a while
-          SyncController.StateEscalationPort.notClearedWhenRefused(escalationLog.warn(_)) {
+          // B-465: refused, with nothing written, while an adoption holds the records; asked for again after a while.
+          // Looked at before the recoveries are reset, so that a refused clear leaves them as they were (vault)
+          SyncController.StateEscalationPort.notClearedWhenRefused(pathState.recordsHeld, escalationLog.warn(_)) {
             stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
           }
         def escalated(kind: EscalationKind): Unit = StateMetrics.escalated(kind)
@@ -1567,7 +1568,7 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
         def clearForBranchRetry(): Boolean =
           def clearNow(): Unit =
             val _ = pathState.clearForBranchRetry(blockchainReader.genesisHeader.hash.value, System.currentTimeMillis())
-          SyncController.StateEscalationPort.notClearedWhenRefused(escalationLog.warn(_)) {
+          SyncController.StateEscalationPort.notClearedWhenRefused(pathState.recordsHeld, escalationLog.warn(_)) {
             stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
           }
     }

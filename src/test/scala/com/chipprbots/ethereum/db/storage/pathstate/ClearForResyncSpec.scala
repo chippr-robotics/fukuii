@@ -190,13 +190,22 @@ class ClearForResyncSpec extends AnyFlatSpec with Matchers:
         val _ = said.add(why)
       chain.state.withRecordsHeld(held) {
         source.writes = Vector.empty
+        elsewhere(chain.state.recordsHeld).get shouldBe true
         elsewhere(clear()).failed.get shouldBe a[StateClearRefused]
         elsewhere(chain.state.clearForBranchRetry(genesisHash, escalation.atMillis)).failed.get shouldBe
           a[StateClearRefused]
-        // as the escalation's port answers it: not cleared, and why
+        // as the escalation's port answers it: not cleared, and why. The look before the clear finds the hold, and the
+        // clear is not run: what it would undo first (the recoveries that wait, and the failures remembered) is kept
+        var resetRan = false
         elsewhere(
           com.chipprbots.ethereum.blockchain.sync.SyncController.StateEscalationPort
-            .notClearedWhenRefused(tell)(clear())
+            .notClearedWhenRefused(chain.state.recordsHeld, tell) { resetRan = true; clear() }
+        ).get shouldBe false
+        resetRan shouldBe false
+        // and an attempt the look missed (begun just after it) is refused by the clear itself, under its lock
+        elsewhere(
+          com.chipprbots.ethereum.blockchain.sync.SyncController.StateEscalationPort
+            .notClearedWhenRefused(held = false, tell)(clear())
         ).get shouldBe false
         // and from the attempt's own thread
         a[StateClearRefused] should be thrownBy clear()
@@ -209,17 +218,20 @@ class ClearForResyncSpec extends AnyFlatSpec with Matchers:
         chain.appState.getStateEscalationLast() shouldBe None
       }
       said.toArray.toList.map(_.toString) match
-        case List(why) => why should include("holds the records")
-        case other     => fail(s"told $other")
+        case List(looked, locked) =>
+          looked should include("holds the records")
+          locked should include("holds the records")
+        case other => fail(s"told $other")
+      chain.state.recordsHeld shouldBe false
       // asked again once the attempt has ended: cleared
       elsewhere(
         com.chipprbots.ethereum.blockchain.sync.SyncController.StateEscalationPort
-          .notClearedWhenRefused(tell)(clear())
+          .notClearedWhenRefused(chain.state.recordsHeld, tell)(clear())
       ).get shouldBe true
       rowsLeft(source) shouldBe Map("v" -> 0, "t" -> 0, "u" -> 0)
       chain.state.anchor shouldBe None
       chain.appState.getStateEscalationLast() shouldBe Some(escalation)
-      said.size() shouldBe 1
+      said.size() shouldBe 2
     }
 
   "The genesis state as a sync starts" should "be cleared when it is the state held, and no other state be touched" taggedAs

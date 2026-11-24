@@ -1297,7 +1297,11 @@ final class PathStateStorage(
     * It is [[clearForResync]] with no escalation, mark and all: a kill between the batch and the range deletes leaves
     * the mark, and the start finishes it ([[finishPendingClear]]). Deleting the rows first and the anchor after, as the
     * data model had it, would leave a genesis anchor over rows that are gone if killed between the two (vault).
+    *
+    * It may throw [[StateClearRefused]], as [[clearForResync]] does, when an attempt holds the records: not met in
+    * practice, since no adoption runs while SNAP starts on a genesis state.
     */
+  @throws[StateClearRefused]("when an attempt holds the records; none does as a sync starts (B-465)")
   def clearGenesisStateForSync(genesis: BlockRef, atMillis: Long): Boolean =
     val heldIsGenesis = anchor.contains(genesis)
     if heldIsGenesis then clearForResync(genesis.hash, atMillis, escalation = None)
@@ -1685,6 +1689,12 @@ final class PathStateStorage(
     * thread that opened it: its moves and its commits are made there, one after another.
     */
   private val attemptThreads = new ConcurrentHashMap[Object, Thread]()
+
+  /** Whether an attempt holds the records right now ([[withRecordsHeld]]), read without a lock: for a caller that would
+    * undo work of its own before a clear that is then refused (B-465). The clear's own check, under the state lock, is
+    * the one that counts: an attempt may begin or end just after this is read.
+    */
+  def recordsHeld: Boolean = !attemptThreads.isEmpty
 
   /** The lowest height an attempt holds the records of, if any does. */
   private def heldFrom: Option[BigInt] =
