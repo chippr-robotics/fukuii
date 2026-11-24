@@ -2,6 +2,8 @@ package com.chipprbots.ethereum.ledger
 
 import org.apache.pekko.util.ByteString
 
+import scala.util.control.NonFatal
+
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.mining.OmmerAncestor
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
@@ -71,6 +73,25 @@ class BlockValidation(
       headers: List[BlockHeader]
   )(implicit blockchainConfig: BlockchainConfig): Option[(BlockHeader, String)] =
     firstInvalid(headers, overOwnHole = true)
+
+  /** Why `header` is invalid by what it says of itself, with no parent to check it against, or None if it is not
+    * (B-140): the rules [[com.chipprbots.ethereum.consensus.validators.BlockHeaderValidator.validateHeaderOnly]]
+    * checks, the Ethash seal among them. Each is one every import checks too, so a header that fails one is invalid on
+    * any chain. A valid seal proves only that the difficulty the header claims was mined, and that cannot be checked
+    * here.
+    *
+    * A header the validator cannot evaluate is invalid, with the reason, and is not thrown: the Ethash seal check
+    * throws for a difficulty its target arithmetic does not handle (0 and 1 among them), and no proof-of-work header
+    * has one.
+    */
+  def headerAloneError(header: BlockHeader)(implicit blockchainConfig: BlockchainConfig): Option[String] =
+    try mining.validators.blockHeaderValidator.validateHeaderOnly(header).left.toOption.map(_.toString)
+    catch
+      case NonFatal(e) =>
+        Some(
+          s"header ${header.idTag} (difficulty ${header.difficulty.value}) could not be validated: " +
+            s"${e.getClass.getSimpleName}: ${e.getMessage}"
+        )
 
   private def firstInvalid(
       headers: List[BlockHeader],

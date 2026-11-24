@@ -523,6 +523,11 @@ class BlockFetcher(
         }
         fetchBlocks(newState)
 
+      case BlamePeer(peerId, reason) =>
+        log.debug("Blacklisting peer {} as the importer asked: {}", peerId, reason.description)
+        peersClient ! BlacklistPeer(peerId, reason)
+        Behaviors.same
+
       case AdaptedMessageFromEventBus(ETHPackets.BlockHeaders(_, headers), _) =>
         headers.lastOption
           .map { bh =>
@@ -799,6 +804,11 @@ object BlockFetcher:
     def apply(from: BigInt, reason: String, toBlacklist: Option[BigInt]): InvalidateBlocksFrom =
       new InvalidateBlocksFrom(from, reason, toBlacklist)
   final case class BlockImportFailed(blockNr: BigInt, reason: BlacklistReason) extends FetchCommand
+
+  /** Blame `peerId` itself, not whoever the fetcher recorded for a block number (B-140): handed to the peers client,
+    * whose peer list exempts maintained (static and trusted) peers as it does for every other blacklisting.
+    */
+  final case class BlamePeer(peerId: PeerId, reason: BlacklistReason) extends FetchCommand
   final case class InternalLastBlockImport(blockNr: BigInt) extends FetchCommand
   final case class RetryBodiesRequest(
       failedPeerId: Option[PeerId] = None,
