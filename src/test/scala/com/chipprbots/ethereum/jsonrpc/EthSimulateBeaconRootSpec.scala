@@ -196,6 +196,51 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
       new Node(132).simulate(time = 144, Some(Root), calls = Seq(readBeaconRoot(144))).head.header.stateRoot
   }
 
+  /** Code other than the canonical contracts: called by SYSTEM_ADDRESS it stores the calldata at slot 0; called by
+    * anyone else it returns slot 0.
+    */
+  private val SlotZeroCode: ByteString = com.chipprbots.ethereum.utils.ByteStringUtils.string2hash(
+    "33" + "73" + "ff" * 19 + "fe" + "14" + "6025" + "57" + "600054" + "600052" + "6020" + "6000" + "f3" +
+      "5b" + "600035" + "600055" + "00"
+  )
+
+  // B-517: go-ethereum's processBlock applies the state overrides and then runs ProcessBeaconBlockRoot /
+  // ProcessParentBlockHash as EVM calls, so code a `code` override puts at either contract runs. Import's preamble
+  // wrote the canonical contract's slots directly whatever the code, so the override had no effect; it now runs code
+  // that is not the canonical contract's, and the simulation reaches that through import's own preamble.
+  it should "run the code a state override puts at the EIP-4788 contract before Amsterdam" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val beacon = BlockExecution.BeaconRootContractAddress
+    val block = new Node(132)
+      .simulate(
+        time = 144,
+        Some(Root),
+        extra = Map(beacon -> StateOverride(code = Some(SlotZeroCode))),
+        calls = Seq(TxArgs(to = Some(beacon)))
+      )
+      .head
+    block.calls.map(c => (c.status, c.returnData)) shouldBe Seq((BigInt(1), Root))
+  }
+
+  it should "run the code a state override puts at the EIP-2935 contract before Amsterdam" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val history = BlockExecution.HistoryStorageAddress
+    val node = new Node(132)
+    val block = node
+      .simulate(
+        time = 144,
+        None,
+        extra = Map(history -> StateOverride(code = Some(SlotZeroCode))),
+        calls = Seq(TxArgs(to = Some(history)))
+      )
+      .head
+    block.calls.map(c => (c.status, c.returnData)) shouldBe Seq((BigInt(1), node.baseHash))
+  }
+
   it should "store the parent hash in the EIP-2935 contract of a Prague block" taggedAs (UnitTest, RPCTest) in {
     val node = new Node(132)
     val block = node.simulate(time = 144, None, calls = Seq(readBlockHash(29))).head

@@ -31,9 +31,10 @@ import com.chipprbots.ethereum.vm.BlockAccessRecorder
 object SimulatedBlockSystemCalls:
 
   /** The block's preamble, as [[BlockExecution.applyBlockPreamble]] runs it for a real block: the DAO fork block's
-    * drain; then the EIP-4788 / EIP-2935 direct storage writes before Amsterdam, or from Amsterdam the system calls,
-    * which record at block access index 0 of `accessList` and run on the block's precompiles as its state overrides
-    * left them. Only the header is read, so the block is given an empty body.
+    * drain; then the EIP-4788 / EIP-2935 direct storage writes before Amsterdam (a system call where a state override
+    * put other code at the address, as import runs such code, B-517), or from Amsterdam the system calls, which record
+    * at block access index 0 of `accessList` and run on the block's precompiles as its state overrides left them. Only
+    * the header is read, so the block is given an empty body.
     *
     * The caller runs it AFTER the block's state overrides: go-ethereum's `processBlock` applies `StateOverrides` and
     * then calls `ProcessBeaconBlockRoot` / `ProcessParentBlockHash` on the EVM it built (internal/ethapi/simulate.go),

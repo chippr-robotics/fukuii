@@ -1093,8 +1093,9 @@ object BlockExecution:
     * (EEST `test_system_call_execution_grant`, `_execution_boundary`, `_reservoir_boundary`). fukuii previously granted
     * the 31,566,720 total as execution gas, with no reservoir.
     *
-    * Pre-Amsterdam (ETH Prague/Osaka) the reservoir is 0 and the context is the one the EIP-7002/7251 calls always had.
-    * ETC never builds one: its only system-contract write, EIP-2935 at Olympia, is a direct storage write.
+    * Pre-Amsterdam (ETH Cancun to Osaka) the reservoir is 0 and the context is the one the EIP-7002/7251 calls always
+    * had, and the EIP-4788 / EIP-2935 calls to non-canonical code (B-517) share it. ETC never builds one: its only
+    * system-contract write, EIP-2935 at Olympia, is a direct storage write.
     *
     * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); empty, as every real block has it, the
     * context is what it was.
@@ -1148,15 +1149,17 @@ object BlockExecution:
 
   /** A block's state changes before its first transaction, in block import's order: the DAO fork block's drain; then,
     * from Amsterdam, the EIP-4788 / EIP-2935 system calls (EIP-7928 block access index 0), and before it the direct
-    * storage writes of EIP-4788 (ETH from Cancun) and EIP-2935 (ETH from Prague, ETC from Olympia).
+    * storage writes of EIP-4788 (ETH from Cancun) and EIP-2935 (ETH from Prague, ETC from Olympia) where the canonical
+    * contract is the code at the address, and on ETH a system call running any other code there (B-517).
     *
     * One function for block import (`executeBlockTransactions`), block building (`BlockPreparator.prepareBlock`),
     * eth_simulateV1 (`SimulatedBlockSystemCalls.preamble`) and the trace replays (`StxLedger.advanceWorldToTx`), so the
     * state a miner builds a block on, a simulation runs its calls on and a trace replays a transaction on is the state
     * import executes the block on.
     *
-    * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); it reaches only the Amsterdam system
-    * calls, the one part of the preamble that runs the EVM. Every other caller leaves it empty.
+    * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); it reaches only the parts of the
+    * preamble that run the EVM: the Amsterdam system calls, and before Amsterdam the EIP-4788 / EIP-2935 call to a
+    * contract whose code is not the canonical one. Every other caller leaves it empty.
     */
   private[ethereum] def applyBlockPreamble(
       block: Block,
@@ -1183,10 +1186,10 @@ object BlockExecution:
       afterPreamble
     else
       // EIP-4788: Store parent beacon block root in system contract (post-Cancun)
-      val worldAfterBeaconRoot = applyEip4788(block, worldAfterDao)
+      val worldAfterBeaconRoot = applyEip4788(block, worldAfterDao, precompileRelocations)
 
       // EIP-2935: Store parent block hash in history storage contract
-      applyEip2935(block, worldAfterBeaconRoot)
+      applyEip2935(block, worldAfterBeaconRoot, precompileRelocations)
 
   /** EIP-4788: Store the parent beacon block root in the beacon root system contract.
     *
@@ -1197,7 +1200,8 @@ object BlockExecution:
     */
   private def applyEip4788(
       block: Block,
-      world: InMemoryWorldStateProxy
+      world: InMemoryWorldStateProxy,
+      precompileRelocations: Map[Address, Address]
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     // Only apply post-Cancun (when parentBeaconBlockRoot is present)
     block.header.parentBeaconBlockRoot match
@@ -1227,7 +1231,23 @@ object BlockExecution:
         // EIP explicitly permits: "Clients may decide to omit an explicit EVM call and directly
         // set the storage values." It is only valid when the canonical contract is the one
         // deployed there, which is why the code-presence guard is a hard precondition.
-        if world.getCode(BeaconRootContractAddress).isEmpty then world
+        //
+        // Any other code is run, as go-ethereum's ProcessBeaconBlockRoot runs whatever is there (B-517): a SYSTEM_ADDRESS
+        // call with 30,000,000 gas whose failure is ignored. The direct write gave such code's account the canonical
+        // contract's slots instead. Every public network has the canonical contract, so its blocks keep the direct
+        // write, byte for byte; the call is reached on a chain (a test genesis) or an eth_simulateV1 state override
+        // that puts other code at the address.
+        val code = world.getCode(BeaconRootContractAddress)
+        if code.isEmpty then world
+        else if code != BeaconRootsCode then
+          uncheckedSystemCall(
+            block.header,
+            world,
+            BeaconRootContractAddress,
+            beaconRoot.value,
+            accessRecorder = None,
+            precompileRelocations
+          )
         else
           val storage = world.getStorage(BeaconRootContractAddress)
           val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
@@ -1243,7 +1263,8 @@ object BlockExecution:
     */
   private def applyEip2935(
       block: Block,
-      world: InMemoryWorldStateProxy
+      world: InMemoryWorldStateProxy,
+      precompileRelocations: Map[Address, Address]
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     val blockNumber = block.header.number.value
     // EIP-2935 activates at Prague on ETH chains (timestamp fork), or at Olympia on ETC chains (block number fork).
@@ -1259,6 +1280,18 @@ object BlockExecution:
     // the first Prague block on any chain that deploys the contract in-chain rather than in genesis (EEST
     // test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork / deploy_on_fork_block]).
     else if !etcOlympiaActive && world.getCode(HistoryStorageAddress).isEmpty then world
+    // ETH: code other than the canonical contract is run, as go-ethereum's ProcessParentBlockHash runs it (B-517; see
+    // applyEip4788). The direct write below is the canonical contract's effect, so public networks keep it. ETC's
+    // client-deployed contract (ECIP-1112) keeps the direct write whatever the code.
+    else if !etcOlympiaActive && world.getCode(HistoryStorageAddress) != HistoryStorageCode then
+      uncheckedSystemCall(
+        block.header,
+        world,
+        HistoryStorageAddress,
+        block.header.parentHash.value,
+        accessRecorder = None,
+        precompileRelocations
+      )
     else
       // ETC (Olympia, ECIP-1112): the history contract IS deployed by the client at activation, so deploy it here
       // if absent (genesis may pre-deploy it). Code presence is the sole guard. Tying deployment to
@@ -1319,7 +1352,8 @@ object BlockExecution:
     * With the canonical contracts the storage is the same as the direct writes: the beacon roots contract stores the
     * timestamp and the root at slots `timestamp % 8191` and `timestamp % 8191 + 8191`, and the history contract stores
     * the parent hash at slot `(number - 1) % 8191` (asserted in AmsterdamSystemCallSpec). Every earlier fork and every
-    * ETC fork keep the direct writes.
+    * ETC fork keep the direct writes for the canonical contracts; before Amsterdam, other code at either ETH address is
+    * run by the same [[uncheckedSystemCall]] (B-517).
     *
     * Here in the companion rather than on the class so that block execution and the trace replays of an Amsterdam block
     * (`StxLedger.advanceWorldToTx`) run one and the same preamble.
@@ -1349,7 +1383,7 @@ object BlockExecution:
     * ignored — the call's state changes are dropped and the block stays valid. No code at `target` means nothing to run
     * and nothing changes, as for any zero-value call to an account without code.
     */
-  private def uncheckedSystemCall(
+  private[ledger] def uncheckedSystemCall(
       header: BlockHeader,
       world: InMemoryWorldStateProxy,
       target: Address,

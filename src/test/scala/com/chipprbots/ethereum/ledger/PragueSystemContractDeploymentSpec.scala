@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecErr
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.ForkTimestamps
@@ -158,3 +159,70 @@ class PragueSystemContractDeploymentSpec extends AnyFlatSpec with Matchers:
     exec.requireRequestPredeploysPresent(block, emptyWorld)(using prePrague) shouldBe Right(())
     val etc: BlockchainConfig = Config.blockchains.blockchainConfig
     exec.requireRequestPredeploysPresent(block, emptyWorld)(using etc) shouldBe Right(())
+
+  // ── B-517: the direct write is the canonical contract's effect; other code is run ─────────
+
+  // The direct write stands in for go-ethereum's ProcessParentBlockHash (a SYSTEM_ADDRESS call, 30,000,000 gas) only
+  // because it is what the canonical contract does: running that contract as the call gives import's state root.
+  "EIP-2935 on ETH Prague (B-517)" should "give the state root that running the canonical contract as a SYSTEM_ADDRESS call gives" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup:
+    // A Prague chain as every real one has it, Shanghai and Cancun first: the contract's code uses PUSH0 (EIP-3855).
+    val prague: BlockchainConfig = blockchainConfig.copy(forkTimestamps =
+      ForkTimestamps(shanghaiTimestamp = Some(0L), cancunTimestamp = Some(0L), pragueTimestamp = Some(0L))
+    )
+    val deployed: InMemoryWorldStateProxy = withCode(emptyWorld, HistoryStorageAddress, HistoryStorageCode)
+    Seq(BigInt(1), BigInt(5), BigInt(8191), BigInt(8192), BigInt(3) * 8191 + 17).foreach { number =>
+      val numbered = block.copy(header = block.header.copy(number = BlockNumber(number)))
+      val direct = InMemoryWorldStateProxy.persistState(
+        exec.executeBlockTransactions(numbered, deployed)(using prague).toOption.get.worldState
+      )
+      val called = BlockExecution.uncheckedSystemCall(
+        numbered.header,
+        deployed,
+        HistoryStorageAddress,
+        numbered.header.parentHash.value,
+        accessRecorder = None,
+        precompileRelocations = Map.empty
+      )(using prague)
+      withClue(s"block $number: ") {
+        called.stateRootHash shouldBe direct.stateRootHash
+        called.stateRootHash should not be InMemoryWorldStateProxy.persistState(deployed).stateRootHash
+      }
+    }
+
+  // go-ethereum runs the code at HISTORY_STORAGE_ADDRESS, whatever it is; the direct write gave this account the
+  // canonical contract's slot instead. The code stores the calldata (the parent hash) at slot 0 when SYSTEM_ADDRESS
+  // calls it.
+  it should "run code other than the canonical contract, as go-ethereum's system call does" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup:
+    val custom: ByteString = ByteStringUtils.string2hash(
+      "33" + "73" + "ff" * 19 + "fe" + "14" + "6025" + "57" + "600054" + "600052" + "6020" + "6000" + "f3" +
+        "5b" + "600035" + "600055" + "00"
+    )
+    val storage: InMemoryWorldStateProxyStorage =
+      runBlock(withCode(emptyWorld, HistoryStorageAddress, custom)).getStorage(HistoryStorageAddress)
+    storage.load(0) shouldBe UInt256(block.header.parentHash.value).toBigInt
+    storage.load((block.header.number.value - 1) % HistoryServeWindow) shouldBe BigInt(0)
+
+  // ETC's history contract is the client's own (ECIP-1112): its direct write does not read the code, so Olympia keeps
+  // it whatever the code is.
+  it should "keep ETC Olympia's direct write whatever the code" taggedAs (
+    UnitTest,
+    ConsensusTest,
+    OlympiaTest
+  ) in new TestSetup:
+    val etc: BlockchainConfig = blockchainConfig
+      .withUpdatedForkBlocks(_.copy(olympiaBlockNumber = 0))
+      .copy(networkType = NetworkType.ETC, forkTimestamps = ForkTimestamps())
+    val world: InMemoryWorldStateProxy = exec
+      .executeBlockTransactions(block, withCode(emptyWorld, HistoryStorageAddress, someCode))(using etc)
+      .toOption
+      .get
+      .worldState
+    val storage: InMemoryWorldStateProxyStorage = world.getStorage(HistoryStorageAddress)
+    storage.load((block.header.number.value - 1) % HistoryServeWindow) shouldBe
+      UInt256(block.header.parentHash.value).toBigInt
