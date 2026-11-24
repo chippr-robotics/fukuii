@@ -1540,11 +1540,22 @@ class EngineApiService(
     * Dropped: nonce below the parent-state nonce (already included, or replaced), a nonce gap (would fail with
     * NONCE_MISMATCH_TOO_HIGH), and an unrecoverable sender. A trie node missing at the parent root means we cannot
     * judge, so the list is returned unchanged — exactly the pre-existing behaviour.
+    *
+    * The parent's state is read through the door the build itself reads it through
+    * ([[BlockchainReader.proposerStateOn]], .claude/agent-protocols/proposer-import-parity.md), one view for every
+    * sender: on the unified layout that serves a parent that is an executed block kept beside the disk (a payload
+    * newPayload executed and no forkchoiceUpdated has adopted yet) as the build serves it. The anchor-chain door
+    * ([[BlockchainReader.accountAt]]) refuses such a parent, and the refusal failed the whole build (B-239). A fault of
+    * that state ([[com.chipprbots.ethereum.db.storage.pathstate.StateFault]]) is still thrown: the build would meet the
+    * same state, and skipping the filter instead would let a payload carry a transaction that can never validate.
     */
   def executableAtParent(parent: BlockHeader, txs: Seq[SignedTransaction]): Seq[SignedTransaction] =
     if txs.isEmpty then txs
     else
       try
+        // with the guard off there is no proposer's door, and the read-only buffer over the hash store is read
+        val parentState = blockchainReader.proposerStateOn(parent).getOrElse(blockchainReader.stateAt(parent))
+        val parentAccounts = blockchainReader.accountsIn(parentState, parent)
         val nextNonce = scala.collection.mutable.Map.empty[Address, BigInt]
         val (kept, dropped) =
           txs.foldLeft((Vector.empty[SignedTransaction], Vector.empty[String])) { case ((keep, drop), stx) =>
@@ -1553,10 +1564,9 @@ class EngineApiService(
               case Some(sender) =>
                 val expected = nextNonce.getOrElseUpdate(
                   sender,
-                  // by the parent's header: the hash store's read-only buffer at its root with the guard off, a view
-                  // of the parent on the unified layout, where a fault of the state is the build's to answer
-                  blockchainReader
-                    .accountAt(parent, sender)
+                  // a fault of the state on the unified layout is the build's to answer
+                  parentAccounts
+                    .get(sender)
                     .map(_.nonce.toBigInt)
                     .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
                 )
