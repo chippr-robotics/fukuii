@@ -2125,8 +2125,9 @@ final private class BlockImporterLogic(
   // head the store holds now, read from the chain as the fork choice reads it (`TxPoolReset.between`): the two resets
   // agree, and the pool and its recorded head end on the final head.
   //
-  // On a proof-of-work chain the blocks moved onto are completed with the side blocks the branch stands on that the
-  // result does not list (B-512, `sideBlocksUnder`): canonical with the move, their transactions leave the pool too.
+  // The blocks moved onto are completed with the side blocks the branch stands on that the result does not list
+  // (B-512, `sideBlocksUnder`): canonical with the move, their transactions leave the pool too. On every chain, as
+  // go-ethereum's `LegacyPool.reset` walks the new chain whatever the consensus.
   private def updateTxPool(blocksAdded: Seq[Block], blocksRemoved: Seq[Block]): Unit =
     txPoolHead.resetFrom(pendingTransactionsManager) { (poolHead, resets) =>
       val moveHead = headTheMoveLeft(blocksAdded, blocksRemoved)
@@ -2134,8 +2135,7 @@ final private class BlockImporterLogic(
       // the next tell of this import follows this one
       poolResetsAtImport.set(Some(resets + 1))
       if inStep then
-        val under =
-          if branchResolution.followsConsensusLayer then Nil else sideBlocksUnder(blocksAdded, blocksRemoved, poolHead)
+        val under = sideBlocksUnder(blocksAdded, blocksRemoved, poolHead)
         (moveHead, TxPoolReset.ofBranches(under ++ blocksAdded, blocksRemoved))
       else
         Try(blockchainReader.getBestBlockHeader).toOption.flatten.orElse(moveHead) match
@@ -2156,7 +2156,11 @@ final private class BlockImporterLogic(
     * Read from the store by parent hash, not by the index (`ancestry-not-index.md`), from the parent of the lowest
     * block added down to the fork's height. Nothing when the walk does not meet the fork there (the old chain listed
     * only in part), when a block on the way is not stored, or when more than [[TxPoolReset.MaxReorgDepth]] blocks lie
-    * between: a pool reset reads no more than go-ethereum's would.
+    * between: a pool reset reads no more than go-ethereum's would, and that last is warned of, as go-ethereum warns of
+    * a reorganisation too deep for its pool ("Skipping deep transaction reorg"). One walk for proof of work and for a
+    * chain that follows a consensus layer: go-ethereum's reset is the same for both. It runs under the lock of the
+    * node's one record of the pool's head ([[TxPoolHead]], B-515), from that head, and the reset it completes is told
+    * before the importer answers, so before any build that follows asks the pool (#2066).
     */
   private def sideBlocksUnder(
       added: Seq[Block],
@@ -2179,6 +2183,16 @@ final private class BlockImporterLogic(
               block :: acc
             case _ => Nil
         down(lowest.header.parentHash, Nil)
+      case (Some(lowest), Some((forkNumber, _))) if lowest.number.value - 1 - forkNumber > TxPoolReset.MaxReorgDepth =>
+        log.warning(
+          "Skipping deep transaction reorg: {} side block(s) between block {} and the fork at block {}, more than {}: " +
+            "their transactions are not taken out of the pool",
+          lowest.number.value - 1 - forkNumber,
+          lowest.number.value,
+          forkNumber,
+          TxPoolReset.MaxReorgDepth
+        )
+        Nil
       case _ => Nil
 
   /** The count of the pool's resets ([[TxPoolHead.resets]]) as this import's evaluation began, read again after each of

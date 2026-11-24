@@ -4308,8 +4308,9 @@ class RegularSyncSpec
 
       // B-512: a reorganisation onto a branch that stands on side blocks stored before makes them canonical with it.
       // The hash layout's answer lists the branch alone, so their transactions stayed in the pool though the chain now
-      // includes them. go-ethereum's pool reset walks the new chain down to the fork: the importer reads them from the
-      // store, down to the parent of the lowest block moved off, and they leave the pool with the branch, oldest first.
+      // includes them. go-ethereum's pool reset walks the new chain down to the fork, on proof of work and proof of stake
+      // alike: the importer reads them from the store, down to the parent of the lowest block moved off, and they leave
+      // the pool with the branch, oldest first, on either chain.
       for follows <- Seq(false, true) do
         s"drop the transactions of the side blocks a reorganisation made canonical (follows a consensus layer: $follows)" taggedAs (
           UnitTest,
@@ -4324,10 +4325,7 @@ class RegularSyncSpec
 
             importBatch(List(branch))
 
-            // following a consensus layer the reset is as it was (the fork choice's own reset walks the chain)
-            removedFromThePool() shouldBe
-              (if follows then List(branch.body.transactionList)
-               else List(side.body.transactionList, branch.body.transactionList))
+            removedFromThePool() shouldBe List(side.body.transactionList, branch.body.transactionList)
             takenBackByThePool() shouldBe List(movedOff.body.transactionList)
             resetsOfThePool() shouldBe 1
         )
@@ -4356,6 +4354,27 @@ class RegularSyncSpec
           takenBackByThePool() shouldBe List(movedOff.body.transactionList)
           resetsOfThePool() shouldBe 1
       )
+
+      // go-ethereum's cap: a side chain of more than 64 blocks under the branch is not walked (warned of), and the reset
+      // is what the result lists; at 64 it is walked whole
+      val MaxDepth: Int = com.chipprbots.ethereum.transactions.TxPoolReset.MaxReorgDepth
+      for (sides, walked) <- Seq(MaxDepth -> true, (MaxDepth + 1) -> false) do
+        s"drop the transactions of $sides side blocks under the branch only within the 64-block cap" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new BatchImportTells(s"b512-cap-$sides"):
+            val movedOff: Block = BlockHelpers.generateBlock(BlockHelpers.genesis)
+            val side: List[Block] = BlockHelpers.generateChain(sides, BlockHelpers.genesis)
+            side.foreach(blockchainWriter.storeBlock(_).commit())
+            val branch: Block = BlockHelpers.generateBlock(side.last)
+            answer.set(ChainReorganised(List(movedOff), List(branch), List(weighed(branch).weight), branchBlocks = 1))
+
+            importBatch(List(branch))
+
+            removedFromThePool() shouldBe
+              (if walked then (side :+ branch).map(_.body.transactionList) else List(branch.body.transactionList))
+        )
 
       "drop no more than the result lists when a block between it and the fork is not stored" taggedAs (
         UnitTest,
