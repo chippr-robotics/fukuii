@@ -2021,7 +2021,7 @@ items:
   - id: B-217
     title: "Legacy recovery scans stop at the first hole and settle the flag on a partial walk: align with the combined scan, or retire them"
     priority: P3
-    status: claimed
+    status: in-progress
     area: sync
     size: S
     opened: 2026-11-11
@@ -2031,8 +2031,10 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T07:06:47Z
-      heartbeat: 2026-11-24T07:06:47Z
-    notes: "parallel-recovery-scan = false. StorageRecoveryActor.scanForMissingStorage and BytecodeRecoveryActor.scanForMissingBytecodes catch an MPTException mid-walk, return the partial list, and recovery is then marked done. The combined scan counts a hole and goes on over its siblings (spec 022 T050a; user decision 2026-10-31: a pass that ran settles the flags, holes or not). Options: the same onHole counter for the legacy walks; a stopped walk is a failure (beacon, C2b); retire the legacy path. Spec 018 C2b fixed only a scan that could not run at all being taken as 'nothing missing'."
+      heartbeat: 2026-11-24T07:06:52Z
+    notes: |-
+      parallel-recovery-scan = false. StorageRecoveryActor.scanForMissingStorage and BytecodeRecoveryActor.scanForMissingBytecodes catch an MPTException mid-walk, return the partial list, and recovery is then marked done. The combined scan counts a hole and goes on over its siblings (spec 022 T050a; user decision 2026-10-31: a pass that ran settles the flags, holes or not). Options: the same onHole counter for the legacy walks; a stopped walk is a failure (beacon, C2b); retire the legacy path. Spec 018 C2b fixed only a scan that could not run at all being taken as 'nothing missing'.
+      2026-11-24 in-progress: clone-d
   - id: B-218
     title: SyncControllerSpec 'leave SNAP's resume alone once SNAP has taken over...' fails when the spec is run alone
     priority: P3
