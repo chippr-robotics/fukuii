@@ -2138,7 +2138,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T17:03:11Z
-      heartbeat: 2026-11-24T17:03:15Z
+      heartbeat: 2026-11-24T17:31:30Z
     notes: "By the user's decision of 2026-11-12, C3c part 3 is its linear subset (plan.md 'C3c part 3'). Left for the overlay (C4a) and the head move (C4b): ChainImporter.importInPlace refuses a block that is not built on the head (the rest of T109: pre-merge side blocks through the fork choice, post-merge ones adopted; bcMultiChainTest, the uncle races, lotsOfLeafs end on another head with the guard on); test_rewindToBlock in test mode; it/ethtest EthereumTestHelper, EthereumTestExecutor and ForkChoiceBlockchainTestsSpec (the rest of T117, needed by EG-2 / T254); engine_newPayload adopting nothing on the guard."
   - id: B-228
     title: "GraphQL answers a missing trie node as an account that does not exist: balance 0, nonce 0, zero storage (GraphQLSchema.scala:484); answer an error"
