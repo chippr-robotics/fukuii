@@ -504,8 +504,11 @@ object GraphQLSchema:
     // A state that is not held, a node that is missing, or a state that moved under the read is NOT caught here:
     // answering it with no account would report a zero balance for an account that has one. It surfaces, through
     // [[stateRead]], as an error of the field, as it does for `code`.
+    // the canonical block at that height, as geth resolves a number: none above the best block, where a block imported
+    // and not yet the head may be stored by its number (B-210)
     for
-      header <- ctx.blockchainReader.getBlockHeaderByNumber(blockNumber)
+      hash <- ctx.blockchainReader.getHashByBlockNumber(ctx.blockchainReader.getBestBranch, blockNumber)
+      header <- ctx.blockchainReader.getBlockHeaderByHash(hash)
       state = ctx.blockchainReader.stateAt(header)
       account <- ctx.blockchainReader.accountIn(state, header, Address(address))
     yield (state, account)

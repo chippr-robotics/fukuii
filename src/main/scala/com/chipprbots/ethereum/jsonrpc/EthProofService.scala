@@ -186,11 +186,12 @@ class EthProofService(
       storageKeys: Seq[StorageProofKey],
       block: BlockParam
   ): IO[Either[JsonRpcError, ProofAccount]] = IO {
-    resolveHeader(block).map(_.header).flatMap { header =>
+    resolveHeader(block).flatMap { resolved =>
+      val header = resolved.header
       val blockNumber = header.number.value
       // The account, its proof and its storage proofs come from one state: a proof is of one block.
       StateRead
-        .at(blockchainReader, header) { state =>
+        .of(blockchainReader, resolved) { state =>
           for accountProof <- Either.fromOption(
               blockchainReader.accountProofIn(state, header, address).map(_.map(asRlpSerializedNode)),
               noAccountProof(address, blockNumber)
@@ -253,7 +254,7 @@ class EthProofService(
       val header = blockchainReader.getBestBranch match
         case BestBranch(_, tip) if tip >= number && number >= 0 => blockchainReader.getBlockHeaderByNumber(number)
         case _                                                  => None
-      header.toRight(JsonRpcError.InvalidParams(s"Block $number not found"))
+      header.toRight(ResolveBlock.HeaderNotFound)
 
     def getLatestHeader(): Either[JsonRpcError, BlockHeader] =
       blockchainReader.getBestBlockHeader

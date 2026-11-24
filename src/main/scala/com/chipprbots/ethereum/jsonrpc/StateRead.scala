@@ -41,6 +41,15 @@ object StateRead extends Logger:
   def at[A](reader: BlockchainReader, header: BlockHeader)(read: MptStorage => A): Either[JsonRpcError, A] =
     retrying(() => reader.stateAt(header))(read)
 
+  /** `read` on the state of the block `resolved` names. The pending block's state is in its build's own buffer and
+    * nowhere else, so it is read from the pending block's world (B-210, as B-230 does for its code): read over the
+    * stores by the pending header, the nodes its build wrote are not there. Any other block's through [[at]].
+    */
+  def of[A](reader: BlockchainReader, resolved: ResolvedHeader)(read: MptStorage => A): Either[JsonRpcError, A] =
+    resolved.pendingState match
+      case Some(world) => Right(read(world.stateStorage))
+      case None        => at(reader, resolved.header)(read)
+
   /** `read` on the state of `header`'s block, for an execution that commits nothing: each attempt gets a scratch state
     * of its own, so what a stale attempt persisted is dropped with it.
     */

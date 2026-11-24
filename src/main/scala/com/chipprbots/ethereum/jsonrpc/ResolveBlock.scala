@@ -157,12 +157,16 @@ trait ResolveBlock:
       .getBlockByNumber(blockchainReader.getBestBranch, number)
       .toRight(JsonRpcError.InvalidParams(s"Block $number not found"))
 
-  /** The header at `number` on the best branch (the number index, as [[getBlock]], but no body). */
+  /** The header at `number` on the best branch (the number index, as [[getBlock]], but no body). A number above the
+    * best block names no block, though a block imported and not yet the head may be stored at that height: geth
+    * resolves a number through the canonical chain, and answers one it does not find with
+    * [[ResolveBlock.HeaderNotFound]] (B-210).
+    */
   private def getHeader(number: BigInt): Either[JsonRpcError, BlockHeader] =
     val header = blockchainReader.getBestBranch match
       case BestBranch(_, tip) if tip >= number && number >= 0 => blockchainReader.getBlockHeaderByNumber(number)
       case _                                                  => None
-    header.toRight(JsonRpcError.InvalidParams(s"Block $number not found"))
+    header.toRight(ResolveBlock.HeaderNotFound)
 
   private def getHeaderByHash(hash: org.apache.pekko.util.ByteString): Either[JsonRpcError, BlockHeader] =
     blockchainReader
@@ -174,6 +178,11 @@ trait ResolveBlock:
       .toRight(JsonRpcError.InvalidParams("Latest block not found"))
 
 object ResolveBlock:
+
+  /** What a method that reads a block's state answers for a block number that names no block: geth's and core-geth's
+    * answer (`StateAndHeaderByNumber`), `-32000 header not found`.
+    */
+  val HeaderNotFound: JsonRpcError = JsonRpcError.LogicError("header not found")
 
   /** How far below a safe block the head's chain is looked for, at most: one block read each. */
   val SafeAncestorSearch: Int = 1_024

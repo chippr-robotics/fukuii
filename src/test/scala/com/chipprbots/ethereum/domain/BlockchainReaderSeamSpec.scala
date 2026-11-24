@@ -209,20 +209,69 @@ class BlockchainReaderSeamSpec extends AnyFlatSpec with Matchers:
     }
   }
 
-  // The by-number reads answered a block above the best block with no account; the pending block is such a block.
+  // B-210. A block above the best block (one imported and not yet the head, or the pending block) was answered with no
+  // account, as the read by block number that the header reads replaced did. geth answers it from its state.
   Seq(false, true).foreach { guard =>
-    it should s"answer a block above the best block with no account, as the read by number did (guard ${
-        if guard then "on" else "off"
-      })" taggedAs UnitTest in {
+    it should s"answer a block above the best block from the state it is handed (guard ${if guard then "on" else "off"})" taggedAs UnitTest in {
       val f = new OnPositions
       val node = if guard then f.node else new Node(EphemDataSource(), ArchivePruning, guard = false)
-      val pending = headerOf(2, f.hashed.root)
-      node.reader.accountIn(f.hashed.nodes, pending, alice) shouldBe None
-      node.reader.accountProofIn(f.hashed.nodes, pending, alice) shouldBe None
+      val above = headerOf(2, f.hashed.root)
+      node.reader.getBestBlockNumber shouldBe 1
+      node.reader.accountIn(f.hashed.nodes, above, alice) shouldBe f.reference.get(alice)
+      node.reader.accountIn(f.hashed.nodes, above, alice) shouldBe defined
+      encoded(node.reader.accountProofIn(f.hashed.nodes, above, alice)) shouldBe encoded(f.reference.getProof(alice))
       node.reader.accountIn(f.hashed.nodes, f.header, alice) shouldBe f.reference.get(alice)
-      encoded(node.reader.accountProofIn(f.hashed.nodes, f.header, alice)) shouldBe
-        encoded(f.reference.getProof(alice))
     }
+  }
+
+  /** Block 2 on the anchor, executed and kept beside the disk as a forward layer, as a block imported and not adopted
+    * is: `alice`'s balance and a slot of hers are changed, and `eve` is made.
+    */
+  final private class WithALayer:
+    val f = new OnPositions
+    private val state = f.node.storages.pathStateStorage.get
+    private val codes = f.node.storages.evmCodeStorage
+    private val staged = state.stage(refOf(f.header))
+    val eve: Address = Address(0xe7e)
+    val root: ByteString = InMemoryWorldStateProxy
+      .persistState(
+        withSlots(alice, Seq(1 -> 4242))(worldOver(staged.storage, f.hashed.root, codes))
+          .saveAccount(alice, f.reference.get(alice).get.copy(balance = UInt256(777)))
+          .saveAccount(eve, Account(3, 33))
+      )
+      .stateRootHash
+    val header: BlockHeader = headerOf(2, root).copy(parentHash = f.header.hash)
+    state.commitOverlay(staged, refOf(header)) match
+      case com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.OverlayOutcome.Kept(_) => ()
+      case other => fail(s"block 2 was not kept as a layer: $other")
+    state.holdsLayer(refOf(header)) shouldBe true
+    state.anchor shouldBe Some(refOf(f.header))
+
+  it should "read a block kept beside the disk as a forward layer from its layer (B-210)" taggedAs UnitTest in {
+    val l = new WithALayer
+    import l.f
+    // the block's own state, through its layer and the disk's rows
+    f.node.reader.accountAt(l.header, alice).map(_.balance.toBigInt) shouldBe Some(BigInt(777))
+    f.node.reader.accountAt(l.header, l.eve) shouldBe Some(Account(3, 33))
+    f.node.reader.accountAt(l.header, bob) shouldBe f.reference.get(bob)
+    val state = f.node.reader.stateAt(l.header)
+    val alices = f.node.reader.accountIn(state, l.header, alice).get
+    BigInt(
+      1,
+      f.node.blockchain
+        .getAccountStorageAt(state, alice, alices.storageRoot.value, 1, ethCompatibleStorage = true)
+        .toArray
+    ) shouldBe BigInt(4242)
+    // an execution on it reads the same, and writes nowhere
+    worldOver(f.node.reader.scratchStateAt(l.header), l.root, f.node.storages.evmCodeStorage)
+      .getAccount(l.eve) shouldBe Some(Account(3, 33))
+    // the anchor's state is the anchor's still
+    f.node.reader.accountAt(f.header, alice) shouldBe f.reference.get(alice)
+    f.node.reader.accountAt(f.header, l.eve) shouldBe None
+    // a block at that height with no layer is not held
+    val sibling = l.header.copy(extraData = ByteString("another block 2"))
+    a[StateUnavailable] should be thrownBy f.node.reader.stateAt(sibling)
+    a[StateUnavailable] should be thrownBy f.node.reader.scratchStateAt(sibling)
   }
 
   it should "give an execution a state it can persist to, and a reader one it cannot" taggedAs UnitTest in {
