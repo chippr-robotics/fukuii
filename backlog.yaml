@@ -5372,7 +5372,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:15:45Z
-      heartbeat: 2026-11-24T11:15:50Z
+      heartbeat: 2026-11-24T12:16:59Z
     notes: |-
       beacon W1 on B-338 (EngineApiService.poolHead only moves on FCU). Pool contents/RPC only, never a build. One shared tracker for both paths.
       2026-11-24 in-progress: folded into the B-338/B-460 round 2 (user: fix in the PR, don't split)
