@@ -4363,3 +4363,13 @@ items:
     links:
       spec: 018
     notes: B-410 added SyncConfig.backfillStallTimeout (default 30 min, read via hasPath) but snap-split verify forbids src/main/resources edits on fix/* branches, so the key is undocumented in sync.conf. Add it from a non-fix branch.
+  - id: B-460
+    title: BlockImporter.resolveBranch hands the predicted old branch's txs to the pool before the import, against the pre-reorg state, even when the import fails
+    priority: P3
+    status: open
+    area: sync
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "forge-b448: since B-448 a batch ChainReorganised re-adds the moved-off blocks' txs after the import (as importBlock). The pre-import AddUncheckedTransactions(oldBranch) in resolveBranch is then a duplicate for full reorgs, validated against the old head's state (where those txs are included), and sent even on KeptCurrentBestBranch/failure. Retire it once B-338 reports a partial reorg's old branch."
