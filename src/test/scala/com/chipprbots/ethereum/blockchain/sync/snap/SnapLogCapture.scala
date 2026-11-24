@@ -35,9 +35,13 @@ import org.slf4j.helpers.MessageFormatter
   * under the package, such as the TrieNodeHealingCoordinator's INFO in `logback-test.xml`, is captured at DEBUG too),
   * and the package logger's additivity is off while a capture is open, so nothing reaches the console. One filter
   * serves every open capture, so captures nest; `close()` restores the additivity.
+  *
+  * @param scope
+  *   the logger, or the package, whose lines are captured: the `snap` package unless another is named (B-496: the
+  *   consensus adapter's lines)
   */
-final class SnapLogCapture extends AutoCloseable:
-  private val logger = LoggerFactory.getLogger(SnapLogCapture.Package).asInstanceOf[LogbackLogger]
+final class SnapLogCapture(val scope: String = SnapLogCapture.Package) extends AutoCloseable:
+  private val logger = LoggerFactory.getLogger(scope).asInstanceOf[LogbackLogger]
   private val previousAdditive: Boolean = logger.isAdditive
 
   private val captured = new ConcurrentLinkedQueue[(Level, String)]()
@@ -102,10 +106,10 @@ object SnapLogCapture:
 
   private val open = new CopyOnWriteArraySet[SnapLogCapture]()
 
-  private def inPackage(name: String): Boolean =
-    name == Package || (name.startsWith(Package) && name.charAt(Package.length) == '.')
+  private def inScope(scope: String, name: String): Boolean =
+    name == scope || (name.startsWith(scope) && name.charAt(scope.length) == '.')
 
-  /** Records the package's DEBUG-and-up lines in every open capture. A call without a message is a level check
+  /** Records a scope's DEBUG-and-up lines in every open capture of it. A call without a message is a level check
     * (`isDebugEnabled`, or Pekko's `Slf4jLoggingFilter` before it publishes): it is accepted, so that the line follows.
     */
   private object Tap extends TurboFilter:
@@ -117,13 +121,16 @@ object SnapLogCapture:
         params: Array[AnyRef],
         t: Throwable
     ): FilterReply =
-      if open.isEmpty || level == null || !level.isGreaterOrEqual(Level.DEBUG) || !inPackage(logger.getName) then
-        FilterReply.NEUTRAL
+      if open.isEmpty || level == null || !level.isGreaterOrEqual(Level.DEBUG) then FilterReply.NEUTRAL
       else
-        if format != null then
-          val line = MessageFormatter.arrayFormat(format, params).getMessage
-          open.forEach(_.record(level, line))
-        FilterReply.ACCEPT
+        val name = logger.getName
+        val capturing = open.asScala.filter(capture => inScope(capture.scope, name))
+        if capturing.isEmpty then FilterReply.NEUTRAL
+        else
+          if format != null then
+            val line = MessageFormatter.arrayFormat(format, params).getMessage
+            capturing.foreach(_.record(level, line))
+          FilterReply.ACCEPT
 
   private def context: LoggerContext = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
 

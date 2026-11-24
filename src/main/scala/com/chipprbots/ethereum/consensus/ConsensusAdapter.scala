@@ -523,9 +523,10 @@ class ConsensusAdapter(
       val queued = newBranch.toList.drop(imported.size)
       failure match
         case StoreFailure.OfTheState(fault) =>
-          // the fault as it was thrown, never wrapped: its type is what the escalation's feed reads (B-462)
+          // the fault as it was thrown, never wrapped: its type is what the escalation's feed reads (B-462). Its tag
+          // is ConsensusImpl's: another thread's adoption holding the head is said as busy, not as a fault (B-496)
           log.warn(
-            s"[STATE-FAULT] The import of blocks $blocks met a fault of this node's state, after ${imported.size} " +
+            s"${ConsensusImpl.tagOf(fault)} The import of blocks $blocks met a fault of this node's state, after ${imported.size} " +
               s"block(s) of it became the head: no block was judged, the others are queued again: ${fault.getMessage}"
           )
           ConsensusStateFault(fault, imported, queued)

@@ -11,6 +11,7 @@ import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.consensus.Consensus.*
 import com.chipprbots.ethereum.consensus.ConsensusImpl.ForkPoint
+import com.chipprbots.ethereum.consensus.ConsensusImpl.tagOf
 import com.chipprbots.ethereum.consensus.engine.BranchHandOff
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
@@ -315,12 +316,6 @@ class ConsensusImpl(
     fault match
       case Some(fault) => stateFaulted(fault, outcome.executed, branch.toList)
       case None        => extendedBy(branch, (outcome.executed, outcome.error))
-
-  /** The tag a refusal is logged with: another thread's adoption holding the head is no fault of this node's state
-    * (B-462).
-    */
-  private def tagOf(fault: StateFault): String =
-    if fault.isInstanceOf[StateBusy] then "[STATE-BUSY]" else "[STATE-FAULT]"
 
   /** A batch that stopped on a fault of this node's own state (spec 018 Track C, C4b): the blocks before it are
     * adopted, as a shorter batch would have left them, and the rest are handed back to be tried again. No block is
@@ -1731,6 +1726,13 @@ class ConsensusImpl(
     told
 
 object ConsensusImpl:
+
+  /** The tag a refusal is logged with: another thread's adoption holding the head is no fault of this node's state
+    * (B-462). Shared with [[ConsensusAdapter]], whose answer to a fault thrown out of an evaluation says it too
+    * (B-496).
+    */
+  private[consensus] def tagOf(fault: StateFault): String =
+    if fault.isInstanceOf[StateBusy] then "[STATE-BUSY]" else "[STATE-FAULT]"
 
   /** @param number
     *   height of the last block the branch shares with the canonical chain
