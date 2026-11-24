@@ -136,11 +136,19 @@ class ForkChoiceManager(
         // executes and settles holds it, so this moves the head from the index that settle leaves, and the settle
         // never sees the head moved under it.
         val move = CanonicalHeadLock.held(s"the fork choice to block ${header.number.value}") {
-          val move = blockchainWriter.promoteToCanonicalHead(header, blockchainReader)
           // Reference counts follow the canonical index: a block is applied exactly while it is canonical (see
-          // ReorgStateHandler). Abandon first, then re-adopt, as ConsensusImpl.settleHead does; both are idempotent.
+          // ReorgStateHandler). The blocks the move adopts are put back before its batch is written, and those it drops
+          // are taken out after, as ConsensusImpl.settleHead does: a stop between them leaves a block counted that is
+          // not indexed, which only keeps nodes longer, never one indexed that is not counted, whose nodes the prune
+          // would delete under the head (B-511, vault). Both are idempotent, so the fork choice made again after a
+          // stop counts nothing twice.
+          val move = blockchainWriter.promoteToCanonicalHead(
+            header,
+            blockchainReader,
+            beforeTheWrite =
+              planned => reorgState.readoptBlockStates(planned.adopted.map { case (n, h) => (n, h.value) })
+          )
           reorgState.abandonBlockStates(move.dropped.map { case (n, h) => (n, h.value) })
-          reorgState.readoptBlockStates(move.adopted.map { case (n, h) => (n, h.value) })
           move
         }
         rederiveWeights(move.adopted.map(_._2))

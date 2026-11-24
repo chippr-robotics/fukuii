@@ -522,8 +522,12 @@ class EngineApiService(
     *      known and we have state → full execution + validation 4. If parent is unknown → optimistic import (store
     *      block, skip execution, return VALID) This enables checkpoint sync where we follow the CL tip without full
     *      history.
+    *
+    * On a thread that may block (B-511): on the hash layout the look at the index and the write of the payload's entry
+    * wait for the head's lock, which a branch the p2p import executes and settles holds; on the unified layout the
+    * payload's state is written under the state's lock. A compute thread parked behind either starves the runtime.
     */
-  def newPayload(payload: ExecutionPayload): IO[PayloadStatusV1] = IO {
+  def newPayload(payload: ExecutionPayload): IO[PayloadStatusV1] = IO.blocking {
     val block = payloadToBlock(payload)
 
     // EIP-7928 (engine_newPayloadV5): the block access list must be the canonical RLP of a well-formed list, the empty

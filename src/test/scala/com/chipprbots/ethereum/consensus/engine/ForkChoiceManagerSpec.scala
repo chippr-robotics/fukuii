@@ -100,6 +100,25 @@ class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       countedUnderTheLock shouldBe List(true, true)
   )
 
+  // B-511 (vault): the blocks a move adopts are counted again before its write, and those it drops are taken out after.
+  // A stop between the two then leaves a block counted that is not indexed, which only keeps nodes longer; never one
+  // indexed that is not counted, whose nodes the prune would delete under the head.
+  it should "put back the counts of what a move adopts before its write, and take out what it drops after" taggedAs UnitTest in (
+    new Fixture:
+      @volatile var bestAt: List[(String, Option[ByteString])] = Nil
+      def best: Option[ByteString] = blockchainReader.getBestBlockHeader.map(_.hash.value)
+      val recording: ReorgStateHandler = new com.chipprbots.ethereum.consensus.ReorgStateHandler:
+        override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = bestAt :+= ("abandon" -> best)
+        override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = bestAt :+= ("readopt" -> best)
+      val before = best
+      before should not be Some(knownHeadHash)
+      val counted = new ForkChoiceManager(blockchainReader, blockchainWriter, recording)
+      counted.applyForkChoiceState(ForkChoiceState(knownHeadHash, ByteString.empty, ByteString.empty)) shouldBe Right(
+        ()
+      )
+      bestAt shouldBe List("readopt" -> before, "abandon" -> Some(knownHeadHash))
+  )
+
   it should "not throw when no listener is registered" taggedAs UnitTest in new Fixture:
     // No listener — must still succeed
     val state: ForkChoiceState = ForkChoiceState(unknownHeadHash, ByteString.empty, ByteString.empty)

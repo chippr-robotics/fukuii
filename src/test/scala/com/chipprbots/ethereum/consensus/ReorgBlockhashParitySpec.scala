@@ -2080,6 +2080,158 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       (6 to 9).foreach(n => node.indexed(n) shouldBe None)
     )
 
+  // B-511 (bound): a batch onto the head is executed a hold at a time under the head's lock, here a hold per block. A
+  // fork choice that comes while a block is executed waits for that hold alone, and has the lock before the batch's
+  // next hold. `onTop` is 50 blocks on the head, known by their hash, as the Engine API stores payloads, so that a fork
+  // choice may name one of them.
+  class BatchOnTheHead extends DesignatedOnTheHashLayout:
+    override def holdBudget: scala.concurrent.duration.FiniteDuration = scala.concurrent.duration.Duration.Zero
+    val onTop: List[Block] = oracle.extendWith(left.last, List.fill(50)(Nil), difficulty = 0, tag = 0x6b)
+    onTop.foreach(block => node.blockchainWriter.storeBlockByHashOnly(block).commit())
+    named.set(Some(onTop.last.hash.value))
+    // the fork choice's move: its reference counts are put back under the lock, before its write
+    @volatile var moved = false
+    val forkChoiceManager = new ForkChoiceManager(
+      node.blockchainReader,
+      node.blockchainWriter,
+      new ReorgStateHandler:
+        override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = ()
+        override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = moved = true
+    )
+    @volatile var forkChoice: Option[Thread] = None
+    @volatile var heldBack = false
+    // whether the fork choice had moved the head as each block of the batch began to execute
+    @volatile var movedBefore: Map[Int, Boolean] = Map.empty
+
+    /** A fork choice to `to`, sent as the batch's block `at` (0-based) is executed: it waits for the lock. */
+    def forkChoiceAt(at: Int, to: Block): Unit =
+      onExecute = block =>
+        val index = onTop.indexWhere(_.hash == block.hash)
+        if index >= 0 then movedBefore += index -> moved
+        if index == at then
+          val thread = new Thread(() =>
+            forkChoiceManager.applyForkChoiceState(
+              ForkChoiceState(to.hash.value, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash)
+            ): Unit
+          )
+          forkChoice = Some(thread)
+          thread.start()
+          val deadline = System.nanoTime() + 30_000_000_000L
+          while !CanonicalHeadLock.isWaiting(thread) && thread.isAlive && System.nanoTime() < deadline do
+            Thread.onSpinWait()
+          heldBack = CanonicalHeadLock.isWaiting(thread)
+
+  "A batch onto the head on the hash layout (B-511)" should
+    "let a fork choice that comes as one of its blocks is executed move the head before its next block" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new BatchOnTheHead:
+      // the consensus layer names the block the batch is executing, which is the head once that block is committed
+      forkChoiceAt(1, onTop(1))
+      evaluate(onTop) match
+        case ExtendedCurrentBestBranch(imported) => imported.map(_.block.hash) shouldBe onTop.map(_.hash)
+        case other                               => fail(s"not the whole batch onto the head: $other")
+      forkChoice.foreach(_.join(30_000))
+      heldBack shouldBe true
+      // it waited for the hold of block 2 alone: it had moved the head as block 3 began, and not before
+      movedBefore(1) shouldBe false
+      movedBefore(2) shouldBe true
+      movedBefore.size shouldBe 50
+      node.bestHash shouldBe onTop.last.hash
+      oneChain()
+    )
+
+  it should "stop where a fork choice moved the head elsewhere, and hand the rest back, not judged" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new BatchOnTheHead:
+    // the consensus layer goes back to block 4, the head the batch stands on, as block 6 is executed
+    forkChoiceAt(1, left.last)
+    evaluate(onTop) match
+      case ConsensusStateFault(fault, imported, toEnqueue) =>
+        fault shouldBe a[StateBusy]
+        imported.map(_.block.hash) shouldBe onTop.take(2).map(_.hash)
+        toEnqueue shouldBe onTop.drop(2)
+      case other => fail(s"not a batch handed back: $other")
+    forkChoice.foreach(_.join(30_000))
+    heldBack shouldBe true
+    movedBefore.keySet shouldBe Set(0, 1)
+    // the fork choice's head is the head: the batch did not commit over it
+    node.bestHash shouldBe left.last.hash
+    oneChain()
+    reported shouldBe Nil
+  )
+
+  // B-506, the consensus layer's arm (ETH): when its branch does not become the head, the payloads the index named above
+  // the old head are put back only as the chain that links up from the old head; an entry that does not link is deleted.
+  "The consensus layer's branch on the hash layout, not adopted," should
+    "put back only the payloads above the old head that link up from it" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new DesignatedWithPayloadsAhead:
+      // at height 7, a block of another chain: it does not stand on the payload at 6
+      val stray: Block = oracle.extendWith(prefix.last, List(Nil, Nil), difficulty = 0, tag = 0x6c).last
+      stray.number.value shouldBe BigInt(7)
+      node.blockchainWriter.storeBlock(stray).commit()
+      node.indexed(7) shouldBe Some(stray.hash)
+      val invalid: Block = oracle.invalidChild(prefix.last, difficulty = 0)
+      named.set(Some(invalid.hash.value))
+      evaluate(prefix :+ invalid) match
+        case BranchExecutionFailure(_, failing, _) => failing shouldBe invalid.hash.value
+        case other                                 => fail(s"not a failure of the branch: $other")
+      node.bestHash shouldBe left.last.hash
+      (3 to 4).foreach(n => node.indexed(n) shouldBe Some(left(n - 3).hash))
+      node.indexed(5) shouldBe Some(ahead.head.hash)
+      node.indexed(6) shouldBe Some(ahead(1).hash)
+      node.indexed(7) shouldBe None
+      node.indexed(8) shouldBe None
+    )
+
+  // B-506 on the weight arm (ETC), the old head kept: core-geth's `reorg` deletes every hash marker that is not the head's
+  // ancestry. Entries a branch's commits left above the head when the node stopped before its settle are deleted, and
+  // their blocks' state changes taken out, whether they stand on the head or not; none is put back.
+  "A lighter executed prefix on the hash layout (the weight arm)" should
+    "delete every entry above the kept head, and take out the state changes of their blocks" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new Fixture(guard = false):
+      import node.blockchainConfig
+      import node.runtime
+      val common: List[Block] = oracle.extendCanonical(oracle.genesis, 3, difficulty = 1000)
+      val aChain: List[Block] = oracle.extendCanonical(common.last, 3, difficulty = 1000)
+      node.importAll(common ++ aChain) shouldBe a[BlockImportedToTop]
+      // left above the head by a stop: at 7 a child of the head, at 8 a block of another chain
+      val child: Block = oracle.extendSide(aChain.last, 1, difficulty = 1000, tag = 0x6d).head
+      val stray: Block = oracle.extendSide(common.last, 5, difficulty = 1000, tag = 0x6e).last
+      List(child, stray).foreach(block => node.blockchainWriter.storeBlock(block).commit())
+      node.indexed(7) shouldBe Some(child.hash)
+      node.indexed(8) shouldBe Some(stray.hash)
+      // b4 at 1000, then a block that fails at 5000: selected by its headers' weight, its executed prefix is lighter
+      val b4: Block = oracle.extendSide(common.last, 1, difficulty = 1000, tag = 0x6f).head
+      val invalid: Block = oracle.invalidChild(b4, difficulty = 5000)
+      @volatile var abandoned: List[(BigInt, ByteString)] = Nil
+      val consensus = new ConsensusImpl(
+        node.blockchainReader,
+        node.blockchainWriter,
+        node.blockExecution,
+        reorgState = new ReorgStateHandler:
+          override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = abandoned ++= blocks
+          override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit = ()
+      )
+      consensus.evaluateBranch(NonEmptyList.of(b4, invalid)).unsafeRunSync() match
+        case BranchExecutionFailure(_, failing, _) => failing shouldBe invalid.hash.value
+        case other                                 => fail(s"not a failure of the branch: $other")
+      node.bestHash shouldBe aChain.last.hash
+      (1 to 3).foreach(n => node.indexed(n) shouldBe Some(common(n - 1).hash))
+      (4 to 6).foreach(n => node.indexed(n) shouldBe Some(aChain(n - 4).hash))
+      (7 to 9).foreach(n => withClue(s"height $n: ")(node.indexed(n) shouldBe None))
+      abandoned.toSet shouldBe Set(
+        BigInt(4) -> b4.hash.value,
+        BigInt(7) -> child.hash.value,
+        BigInt(8) -> stray.hash.value
+      )
+    )
+
   /** A node past the merge (a terminal total difficulty of 0), on the unified layout unless `guard` is false, with a
     * `ConsensusImpl` that has a head the consensus layer names and a reporter of invalid blocks, as the node builds one
     * with the Engine API on. `aChain` is blocks 1 to 5; `bChain` leaves it after block 2 and is blocks 3 to 6. With
@@ -2121,6 +2273,10 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
           ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
             onExecute(block)
             super.executeAndValidateStaged(block, alreadyValidated, staged)
+
+    /** How long a batch onto the head holds the head's lock on the hash layout (B-511): the node's, unless a test says.
+      */
+    def holdBudget: scala.concurrent.duration.FiniteDuration = CanonicalHeadLock.ImportHoldBudget
     val consensus = new ConsensusImpl(
       node.blockchainReader,
       writerOf(node),
@@ -2128,7 +2284,8 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       Some(reporter),
       Some(DesignatedHead(() => namedNow())),
       ReorgStateHandler.NoOp,
-      handOff
+      handOff,
+      importHoldBudget = holdBudget
     )
     val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, 5, difficulty = 0)
     val bChain: List[Block] = oracle.extendSide(aChain(1), 4, difficulty = 0, tag = 0x74)

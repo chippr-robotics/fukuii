@@ -308,6 +308,9 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
 object ReferenceCountedStateStorage extends com.chipprbots.ethereum.utils.Logger:
   /** One block commit (and one prune) at a time: the duplicate check reads the record the previous commit writes. */
   private[storage] val commitLock = new Object
+
+  /** Whether this thread holds [[commitLock]]: the head's lock is taken before it, never inside it (B-511). */
+  private[ethereum] def commitLockHeldByCurrentThread: Boolean = Thread.holdsLock(commitLock)
   private[storage] def warnDuplicate(msg: String): Unit = log.warn(msg)
   private[storage] def warnTrustUnreadable(e: Throwable): Unit =
     log.error("Could not tell whether reference counts can be trusted; this prune keeps every trie node (#1692)", e)

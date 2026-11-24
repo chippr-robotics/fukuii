@@ -33,6 +33,7 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.CanonicalHeadLock
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.IndexRewrite
 import com.chipprbots.ethereum.ledger.BlockData
 import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
@@ -75,7 +76,10 @@ class ConsensusImpl(
     oldBranchToldAtMost: Int = ConsensusImpl.OldBranchToldAtMost,
     // How many of the side blocks a reorganisation executes again are read and executed at a time (B-343): the blocks
     // in memory at once, however deep the side chain. Tests give it to compare a run in chunks with one in one piece.
-    reorgChunkBlocks: Int = ConsensusImpl.ReorgChunkBlocks
+    reorgChunkBlocks: Int = ConsensusImpl.ReorgChunkBlocks,
+    // How long a batch onto the head holds the head's lock on the hash layout before it lets it go between two blocks
+    // (B-511): what a fork choice waits behind it, besides one block. Tests give a zero, a hold per block.
+    importHoldBudget: scala.concurrent.duration.FiniteDuration = CanonicalHeadLock.ImportHoldBudget
 ) extends Consensus
     with Logger:
 
@@ -204,53 +208,138 @@ class ConsensusImpl(
             )
           )
       else
-        // On the hash layout a batch onto the head and a branch alike are executed and settled under the head's lock,
-        // as go-ethereum's insertChain holds `chainmu`: a fork choice or a payload's entry waits for it, and the head
-        // the batch is weighed against is the head as it is once the lock is held (B-511). A batch onto the head
-        // writes the best block and the index block by block as it commits them; a fork choice between two of those
-        // commits left the index of one chain under the best block of another.
-        IO
-          .delay(
-            CanonicalHeadLock.held(s"the import of blocks [${branch.head.number}-${branch.last.number}]")(
-              againstTheHeadNow(branch, currentBestHeader, currentBestBlockWeight, accessLists)
-            )
-          )
-          .evalOn(blockExecutionScheduler.compute)
+        // On the hash layout a branch is executed and settled under the head's lock, as go-ethereum's insertChain holds
+        // `chainmu`, and a batch onto the head is executed under it a hold at a time (B-511): a fork choice or a
+        // payload's entry waits for it, and the head a batch is weighed against is the head as it is once the lock is
+        // held. On a thread that may block: the wait for the lock is no work of the compute pool's.
+        IO.blocking(onTheHashLayout(branch, currentBestHeader, currentBestBlockWeight, accessLists))
 
     consensusResult.flatTap(result => IO(measureBlockMetrics(result)))
 
-  /** A batch on the hash layout, under [[CanonicalHeadLock]], against the head as it is now: the head it was weighed
-    * against, or, when a fork choice moved the head since, the head it moved to, which the batch is weighed against
-    * again (B-511). Nothing else moves the head while the lock is held, so the head the batch is executed and settled
-    * against stays the head it was read as.
+  /** A step of a batch on the hash layout, taken under [[CanonicalHeadLock]]: the batch's result, or the blocks still
+    * to execute onto the head, the blocks executed so far and the weight of the last of them.
     */
-  private def againstTheHeadNow(
+  private enum HashStep:
+    case Done(result: ConsensusResult)
+    case More(remaining: NonEmptyList[Block], executed: List[BlockData], weight: ChainWeight)
+
+  /** A batch on the hash layout, against the head as it is (B-511).
+    *
+    * The first hold of [[CanonicalHeadLock]] reads the head: the head the batch was weighed against, or, when a fork
+    * choice moved it since, the head it moved to, which the batch is weighed against again. A batch that does not stand
+    * on it is a branch: executed and settled in that one hold, as `insertChain` holds `chainmu`. Nothing else moves the
+    * head while the lock is held, so the head the branch is executed and settled against stays the head it was read as.
+    *
+    * A batch onto the head is executed a hold at a time: each hold executes blocks for at most `importHoldBudget`
+    * ([[CanonicalHeadLock.ImportHoldBudget]] on a node; one block at least), then lets the lock go, so that a fork
+    * choice that waits has it before the next hold (the lock is fair). Each hold after the first asks again that the
+    * next block stands on the head, as the strict import's `stillOnHead` asks before each commit. A batch block commits
+    * the best block and its index entry with its state, so the best block and the index name one chain after every
+    * hold. When a fork choice moved the head elsewhere between two holds, the batch stops there: the blocks executed
+    * stay as they were committed, the fork choice's head stays the head, and the rest are handed back, not judged, as a
+    * head that moved under a batch is on the unified layout ([[StateBusy]], which no escalation counts).
+    */
+  private def onTheHashLayout(
       branch: NonEmptyList[Block],
       weighedHeader: BlockHeader,
       weighedWeight: ChainWeight,
       accessLists: Map[ByteString, BlockAccessList]
   )(implicit blockchainConfig: BlockchainConfig): ConsensusResult =
-    def onTheHead(head: BlockHeader, weight: ChainWeight): ConsensusResult =
-      if head.hash == branch.head.header.parentHash then importToTop(branch, weight, accessLists)
-      else importToNewBranch(branch, head.number.value, weight, accessLists, head.hash)
-    // the header alone: the old head is read whole only if its blocks are told (B-296)
-    blockchainReader.getBestBlockHeader match
-      case Some(now) if now.hash == weighedHeader.hash => onTheHead(weighedHeader, weighedWeight)
-      case Some(now) =>
-        blockchainReader.getChainWeightByHash(now.hash) match
-          case Some(weight) =>
-            log.info(
-              "REORG: the head moved to {} {} since the blocks [{}-{}] were weighed against {}: they are weighed " +
-                "against the head as it is",
-              now.number,
-              now.hashAsHexString,
-              branch.head.number,
-              branch.last.number,
-              weighedHeader.number
+    def holding(remaining: NonEmptyList[Block]): String =
+      s"the import of blocks [${remaining.head.number}-${remaining.last.number}]"
+
+    def first: HashStep =
+      // the header alone: the old head is read whole only if its blocks are told (B-296)
+      blockchainReader.getBestBlockHeader match
+        case None => HashStep.Done(noBestBlock())
+        case Some(now) =>
+          val weight =
+            if now.hash == weighedHeader.hash then Some(weighedWeight)
+            else
+              val stored = blockchainReader.getChainWeightByHash(now.hash)
+              if stored.isDefined then
+                log.info(
+                  "REORG: the head moved to {} {} since the blocks [{}-{}] were weighed against {}: they are weighed " +
+                    "against the head as it is",
+                  now.number,
+                  now.hashAsHexString,
+                  branch.head.number,
+                  branch.last.number,
+                  weighedHeader.number
+                )
+              stored
+          weight match
+            case None => HashStep.Done(noTotalDifficultyForHeader(now))
+            case Some(weight) if now.hash == branch.head.header.parentHash =>
+              ontoTheHeadForAHold(branch, branch, Nil, weight, accessLists)
+            case Some(weight) =>
+              HashStep.Done(importToNewBranch(branch, now.number.value, weight, accessLists, now.hash))
+
+    def next(remaining: NonEmptyList[Block], executed: List[BlockData], weight: ChainWeight): HashStep =
+      blockchainReader.getBestBlockHeader match
+        case Some(now) if now.hash == remaining.head.header.parentHash =>
+          ontoTheHeadForAHold(branch, remaining, executed, weight, accessLists)
+        case now =>
+          val where = now.fold("no block")(h => s"block ${h.number} (${h.hashAsHexString})")
+          log.info(
+            "[STATE-BUSY] the head moved to {} under the import of blocks [{}-{}], after {} block(s) of it: the rest are " +
+              "handed back, not judged",
+            where,
+            branch.head.number,
+            branch.last.number,
+            executed.size
+          )
+          HashStep.Done(
+            ConsensusStateFault(
+              new StateBusy(
+                "a fork choice",
+                s"the head moved to $where under the import of blocks [${branch.head.number}-${branch.last.number}], " +
+                  s"after ${executed.size} block(s) of it"
+              ),
+              executed,
+              remaining.toList
             )
-            onTheHead(now, weight)
-          case None => noTotalDifficultyForHeader(now)
-      case None => noBestBlock()
+          )
+
+    @tailrec
+    def go(step: HashStep): ConsensusResult = step match
+      case HashStep.Done(result) => result
+      case HashStep.More(remaining, executed, weight) =>
+        go(CanonicalHeadLock.held(holding(remaining))(next(remaining, executed, weight)))
+
+    go(CanonicalHeadLock.held(holding(branch))(first))
+
+  /** One hold's worth of a batch onto the head, on the hash layout, under [[CanonicalHeadLock]]: blocks executed one at
+    * a time, each committed as the head, while the hold is within `importHoldBudget`; then the rest, if any, for the
+    * next hold. A batch that ends in this hold is answered in it, as [[importToTop]] answers it, so that its write of
+    * the best block is under the lock too.
+    */
+  private def ontoTheHeadForAHold(
+      branch: NonEmptyList[Block],
+      remaining: NonEmptyList[Block],
+      executedBefore: List[BlockData],
+      weight: ChainWeight,
+      accessLists: Map[ByteString, BlockAccessList]
+  )(implicit blockchainConfig: BlockchainConfig): HashStep =
+    val until = System.nanoTime() + importHoldBudget.toNanos
+    @tailrec
+    def run(blocks: NonEmptyList[Block], executed: List[BlockData], weight: ChainWeight): HashStep =
+      val displaced = displacedBy(List(blocks.head))
+      val outcome = executeBranch(List(blocks.head), weight, adoptEachBlock = true, accessLists)
+      abandonDisplaced(displaced, outcome.executed)
+      val executedNow = executed ++ outcome.executed
+      NonEmptyList.fromList(blocks.tail) match
+        case Some(rest) if outcome.error.isEmpty && outcome.stateFault.isEmpty =>
+          val carried = outcome.executed.last.weight
+          if System.nanoTime() < until then run(rest, executedNow, carried)
+          else
+            // the best block as the batch leaves it, under this hold: each block's commit wrote it already, so this
+            // writes the same block again, as the end of a batch does (`saveLastBlock`)
+            saveLastBlock(executedNow)
+            HashStep.More(rest, executedNow, carried)
+        case _ =>
+          HashStep.Done(answered(branch, BlockExecution.BatchOutcome(executedNow, outcome.error, outcome.stateFault)))
+    run(remaining, executedBefore, weight)
 
   private def importToNewBranch(
       branch: NonEmptyList[Block],
@@ -324,20 +413,31 @@ class ConsensusImpl(
   )(implicit
       blockchainConfig: BlockchainConfig
   ): ConsensusResult =
-    // PoS only: an Engine API payload that extended the head wrote its index entry ahead of the best block
-    // (`engine_newPayload` does, the best pointer moving only on forkchoiceUpdated). A different block imported at that
-    // height replaces the entry, and the payload is then non-canonical with its reference counts still applied. Read
-    // before execution overwrites the entries; on a PoW chain `followsConsensusLayer` is false and nothing is read.
-    val displaced: List[(BigInt, BlockHash)] =
-      if followsConsensusLayer then
-        branch.toList.flatMap(b =>
-          blockchainReader.getCanonicalHashByNumber(b.number.value).filterNot(_ == b.hash).map(b.number.value -> _)
-        )
-      else Nil
+    val displaced = displacedBy(branch.toList)
     val outcome = executeBranch(branch.toList, currentBestBlockWeight, adoptEachBlock = true, accessLists)
+    abandonDisplaced(displaced, outcome.executed)
+    answered(branch, outcome)
+
+  /** PoS only: an Engine API payload that extended the head wrote its index entry ahead of the best block
+    * (`engine_newPayload` does, the best pointer moving only on forkchoiceUpdated). A different block imported at that
+    * height replaces the entry, and the payload is then non-canonical with its reference counts still applied. Read
+    * before execution overwrites the entries; on a PoW chain `followsConsensusLayer` is false and nothing is read.
+    */
+  private def displacedBy(blocks: List[Block]): List[(BigInt, BlockHash)] =
+    if followsConsensusLayer then
+      blocks.flatMap(b =>
+        blockchainReader.getCanonicalHashByNumber(b.number.value).filterNot(_ == b.hash).map(b.number.value -> _)
+      )
+    else Nil
+
+  /** The [[displacedBy]] entries at the heights a block was executed at: their blocks leave the chain. */
+  private def abandonDisplaced(displaced: List[(BigInt, BlockHash)], executed: List[BlockData]): Unit =
     if displaced.nonEmpty then
-      val executed = outcome.executed.map(_.block.number.value).toSet
-      reorgState.abandonBlockStates(displaced.collect { case (n, h) if executed(n) => (n, h.value) })
+      val heights = executed.map(_.block.number.value).toSet
+      reorgState.abandonBlockStates(displaced.collect { case (n, h) if heights(n) => (n, h.value) })
+
+  /** What a batch onto the head (`branch`) is answered with, once it ran as `outcome`. */
+  private def answered(branch: NonEmptyList[Block], outcome: BlockExecution.BatchOutcome): ConsensusResult =
     // On the unified layout a trie error that is not a missing node is this node's own state's, never the block's, as
     // the adoption of a branch (`settleOnLayers`) and the commit in place at the cap read it: a fault like any other,
     // told to the escalation's feed as a branch not judged (B-450). A missing node is left to the adapter, which fetches
@@ -1687,11 +1787,18 @@ class ConsensusImpl(
       // put back, every entry above the tip deleted, up to the first height with none: B-506), the best block is the
       // tip, and the transactions only the blocks the head left include lose their lookups, all in one batch (B-088).
       // The executed blocks wrote their own entries and lookups as they were committed, over the old chain's at the
-      // heights the two share, so which blocks left is `displaced` and `aheadLeft`, captured before execution, not what
-      // the index names now. For the consensus layer's branch the write is refused if the head it names no longer
-      // descends from the tip, asked under the head's lock with the write (B-511): a fork choice that came after the
-      // caller asked waits for that lock, and its head is not adopted over.
-      def adoptTip(): Boolean =
+      // heights the two share, so which blocks left there is `displaced` and `aheadLeft`, captured before execution;
+      // at every other height the rewrite reads what it deletes or replaces with the write, and says it. For the
+      // consensus layer's branch the write is refused if the head it names no longer descends from the tip, asked under
+      // the head's lock with the write (B-511): a fork choice that came after the caller asked waits for that lock, and
+      // its head is not adopted over.
+      //
+      // The side blocks the new branch builds on are canonical again (their changes were taken out when they were
+      // executed as a side payload or dropped): their changes are put back once the write is admitted and before it is
+      // written, so that a stop between the two leaves them counted and not indexed, which only keeps nodes longer,
+      // never indexed and not counted, whose nodes the prune would delete under the head (B-511, vault). Idempotent
+      // through the record's applied flag, so the branch made the head again after a stop counts nothing twice.
+      def adoptTip(): Option[IndexRewrite] =
         blockchainWriter.rewriteCanonicalIndex(
           put = fork.parentSideChain,
           remove = ((tip.number.value + 1) to oldBestNumber).toList,
@@ -1703,21 +1810,22 @@ class ConsensusImpl(
           admit = () =>
             Option.when(!selectedByWeight && !stillNamed())(
               "the consensus layer names another head, which does not descend from the tip"
-            )
+            ),
+          beforeTheWrite = () => reorgState.readoptBlockStates(fork.parentSideChain.map { case (n, h) => (n, h.value) })
         ) match
-          case Right(droppedTxLookups) =>
-            if droppedTxLookups > 0 then
+          case Right(rewrite) =>
+            if rewrite.droppedTxLookups > 0 then
               log.info(
                 "REORG-SETTLE: head=#{} {}: {} transaction lookup(s) of the {} block(s) it left dropped",
                 tip.number,
                 tip.hash.toHexString,
-                droppedTxLookups,
+                rewrite.droppedTxLookups,
                 displaced.size + aheadLeft.size
               )
-            true
+            Some(rewrite)
           case Left(refused) =>
             log.info("REORG-SUPERSEDED: the head is not moved to block {}: {}", tip.number, refused)
-            false
+            None
       // Whether the executed blocks become the head. The post-merge arm: when the caller found the whole branch valid
       // and still leading to the head the consensus layer names (B-505), and it still does as the index is written
       // (B-511). The weight arm: when they outweigh the old head, recomputed from the headers rather than read from
@@ -1731,48 +1839,112 @@ class ConsensusImpl(
       // block, leaving the old chain's entries above the tip and below it at the side blocks' heights, and the
       // lookups of the transactions only the old chain held. A forkchoiceUpdated to the tip then found the index
       // naming the tip and rewrote nothing below it.
-      if adopt && adoptTip() then
-        adopted = true
-        // The old head's blocks left the canonical chain with their state changes applied: take them back out, or a
-        // node only they replaced stays at zero references while the new chain uses it, and is pruned. The side blocks
-        // the new branch builds on are canonical again (their changes were taken out when they were executed as a side
-        // payload or dropped). Idempotent through the record's applied flag.
-        reorgState.abandonBlockStates((displaced ++ aheadLeft).map { case (n, h) => (n, h.value) })
-        reorgState.readoptBlockStates(fork.parentSideChain.map { case (n, h) => (n, h.value) })
-      else
-        // The index as it was captured before execution: the old head's chain above the fork, and what stood above the
-        // old head (B-506), which the branch's blocks wrote over at the heights they reached.
-        val restored = oldCanonical ++ aheadOfTheHead
-        val restoredHeights = restored.map(_._1).toSet
-        val executedHeights = executedBlocks.map(_.block.number.value)
-        log.warn(
-          "REORG-PARTIAL: executed blocks {}-{} {} the current head {} — keeping it and restoring the canonical index",
-          executedHeights.head,
-          executedHeights.last,
-          if selectedByWeight then "do not outweigh"
-          else "are not the whole valid branch to the head the consensus layer names, and do not replace",
-          oldBestNumber
-        )
-        // The executed side blocks are committed but not canonical. A re-presented canonical block among them, or one
-        // the index named above the head (a payload `engine_newPayload` executed and indexed first), is put back in
-        // the index below, so it stays applied.
-        val sideBlocks =
-          executedBlocks.map(b => (b.block.number.value, b.block.hash)).filterNot(id => restored.contains(id))
-        // All of the captured segment, not only the executed heights: that also re-points the transaction
-        // locations of every old block, which a side block carrying the same transaction may have overwritten. The
-        // transactions only the side blocks (and the side blocks the branch stands on) include lose the lookups
-        // their commits wrote (B-088): none of those blocks is canonical.
-        blockchainWriter.rewriteCanonicalIndex(
-          put = restored,
-          remove = executedHeights.filterNot(restoredHeights),
-          newBest = None,
-          left = (fork.parentSideChain ++ sideBlocks).map(_._2),
-          chain = restored.map(_._2),
-          reader = blockchainReader
-        )
-        reorgState.abandonBlockStates(sideBlocks.map { case (n, h) => (n, h.value) })
+      (if adopt then adoptTip() else None) match
+        case Some(rewrite) =>
+          adopted = true
+          // The old head's blocks left the canonical chain with their state changes applied: take them back out, or a
+          // node only they replaced stays at zero references while the new chain uses it, and is pruned. Exactly the
+          // blocks that left the index: those the executed blocks wrote over, known from before execution, and those
+          // the rewrite deleted or replaced, as it read them with its write. Idempotent through the record's applied
+          // flag.
+          val executedHeights = executedBlocks.iterator.map(_.block.number.value).toSet
+          val overwritten = (displaced ++ aheadLeft).filter((n, _) => executedHeights(n))
+          reorgState.abandonBlockStates((overwritten ++ rewrite.removed).distinct.map { case (n, h) => (n, h.value) })
+        case None =>
+          keepTheOldHead(executedBlocks, oldBestNumber, fork, oldCanonical, aheadOfTheHead, selectedByWeight)
     }
     adopted
+
+  /** The old head stays ([[settleHead]]'s arm for executed blocks that do not become the head): the index is put back
+    * to the old head's ancestry, as it was captured before execution, and the executed side blocks leave it.
+    *
+    * Above the old head the index keeps only what the head's own chain may hold there (B-506):
+    *   - the weight arm (every ETC reorg, and proof of work before the merge): nothing. core-geth's `reorg` deletes
+    *     every hash marker that is not the head's ancestry; there an entry above the head is one a branch's commits
+    *     left when the node stopped before its settle, or one a datadir from before the settle existed holds, of a side
+    *     chain;
+    *   - the consensus layer's arm: the entries `engine_newPayload` wrote for payloads that extend the index, the chain
+    *     of them that links by parent hash up from the old head, which a forkchoiceUpdated may yet name. An entry that
+    *     does not link (a stop left it, or a payload of another chain) ends that chain.
+    *
+    * Every entry above the old head that is not kept is deleted in the same batch as the rest, with the lookups of the
+    * transactions only its block includes, and its block's state changes are taken out after, as for the executed side
+    * blocks: the block left the chain the index names.
+    */
+  private def keepTheOldHead(
+      executedBlocks: List[BlockData],
+      oldBestNumber: BigInt,
+      fork: ForkPoint,
+      oldCanonical: List[(BigInt, BlockHash)],
+      aheadOfTheHead: List[(BigInt, BlockHash)],
+      selectedByWeight: Boolean
+  ): Unit =
+    val keptAbove: List[(BigInt, BlockHash)] =
+      if selectedByWeight then Nil
+      else
+        blockchainReader.getBestBlockHeader.filter(_.number.value == oldBestNumber) match
+          case None       => Nil
+          case Some(head) => linkedUpFrom(head, aheadOfTheHead)
+    // The index as it was captured before execution: the old head's chain above the fork, and what is kept of what
+    // stood above the old head, which the branch's blocks wrote over at the heights they reached.
+    val restored = oldCanonical ++ keptAbove
+    val restoredIds = restored.toSet
+    val restoredHeights = restored.map(_._1).toSet
+    val droppedAhead = aheadOfTheHead.filterNot(restoredIds)
+    val executedHeights = executedBlocks.map(_.block.number.value)
+    log.warn(
+      "REORG-PARTIAL: executed blocks {}-{} {} the current head {} — keeping it and restoring the canonical index{}",
+      executedHeights.head,
+      executedHeights.last,
+      if selectedByWeight then "do not outweigh"
+      else "are not the whole valid branch to the head the consensus layer names, and do not replace",
+      oldBestNumber,
+      if droppedAhead.isEmpty then ""
+      else s"; ${droppedAhead.size} entr(ies) above it that are not its chain are deleted (B-506)"
+    )
+    // The executed side blocks are committed but not canonical. A re-presented canonical block among them, or a payload
+    // the index named above the head that links up from it (one `engine_newPayload` executed and indexed first), is put
+    // back in the index below, so it stays applied.
+    val sideBlocks =
+      executedBlocks.map(b => (b.block.number.value, b.block.hash)).filterNot(restoredIds)
+    // All of the captured segment, not only the executed heights: that also re-points the transaction locations of
+    // every old block, which a side block carrying the same transaction may have overwritten. The transactions only the
+    // side blocks (and the side blocks the branch stands on, and the entries above the head that are not kept) include
+    // lose the lookups their commits wrote (B-088): none of those blocks is canonical. Everything above the kept chain
+    // goes, up to the first height with none, as core-geth's `reorg` deletes it.
+    val rewrite = blockchainWriter.rewriteCanonicalIndex(
+      put = restored,
+      remove = (executedHeights ++ droppedAhead.map(_._1)).distinct.filterNot(restoredHeights),
+      newBest = None,
+      left = (fork.parentSideChain ++ sideBlocks ++ droppedAhead).map(_._2),
+      chain = restored.map(_._2),
+      reader = blockchainReader,
+      clearAbove = Some(keptAbove.lastOption.fold(oldBestNumber)(_._1))
+    )
+    // the side blocks, the entries above the head that are not kept, and whatever else the rewrite took off the index;
+    // never a block of the chain it put back
+    val removed = rewrite.toOption.fold(Nil)(_.removed)
+    reorgState.abandonBlockStates(
+      (sideBlocks ++ droppedAhead ++ removed).distinct.filterNot(restoredIds).map { case (n, h) => (n, h.value) }
+    )
+
+  /** Of `ahead`, the entries above `head` in order of height, the chain that links by parent hash up from `head`: from
+    * the entry at the height above it, while each names the child of the one below.
+    */
+  private def linkedUpFrom(head: BlockHeader, ahead: List[(BigInt, BlockHash)]): List[(BigInt, BlockHash)] =
+    @tailrec
+    def go(
+        parent: BlockHash,
+        number: BigInt,
+        rest: List[(BigInt, BlockHash)],
+        kept: List[(BigInt, BlockHash)]
+    ): List[(BigInt, BlockHash)] =
+      rest match
+        case (n, hash) :: tail
+            if n == number + 1 && blockchainReader.getBlockHeaderByHash(hash).exists(_.parentHash == parent) =>
+          go(hash, n, tail, (n, hash) :: kept)
+        case _ => kept.reverse
+    go(head.hash, head.number.value, ahead.sortBy(_._1), Nil)
 
   /** Where a branch whose parent is `parentHash` leaves the canonical chain.
     *

@@ -121,6 +121,8 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
     "-Dpekko.coordinated-shutdown.exit-jvm=off", // Prevent CoordinatedShutdown from calling System.exit
     "-Dpekko.coordinated-shutdown.run-by-actor-system-terminate=on", // Ensure proper shutdown on ActorSystem.terminate
     "-Dpekko.jvm-shutdown-hooks=off", // Disable Pekko JVM shutdown hooks that may interfere with test cleanup
+    // B-511: a thread that asks for the head's lock while it holds a lock taken inside it throws in tests (CanonicalHeadLock)
+    "-Dfukuii.head-lock.order-check=fail",
     // JDK-8385993: C2 ReduceAllocationMerges miscompiles field reads on JDK 23+ (fixed in JDK 28). .jvmopts only
     // reaches the sbt JVM, so forked test JVMs need it here. Order matters: Unlock must precede the diagnostic flag;
     // Ignore keeps JDK 21 (no such flag) starting. Drop once the test JDK carries the fix.
