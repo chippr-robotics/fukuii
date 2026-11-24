@@ -5315,19 +5315,17 @@ items:
   - id: B-508
     title: "EngineApiHttpServerObservationSpec still flakes in CI after #2029 (B-374 reopened shape); seen on #2063 run 45356110651"
     priority: P3
-    status: review
+    status: done
     area: ci
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2088]
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T13:26:23Z
-      heartbeat: 2026-11-24T13:44:15Z
-    notes: "B-374 is done (#1927, #2029) but the spec failed again in Test and Build on 2026-11-24 for a PR that doesn't touch the Engine API HTTP server. Find the remaining timing assumption; no Thread.sleep fixes."
+    notes: |-
+      B-374 is done (#1927, #2029) but the spec failed again in Test and Build on 2026-11-24 for a PR that doesn't touch the Engine API HTTP server. Find the remaining timing assumption; no Thread.sleep fixes.
+      2026-11-24 done: merged aff41f1f2b
   - id: B-509
     title: "B-503 follow-ups: pin the partial-success arms' queue removal; a weightless queued block whose queued parent became the head stays weightless"
     priority: P3
