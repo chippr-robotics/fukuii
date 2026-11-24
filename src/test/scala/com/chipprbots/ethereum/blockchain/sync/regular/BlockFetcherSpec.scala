@@ -298,7 +298,7 @@ class BlockFetcherSpec
       testKit.system.classicSystem.actorSelection(blockFetcher.path / "state-node-fetcher") !
         org.apache.pekko.actor.PoisonPill
 
-      importerReplies.expectMessage(5.seconds, BlockFetcher.FetchedStateNode(ETHPackets.NodeData(Nil)))
+      importerReplies.expectMessage(5.seconds, BlockFetcher.FetchedStateNode(Nil))
       fetchCode() // asked of a peer again, by the new one
 
     "should include BlockRangeUpdateCode in peer event subscription" taggedAs (UnitTest, SyncTest) in new TestSetup:

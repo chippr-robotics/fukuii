@@ -45,7 +45,6 @@ import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.mpt.HexPrefix
 import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -120,7 +119,7 @@ class OnDemandFetchByPositionSpec extends AnyFlatSpec with Matchers:
 
       // One answer, as the fetcher gives. It may land before the import's end puts the importer in the wait for the
       // node; it is then handed to that wait (B-408), so the import completes well inside the wait's 30 s retry.
-      asked.replyTo ! BlockFetcher.FetchedStateNode(NodeData(List(holeNode)))
+      asked.replyTo ! BlockFetcher.FetchedStateNode(List(holeNode))
       withClue("one answer completes the import, without the wait's retry: ")(
         noException should be thrownBy node.awaitBest(1, 15.seconds)
       )

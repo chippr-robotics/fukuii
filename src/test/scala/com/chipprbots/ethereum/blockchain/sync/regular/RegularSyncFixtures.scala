@@ -35,7 +35,6 @@ import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
 import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
@@ -52,8 +51,6 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies as ETHGetBlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders as ETHGetBlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
@@ -362,12 +359,6 @@ trait RegularSyncFixtures:
 
           replyTo ! PeersClient.Response(defaultPeer, BlockBodies(BigInt(0), matchingBodies))
           None
-        case PeersClient.Request(GetNodeData(hash :: Nil), _, _, replyTo) =>
-          replyTo ! PeersClient.Response(
-            defaultPeer,
-            NodeData(List(ByteString(blocks.byHashUnsafe(hash).header.toBytes: Array[Byte])))
-          )
-          None
         case _ => None
       }
 
@@ -431,7 +422,7 @@ trait RegularSyncFixtures:
     // for core-geth compatibility). Also handles comparison between ETH65 and ETH66 message
     // versions. Only handles GetBlockHeaders and GetBlockBodies as those are the ETH66
     // message types used in these tests. Other ETH66 request types like GetPooledTransactions,
-    // GetNodeData, and GetReceipts are not used in RegularSync tests.
+    // and GetReceipts are not used in RegularSync tests.
     private def messagesEqualIgnoringRequestId(x: Message, y: Message): Boolean = (x, y) match
       // ETH66 to ETH66 comparison
       case (h1: ETHGetBlockHeaders, h2: ETHGetBlockHeaders) =>

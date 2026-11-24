@@ -2,8 +2,13 @@ package com.chipprbots.ethereum.network.snapserver
 
 import org.apache.pekko.util.ByteString
 
+import scala.util.control.NonFatal
+
+import org.bouncycastle.util.encoders.Hex
+
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Account.*
@@ -79,27 +84,49 @@ object SnapServer extends Logger:
     case HashNode(hash) => orAbsent(nodes.getAt(NibblePath.fromNibbles(at), hash))
     case other          => other
 
-  /** Read the root node of the trie `nodes` is the storage of, by its hash. Returns NullNode if missing. */
+  /** Read the root node of the trie `nodes` is the storage of, by its hash. A root that cannot be read is
+    * [[Unservable]], as in go-ethereum, where a missing root answers the whole request with nothing.
+    */
   private def fetchRootNode(rootHash: ByteString, nodes: MptStorage): MptNode =
     orAbsent(nodes.getAt(NibblePath.Empty, rootHash.toArray))
 
-  /** A node that cannot be read is taken as a node that is not here, as it always was. A fault of the state itself is
-    * not: when the disk has moved away from the view being read, "absent" would be a hole in the middle of a range,
-    * sent with proofs that cannot close over it. It is thrown on, and [[notServed]] answers the request.
+  /** A node of a trie this server serves that cannot be read: missing (pruned, or never synced), corrupt (stored bytes
+    * that are not the node their key names), or a store that failed. Served as a hole in a range, it would leave out a
+    * subtree its proofs cannot close over, and the peer finds the response invalid (B-213). go-ethereum answers a range
+    * request it cannot serve whole with an empty response (`ServiceGetAccountRangeQuery` and
+    * `ServiceGetStorageRangesQuery` return `nil, nil` when a proof cannot be built; `ServiceGetTrieNodesQuery` does so
+    * for a missing root and skips only the single node it cannot get). [[notServed]] makes the same answer here;
+    * `serveTrieNodes` skips per node.
+    */
+  final class Unservable(why: String, cause: Throwable = null) extends RuntimeException(why, cause, false, false)
+
+  /** A node that cannot be read is [[Unservable]]. A fault of the state itself is not taken for one: it is thrown on,
+    * and [[notServed]] answers the request all the same. A corrupt node is said once (its hash, as the store says it);
+    * a missing one is not, since pruned state is normal.
     */
   private def orAbsent(read: => MptNode): MptNode =
     try read
     catch
-      case fault: StateFault                          => throw fault
-      case _: MerklePatriciaTrie.MissingNodeException => NullNode
-      case other: Throwable                           =>
-        // a node that is there and cannot be read (one that does not decode, a store that fails): served as absent, as
-        // it always was (B-213), and said, since a hole it leaves in a response cannot be told from a missing node
-        log.debug("SNAP serve: a node could not be read and is taken as absent: {}", other.toString)
-        NullNode
+      case fault: StateFault                                => throw fault
+      case corrupt: MerklePatriciaTrie.CorruptNodeException =>
+        // The store says a corrupt node itself once, when it is the one that reads it; the path store does not.
+        if SerializingMptStorage.firstReport(corrupt.hash) then
+          log.error(
+            "[STATE-CORRUPT] SNAP serve: stored trie node {} is not that node ({}); every request that needs it is " +
+              "answered with nothing until it is deleted or replaced",
+            Hex.toHexString(corrupt.hash.toArray),
+            corrupt.detail
+          )
+        throw new Unservable(s"corrupt node ${Hex.toHexString(corrupt.hash.toArray)}", corrupt)
+      case missing: MerklePatriciaTrie.MissingNodeException =>
+        throw new Unservable(s"missing node ${Hex.toHexString(missing.hash.toArray)}", missing)
+      case NonFatal(other) =>
+        log.warn("SNAP serve: a node could not be read, the request is answered with nothing: {}", other.toString)
+        throw new Unservable(other.toString, other)
 
-  /** `serve`, or `nothing` when the state it reads stopped being this node's to serve while it was read: the empty
-    * response, which says "this state is not here", and never the part that was read before the disk moved.
+  /** `serve`, or `nothing` when the state it reads stopped being this node's to serve while it was read, or a node of
+    * it cannot be read: the empty response, which says "this state is not here", and never the part that was read
+    * before.
     */
   private def notServed[A](request: String, nothing: => A)(serve: => A): A =
     try serve
@@ -107,6 +134,16 @@ object SnapServer extends Logger:
       case fault: StateFault =>
         log.debug("SNAP {}: answered with nothing, the state is no longer served: {}", request, fault.getMessage)
         nothing
+      case unservable: Unservable =>
+        log.debug("SNAP {}: answered with nothing, {}", request, unservable.getMessage)
+        nothing
+
+  /** One node of a `GetTrieNodes` request that cannot be read is left out of the answer, as go-ethereum does (`GetNode`
+    * fails, the node is not appended); the request goes on.
+    */
+  private def orSkip[A](find: => Option[A]): Option[A] =
+    try find
+    catch case _: Unservable => None
 
   /** The storage root of an account of the state at `rootHash`, by the account's hash: `None` when that state is not
     * here, or has no such account. What `serveStorageRanges` is given as `accountRoot`.
@@ -458,7 +495,7 @@ object SnapServer extends Logger:
             if pathSet.size == 1 then
               // Single-element path: account-trie node lookup (HP-encoded partial path).
               val nibbles = decodeHpPath(pathSet.head.toArray)
-              collectNodeAtPath(rootNode, accounts, nibbles) match
+              orSkip(collectNodeAtPath(rootNode, accounts, nibbles)) match
                 case Some(enc) =>
                   collected += enc; accumulated += enc.size
                 case None =>
@@ -470,15 +507,17 @@ object SnapServer extends Logger:
               // which is read under that account.
               val accountNibbles = hashToNibbles(pathSet.head)
               val storageNibblesList = pathSet.tail
-              resolveLeafAccount(rootNode, accounts, accountNibbles) match
+              orSkip(resolveLeafAccount(rootNode, accounts, accountNibbles)) match
                 case Some(account) if account.storageRoot != Account.EmptyStorageRootHash =>
                   val slots = storage.forOwner(Some(pathSet.head))
-                  val storageRootNode = fetchRootNode(account.storageRoot.value, slots)
+                  val storageRootNode =
+                    try fetchRootNode(account.storageRoot.value, slots)
+                    catch case _: Unservable => NullNode
                   if storageRootNode != NullNode then
                     storageNibblesList.foreach { storagePath =>
                       if accumulated < maxBytes || collected.isEmpty then
                         val sn = decodeHpPath(storagePath.toArray)
-                        collectNodeAtPath(storageRootNode, slots, sn) match
+                        orSkip(collectNodeAtPath(storageRootNode, slots, sn)) match
                           case Some(enc) =>
                             collected += enc; accumulated += enc.size
                           case None =>

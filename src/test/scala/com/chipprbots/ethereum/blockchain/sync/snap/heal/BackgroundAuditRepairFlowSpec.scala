@@ -42,7 +42,6 @@ import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
 import com.chipprbots.ethereum.db.storage.pathstate.PositionRepairFixture
 import com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** What the audit does with the answer of a repair (spec 018 C5b part 1 review): the hash scheme pushes a position back
@@ -63,7 +62,7 @@ class BackgroundAuditRepairFlowSpec
   private val settings = BackgroundAudit.Settings(readFactor = 0)
 
   private def serve(fetch: StateNodeFetcher.FetchStateNode, bytes: Array[Byte]): Unit =
-    fetch.originalSender ! FetchedStateNode(NodeData(Seq(ByteString(bytes))))
+    fetch.originalSender ! FetchedStateNode(Seq(ByteString(bytes)))
 
   private def statusOf(audit: ActorRef[Command]): BackgroundAudit.Status =
     val probe = createTestProbe[BackgroundAudit.Status]()

@@ -1202,6 +1202,8 @@ object NetworkPeerManagerActor:
                   catch
                     // not "no such account": the serve answers the whole request with nothing
                     case fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault => throw fault
+                    // nor "no such account": a node of the account trie that cannot be read answers with nothing
+                    case unservable: SnapServer.Unservable => throw unservable
                     case e: Throwable =>
                       log.warn("MPT traversal error in handleGetStorageRanges: {}", e.getMessage)
                       None
