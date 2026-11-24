@@ -5092,12 +5092,17 @@ items:
   - id: B-500
     title: Ommer pool hands out ommers already included in the last 6 blocks; PoWBlockGenerator then drops the whole set, so one stale ommer costs both slots
     priority: P3
-    status: open
+    status: claimed
     area: consensus
     size: S
     opened: 2026-11-24
     refs: []
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T10:48:50Z
+      heartbeat: 2026-11-24T10:48:50Z
     notes: forge, found during B-299. core-geth filters included uncles per candidate.
   - id: B-501
     title: BlockImporter offers NewBetterBranch's oldBranch.head to the ommer pool before the reorg runs (offer after success instead)
