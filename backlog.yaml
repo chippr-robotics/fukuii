@@ -5285,18 +5285,19 @@ items:
   - id: B-506
     title: settleHead designated-head arm deletes index entries above the tip only up to the old best; sweep upward like canonicalHeadUpdate
     priority: P3
-    status: in-progress
+    status: review
     area: consensus
     size: S
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2095]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T11:30:35Z
-      heartbeat: 2026-11-24T13:43:32Z
+      heartbeat: 2026-11-24T15:14:34Z
     notes: |-
       2026-11-24 in-progress: one PR with B-506+B-511 (settleHead designated arm), clone-d
       2026-11-24 in-progress: pushed 31a4bfc91e (index sweep above head; CanonicalHeadLock on hash layout incl. FCU/newPayload; prefix pruning pinned); covering importToTop/setCanonicalChainHead next, then beacon+vault review
