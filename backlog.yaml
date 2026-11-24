@@ -5156,22 +5156,19 @@ items:
   - id: B-503
     title: A branch re-queued after a state fault and later adopted stays in blockQueue; the next child re-executes it as a spurious ChainReorganised
     priority: P3
-    status: review
+    status: done
     area: consensus
     size: M
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2069]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T09:05:17Z
-      heartbeat: 2026-11-24T09:36:22Z
     notes: |-
       forge, found during B-463 (incl. StateBusy re-queues; adopted via evaluateBranch). Head ends correct; cost is wasted re-execution and a misleading reorg event to the pool/announcements.
       2026-11-24 in-progress: forge agent clone-d
+      2026-11-24 done: merged
   - id: B-504
     title: "B-463 PoS tests: fork-choice move in the read-to-hold window, anchor read between move batches, Engine API-level SYNCING + no escalation"
     priority: P3
