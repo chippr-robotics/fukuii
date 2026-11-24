@@ -358,7 +358,8 @@ class StxLedger(
         if e.gasShortfall then PreCheck(s"gas required exceeds allowance ($hi)")
         else PreCheck(s"failed with $hi gas: ${e.message}")
       }
-      atHi = runCallFrame(stxHi, blockHeader, world1, options, tracer = None)._1
+      atHiRun = runCallFrame(stxHi, blockHeader, world1, options, tracer = None)
+      atHi = atHiRun._1
       // gasestimator.Estimate (gasestimator.go:139-143): a failure at the ceiling that is not out-of-gas is the answer
       // (a revert with its data); out of gas at the ceiling is "gas required exceeds allowance". A pre-Homestead
       // creation short of its code deposit is such a failure: go-ethereum's (and core-geth's) `create` returns
@@ -377,19 +378,13 @@ class StxLedger(
           val result = runCallFrame(withGas(stx, gasLimit), blockHeader, world1, options, tracer = None)._1
           // See binarySearchGasEstimation: a pre-Homestead CREATE short of its code deposit is no answer.
           result.codeDepositShortfall || result.error.isDefined
-        // gasestimator.Estimate seeds the search from the run at the ceiling's MaxUsedGas, the peak before refunds,
-        // not from UsedGas: a refund (SSTORE clear, SELFDESTRUCT) lowers UsedGas but not the gas the execution needs.
-        // Nothing below the peak can succeed, so the search starts there; and the peak plus the call stipend, scaled
-        // by 63/64 for the EIP-150 retention, is tried first, since most calls succeed with it.
+        // gasestimator.Estimate: the failing floor is `UsedGas - 1` of the run at the ceiling (post-refund, floor
+        // included), never below the intrinsic/floor bound's own `bound - 1`; the first guess is
+        // `(MaxUsedGas + CallStipend) * 64 / 63`, MaxUsedGas being the pre-refund peak.
+        val used = callGasUsed(stxHi, blockHeader, atHi, atHiRun._2)
         val peak = peakGasUsed(stxHi, blockHeader, atHi)
-        val lo = lowLimit.max(peak).min(hi)
-        val guess = (peak + StxLedger.CallStipend) * 64 / 63
-        val (searchLo, searchHi) =
-          if guess < hi && guess >= lo then if fails(guess) then (guess + 1, hi) else (lo, guess)
-          else (lo, hi)
-        StxLedger.binaryChop(searchLo, searchHi) { gasLimit =>
-          if fails(gasLimit) then Some(()) else None
-        }
+        val lo = (lowLimit - 1).max(used - 1)
+        StxLedger.estimateSearch(lo, hi, (peak + StxLedger.CallStipend) * 64 / 63)(fails)
 
   /** go-ethereum `ExecutionResult.MaxUsedGas` of a message call: the gas the frame consumed before refunds (the gas
     * limit less what is left, less an unspent EIP-8037 state-gas reservoir), raised to the calldata floor where that is
@@ -841,6 +836,21 @@ object StxLedger:
     */
   /** EVM call stipend (params.CallStipend), added by go-ethereum's optimistic estimation guess. */
   private[ledger] val CallStipend: BigInt = 2300
+
+  /** go-ethereum `gasestimator.Estimate`'s search after the run at the ceiling: `lo` is a limit known to fail (or the
+    * floor below the first possible one), `hi` one known to succeed. The optimistic `guess` is run first when below
+    * `hi` (failure raises `lo`, success lowers `hi`); then it bisects, with the midpoint capped at `2 * lo` so a small
+    * answer under a huge ceiling is reached in few runs. geth's `ErrorRatio` early break is not implemented: fukuii
+    * returns the exact minimum.
+    */
+  @tailrec
+  private[ledger] def estimateSearch(lo: BigInt, hi: BigInt, guess: BigInt)(fails: BigInt => Boolean): BigInt =
+    if guess < hi && guess > lo then
+      if fails(guess) then estimateSearch(guess, hi, hi)(fails) else estimateSearch(lo, guess, hi)(fails)
+    else if lo + 1 >= hi then hi
+    else
+      val mid = (lo + (hi - lo) / 2).min(lo * 2).max(lo + 1)
+      if fails(mid) then estimateSearch(mid, hi, hi)(fails) else estimateSearch(lo, mid, hi)(fails)
 
   @tailrec
   private[ledger] def binaryChop[Err](min: BigInt, max: BigInt)(f: BigInt => Option[Err]): BigInt =

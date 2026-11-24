@@ -167,11 +167,10 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with EitherValues with Log
     totalRefunded shouldEqual vmResult.gasRemaining + expectedRefundCredit
     totalRefunded should be > vmResult.gasRemaining
 
-  /** B-518: go-ethereum's `gasestimator.Estimate` seeds its search from the ceiling run's `MaxUsedGas`, the peak before
-    * refunds, not from `UsedGas`. A refund-heavy call (SSTORE set then clear, R_sclear) is charged far less than the
-    * execution needs: the estimate must be the least gas limit that executes, which is at least the peak.
+  /** B-518: a refund-heavy call (SSTORE set then clear, R_sclear): the estimate is a limit that executes and the least
+    * one, though the refund makes the charged `UsedGas` far below the gas the execution consumed.
     */
-  it should "estimate a refund-heavy call at no less than its pre-refund peak, the least limit that executes" taggedAs (
+  it should "estimate a refund-heavy call at the least gas limit that executes" taggedAs (
     UnitTest,
     StateTest
   ) in new HiveGraphQLScenarioSetup:
@@ -182,7 +181,6 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with EitherValues with Log
       fromAddress
     )
     val ceiling: BigInt = BigInt(200000)
-    val world: InMemoryWorldStateProxy = stxLedger.worldAt(block32Header)
     val options = StxLedger.CallOptions.Empty
 
     val atCeiling: PR =
@@ -191,14 +189,14 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with EitherValues with Log
     atCeiling.gasRefund should be > BigInt(0)
     val peak: BigInt = ceiling - atCeiling.gasRemaining
     val usedAfterRefund: BigInt = stxLedger
-      .simulateCall(stxWithGas(ceiling), block32Header, world, options, None)
+      .simulateCall(stxWithGas(ceiling), block32Header, stxLedger.worldAt(block32Header), options, None)
       .value
       .txResult
       .gasUsed
-    usedAfterRefund should be < peak // the refund really lowers UsedGas below what execution needs
+    usedAfterRefund should be < peak // the refund really lowers UsedGas below what execution consumed
 
-    val estimate: BigInt = stxLedger.estimateCallGas(stxWithGas(ceiling), block32Header, world, options).value
-    estimate.should(be >= peak)
+    val estimate: BigInt =
+      stxLedger.estimateCallGas(stxWithGas(ceiling), block32Header, stxLedger.worldAt(block32Header), options).value
     def runs(gas: BigInt): Boolean =
       stxLedger
         .simulateCall(stxWithGas(gas), block32Header, stxLedger.worldAt(block32Header), options, None)
@@ -207,7 +205,37 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with EitherValues with Log
         .vmError
         .isEmpty
     runs(estimate).shouldBe(true) // sufficient for execution
-    runs(estimate - 1).shouldBe(false) // and the least such limit, as geth's binary search returns
+    runs(estimate - 1).shouldBe(false) // and the least such limit
+
+  /** B-518: geth's search runs the optimistic guess `(MaxUsedGas + 2300) * 64 / 63` first. When it succeeds the search
+    * is confined below it, in far fewer runs than bisecting from the ceiling; the answer is the same minimum.
+    */
+  it should "run the optimistic guess first and so search narrower than the old bisection" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val needed = BigInt(50000)
+    var runsCounted = 0
+    def fails(g: BigInt): Boolean =
+      runsCounted += 1
+      g < needed
+    val ceiling = BigInt(30000000)
+    val guess = (BigInt(49000) + StxLedger.CallStipend) * 64 / 63 // 52114, above `needed`
+    StxLedger.estimateSearch(BigInt(20999), ceiling, guess)(fails).shouldBe(needed)
+    val withGuess = runsCounted
+
+    runsCounted = 0
+    StxLedger.binaryChop(BigInt(21000), ceiling)(g => if fails(g) then Some(()) else None).shouldBe(needed)
+    val oldBisection = runsCounted
+
+    runsCounted = 0
+    StxLedger.estimateSearch(BigInt(20999), ceiling, guess)(fails)
+    withGuess.should(be < oldBisection)
+    // a failing guess raises lo and still finds the same minimum
+    StxLedger.estimateSearch(BigInt(20999), ceiling, BigInt(40000))(g => g < needed).shouldBe(needed)
+    // a guess at or above hi is ignored
+    StxLedger.estimateSearch(BigInt(20999), BigInt(60000), BigInt(70000))(g => g < needed).shouldBe(needed)
+  }
 
   /** go-ethereum `gasestimator.Estimate` (gasestimator.go:139-143) returns any failure at the ceiling that is not
     * `ErrOutOfGas`. At the ceiling below, a pre-Homestead CREATE runs its init code but cannot pay the 200,000 deposit
