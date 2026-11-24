@@ -264,6 +264,11 @@ items:
     refs: [H14]
     links:
       issues: [1571, 1566, 1694, 1660]
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T03:42:15Z
+      heartbeat: 2026-11-24T03:42:15Z
     notes: |-
       #1571 fixed by #1640, #1566 by #1706, #1694 per 0.11.0's notes (verify), #1660 superseded by #1727.
       2026-11-08 blocked: needs the user's OK.
