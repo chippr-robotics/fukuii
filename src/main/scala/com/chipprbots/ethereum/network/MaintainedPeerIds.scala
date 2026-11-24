@@ -21,7 +21,9 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.
   * reads it at each count, so a peer the operator adds while the node waits for snap peers is counted as declared.
   *
   * Empty until the first change is published after the subscription; the files the precondition reads at the start
-  * cover the static nodes until then.
+  * cover the static nodes until then (seeding it with `GetAdminStateCmd` would close that window; not worth it for a
+  * count that only feeds a log line). A static node removed with `admin_removePeer` is still counted as declared: the
+  * precondition's set is the files' set together with this one.
   */
 final class MaintainedPeerIds:
   private val ids = new AtomicReference(Set.empty[ByteString])
@@ -48,7 +50,12 @@ object MaintainedPeerIds:
       onSubscribed()
       Behaviors.receiveMessage {
         case MaintainedPeersChanged(nodeIds) =>
-          ids.set(nodeIds.flatMap(hex => Try(ByteString(Hex.decode(hex))).toOption.filter(_.nonEmpty)))
+          val decoded = nodeIds.map(hex => hex -> Try(ByteString(Hex.decode(hex))).toOption.filter(_.nonEmpty))
+          // The peer manager publishes lowercase hex ids only: an id that does not decode is a bug there, not input.
+          decoded.collect { case (hex, None) => hex }.foreach { bad =>
+            ctx.log.warn("[SNAP-PEERS] maintained peer id {} is not a hex node id; left out of the count", bad)
+          }
+          ids.set(decoded.flatMap(_._2))
           Behaviors.same
         case _ => Behaviors.same
       }
