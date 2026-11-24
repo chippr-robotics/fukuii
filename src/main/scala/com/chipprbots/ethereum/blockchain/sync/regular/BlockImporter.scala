@@ -54,6 +54,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.jsonrpc.NewBlockImported
@@ -106,6 +107,19 @@ object BlockImporter:
   // From this many faults of this node's own state in a row on one block, the block's tries are spaced out by
   // exhaustBackoff. Nothing is escalated: what the node does when the fault stays is a later slice's (spec 018, C4b).
   val StateFaultBackoffAfter: Int = 3
+
+  // A branch refused because the head moved after it was weighed (B-315) is tried again at once, uncounted by the streak
+  // above, for as long as each refusal finds the head higher than any before it: a head that climbs is a chain that
+  // grows, which is new information and cannot go on without blocks being committed. From this many refusals in a row
+  // of the same branch with the head no higher (a head moved back and forth, or sideways, between the weighing and the
+  // move), the tries are spaced out by exhaustBackoff, as they are for any busy head. The same three as the streak's: a
+  // head that does not climb is no newer information than an adoption that holds it, and is backed off no later.
+  val HeadMovedRetriesWithoutProgress: Int = 3
+
+  /** What regular sync does with a branch refused because the head moved after it was weighed (B-315). */
+  private[regular] enum HeadMovedRetry:
+    case AtOnce
+    case BackOff(refusals: Int)
 
   // How often a block waiting on a missing node is imported again. A variable only so a spec can shorten it.
   private[regular] var resolvingRetryInterval: FiniteDuration = 30.seconds
@@ -643,6 +657,37 @@ final private class BlockImporterLogic(
     * C, C4b): cleared by any block that is imported.
     */
   private var stateFaultStreak: Option[(ByteString, Int)] = None
+
+  /** The block the import last stopped at because the head moved after its branch was weighed (B-315), the highest head
+    * such a refusal of it found, and how many of its refusals in a row found the head no higher than that (the first
+    * counts one). Cleared by any block that is imported and by any other fault of this node's state.
+    */
+  private var headMovedStreak: Option[(ByteString, BigInt, Int)] = None
+
+  /** For a fault that is a branch refused because the head moved after it was weighed (B-315): whether it is tried
+    * again at once or backed off ([[BlockImporter.HeadMovedRetriesWithoutProgress]]), with the streak of such refusals
+    * moved on. `None` for any other fault, which ends that streak.
+    */
+  private def headMovedSinceWeighed(fault: StateFault, failedBlock: Block): Option[HeadMovedRetry] =
+    fault match
+      case busy: StateBusy =>
+        busy.cause match
+          case StateBusy.Cause.HeadMovedSinceWeighed(head) =>
+            val (highest, refusals) = headMovedStreak match
+              case Some((hash, highest, refusals)) if hash == failedBlock.hash.value =>
+                if head > highest then (head, 1) else (highest, refusals + 1)
+              case _ => (head, 1)
+            headMovedStreak = Some((failedBlock.hash.value, highest, refusals))
+            Some(
+              if refusals < BlockImporter.HeadMovedRetriesWithoutProgress then HeadMovedRetry.AtOnce
+              else HeadMovedRetry.BackOff(refusals)
+            )
+          case StateBusy.Cause.HeldByAnother =>
+            headMovedStreak = None
+            None
+      case _ =>
+        headMovedStreak = None
+        None
 
   /** The fetch of ancestor bodies in flight (B-301): the block whose import wanted them, the hashes asked for, and when
     * (`System.nanoTime`). One at a time, freed by its answer in every behaviour, or, if the answer is lost, by
@@ -1313,6 +1358,7 @@ final private class BlockImporterLogic(
           holeToldFor = None
           floorGapRewinds.reset()
           stateFaultStreak = None
+          headMovedStreak = None
 
         errorOpt match
           case None      => Running
@@ -1596,6 +1642,7 @@ final private class BlockImporterLogic(
                   setAside.getMessage
                 )
                 stateFaultStreak = None
+                headMovedStreak = None
                 Running
               case BlockImportStateFault(fault, _) =>
                 // The state these blocks are to be executed on is not the one this node holds, or is no longer: the
@@ -1603,59 +1650,88 @@ final private class BlockImporterLogic(
                 // judged. They are fetched again from the first that was not executed, and the peer that served them
                 // is not blamed: it was asked for these blocks and gave them.
                 val failedBlock = notImportedBlocks.head
-                val streak = stateFaultStreak
-                  .collect {
-                    case (hash, count) if hash == failedBlock.hash.value => count
-                  }
-                  .getOrElse(0) + 1
-                stateFaultStreak = Some((failedBlock.hash.value, streak))
-                wantAncestorBodiesOn(fault, failedBlock)
-                fetcher ! BlockFetcher.InvalidateBlocksFrom(
-                  failedBlock.number.value,
-                  "this node's state could not take the block",
-                  shouldBlacklist = false
-                )
-                // A head that moved under the batch is gone at the next try. A fault that stays (a branch this layout
-                // cannot execute yet, a state that is not held) would otherwise be met again at every round trip of
-                // the fetcher, for good: from the third in a row on the same block the tries are spaced out.
-                // Refused because another thread's adoption holds the head (B-294): no fault of this node's state, and
-                // said at WARN as busy, never at ERROR; spaced out the same way while it lasts (B-462)
-                val busy = fault.isInstanceOf[StateBusy]
-                if streak < BlockImporter.StateFaultBackoffAfter then
-                  if busy then
+                def fetchAgain(): Unit =
+                  fetcher ! BlockFetcher.InvalidateBlocksFrom(
+                    failedBlock.number.value,
+                    "this node's state could not take the block",
+                    shouldBlacklist = false
+                  )
+                headMovedSinceWeighed(fault, failedBlock) match
+                  // The branch was weighed against a head that moved before the move to it (B-315). Weighed again, it
+                  // is weighed against the head as it is: tried again at once, and not counted in the streak of state
+                  // faults, whose back-off is for a fault that lasts (B-294's adoption that holds the head).
+                  case Some(HeadMovedRetry.AtOnce) =>
+                    fetchAgain()
                     log.warning(
-                      "[STATE-BUSY] block {} was not executed: another adoption holds the head, no peer blamed: {}",
+                      "[STATE-BUSY] block {} was not executed: the head moved after its branch was weighed, and it is " +
+                        "tried again at once; no peer blamed: {}",
                       failedBlock.number,
                       fault.getMessage
                     )
-                  else
-                    log.warning(
-                      "[LOCAL-STATE-FAULT] block {} was not executed on this node's own state, no peer blamed: {}",
-                      failedBlock.number,
-                      fault.getMessage
-                    )
-                  RunningAfterFetcherRewind
-                else
-                  if streak == BlockImporter.StateFaultBackoffAfter then
-                    if busy then
+                    RunningAfterFetcherRewind
+                  // the same branch refused so, in a row, with the head no higher: spaced out as a fault that lasts
+                  case Some(HeadMovedRetry.BackOff(refusals)) =>
+                    fetchAgain()
+                    if refusals == BlockImporter.HeadMovedRetriesWithoutProgress then
                       log.warning(
-                        "[STATE-BUSY] block {} was refused {} times running while another adoption holds the head; " +
-                          "it is tried again every {}s, and no peer is blamed: {}",
+                        "[STATE-BUSY] block {} was refused {} times running because the head moved after its branch " +
+                          "was weighed, with the head no higher; it is tried again every {}s, and no peer is blamed: {}",
                         failedBlock.number,
-                        streak,
+                        refusals,
                         BlockImporter.exhaustBackoff.toSeconds,
                         fault.getMessage
                       )
+                    BackingOffAfterStateFault
+                  case None =>
+                    val streak = stateFaultStreak
+                      .collect {
+                        case (hash, count) if hash == failedBlock.hash.value => count
+                      }
+                      .getOrElse(0) + 1
+                    stateFaultStreak = Some((failedBlock.hash.value, streak))
+                    wantAncestorBodiesOn(fault, failedBlock)
+                    fetchAgain()
+                    // A head that moved under the batch is gone at the next try. A fault that stays (a branch this
+                    // layout cannot execute yet, a state that is not held) would otherwise be met again at every round
+                    // trip of the fetcher, for good: from the third in a row on the same block the tries are spaced
+                    // out. Refused because another thread's adoption holds the head (B-294): no fault of this node's
+                    // state, and said at WARN as busy, never at ERROR; spaced out the same way while it lasts (B-462)
+                    val busy = fault.isInstanceOf[StateBusy]
+                    if streak < BlockImporter.StateFaultBackoffAfter then
+                      if busy then
+                        log.warning(
+                          "[STATE-BUSY] block {} was not executed: another adoption holds the head, no peer blamed: {}",
+                          failedBlock.number,
+                          fault.getMessage
+                        )
+                      else
+                        log.warning(
+                          "[LOCAL-STATE-FAULT] block {} was not executed on this node's own state, no peer blamed: {}",
+                          failedBlock.number,
+                          fault.getMessage
+                        )
+                      RunningAfterFetcherRewind
                     else
-                      log.error(
-                        "[LOCAL-STATE-FAULT] block {} could not be executed on this node's own state {} times " +
-                          "running; it is tried again every {}s, and no peer is blamed: {}",
-                        failedBlock.number,
-                        streak,
-                        BlockImporter.exhaustBackoff.toSeconds,
-                        fault.getMessage
-                      )
-                  BackingOffAfterStateFault
+                      if streak == BlockImporter.StateFaultBackoffAfter then
+                        if busy then
+                          log.warning(
+                            "[STATE-BUSY] block {} was refused {} times running while another adoption holds the " +
+                              "head; it is tried again every {}s, and no peer is blamed: {}",
+                            failedBlock.number,
+                            streak,
+                            BlockImporter.exhaustBackoff.toSeconds,
+                            fault.getMessage
+                          )
+                        else
+                          log.error(
+                            "[LOCAL-STATE-FAULT] block {} could not be executed on this node's own state {} times " +
+                              "running; it is tried again every {}s, and no peer is blamed: {}",
+                            failedBlock.number,
+                            streak,
+                            BlockImporter.exhaustBackoff.toSeconds,
+                            fault.getMessage
+                          )
+                      BackingOffAfterStateFault
               case partial: ImportedPartially =>
                 // B-338: the prefix is imported (tryImportBlocks), so the first block not imported is the one that
                 // failed. The fetcher goes back to it and the peer that served it is blamed, as for a batch whose first

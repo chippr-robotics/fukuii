@@ -989,9 +989,15 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
   private def recoveringEngine(
       on: Node,
       recovery: StateRecovery,
-      escalation: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None
+      escalation: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None,
+      choices: Option[ForkChoiceManager] = None
   ) =
-    val engine = on.engine(() => on.pathState.anchor.map(_.hash), recovery = Some(recovery), escalation = escalation)
+    val engine = on.engine(
+      () => on.pathState.anchor.map(_.hash),
+      choices = choices.getOrElse(on.node.forkChoiceManager),
+      recovery = Some(recovery),
+      escalation = escalation
+    )
     given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
     (
       (block: Block) => engine.newPayload(payloadOf(block)).unsafeRunSync(),
@@ -1808,6 +1814,69 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
       recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(2)
       on.holds(branch(4).header, chain ++ branch)
+    }
+
+  // B-504 (beacon, after B-463), at the Engine API: the consensus client's fork choice to a branch longer than the
+  // layers is answered SYNCING, and its adoption runs on the recovery's thread. A fork choice's move of the head up the
+  // layers lands between the adoption's read of the head and its hold of the records, and the consensus client names the
+  // branch still. The hold is refused as busy: the adoption ends Superseded, which is no refusal the escalation's watch
+  // counts, however low its threshold; nothing of the adoption is written; and the next fork choice to the branch adopts
+  // it from the head as the move left it.
+  it should "answer SYNCING and count nothing when a fork choice moves the head between the adoption's read of it and its hold, and be committed in place at the next" taggedAs
+    (UnitTest, ConsensusTest) in {
+      import com.chipprbots.ethereum.blockchain.sync.EscalationTrigger
+      import com.chipprbots.ethereum.blockchain.sync.EscalationWatch
+      import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+      val on = tightNode
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val recovery = new on.Recovery(maxBlocks = 1)
+      val branch = blocks.slice(39, 44)
+      // one refusal escalates: a Superseded that was counted would be told at once
+      val told = new java.util.concurrent.LinkedBlockingQueue[EscalationKind]()
+      val said = new java.util.concurrent.LinkedBlockingQueue[String]()
+      val watch = new EscalationWatch(
+        new EscalationTrigger(refusals = 1),
+        () => System.currentTimeMillis(),
+        kind => told.put(kind),
+        (_, why) => said.put(why)
+      )
+      // The adoption asks for the head the node followed after it read the head it may move back to, and before it
+      // holds the records: on the recovery's thread, once armed, the fork choice's move is made then. Through the
+      // writer as `ForkChoiceManager.confirmHeldHead` makes it, so that the consensus client's last fork choice, and the
+      // head it names, stay the branch's
+      val armed = new java.util.concurrent.atomic.AtomicBoolean(false)
+      val raced = new java.util.concurrent.atomic.AtomicBoolean(false)
+      val racing = new ForkChoiceManager(on.reader, on.writer):
+        override def getHeadBlockHash: Option[ByteString] =
+          if armed.get && Thread.currentThread.getName == StateRecovery.ThreadName && !raced.getAndSet(true) then
+            on.writer.moveHeadInPlace(branch(1).header, on.reader, forkChoice = true)
+          super.getHeadBlockHash
+      val (newPayload, choose) = recoveringEngine(on, recovery, Some(watch), Some(racing))
+      // 40 to 42 are kept as layers; 43 does not fit, and is VALID; 44 is ACCEPTED
+      branch.take(4).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      newPayload(branch(4)).status shouldBe PayloadStatus.Accepted
+      recovery.outcomes.last shouldBe a[StateRecovery.Outcome.TooLong]
+      armed.set(true)
+      statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe StateRecovery.Outcome.Superseded
+      raced.get shouldBe true
+      // nothing of the adoption: the head is where the fork choice's move took it, up two layers
+      recovery.adoptedBlocks shouldBe empty
+      on.holds(branch(1).header, chain ++ branch.take(2))
+      on.pathState.headGeneration % 2 shouldBe 0
+      on.pathState.recordsHeld shouldBe false
+      // the next fork choice to the branch: from 41, up to 42 and 43 and 44 committed in place. Its recovery runs on the
+      // same one thread as the first, after the first's end was told to the watch
+      statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(2)
+      recovery.adoptedBlocks shouldBe Seq(BigInt(43), BigInt(44))
+      on.holds(branch(4).header, chain ++ branch)
+      withClue("the escalation's watch: ") {
+        told.isEmpty shouldBe true
+        said.isEmpty shouldBe true
+      }
+      on.source.offTheLock.toArray.toSeq shouldBe empty
     }
 
   /** A branch from block 39: 40' to 44', the chain's blocks but for their extra data (before Prague a block's state

@@ -15,6 +15,7 @@ import com.chipprbots.ethereum.consensus.ConsensusImpl.tagOf
 import com.chipprbots.ethereum.consensus.engine.BranchHandOff
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
+import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.BranchPin
 import com.chipprbots.ethereum.db.storage.pathstate.BranchTooLarge
 import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
@@ -739,12 +740,24 @@ class ConsensusImpl(
       bestBlockHash: BlockHash
   )(implicit blockchainConfig: BlockchainConfig): ConsensusResult =
     def notJudged(fault: StateFault): ConsensusResult =
-      log.warn(
-        s"${tagOf(fault)} REORG blocks [{}-{}] not judged, this node's own state could not take them: {}",
-        newBranch.head.number,
-        newBranch.last.number,
-        fault.getMessage
-      )
+      fault match
+        // no fault of this node's state: said here, once, with where the head is (the refusals of the move say nothing
+        // of their own)
+        case busy: StateBusy =>
+          log.warn(
+            "[STATE-BUSY] REORG blocks [{}-{}] not judged, and queued again; the best block is {}: {}",
+            newBranch.head.number,
+            newBranch.last.number,
+            blockchainReader.getBestBlockNumber,
+            busy.getMessage
+          )
+        case _ =>
+          log.warn(
+            s"${tagOf(fault)} REORG blocks [{}-{}] not judged, this node's own state could not take them: {}",
+            newBranch.head.number,
+            newBranch.last.number,
+            fault.getMessage
+          )
       // the whole branch waits to be tried again: what of it was executed is kept, by its layers, and is not executed
       // twice
       ConsensusStateFault(fault, Nil, newBranch.toList)
@@ -855,6 +868,7 @@ class ConsensusImpl(
                         forkBlock,
                         bestBlockNumber,
                         bestBlockWeight,
+                        bestBlockHash,
                         oldCanonical,
                         accessLists,
                         notJudged
@@ -1068,6 +1082,7 @@ class ConsensusImpl(
       forkBlock: BlockHeader,
       bestBlockNumber: BigInt,
       bestBlockWeight: ChainWeight,
+      bestBlockHash: BlockHash,
       oldCanonical: List[(BigInt, BlockHash)],
       accessLists: Map[ByteString, BlockAccessList],
       notJudged: StateFault => ConsensusResult
@@ -1079,10 +1094,13 @@ class ConsensusImpl(
         on <- blockchainReader.getBlockHeaderByHash(remaining.standsOn)
         weight <- blockchainReader.getChainWeightByHash(on.hash)
       yield (on, weight)
-    // the head as it is now, which must be the one the branch was weighed against: nothing else moved it meanwhile
+    // The head as it is now, which must be the one the branch was weighed against: that block, by its hash (B-315). A
+    // head at the same height that is another block (moved back and a sibling committed) has another weight, and
+    // `weight > bestBlockWeight` below would compare the branch with a head the node no longer holds. A block committed
+    // on it, or a move of it, from here to the hold is refused by the hold itself (B-463).
+    // Its number is that block's by its hash; the index must name it at that height.
     val headNow = blockchainReader.getBestBlockHeader.filter { head =>
-      head.number.value == bestBlockNumber &&
-      blockchainReader.getBlockHeaderByNumber(bestBlockNumber).exists(_.hash == head.hash)
+      head.hash == bestBlockHash && blockchainReader.getBlockHeaderByNumber(bestBlockNumber).exists(_.hash == head.hash)
     }
     (headNow, start) match
       case (Some(oldHead), Some((on, weightOn))) =>
@@ -1185,7 +1203,8 @@ class ConsensusImpl(
           else ConsensusStateFault(fault, imported, queued)
         try
           // on the head read above, which the branch was weighed against and the move back leads to: a block committed
-          // on it since refuses the hold as busy, nothing written, and the branch is weighed again (B-463)
+          // on it, or a move of it, since refuses the hold as busy, nothing written, and the branch is weighed again
+          // (B-463)
           blockchainWriter.withRecordsHeldAbove(forkBlock, expectedHead = oldHead) {
             try
               // the layers of what was kept are still the pin's: the move applies them
@@ -1279,6 +1298,22 @@ class ConsensusImpl(
               deep.getMessage
             )
             notJudged(deep)
+      // Another head than the one the branch was weighed against: a block committed on it, or a move of it, since the
+      // weight comparison (B-315). No fault of this node and no verdict on the branch: busy, as the hold refuses it
+      // (B-463), and the branch is weighed again against the head as it is
+      case (None, _) if blockchainReader.getBestBlockHeader.exists(_.hash != bestBlockHash) =>
+        val now = blockchainReader.getBestBlockHeader.filter(_.hash != bestBlockHash)
+        val where = now.fold("no block")(head => s"block ${head.number}")
+        notJudged(
+          new StateBusy(
+            s"the writer that moved the head to $where",
+            s"the branch [${newBranch.head.number}-${newBranch.last.number}] was not committed in place: the head is " +
+              s"$where, not block $bestBlockNumber, which the branch was weighed against. Weigh it again against the " +
+              "head as it is",
+            // the head this refusal found: regular sync tries the branch again at once (BlockImporter)
+            StateBusy.Cause.HeadMovedSinceWeighed(now.fold(bestBlockNumber)(_.number.value))
+          )
+        )
       case (None, _) =>
         notJudged(
           new StateUnavailable(s"the head is no longer block $bestBlockNumber, which the branch was weighed against")
@@ -1363,6 +1398,37 @@ class ConsensusImpl(
   // the blocks a branch stood on that failed when they were executed again (reorganiseOnLayers); in memory only
   private val divergedParents = java.util.concurrent.ConcurrentHashMap.newKeySet[BlockHash]()
 
+  /** `anchor`, the block whose state the disk holds as a move of the head to `target` is planned, when it is not the
+    * head the weight arm's branch was weighed against: that head moved, and the best block with it (data-model 5.1,
+    * I1), so the move is refused as busy and the branch weighed again (B-315). Asked as the move is admitted, with the
+    * move under way: no commit lands meanwhile, and the best block is read as the plan's anchor was.
+    *
+    * A best block that is not `anchor` is no head that moved: a writer moved the best block or the state without the
+    * other, as `PathStateStorage.bestIsTheAnchor` finds before a batch is written. Refused as busy, it would be refused
+    * again at every offer and never be said; so it fails as that check fails, at ERROR, with nothing written.
+    *
+    * @throws IllegalStateException
+    *   when the best block is not `anchor`
+    */
+  private def movedWithTheBestBlock(anchor: BlockRef, target: BigInt): BlockRef =
+    val best = blockchainReader.getBestBlockHeader
+    if !best.exists(head => head.hash.value == anchor.hash && head.number.value == anchor.number) then
+      val bestIs = best.fold(s"${blockchainReader.getBestBlockNumber} (its header is not stored)")(head =>
+        s"${head.number} (${head.hash.toHexString.drop(2).take(16)})"
+      )
+      log.error(
+        "[STATE-MOVE] The best block is {} and the state is held at {}: a writer moved the one without the other. The " +
+          "move of the head to block {} was not written",
+        bestIs,
+        anchor.show,
+        target
+      )
+      throw new IllegalStateException(
+        s"the move of the head to block $target was not written: the best block ($bestIs) is not the block the state " +
+          s"is held at (${anchor.show})"
+      )
+    anchor
+
   /** What a branch executed on layers comes to: the head moved to it, kept, or a fault ([[reorganiseOnLayers]]). */
   private def settleOnLayers(
       outcome: BlockExecution.BatchOutcome,
@@ -1425,6 +1491,16 @@ class ConsensusImpl(
             // the branch was weighed, its blocks were told when they became canonical, and the importer tells them once
             // more (the pool, new-head subscribers): harmless, and accepted so that no other answer is needed (B-516)
             var headAlreadyHoldsIt = false
+            // The proof-of-work rule's branch only (B-315): the head it was weighed against is not the head the move
+            // would leave. A block was committed on it, or it was moved, after the weight comparison. Moved anyway, the
+            // node could take a lighter chain than the one it holds (core-geth weighs a side chain against the head it
+            // holds under `chainmu`, and `reorg` follows from that comparison). Asked as the move is planned: a plan is
+            // made from the head as it is, and its first batch is written only if the head is still that block, under
+            // the state lock, or the move is planned and asked again. Refused as busy, with nothing written: no fault of
+            // this node and no verdict on the branch, which is queued again and weighed against the head as it is. Only
+            // when the best block moved with the state: a best block that did not is a defect, and fails at ERROR
+            // ([[movedWithTheBestBlock]]).
+            var weighedAgainstAnotherHead: Option[BlockRef] = None
             val moved =
               try
                 Some(
@@ -1433,6 +1509,10 @@ class ConsensusImpl(
                     blockchainReader,
                     admit = plan =>
                       val headMoved = !selectedByWeight && plan.anchor.hash != bestBlockHash.value
+                      weighedAgainstAnotherHead =
+                        if selectedByWeight && plan.anchor.hash != bestBlockHash.value then
+                          Some(movedWithTheBestBlock(plan.anchor, tip.block.number.value))
+                        else None
                       headAlreadyHoldsIt = !selectedByWeight && plan.forward.isEmpty
                       val another = !selectedByWeight && (headMoved ||
                         designatedHead.flatMap(_.headBlockHash) != namedAt && !leadsToDesignatedHead(newBranch))
@@ -1443,21 +1523,26 @@ class ConsensusImpl(
                           Option.when(headAlreadyHoldsIt)(s"the head ${plan.anchor.show} is past the branch's tip")
                         )
                         .orElse(Option.when(another)("the consensus layer names another head"))
+                        .orElse(weighedAgainstAnotherHead.map(anchor => s"the head moved to block ${anchor.show}"))
                   )
                 )
               catch
                 // refused as it was admitted: nothing was written
                 case _: StateFault if refusedAsSuperseded => None
-                // refused before its first batch, with nothing written, because another thread's adoption holds the
-                // head (B-294): no fault of this node, and the branch is asked for again once it ends (B-462)
-                case busy: StateBusy =>
-                  log.warn(
-                    "[STATE-BUSY] REORG: the move of the head to block {} was not made, and the best block is still {}: {}",
-                    tip.block.number,
-                    blockchainReader.getBestBlockNumber,
-                    busy.getMessage
+                // said once, as busy, where the branch is queued again (`notJudged`)
+                case _: StateFault if weighedAgainstAnotherHead.isDefined =>
+                  val anchor = weighedAgainstAnotherHead.get
+                  throw new StateBusy(
+                    s"the writer that moved the head to block ${anchor.show}",
+                    s"the move of the head to block ${tip.block.number} was not made: the head is at block " +
+                      s"${anchor.show}, not at block $bestBlockNumber (${bestBlockHash.toHexString.drop(2).take(16)}), " +
+                      "which the branch was weighed against. Weigh it again against the head as it is",
+                    StateBusy.Cause.HeadMovedSinceWeighed(anchor.number)
                   )
-                  throw busy
+                // refused before its first batch, with nothing written, because another thread's adoption holds the
+                // head (B-294): no fault of this node, and the branch is asked for again once it ends (B-462). Said
+                // once, as busy, where the branch is queued again (`notJudged`)
+                case busy: StateBusy    => throw busy
                 case failed: StateFault =>
                   // a move of several batches may have written some: where the head is now is said, and the
                   // next attempt moves on from it

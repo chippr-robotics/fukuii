@@ -514,8 +514,9 @@ class StateRecovery(
               val committed = scala.collection.mutable.ListBuffer.empty[BlockHash]
               rederivingAfter(madeCanonical ++ committed) {
                 try
-                  // on the head read as `from`, which a move back leads to: a block committed on it since refuses the
-                  // hold as busy, nothing written, and the next fork choice reads the head again (B-463)
+                  // on the head read as `from`, which a move back leads to: a block committed on it, or a move of it,
+                  // since refuses the hold as busy, nothing written, and the next fork choice reads the head again
+                  // (B-463)
                   state.withRecordsHeld(refOf(holdFrom), expectedAnchor = from) {
                     holding = true
                     val movedTo =
@@ -563,7 +564,7 @@ class StateRecovery(
                   // another thread's adoption is moving the head (B-294): no fault of this node, and no verdict on the
                   // branch. Superseded, as a state that moved under it: asked for again at once, with no cool-down,
                   // and not counted by the escalation's watch (beacon). The hold refused is a `StateBusy` (B-462); so it
-                  // is when a block was committed on the head since `from` was read (B-463)
+                  // is for a block committed on the head, or a move of it, since `from` was read (B-463)
                   case _: StateBusy if !holding => Outcome.Superseded
                 finally adopting = None
               }

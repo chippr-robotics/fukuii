@@ -51,14 +51,43 @@ final class StateUnavailable(
   * state moved under between two of its batches, or that no plan of could be made. Thrown where another attempt is
   * found open ([[PathStateStorage]]`.refuseInAnotherAttempt`), and by a hold of the records asked for on a head that is
   * not the one its caller read (B-463, [[PathStateStorage.withRecordsHeld]]): a block was committed on it, or it was
-  * moved, since. That too is no fault and no verdict: the caller reads the head again and asks again.
+  * moved, since; or while a move of the head is under way on another thread (B-504). That too is no fault and no
+  * verdict: the caller reads the head again and asks again. And by the weight arm of a reorganisation whose branch was
+  * weighed against a head that is not the head any more (B-315, `ConsensusImpl`), with the cause
+  * [[StateBusy.Cause.HeadMovedSinceWeighed]].
   *
   * @param holder
   *   who holds the head: the thread of the adoption that is open, and what it holds; or the writer that moved it
   * @param reason
   *   what was refused, and why
+  * @param cause
+  *   which kind of busy it is: what the writer that asks again can expect of its next attempt ([[StateBusy.Cause]])
   */
-final class StateBusy(val holder: String, val reason: String) extends StateFault(s"State busy: $reason")
+final class StateBusy(
+    val holder: String,
+    val reason: String,
+    val cause: StateBusy.Cause = StateBusy.Cause.HeldByAnother
+) extends StateFault(s"State busy: $reason")
+
+object StateBusy:
+
+  /** Why the head was busy, for the writer that asks again: regular sync paces its tries by it (`BlockImporter`). */
+  enum Cause:
+
+    /** Another writer holds the head, or is moving it: an adoption that is open (B-294, B-462), a move of the head
+      * under way on another thread (B-504), or a head that moved between a caller's read of it and its hold (B-463). It
+      * lasts as long as that writer's work does, which may be long: the tries are spaced out from the third.
+      */
+    case HeldByAnother
+
+    /** The weight arm's branch was weighed against a head that is not the head any more (B-315): a block was committed
+      * on it, or it was moved, between the weight comparison and the move. It ends as soon as the branch is weighed
+      * again against the head as it is, so it is tried again at once.
+      *
+      * @param headNumber
+      *   the height of the head the refusal found
+      */
+    case HeadMovedSinceWeighed(headNumber: BigInt)
 
 /** A block of this node's own chain that a rule needs is not stored whole: the ommers of a block are checked against
   * the blocks of its six ancestors, and after a sync that began from a pivot the bodies below the pivot arrive later

@@ -1,5 +1,7 @@
 package com.chipprbots.ethereum.consensus
 
+import java.nio.ByteBuffer
+
 import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
@@ -624,6 +626,287 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
             node.bestHash shouldBe next.hash
       }
   }
+  // B-315 (forge's area, core-geth parity): the weight arm moves the head to a branch it weighed against the head it
+  // read. A block committed on that head, or a move of it, between the weight comparison and the move (an operator's
+  // admin_importChain on a live node takes no import lock, nor do the test RPC's rewind and mining) gives the node
+  // another head. Moved anyway, it took a lighter chain than the one it held: core-geth weighs a side chain against the
+  // head it holds under `chainmu`. The move is refused as busy, with nothing written; the branch is queued again, no
+  // peer blamed and nothing counted, and the next offer weighs it against the head as it is. Forced into the window on
+  // both of the arm's ways to the head: the move of the executed branch, and its commit in place at the cap, where the
+  // head is read again before the hold (a sibling of the head at its height was not seen there, by number alone).
+  it should "refuse, as busy, a move of the head to a branch weighed against a head that a block was committed on, or that moved, since; and weigh it again against the head as it is" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    final case class Race(
+        what: String,
+        cap: StateConfig => StateConfig,
+        atThePin: Boolean,
+        meanwhile: HeadRacedReorg => Block,
+        // what is the head's chain above the fork once the branch is offered again: None when it is kept beside it
+        leftAgain: (HeadRacedReorg, Block) => Option[List[Block]]
+    )
+    def committedOn(f: HeadRacedReorg, difficulty: BigInt): Block =
+      val onTheHead = f.oracle.extendSide(f.oldChain.last, 1, difficulty = difficulty, tag = 0x86, miner = OtherMiner)
+      f.node.importOne(onTheHead.head) shouldBe a[BlockImportedToTop]
+      onTheHead.head
+    val races = Seq(
+      // 14000 against the branch's 13000: before, the lighter branch was taken
+      Race("a heavier block committed on the head", identity, false, committedOn(_, 2000), (_, _) => None),
+      Race(
+        "a lighter block committed on the head",
+        identity,
+        false,
+        committedOn(_, 500),
+        (f, committed) => Some(f.oldChain.drop(3) :+ committed)
+      ),
+      Race(
+        "the head moved back to block 10",
+        identity,
+        false,
+        { f =>
+          f.movedBackTo(f.oldChain(9))
+          f.oldChain(9)
+        },
+        (f, _) => Some(f.oldChain.slice(3, 10))
+      ),
+      Race(
+        "a heavier block committed on the head, at the cap",
+        pinnedCap(1L),
+        true,
+        committedOn(_, 2000),
+        (_, _) => None
+      ),
+      // moved back to 11 and a sibling of the old head committed at 12, 14000 against 13000: the head read again
+      // at the cap is at the height the branch was weighed at, and is another block
+      Race(
+        "a heavier sibling of the head at its height, at the cap",
+        pinnedCap(1L),
+        true,
+        { f =>
+          f.movedBackTo(f.oldChain(10))
+          val sibling = f.oracle.extendSide(f.oldChain(10), 1, difficulty = 3000, tag = 0x87, miner = OtherMiner).head
+          f.node.importOne(sibling) shouldBe a[BlockImportedToTop]
+          sibling
+        },
+        (_, _) => None
+      )
+    )
+    for race <- races do
+      withClue(s"${race.what}: ") {
+        new HeadRacedReorg(race.cap, race.atThePin):
+          val headMeanwhile = new java.util.concurrent.atomic.AtomicReference[Block]()
+          val untouched = new java.util.concurrent.atomic.AtomicReference[Map[java.nio.ByteBuffer, Array[Byte]]]()
+          meanwhile = () =>
+            headMeanwhile.set(race.meanwhile(this))
+            untouched.set(datadir.storage)
+          val (first, said) = com.chipprbots.ethereum.testing.LogCapture.capture(classOf[ConsensusImpl])(offer())
+          ranMeanwhile shouldBe true
+          val now = headMeanwhile.get
+          first match
+            case BlockImportStateFault(refused: StateBusy, Nil) =>
+              refused.reason should include(s"block ${oldChain.last.number.value}")
+              refused.holder should include(s"block ${now.number.value}")
+              // the kind regular sync tries again at once, with the head it found (W2)
+              refused.cause shouldBe StateBusy.Cause.HeadMovedSinceWeighed(now.number.value)
+            case other => fail(s"not refused as busy: $other")
+          // nothing of the adoption was written: the head is where the other writer left it
+          if race.atThePin then
+            // the branch was executed after `meanwhile`, under its pin, up to the cap: what that stores is by the
+            // blocks' hashes. Nothing of the head (the index of blocks by number, the best block, the anchor) changed
+            val before = untouched.get
+            val written = (datadir.storage.keySet ++ before.keySet).filterNot(key =>
+              java.util.Arrays.equals(datadir.storage.getOrElse(key, null), before.getOrElse(key, null))
+            )
+            written.map(_.get(0)) should contain noneOf (
+              Namespaces.HeightsNamespace.head,
+              Namespaces.AppStateNamespace.head
+            )
+          else (datadir.storage eq untouched.get) shouldBe true
+          state.headGeneration % 2 shouldBe 0
+          validHead(node, datadir).hash shouldBe now.hash
+          // queued again, and said at WARN as busy, never at ERROR
+          branch.foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
+          said.filter(_.getLevel == ch.qos.logback.classic.Level.ERROR) shouldBe empty
+          // said once, at WARN, where the branch is queued again (N3): not again by the refusal of the move
+          said.count(e => e.getFormattedMessage.startsWith("[STATE-BUSY]")) shouldBe 1
+          said.filter(_.getFormattedMessage.startsWith("[STATE-BUSY]")).map(_.getLevel).distinct shouldBe
+            List(ch.qos.logback.classic.Level.WARN)
+          // offered again: weighed against the head as it is
+          val again: BlockImportResult = offer()
+          race.leftAgain(this, now) match
+            case None =>
+              again shouldBe BlockEnqueued
+              validHead(node, datadir).hash shouldBe now.hash
+            case Some(left) =>
+              again match
+                case ChainReorganised(oldBranch, newBranch, _, _) =>
+                  oldBranch.map(_.hash) shouldBe left.map(_.hash)
+                  newBranch.map(_.hash) shouldBe branch.map(_.hash)
+                case other => fail(s"not adopted: $other")
+              validHead(node, datadir).hash shouldBe branch.last.hash
+      }
+  }
+
+  // B-315 (forge's review, W1): the move of the weight arm's branch finds the state held at another block than the head
+  // the branch was weighed against, and the best block is that head still. No head moved: a writer moved the state
+  // without the best block (data-model 5.1, I1). Refused as busy, it would be refused again at every offer and never be
+  // said. It fails as `PathStateStorage.bestIsTheAnchor` fails before a batch is written: at ERROR, with an
+  // IllegalStateException, and nothing written. A best block that moved with the state is the busy refusal above.
+  it should "fail at ERROR, with nothing written, a move of the head whose state moved without the best block after the branch was weighed" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new HeadRacedReorg(identity, atThePin = false):
+    val untouched = new java.util.concurrent.atomic.AtomicReference[Map[java.nio.ByteBuffer, Array[Byte]]]()
+    meanwhile = () =>
+      // the state moved back to block 10, the best block with it; then the best block alone put back on block 12
+      movedBackTo(oldChain(9))
+      node.storagesInstance.storages.appStateStorage
+        .putBestBlockInfo(
+          com.chipprbots.ethereum.domain.appstate.BlockInfo(oldChain.last.hash.value, oldChain.last.number.value)
+        )
+        .commit()
+      untouched.set(datadir.storage)
+    val (thrown, said) =
+      com.chipprbots.ethereum.testing.LogCapture.capture(classOf[ConsensusImpl])(scala.util.Try(offer()))
+    ranMeanwhile shouldBe true
+    thrown.failed.toOption match
+      case Some(failed: IllegalStateException) =>
+        failed.getMessage should include("is not the block the state is held at")
+      case _ => fail(s"not failed as a broken invariant: $thrown")
+    // nothing was written: the state is where the other writer left it, and so is the best block
+    (datadir.storage eq untouched.get) shouldBe true
+    state.anchor.map(_.hash) shouldBe Some(oldChain(9).hash.value)
+    node.bestHash shouldBe oldChain.last.hash
+    state.headGeneration % 2 shouldBe 0
+    said.exists(e =>
+      e.getLevel == ch.qos.logback.classic.Level.ERROR && e.getFormattedMessage.startsWith("[STATE-MOVE]")
+    ) shouldBe true
+    said.exists(_.getFormattedMessage.contains("[STATE-BUSY]")) shouldBe false
+  )
+
+  // The same broken invariant on the proof-of-work rule's way at the cap (forge, after B-315 W1): the head read again
+  // there is the head the branch was weighed against, by the best block and the index, and the state is held at another
+  // block. The hold of the records is where it is met: refused as busy (B-463), it would be refused again at every
+  // offer and never be said. It fails as `bestIsTheAnchor` fails before a batch is written: at ERROR, with an
+  // IllegalStateException, and nothing held or written.
+  it should "fail at ERROR, with nothing held, the hold at the cap when the state moved without the best block" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new HeadRacedReorg(pinnedCap(1L), atThePin = true):
+    val before = new java.util.concurrent.atomic.AtomicReference[Map[java.nio.ByteBuffer, Array[Byte]]]()
+    meanwhile = () =>
+      // the state moved back to block 10, the best block and the index with it; then the rows of a move to block 12,
+      // the best block and the index, written alone: the anchor is block 10, and the head reads as block 12
+      movedBackTo(oldChain(9))
+      node.blockchainWriter.canonicalHeadUpdate(oldChain.last.header, node.blockchainReader).batch.commit()
+      before.set(datadir.storage)
+    val (thrown, said) =
+      com.chipprbots.ethereum.testing.LogCapture.capture("com.chipprbots.ethereum")(scala.util.Try(offer()))
+    ranMeanwhile shouldBe true
+    thrown.failed.toOption match
+      case Some(failed: IllegalStateException) =>
+        failed.getMessage should include("the hold of the records above block")
+        failed.getMessage should include("is not the block the state is held at")
+      case _ => fail(s"not failed as a broken invariant: $thrown")
+    // nothing held, and nothing of the head written (the branch was executed under its pin, by its blocks' hashes)
+    state.recordsHeld shouldBe false
+    state.headGeneration % 2 shouldBe 0
+    state.anchor.map(_.hash) shouldBe Some(oldChain(9).hash.value)
+    node.bestHash shouldBe oldChain.last.hash
+    val written: Set[ByteBuffer] = (datadir.storage.keySet ++ before.get.keySet).filterNot(key =>
+      java.util.Arrays.equals(datadir.storage.getOrElse(key, null), before.get.getOrElse(key, null))
+    )
+    written.map(_.get(0)) should contain noneOf (
+      Namespaces.HeightsNamespace.head,
+      Namespaces.AppStateNamespace.head
+    )
+    said.exists(e =>
+      e.getLevel == ch.qos.logback.classic.Level.ERROR && e.getFormattedMessage.startsWith("[STATE-MOVE]")
+    ) shouldBe true
+    said.exists(_.getFormattedMessage.contains("[STATE-BUSY]")) shouldBe false
+  )
+
+  // B-504 on the proof-of-work rule's way at the cap (forge's review, N4): the branch is weighed against a head that a
+  // move of the head on another thread is passing through, paused between two of its batches. The head read again at the
+  // cap is that block, and so is the anchor, so neither B-315's check nor B-463's refuses the hold; the move under way
+  // does. Held, the adoption's own move would wait for the paused one, and a move back would lead to a block half-way up
+  // it. Refused as busy, nothing of the head written, the branch queued again; once the move has ended the next offer
+  // weighs it against the head the move left, and adopts it.
+  it should "refuse, as busy, the hold at the cap while a move of the head on another thread is between two of its batches" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new HeadRacedReorg(config => pinnedCap(1L)(config).copy(maxBlocksPerMoveBatch = 1), atThePin = true):
+    // the other thread's move: from block 10 up to block 12, a block a batch, paused before its second batch
+    movedBackTo(oldChain(9))
+    val paused = new java.util.concurrent.CountDownLatch(1)
+    val goOn = new java.util.concurrent.CountDownLatch(1)
+    val batches = new java.util.concurrent.atomic.AtomicInteger(0)
+    val moveEnded = new java.util.concurrent.atomic.AtomicReference[scala.util.Try[Any]]()
+    val moving = new Thread(() =>
+      moveEnded.set(
+        scala.util.Try(
+          node.blockchainWriter.moveHeadInPlace(
+            oldChain.last.header,
+            node.blockchainReader,
+            refuse = _ =>
+              if batches.incrementAndGet() == 2 then
+                paused.countDown()
+                goOn.await(60, java.util.concurrent.TimeUnit.SECONDS)
+              None
+          )
+        )
+      )
+    )
+    def releaseTheMove(): Unit =
+      goOn.countDown()
+      moving.join(60000)
+    try
+      moving.start()
+      paused.await(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+      // between its first and second batch: the head and the state are block 11, which the move passes through
+      node.bestHash shouldBe oldChain(10).hash
+      state.anchor.map(_.hash) shouldBe Some(oldChain(10).hash.value)
+      val before = datadir.storage
+      // offered on another thread: a hold granted would wait for the paused move with its own, and is said, not hung
+      val offered = scala.concurrent.Future(
+        com.chipprbots.ethereum.testing.LogCapture.capture(classOf[ConsensusImpl])(offer())
+      )(using scala.concurrent.ExecutionContext.global)
+      val (first, said) =
+        try scala.concurrent.Await.result(offered, scala.concurrent.duration.Duration(60, "s"))
+        catch case _: java.util.concurrent.TimeoutException => fail("the adoption waited for the paused move")
+      first match
+        case BlockImportStateFault(refused: StateBusy, Nil) =>
+          refused.holder should include("the move of the head under way on another thread")
+          refused.cause shouldBe StateBusy.Cause.HeldByAnother
+        case other => fail(s"not refused as busy: $other")
+      // nothing of the head was written (the branch was executed under its pin, by its blocks' hashes)
+      val written = (datadir.storage.keySet ++ before.keySet).filterNot(key =>
+        java.util.Arrays.equals(datadir.storage.getOrElse(key, null), before.getOrElse(key, null))
+      )
+      written.map(_.get(0)) should contain noneOf (
+        Namespaces.HeightsNamespace.head,
+        Namespaces.AppStateNamespace.head
+      )
+      node.bestHash shouldBe oldChain(10).hash
+      state.recordsHeld shouldBe false
+      branch.foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
+      said.filter(_.getLevel == ch.qos.logback.classic.Level.ERROR) shouldBe empty
+      said.count(_.getFormattedMessage.startsWith("[STATE-BUSY]")) shouldBe 1
+      // the move ends where it was going
+      releaseTheMove()
+      moveEnded.get.isSuccess shouldBe true
+      node.bestHash shouldBe oldChain.last.hash
+      // offered again: weighed against block 12, 13000 against 12000, and adopted
+      offer() match
+        case ChainReorganised(oldBranch, newBranch, _, _) =>
+          oldBranch.map(_.hash) shouldBe oldChain.drop(3).map(_.hash)
+          newBranch.map(_.hash) shouldBe branch.map(_.hash)
+        case other => fail(s"not adopted: $other")
+      validHead(node, datadir).hash shouldBe branch.last.hash
+    finally releaseTheMove()
+  )
+
   // B-503: a batch the store was busy for is queued again (B-440), and regular sync fetches it again and adopts it
   // with `evaluateBranch`. The blocks it made the head must leave the queue, as a branch the queue resolved does: left
   // in it, the next block announced is resolved with them as its branch, and the node reorganises onto its own chain,
@@ -1137,6 +1420,174 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       reported shouldBe Nil
     finally recovery.close()
   )
+
+  /** A recovery over `f`'s node that adopts a branch of more than two blocks in place, and a sink of it that names what
+    * `f` names and runs `meanwhile` once, the first time the adoption asks for the head it followed: after it read the
+    * head it may move back to (`from`), before it holds the records (B-504).
+    */
+  private def racedRecovery(f: DesignatedFixture, meanwhile: () => Unit): (StateRecovery, Sink) =
+    val recovery = new StateRecovery(
+      f.node.blockchainReader,
+      f.node.blockchainWriter,
+      f.node.blockExecution,
+      f.node.storagesInstance.storages.pathStateStorage.get,
+      maxBlocks = 2
+    )(using f.node.blockchainConfig)
+    val raced = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val sink: Sink = new StateRecovery.Sink:
+      def executed(
+          block: Block,
+          receipts: Seq[Receipt],
+          accessList: Option[com.chipprbots.ethereum.domain.BlockAccessList]
+      ): Unit = ()
+      def rejected(block: Block, error: BlockExecutionError, above: List[Block]): Unit = fail("rejected")
+      override def requestedHead: Option[ByteString] = f.namedNow()
+      override def followedHead: Option[ByteString] =
+        if !raced.getAndSet(true) then meanwhile()
+        Some(f.aChain.last.hash.value)
+    (recovery, sink)
+
+  // B-504 (beacon, after B-463): a consensus client's fork choice moves the head, by a move of it and not by a block
+  // committed on it, between the recovery's read of the head it may move back to and its hold of the records. The
+  // consensus layer names the branch again before the hold, so the adoption is still asked for and the hold itself must
+  // refuse it: as busy, nothing held or written, answered Superseded; the next fork choice adopts the branch from the
+  // head the fork choice left.
+  it should "be superseded, with nothing written, when a fork choice moves the head between the recovery's read of it and its hold" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new DesignatedFixture(archiveOfShortViews):
+    val state = node.storagesInstance.storages.pathStateStorage.get
+    // the store as the fork choice's move left it
+    val untouched = new java.util.concurrent.atomic.AtomicReference[AnyRef]()
+    val (recovery, sink) = racedRecovery(
+      this,
+      () =>
+        // the move a fork choice makes (ForkChoiceManager.confirmHeldHead): up the head's chain, by its record
+        node.blockchainWriter.moveHeadInPlace(aChain.last.header, node.blockchainReader, forkChoice = true)
+        untouched.set(node.storagesInstance.dataSource.storage)
+    )
+    try
+      node.importAll(aChain) shouldBe a[BlockImportedToTop]
+      // the head the consensus client had last followed: block 4, with block 5 above it by its record
+      node.blockchainWriter.moveHeadInPlace(aChain(3).header, node.blockchainReader)
+      node.bestHash shouldBe aChain(3).hash
+      bChain.foreach(block => node.blockchainWriter.storeBlockByHashOnly(block).commit())
+      named.set(Some(bChain.last.hash.value))
+      recovery
+        .requestFor(bChain.last.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Superseded
+      // nothing of the adoption was written: the head is where the fork choice moved it
+      (node.storagesInstance.dataSource.storage eq untouched.get) shouldBe true
+      node.bestHash shouldBe aChain.last.hash
+      state.anchor.map(_.hash) shouldBe Some(aChain.last.hash.value)
+      state.headGeneration % 2 shouldBe 0
+      state.recordsHeld shouldBe false
+      // the next fork choice: adopted from the head as it is
+      recovery
+        .requestFor(bChain.last.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+        .outcome
+        .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Adopted(4)
+      node.bestHash shouldBe bChain.last.hash
+      (3 to 6).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 3).hash))
+      reported shouldBe Nil
+    finally recovery.close()
+  )
+
+  // B-504 (beacon, after B-463): the recovery reads the head it may move back to while a fork choice's move of the head
+  // is between two of its batches: `from` is a block the move is passing through, which no fork choice named and no
+  // branch was weighed against. The hold is refused, as busy and with nothing written, whether it is asked once the
+  // move has gone on (the head is not `from` any more), or while the move is still between the same two batches (the
+  // head is `from` still, and the move will take it on): held then, a move back would lead to a block half-way up a
+  // move. Superseded both ways; once the move has ended, the next fork choice adopts the branch from where it left the
+  // head.
+  it should "be superseded, with nothing written, when it read the head between two batches of a fork choice's move" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    for holdWhileMoving <- Seq(false, true) do
+      withClue(s"the hold asked while the move is still between its batches: $holdWhileMoving: ") {
+        new DesignatedFixture(config => archiveOfShortViews(config).copy(maxBlocksPerMoveBatch = 1)):
+          val state = node.storagesInstance.storages.pathStateStorage.get
+          // the fork choice's move: from block 2 up to block 5, a block a batch, paused before its second batch
+          val paused = new java.util.concurrent.CountDownLatch(1)
+          val goOn = new java.util.concurrent.CountDownLatch(1)
+          val batches = new java.util.concurrent.atomic.AtomicInteger(0)
+          val fromRead = new java.util.concurrent.atomic.AtomicReference[Option[BlockRef]](None)
+          @volatile var moving: Thread = null
+          def releaseTheMove(): Unit =
+            goOn.countDown()
+            Option(moving).foreach(_.join(60000))
+          val (recovery, sink) = racedRecovery(
+            this,
+            () =>
+              // the adoption read `from` already: the head as the paused move left it
+              fromRead.set(state.anchor)
+              if !holdWhileMoving then releaseTheMove()
+          )
+          try
+            node.importAll(aChain) shouldBe a[BlockImportedToTop]
+            node.blockchainWriter.moveHeadInPlace(aChain(1).header, node.blockchainReader)
+            node.bestHash shouldBe aChain(1).hash
+            bChain.foreach(block => node.blockchainWriter.storeBlockByHashOnly(block).commit())
+            val moveEnded = new java.util.concurrent.atomic.AtomicReference[scala.util.Try[Any]]()
+            moving = new Thread(() =>
+              moveEnded.set(
+                scala.util.Try(
+                  node.blockchainWriter.moveHeadInPlace(
+                    aChain.last.header,
+                    node.blockchainReader,
+                    refuse = _ =>
+                      if batches.incrementAndGet() == 2 then
+                        paused.countDown()
+                        goOn.await(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+                      None
+                    ,
+                    forkChoice = true
+                  )
+                )
+              )
+            )
+            moving.start()
+            paused.await(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+            // between its first and second batch: the head is block 3, which the move passes through
+            state.anchor.map(_.hash) shouldBe Some(aChain(2).hash.value)
+            named.set(Some(bChain.last.hash.value))
+            val untouched = node.storagesInstance.dataSource.storage
+            // a hold made while the move stands still would wait for it with its own move: said, not hung
+            val first = scala.util.Try(
+              recovery
+                .requestFor(bChain.last.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+                .outcome
+                .get(60, java.util.concurrent.TimeUnit.SECONDS)
+            )
+            first.fold(thrown => fail(s"the adoption did not end: $thrown"), identity) shouldBe
+              StateRecovery.Outcome.Superseded
+            fromRead.get.map(_.hash) shouldBe Some(aChain(2).hash.value)
+            if holdWhileMoving then
+              // nothing was written while the move stood still, by the adoption either
+              (node.storagesInstance.dataSource.storage eq untouched) shouldBe true
+              releaseTheMove()
+            moveEnded.get.isSuccess shouldBe true
+            // the move ended where the fork choice named, and the adoption wrote nothing and holds nothing
+            node.bestHash shouldBe aChain.last.hash
+            state.anchor.map(_.hash) shouldBe Some(aChain.last.hash.value)
+            state.headGeneration % 2 shouldBe 0
+            state.recordsHeld shouldBe false
+            (3 to 5).foreach(n => node.indexed(n) shouldBe Some(aChain(n - 1).hash))
+            // the next fork choice: adopted from the head as it is
+            recovery
+              .requestFor(bChain.last.hash.value, sink, "a fork choice", StateRecovery.Authority.ForkChoice)
+              .outcome
+              .get(60, java.util.concurrent.TimeUnit.SECONDS) shouldBe StateRecovery.Outcome.Adopted(4)
+            node.bestHash shouldBe bChain.last.hash
+            (3 to 6).foreach(n => node.indexed(n) shouldBe Some(bChain(n - 3).hash))
+            reported shouldBe Nil
+          finally
+            releaseTheMove()
+            recovery.close()
+      }
+  }
 
   it should "set what hangs from it aside while the head stays, once it is handed off, and not hand off a fork below the views" taggedAs (
     UnitTest,
@@ -2408,6 +2859,70 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       import node.blockchainConfig
       import node.runtime
       adapter.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
+
+  /** [[KilledReorg]]'s two chains on a node that runs on, with `cap` on the pinned layers (B-315). `meanwhile` runs
+    * once, on the same thread, after the branch was weighed against the head and before the head is moved to it: as the
+    * move of the head to the executed branch is asked for, or, with `atThePin`, as the branch's pin is opened, before
+    * anything of it is executed (the branch committed in place at the cap reads the head again after that). The branch
+    * is offered through an import adapter over this fixture's `consensus` and the node's queue.
+    */
+  class HeadRacedReorg(cap: StateConfig => StateConfig, atThePin: Boolean) extends KilledReorg(cap):
+    val datadir = new EphemDataSource(Map.empty)
+    val node = new Node(guard = true, cap, Some(datadir))
+    node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+    val state: PathStateStorage = node.storagesInstance.storages.pathStateStorage.get
+    @volatile var meanwhile: () => Unit = () => ()
+    @volatile var ranMeanwhile = false
+    private def once(): Unit =
+      if !ranMeanwhile then
+        ranMeanwhile = true
+        meanwhile()
+    private val storages = node.storagesInstance.storages
+    private val writer = new BlockchainWriter(
+      storages.blockHeadersStorage,
+      storages.blockBodiesStorage,
+      storages.blockNumberMappingStorage,
+      storages.transactionMappingStorage,
+      storages.receiptStorage,
+      storages.chainWeightStorage,
+      storages.appStateStorage,
+      storages.blockAccessListStorage,
+      pathState = storages.pathStateStorage
+    ):
+      override def withPinnedBranch[A](name: String)(
+          body: Option[com.chipprbots.ethereum.db.storage.pathstate.BranchPin] => A
+      ): A =
+        if atThePin then once()
+        super.withPinnedBranch(name)(body)
+      override def moveHeadInPlace(
+          target: BlockHeader,
+          reader: BlockchainReader,
+          refuse: com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan.Chunk => Option[String],
+          finalized: Option[FinalizedBlock],
+          admit: com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan => Option[String],
+          forkChoice: Boolean
+      ): PathStateStorage.MoveOutcome =
+        if !atThePin then once()
+        super.moveHeadInPlace(target, reader, refuse, finalized, admit, forkChoice)
+    val consensus = new ConsensusImpl(node.blockchainReader, writer, node.blockExecution, reorgState = node.blockchain)
+    private val adapter = new ConsensusAdapter(
+      consensus,
+      node.blockchainReader,
+      node.blockQueue,
+      new com.chipprbots.ethereum.ledger.BlockValidation(node.mining, node.blockchainReader, node.blockQueue),
+      node.runtime
+    )
+
+    /** The branch, offered through the import adapter over this fixture's `consensus`. */
+    def offer(): BlockImportResult =
+      import node.blockchainConfig
+      import node.runtime
+      adapter.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
+
+    /** The head moved back along its own chain to `to`, as a rewind moves it. */
+    def movedBackTo(to: Block): Unit =
+      node.blockchainWriter.moveHeadInPlace(to.header, node.blockchainReader)
+      node.bestHash shouldBe to.hash
 
   /** Canonical h1..h12 at difficulty 1000; the branch leaves it after h3, 9 blocks below the head, with 10 blocks at
     * 1000 sealed for another miner: heavier, and of another state at every height.
