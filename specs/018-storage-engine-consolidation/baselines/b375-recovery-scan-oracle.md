@@ -19,6 +19,8 @@ Recorded 2026-11-22 by `vault-b375` (B-375), cloud session. Closes the jar half 
    runs six scans: `CombinedRecoveryScan.scanFrom` (whole), the same by shard (`ShardEnumerator.enumShards` depth 1,
    `scanShard`), `CombinedRecoveryScanner.run()` sequential and with concurrency 2, `StorageRecoveryActor.scanForMissingStorage`
    and `BytecodeRecoveryActor.scanForMissingBytecodes`. 66 verdicts each side (11 cases x 6 scans).
+   (2026-11-24, B-217: the two legacy scans were retired, and the runner no longer prints them. A run of it now gives
+   44 verdicts each side, 11 cases x 4 scans; the record below is the run of 2026-11 as it was.)
 3. The two verdict files are diffed. Exit 0 is no difference.
 
 **Entry points.** Everything is public or `private[sync]`, so the runner sits in package `blockchain.sync` and calls the

@@ -9,14 +9,9 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
-import scala.collection.mutable
-import scala.concurrent.Future
 import scala.concurrent.duration.*
-import scala.util.Failure
-import scala.util.Success
 
 import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
@@ -24,22 +19,20 @@ import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTask
 import com.chipprbots.ethereum.blockchain.sync.snap.actors
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
-import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs
-import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.mpt.*
-import com.chipprbots.ethereum.mpt.MptVisitors.*
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
 
 /** Storage recovery actor for Bug 20 hardening.
   *
-  * On startup after SNAP sync, walks the state trie to find contract accounts whose storage tries are missing from
-  * MptStorage (due to the Bug 20 phase handoff timeout). Collects missing (accountHash, storageRoot) pairs and
-  * downloads them via SNAP protocol using StorageRangeCoordinator.
+  * Downloads the storage tries the combined recovery scan (`CombinedRecoveryScanActor`) found missing from MptStorage
+  * (Bug 20: the phase handoff timeout), as (accountHash, storageRoot) pairs, via the SNAP protocol using
+  * StorageRangeCoordinator. It has no scan of its own: the legacy per-phase scan (`parallel-recovery-scan = false`)
+  * stopped at the first absent node and the flag was then settled on that partial walk, and it was retired (B-217).
   *
   * Runs concurrently with BytecodeRecoveryActor — they target different storage backends (MptStorage vs EvmCodeStorage)
   * with no data dependency.
@@ -49,16 +42,13 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
   * the CAPSTONE co-existence bridge; `Behavior[Any]` is no longer needed — all Typed machinery active.
   *
   * Lifecycle:
-  *   1. Walk state trie, find contracts with missing storage tries 2. If none missing → mark recovery done, report to
-  *      SyncController 3. If missing → download via StorageRangeCoordinator, then mark done
+  *   1. If none missing → mark recovery done, report to SyncController 2. If missing → download via
+  *      StorageRangeCoordinator, then mark done
   */
 object StorageRecoveryActor:
 
   sealed trait Command
-  private case class ScanResult(missingStorage: Seq[(ByteString, ByteString)]) extends Command
-
-  /** The scan could not run (the root is not in the store, the store failed, the state moved under it). */
-  private case object ScanFailed extends Command
+  private case class GapsToFill(missingStorage: Seq[(ByteString, ByteString)]) extends Command
   // Delayed self-ping for Bug 30b abandon path. Carries the progress counter current at arm time;
   // if progressSeq still matches on fire, nothing moved and we give up.
   private[sync] case class CheckAbandon(progressAtSchedule: Long) extends Command
@@ -88,7 +78,9 @@ object StorageRecoveryActor:
   /** Sent to SyncController when recovery is complete (or skipped) */
   case object RecoveryComplete extends SyncControllerMsg
 
-  /** Sent in its place when the scan could not run: recovery is over for this run, and nothing is settled by it. */
+  /** Sent in its place when the actor refused to run (the unified layout, B-376): recovery is over for this run, and
+    * nothing is settled by it.
+    */
   case object RecoveryNotRun extends SyncControllerMsg
 
   /** Recovery → SyncController: the saved pivot root has aged out of every peer's snapshot serve window, so storage
@@ -98,28 +90,8 @@ object StorageRecoveryActor:
     */
   case class RequestRecentRoot(replyTo: TypedActorRef[StorageRecoveryActor.Command]) extends SyncControllerMsg
 
-  def apply(
-      stateRoot: ByteString,
-      stateIngest: StateIngest,
-      networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
-      syncController: TypedActorRef[SyncControllerMsg],
-      pivotBlockNumber: BigInt,
-      snapSyncConfig: SNAPSyncConfig,
-      positions: Option[PositionRepairs] = None
-  ): Behavior[Command] = scanning(
-    stateRoot,
-    stateIngest,
-    networkPeerManager,
-    syncController,
-    pivotBlockNumber,
-    snapSyncConfig,
-    preloaded = None,
-    coordinatorForTesting = None,
-    positions = positions
-  )
-
-  /** Download-only variant: skip the scan and go straight to downloading the supplied missing storage tries (produced
-    * by the combined parallel scan). Used by `SyncController` when `parallel-recovery-scan` is on.
+  /** Download the storage tries the combined scan found missing (`missing`). Used by `SyncController` once that scan
+    * reports.
     */
   def applyPreloaded(
       stateRoot: ByteString,
@@ -130,14 +102,14 @@ object StorageRecoveryActor:
       snapSyncConfig: SNAPSyncConfig,
       missing: Seq[(ByteString, ByteString)],
       positions: Option[PositionRepairs] = None
-  ): Behavior[Command] = scanning(
+  ): Behavior[Command] = starting(
     stateRoot,
     stateIngest,
     networkPeerManager,
     syncController,
     pivotBlockNumber,
     snapSyncConfig,
-    preloaded = Some(missing),
+    missing,
     coordinatorForTesting = None,
     positions = positions
   )
@@ -154,7 +126,7 @@ object StorageRecoveryActor:
   private[sync] def coordinatorWiring(snapSyncConfig: SNAPSyncConfig, stateIngest: StateIngest): CoordinatorWiring =
     CoordinatorWiring(snapSyncConfig.storageScheme, Some(stateIngest.snapProgress))
 
-  /** Test entry point: exposes the preloaded-missing and coordinator-injection hooks. */
+  /** Test entry point: exposes the coordinator-injection hook. */
   private[sync] def testApply(
       stateRoot: ByteString,
       stateIngest: StateIngest,
@@ -162,50 +134,50 @@ object StorageRecoveryActor:
       syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
-      preloaded: Option[Seq[(ByteString, ByteString)]] = None,
+      missing: Seq[(ByteString, ByteString)],
       coordinatorForTesting: Option[ActorRef] = None,
       positions: Option[PositionRepairs] = None
-  ): Behavior[Command] = scanning(
+  ): Behavior[Command] = starting(
     stateRoot,
     stateIngest,
     networkPeerManager,
     syncController,
     pivotBlockNumber,
     snapSyncConfig,
-    preloaded,
+    missing,
     coordinatorForTesting,
     positions
   )
 
-  // B-376 (the user's decision of 2026-11-19): the one entry of this actor, `apply`, `applyPreloaded` and `testApply`
-  // alike. Its download writes the storage tries it fetches by hash, into the trie store of
+  // B-376 (the user's decision of 2026-11-19): the one entry of this actor, `applyPreloaded` and `testApply` alike. Its
+  // download writes the storage tries it fetches by hash, into the trie store of
   // `stateIngest.stateTries.getBackingStorage` (CF `n`), which the unified layout never reads: on that layout it would
   // fill nothing the node reads, and say that it had. Every route in is refused already (SyncController: the bulk
   // request, the start after a SNAP sync that is done, both on the guard); this makes the refusal the actor's own, so
   // that a route added later cannot run it there. The refusal is loud, and ends recovery for this run as a scan that
   // could not run does: nothing is written and no flag is set, and regular sync fetches what it reaches by position.
   // A recovery that fills holes by position (`PositionRepairs.repairNodeAt`) is the deferred rewrite of B-376.
-  private def scanning(
+  private def starting(
       stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
-      preloaded: Option[Seq[(ByteString, ByteString)]],
+      missing: Seq[(ByteString, ByteString)],
       coordinatorForTesting: Option[ActorRef],
       positions: Option[PositionRepairs]
   ): Behavior[Command] =
     if positions.isDefined then refusedOnPositions(syncController)
     else
-      scanningOnTheHashLayout(
+      startingOnTheHashLayout(
         stateRoot,
         stateIngest,
         networkPeerManager,
         syncController,
         pivotBlockNumber,
         snapSyncConfig,
-        preloaded,
+        missing,
         coordinatorForTesting,
         positions
       )
@@ -222,60 +194,21 @@ object StorageRecoveryActor:
       Behaviors.stopped
     }
 
-  private def scanningOnTheHashLayout(
+  private def startingOnTheHashLayout(
       stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[SyncControllerMsg],
       pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
-      preloaded: Option[Seq[(ByteString, ByteString)]],
+      missing: Seq[(ByteString, ByteString)],
       coordinatorForTesting: Option[ActorRef],
       positions: Option[PositionRepairs]
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
-      val asyncLog = LoggerFactory.getLogger(getClass)
-      preloaded match
-        case Some(missing) =>
-          ctx.self ! ScanResult(missing)
-        case None =>
-          ctx.log.info(
-            s"StorageRecoveryActor starting: scanning state trie for missing contract storage " +
-              s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
-          )
-          // `ctx.log` may only be read on the actor's thread: read inside the Future it threw, and every scan ended as
-          // `ScanFailed` whatever the state (B-406). The logger is taken here and handed in.
-          val scanLog = ctx.log
-          ctx.pipeToSelf(
-            Future(
-              scanForMissingStorage(
-                stateRoot,
-                RecoveryScanStores
-                  .forRoot(stateIngest.stateTries, positions, stateRoot, pivotBlockNumber),
-                scanLog
-              )
-            )(using ctx.executionContext)
-          ) {
-            case Success(result) => ScanResult(result)
-            case Failure(ex) =>
-              asyncLog.error("Storage recovery scan failed", ex)
-              ScanFailed
-          }
+      ctx.self ! GapsToFill(missing)
       Behaviors.receiveMessage {
-        case ScanFailed =>
-          // A scan that could not run has looked at nothing, so it settles nothing. It was taken as a scan that found
-          // nothing missing, and recovery was marked done for good on a state nobody had read. The flag is left
-          // unwritten: the next start scans again, and regular sync fetches what it reaches on demand, as after a
-          // combined scan that could not run (`SyncController.recoveryCouldNotRun`).
-          ctx.log.error(
-            "Storage recovery: the scan could not run (logged above), so nothing is settled by it. The recovery flag " +
-              "is not written and the next start scans again."
-          )
-          RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseIdle)
-          syncController ! RecoveryNotRun
-          Behaviors.stopped
-
-        case ScanResult(missing) =>
+        case GapsToFill(_) =>
           if missing.isEmpty then
             ctx.log.info("Storage recovery: all contract storage tries present. Marking recovery complete.")
             RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseComplete)
@@ -519,7 +452,7 @@ object StorageRecoveryActor:
           coordinator ! actors.StorageRangeCoordinator.StorageRangesResponseMsg(msg)
           Behaviors.same
 
-        case ScanResult(_) => Behaviors.unhandled
+        case GapsToFill(_) => Behaviors.unhandled
       }
     }
 
@@ -553,59 +486,3 @@ object StorageRecoveryActor:
           s"$residual residual (hot contracts changed since pivot, or never served). Regular sync will fetch " +
           s"these on-demand via GetTrieNodes when block execution reaches them."
       )
-
-  private[sync] def scanForMissingStorage(
-      stateRoot: ByteString,
-      mptStorage: MptStorage,
-      log: Logger
-  ): Seq[(ByteString, ByteString)] =
-    RecoveryMetrics.setStoragePhase(RecoveryMetrics.PhaseScanning)
-    // Every read says where it is (spec 018 Track C): the account trie under no owner, each storage root under its
-    // account. Whether a storage trie seen under one account stands for another's is the store's to say.
-    val accountTrie = mptStorage.forOwner(None)
-    val shared = mptStorage.nodesSharedAcrossTries
-    val rootNode = accountTrie.getAt(NibblePath.Empty, stateRoot.toArray)
-
-    val missing = mutable.ArrayBuffer.empty[(ByteString, ByteString)]
-    val seenRoots = mutable.HashSet.empty[ByteString]
-    var accountCount = 0L
-    var contractCount = 0L
-    var checkedCount = 0L
-
-    val onLeaf: (ByteString, LeafNode) => Unit = (accountHash, leafNode) =>
-      accountCount += 1
-      if accountCount % 100_000 == 0 then
-        RecoveryMetrics.setStorageScanProgress(accountCount, contractCount, missing.size.toLong)
-      if accountCount % 1_000_000 == 0 then
-        log.info(
-          s"Storage recovery scan: $accountCount accounts, $contractCount contracts, " +
-            s"$checkedCount checked, ${missing.size} missing"
-        )
-
-      Account(leafNode.value) match
-        case Success(account) =>
-          if account.storageRoot != Account.EmptyStorageRootHash then
-            contractCount += 1
-            val trie = CombinedRecoveryScan.storageTrieKey(shared, accountHash, account.storageRoot.value)
-            if !seenRoots.contains(trie) then
-              seenRoots += trie
-              checkedCount += 1
-              if !mptStorage.forOwner(Some(accountHash)).holdsNodeAt(NibblePath.Empty, account.storageRoot.value) then
-                missing += ((accountHash, account.storageRoot.value))
-        case Failure(_) => // Skip malformed account RLP
-    try
-      val visitor = new PathTrackingLeafWalkVisitor(accountTrie, ByteString.empty, onLeaf)
-      MptTraversals.dispatch(rootNode, visitor)
-    catch
-      case e: MerklePatriciaTrie.MPTException =>
-        log.error(
-          s"Trie walk failed at account $accountCount — partial results: ${missing.size} missing storage tries",
-          e
-        )
-
-    log.info(
-      s"Storage recovery scan complete: $accountCount accounts, $contractCount contracts, " +
-        s"$checkedCount unique storage roots checked, ${missing.size} missing"
-    )
-    RecoveryMetrics.setStorageScanProgress(accountCount, contractCount, missing.size.toLong)
-    missing.toSeq

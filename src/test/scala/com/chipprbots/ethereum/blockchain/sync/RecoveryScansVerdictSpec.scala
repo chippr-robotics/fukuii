@@ -41,14 +41,15 @@ import com.chipprbots.ethereum.testing.Tags.*
   * Every expectation here is written out by hand from the fixture, not recorded from a run.
   *
   * What is held:
-  *   - each scan (`CombinedRecoveryScan` whole and by shard, the legacy storage and bytecode scans, the sharded and
-  *     parallel `CombinedRecoveryScanner`) finds on rows exactly what it finds on hashes, for each injected gap;
+  *   - each scan (`CombinedRecoveryScan` whole and by shard, the sharded and parallel `CombinedRecoveryScanner`) finds
+  *     on rows exactly what it finds on hashes, for each injected gap (the legacy storage and bytecode scans were held
+  *     here too until B-217 retired them);
   *   - the hash scheme and the guard off are untouched (`RecoveryScanStores` hands back the hash store);
   *   - the scan only reads rows, one position at a time, and a state that moves under it ends it and is never a gap.
   */
 class RecoveryScansVerdictSpec extends AnyFlatSpec with Matchers:
 
-  import RecoveryScannersPositionSpec.{firstOfEachRoot, quiet}
+  import RecoveryScannersPositionSpec.firstOfEachRoot
 
   private type Position = (Option[ByteString], ByteString)
 
@@ -128,13 +129,7 @@ class RecoveryScansVerdictSpec extends AnyFlatSpec with Matchers:
       "scanFrom" -> combined(_.scanFrom(root)),
       "scanShards" -> combined(scan => shards(1).foreach(shard => scan.scanShard(shard.root, shard.pathPrefix))),
       "scanner-sequential" -> driver(1),
-      "scanner-parallel" -> driver(2),
-      "legacy-storage" -> RecoveryScannersPositionSpec.thrown(
-        Found(Nil, StorageRecoveryActor.scanForMissingStorage(root, store, quiet), 0)
-      ),
-      "legacy-bytecode" -> RecoveryScannersPositionSpec.thrown(
-        Found(BytecodeRecoveryActor.scanForMissingBytecodes(root, store, codes, quiet), Nil, 0)
-      )
+      "scanner-parallel" -> driver(2)
     )
 
   private def aliceOwner = owner(alice)
@@ -224,9 +219,7 @@ class RecoveryScansVerdictSpec extends AnyFlatSpec with Matchers:
         val position = s.stored(Some(lost)).head
         scans(s.root, DirectRowMptStorage(s.positionStore(position), s.root), s.codes()).foreach { (name, found) =>
           withClue(s"$name, ${lost.take(2)} lost: ") {
-            found.map(_.storage) match
-              case Right(storage) if name == "legacy-bytecode" => storage shouldBe Nil
-              case other                                       => other shouldBe Right(Seq(lost -> s.hashAt(aliceRoot)))
+            found.map(_.storage) shouldBe Right(Seq(lost -> s.hashAt(aliceRoot)))
           }
         }
     }
@@ -261,11 +254,7 @@ class RecoveryScansVerdictSpec extends AnyFlatSpec with Matchers:
       val store = DirectRowMptStorage(new PathStateStorage(rowsStore, new AppStateStorage(source)), s.root)
       a[CorruptNodeException] should be thrownBy new CombinedRecoveryScan(store, s.codes()).scanFrom(s.root)
       scans(s.root, store, s.codes()).foreach { (name, found) =>
-        withClue(s"$name: ") {
-          // the legacy scans log a walk that failed and return what they had, on either layout, as they always have
-          if name.startsWith("legacy") then found shouldBe Right(Found(Nil, Nil, 0))
-          else found.left.toOption.exists(_.contains("CorruptNodeException")) shouldBe true
-        }
+        withClue(s"$name: ")(found.left.toOption.exists(_.contains("CorruptNodeException")) shouldBe true)
       }
     }
 

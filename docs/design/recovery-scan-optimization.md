@@ -2,6 +2,12 @@
 
 **Status:** proposed · **Context:** ETC mainnet checkpoint generation · **Authored:** 2026-06-03
 
+> **Update 2026-11-24 (B-217):** the combined scan shipped as the default in 0.7.0 (`parallel-recovery-scan = true`),
+> and the two legacy per-phase walks and the flag are now retired: `BytecodeRecoveryActor` and `StorageRecoveryActor`
+> only download the gaps the combined scan reports. The legacy walks stopped at the first absent node and the recovery
+> flags were then settled on that partial walk; the combined scan counts the hole and walks the rest. The plan below is
+> kept as written.
+
 ## TL;DR
 
 The post-SNAP recovery scan (`BytecodeRecoveryActor` + `StorageRecoveryActor`) walks the

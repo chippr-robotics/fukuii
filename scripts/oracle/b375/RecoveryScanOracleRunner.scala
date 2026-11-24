@@ -7,8 +7,6 @@ import org.apache.pekko.util.ByteString
 
 import scala.io.Source
 
-import org.slf4j.LoggerFactory
-
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.dataSource.RocksDbConfig
 import com.chipprbots.ethereum.db.dataSource.RocksDbDataSource
@@ -24,23 +22,19 @@ import com.chipprbots.ethereum.mpt.ShardEnumerator
 /** B-375 (spec 018 T214): the recovery scans' verdicts on a seeded hash-layout RocksDB datadir, as plain text.
   *
   * This one file is compiled UNCHANGED into two builds: the pinned v0.12.1 and staging. It lives in package
-  * `blockchain.sync` because `StorageRecoveryActor.scanForMissingStorage` and `BytecodeRecoveryActor.scanForMissingBytecodes`
-  * are `private[sync]` (the narrowest functions that reach the legacy verdicts; the actors themselves need a Pekko
-  * system and a peer). It uses only API the two builds share: `CombinedRecoveryScan`, `CombinedRecoveryScanner`,
-  * `ShardEnumerator.enumShards`, the two legacy scan functions, `SerializingMptStorage` over `ArchiveNodeStorage`
-  * over `NodeStorage`, `EvmCodeStorage`, `RocksDbDataSource`.
+  * `blockchain.sync`, where it was put to reach the two legacy scan functions (`private[sync]`). B-217 retired those
+  * scans, so their two verdicts are no longer printed (the 2026-11 baseline's legacy columns stay as recorded). It uses
+  * only API the two builds share: `CombinedRecoveryScan`, `CombinedRecoveryScanner`, `ShardEnumerator.enumShards`,
+  * `SerializingMptStorage` over `ArchiveNodeStorage` over `NodeStorage`, `EvmCodeStorage`, `RocksDbDataSource`.
   *
   * args: `<seedDir> <outFile>`. `<seedDir>/manifest.tsv` has one case per line, `name<TAB>stateRoot(hex)<TAB>...`, and
   * each case's datadir is `<seedDir>/<name>/db`. Output: one line per (case, scan), `case<TAB>scan<TAB>verdict`.
   *
   * Verdict text. A scan that throws is `threw <class>`: the nearest named class, as RecoveryScannersPositionSpec names
   * it. Otherwise `code=[sorted hashes] storage=[sorted owner>root] holes=N`. The parallel scanner's shards race to
-  * name the owner of a storage trie that two accounts share, so its storage is printed as the sorted ROOTS only; the
-  * legacy bytecode scan has no storage and the legacy storage scan no code, and print as the one thing they return.
+  * name the owner of a storage trie that two accounts share, so its storage is printed as the sorted ROOTS only.
   */
 object RecoveryScanOracleRunner:
-
-  private val quiet: org.slf4j.Logger = LoggerFactory.getLogger("RecoveryScanOracleRunner")
 
   private def hex(b: ByteString): String = b.map("%02x".format(_)).mkString
 
@@ -92,9 +86,7 @@ object RecoveryScanOracleRunner:
         ShardEnumerator.enumShards(root, s, 1).foreach(shard => scan.scanShard(shard.root, shard.pathPrefix))
       ),
       "scanner-sequential" -> driver(1),
-      "scanner-parallel" -> driver(2),
-      "legacy-storage" -> thrown(pairs(StorageRecoveryActor.scanForMissingStorage(root, store(), quiet))),
-      "legacy-bytecode" -> thrown(codes(BytecodeRecoveryActor.scanForMissingBytecodes(root, store(), evm, quiet)))
+      "scanner-parallel" -> driver(2)
     )
 
   def main(args: Array[String]): Unit =
