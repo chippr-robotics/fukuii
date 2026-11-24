@@ -4662,22 +4662,18 @@ items:
   - id: B-460
     title: BlockImporter.resolveBranch hands the predicted old branch's txs to the pool before the import, against the pre-reorg state, even when the import fails
     priority: P3
-    status: review
+    status: done
     area: sync
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2081]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T10:48:37Z
-      heartbeat: 2026-11-24T13:43:32Z
     notes: |-
-      2026-11-24 in-progress: forge agent clone-d
       2026-11-24 released by cloud-dc960fdc: depends on B-338, which builds on B-253 (#2066); pick up after #2066 merges
       2026-11-24 in-progress: pushed 82b20c387c on top of B-338's branch; PR after B-338 merges
+      2026-11-24 done: merged c20b144f76
   - id: B-461
     title: whereTheHeadIsLeft calls a head left on a reorg's lost side parents 'on the chain it left' and tells none of them as imported
     priority: P3
