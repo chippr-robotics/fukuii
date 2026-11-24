@@ -4281,17 +4281,18 @@ items:
   - id: B-440
     title: "BlockImporter: a throw from evaluateBranch (IOException at the cap, head back) drops the batch unqueued; only re-offered by new announcements"
     priority: P3
-    status: in-progress
+    status: review
     area: consensus
     opened: 2026-11-23
     refs: []
     links:
+      prs: [2049]
       spec: 018
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T03:21:22Z
-      heartbeat: 2026-11-24T05:15:03Z
+      heartbeat: 2026-11-24T06:31:39Z
     notes: |-
       2026-11-24 in-progress: branch pushed; forge/beacon review running
       2026-11-24 in-progress: forge re-review CHANGES (C1 stop before reads, C2 latch after stop, W1 busy bound); rebuild by cherry-pick after #2034; brief in session scratchpad b440-rebuild-brief.md
