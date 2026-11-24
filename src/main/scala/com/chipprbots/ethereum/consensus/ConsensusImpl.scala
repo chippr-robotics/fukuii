@@ -990,12 +990,33 @@ class ConsensusImpl(
                 yield BlockData(block, receipts, weight)
               )
           }
+          // the side blocks the branch stands on that the head's chain holds (B-461): a commit of them that met the
+          // fault, then a move back that failed, leaves the head there, on neither the branch nor the chain it left
+          val sideBlocksOfTheHead: List[(BigInt, BlockHash)] =
+            if onTheHeadsChain.exists(branchHashes) then Nil
+            else fork.parentSideChain.filter((_, hash) => onTheHeadsChain(hash))
           val where = head.fold("is not known")(header =>
             if onTheHeadsChain.exists(branchHashes) then
               s"is at block ${header.number}, on the branch [${newBranch.head.number}-${newBranch.last.number}]"
+            else if sideBlocksOfTheHead.nonEmpty then
+              s"is at block ${header.number}, on the side blocks the branch " +
+                s"[${newBranch.head.number}-${newBranch.last.number}] stands on"
             else if header.number.value > fork.number then s"is at block ${header.number}, on the chain it left"
             else s"is at block ${header.number}, the block the branch leaves the chain at"
           )
+          // told as the head, as a reorganisation tells the side blocks it stands on: as many as it tells at most, each
+          // with its weight, from what this attempt committed or else from the store
+          val headOn: List[BlockData] =
+            sideBlocksOfTheHead.takeRight(newBranchToldAtMost).flatMap { (_, hash) =>
+              kept
+                .get(hash)
+                .orElse(
+                  for
+                    block <- blockchainReader.getBlockByHash(hash)
+                    weight <- blockchainReader.getChainWeightByHash(hash)
+                  yield BlockData(block, Nil, weight)
+                )
+            }
           log.error(
             "[STATE-FAULT] REORG-AT-THE-CAP: after {}, the head could not be moved back to block {} and {}: {} " +
               "block(s) of the branch are its head, the other blocks of both chains above block {} are queued again",
@@ -1005,14 +1026,13 @@ class ConsensusImpl(
             imported.size,
             fork.number
           )
-          ConsensusStateFault(
-            new StateUnavailable(
-              s"after $after, the head could not be moved back to block ${oldHead.number} and $where"
-            ),
-            imported,
-            oldBranchTold(oldCanonical.filterNot((_, hash) => onTheHeadsChain(hash))) ++
-              newBranch.toList.filterNot(block => onTheHeadsChain(block.header.hash))
+          val fault = new StateUnavailable(
+            s"after $after, the head could not be moved back to block ${oldHead.number} and $where"
           )
+          val queued = oldBranchTold(oldCanonical.filterNot((_, hash) => onTheHeadsChain(hash))) ++
+            newBranch.toList.filterNot(block => onTheHeadsChain(block.header.hash))
+          if headOn.nonEmpty then new Consensus.HeadLeftOnSideBlocks(fault, queued, headOn)
+          else ConsensusStateFault(fault, imported, queued)
         try
           blockchainWriter.withRecordsHeldAbove(forkBlock) {
             try

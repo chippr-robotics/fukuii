@@ -134,6 +134,36 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     }
   }
 
+  // B-461: a move back that failed left the head on side blocks the branch stands on. No block of the batch is the head,
+  // and none is told as imported; the head is told to the feed as the head it is
+  it should "tell the feed of a head left on the side blocks a branch stands on, with none of the branch imported" taggedAs UnitTest in {
+    val corrupt = new ReorgTooDeep(ReorgRefusal.Corrupt, "a record is not what it should be")
+    val sideBlock = Block(
+      Fixtures.Blocks.ValidBlock.header
+        .copy(parentHash = forkHash, number = BlockNumber(4), difficulty = Difficulty(1)),
+      BlockBody.empty
+    )
+    var refuse = true
+    val rig = new Rig(_ =>
+      if refuse then ConsensusStateFault(corrupt, Nil, Nil)
+      else
+        new Consensus.HeadLeftOnSideBlocks(
+          new com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable("the move back failed"),
+          Nil,
+          List(BlockData(sideBlock, Nil, ChainWeight.totalDifficultyOnly(1400)))
+        )
+    )
+    rig.imported(branch(5, 3))
+    rig.feed.refusedWeight.isDefined shouldBe true
+    refuse = false
+    // the head left there is no lighter than the branch refused: a head that moved ends the run
+    rig.head = ChainWeight.totalDifficultyOnly(1400)
+    rig.imported(branch(5, 3)) match
+      case BlockImportStateFault(_, imported) => imported shouldBe Nil
+      case other                              => fail(s"not a fault of this node: $other")
+    rig.feed.refusedWeight shouldBe None
+  }
+
   // B-337: a prefix that became the head before a missing node (a reorganisation's, or an extension's) is the head:
   // whoever follows it is told, as for any import that moved it, and the missing node is fetched as ever
   it should "tell the feed of the head a prefix became before a missing node, on the hash layout" taggedAs UnitTest in {
