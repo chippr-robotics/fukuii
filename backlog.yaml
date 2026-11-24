@@ -1763,19 +1763,15 @@ items:
   - id: B-192
     title: "TUI probe: read disk free on its own daemon thread so a hung statvfs or RocksDB read cannot raise false Unresponsive alerts"
     priority: P3
-    status: review
+    status: done
     area: tui
     size: S
     opened: 2026-11-10
+    closed: 2026-11-24
     refs: ["prism re-review of 027 slice 3, 2026-11-10"]
     links:
       prs: [2092]
       spec: specs/027-tui-dashboard
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T14:07:45Z
-      heartbeat: 2026-11-24T15:37:24Z
     notes: "Slice 3 overlaps local reads with the asks, which absorbs a slow read but not a hung one: TuiStatusProbe.apply blocks, no snapshot is published, agedAt flips both sources to Unresponsive and Alerts raise peer manager / sync controller Unresponsive."
   - id: B-194
     title: "Protocol: no metrics-object initialiser on an IO path (rule in agent-protocols); init EngineApiMetrics/PoWMiningMetrics off it"
