@@ -316,12 +316,12 @@ items:
     refs: [H8]
     links:
       issues: [1677]
-      prs: [2086]
+      prs: [2086, 2089]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T13:30:05Z
-      heartbeat: 2026-11-24T13:30:35Z
+      heartbeat: 2026-11-24T13:47:26Z
     notes: |-
       herald.
       2026-11-24 rescoped: per-hash dedup and 256-hash batches done; left: one GetPooledTransactions in flight per peer and the 128 KB cap
