@@ -1122,9 +1122,13 @@ final class PathStateStorage(
     *
     * The caller's, and not checked here: nothing may be reading the rows through an iterator of its own (the audit, a
     * hand-off sample, a walker: a view goes stale, an iterator of its own goes on reading rows that are gone); no
-    * import and no fork choice may be committing; it is not called from inside a hold of the records; and no sync may
-    * write rows until this has returned. If it throws after its first batch the mark is left set: nothing may sync
-    * until [[finishPendingClear]] has run.
+    * import and no fork choice may be committing; and no sync may write rows until this has returned. If it throws
+    * after its first batch the mark is left set: nothing may sync until [[finishPendingClear]] has run.
+    *
+    * '''Not while an attempt holds the records''' ([[withRecordsHeld]], B-465): an adoption of a heavier branch may be
+    * moving the head to a state the chain then follows, and a clear in its middle would give that state up for a sync
+    * from scratch. The clear is refused, with nothing written ([[StateClearRefused]]), and asked for again later. It
+    * does not wait for the attempt: it holds the lock of the moves, which the attempt's next move takes.
     *
     * @param genesisHash
     *   the block at height 0, which the best block is set back to
@@ -1135,6 +1139,7 @@ final class PathStateStorage(
     * @param givenUpFor
     *   on proof of work, the branch the escalation is for ([[GivenUpBranches]]): recorded in the same batch
     */
+  @throws[StateClearRefused]("when an attempt holds the records: nothing was written")
   def clearForResync(
       genesisHash: ByteString,
       atMillis: Long,
@@ -1148,11 +1153,13 @@ final class PathStateStorage(
     * the block the branch stands on, and its pivot; the header download goes back to that block. One more attempt is
     * counted, in the same synced write that begins the clear. No escalation is recorded: this is the one that was.
     *
-    * As for [[clearForResync]], the caller has stopped the sync, and nothing writes rows until this has returned.
+    * As for [[clearForResync]], the caller has stopped the sync, and nothing writes rows until this has returned; and
+    * it is refused while an attempt holds the records.
     *
     * @return
     *   the requirement as counted, or none when no sync is bound (nothing is cleared then)
     */
+  @throws[StateClearRefused]("when an attempt holds the records: nothing was written")
   def clearForBranchRetry(genesisHash: ByteString, atMillis: Long): Option[PivotOnBranch] =
     clearUnderTheLocks(genesisHash, atMillis, escalation = None, givenUpFor = None, again = true)
 
@@ -1169,6 +1176,13 @@ final class PathStateStorage(
         "a clear of the state for a sync from scratch",
         nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
       ) {
+        // asked under the state lock, where a hold is opened: an attempt that is not listed here begins after the clear
+        attemptThreads.values().iterator().asScala.nextOption().foreach { holder =>
+          throw new StateClearRefused(
+            s"an adoption on thread '${holder.getName}' holds the records and is moving the head, which the chain may " +
+              "follow from where it ends. Ask again once it has ended"
+          )
+        }
         val index = new BlockNumberMappingStorage(dataSource)
         val retry =
           if again then

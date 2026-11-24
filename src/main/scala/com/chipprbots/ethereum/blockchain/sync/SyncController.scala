@@ -102,8 +102,9 @@ object SyncController:
       * recoveries that wait or run, and the head the fork choice followed (B-307).
       *
       * @return
-      *   false when it could not be begun (a recovery was still executing a block): nothing was cleared and nothing
-      *   recorded, and the next verdict is decided as if this one had not been
+      *   false when it could not be begun (a recovery was still executing a block, or an adoption held the records:
+      *   [[StateEscalationPort.notClearedWhenRefused]]): nothing was cleared and nothing recorded, and the next verdict
+      *   is decided as if this one had not been
       */
     def clear(
         record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
@@ -126,6 +127,20 @@ object SyncController:
       *   false when it could not be begun: nothing was cleared and nothing counted
       */
     def clearForBranchRetry(): Boolean
+
+  object StateEscalationPort:
+
+    /** `clear`'s answer when the state refused to be cleared because an attempt held the records (B-465, forge): an
+      * adoption of a heavier branch was moving the head, which the chain may follow from where it ends. Nothing was
+      * written, so it is a clear that could not be begun (false), and `refused` is told why. Anything else `clear`
+      * throws is thrown on.
+      */
+    def notClearedWhenRefused(refused: String => Unit)(clear: => Boolean): Boolean =
+      try clear
+      catch
+        case busy: com.chipprbots.ethereum.db.storage.pathstate.StateClearRefused =>
+          refused(busy.getMessage)
+          false
 
   /** A sync on the unified state layout (spec 018 C5a part 10). None on the hash layout. */
   trait PathLiveSyncPort:
@@ -1653,8 +1668,9 @@ object SyncController:
             startSnapSync(minPivotBlock = givenUpFor.map(_.number))
           case StateClearEnded(_, _, scala.util.Success(false)) =>
             log.error(
-              "[STATE-ESCALATION] The state was not cleared: a recovery of the state was still executing a block. " +
-                "Nothing was given up and nothing recorded; regular sync goes on, and no verdict is asked about for a while."
+              "[STATE-ESCALATION] The state was not cleared: a recovery of the state was still executing a block, or " +
+                "an adoption of a heavier branch was moving the head. Nothing was given up and nothing recorded; " +
+                "regular sync goes on, and no verdict is asked about for a while: the clear is asked for again after it."
             )
             port.clearRefused()
             waiting.unstashAll(runningRegularSync(regularSync))

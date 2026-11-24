@@ -1557,14 +1557,19 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
             forkChoiceManagerForSync.foreach(_.clear())
             // the refusals counted so far are of the state that is gone: the count begins again with the sync
             escalationWatch.foreach(_.stateCleared())
-          stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          // B-465: refused, with nothing written, while an adoption holds the records; asked for again after a while
+          SyncController.StateEscalationPort.notClearedWhenRefused(escalationLog.warn(_)) {
+            stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          }
         def escalated(kind: EscalationKind): Unit = StateMetrics.escalated(kind)
         def regularSyncStarted(): Unit = handler.reset()
         def clearRefused(): Unit = handler.clearRefused(System.currentTimeMillis())
         def clearForBranchRetry(): Boolean =
           def clearNow(): Unit =
             val _ = pathState.clearForBranchRetry(blockchainReader.genesisHeader.hash.value, System.currentTimeMillis())
-          stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          SyncController.StateEscalationPort.notClearedWhenRefused(escalationLog.warn(_)) {
+            stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          }
     }
 
   /** A sync on the unified layout (spec 018 C5a part 10): the hand-off each SNAP sync ends with, over the rows SNAP

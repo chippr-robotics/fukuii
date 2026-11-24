@@ -839,6 +839,8 @@ class SyncControllerSpec
     }
     someTimePasses()
     errors.exists(_.contains("was not cleared")) shouldBe true
+    // B-465: an adoption that held the records refuses the clear too, and the message says so
+    errors.exists(_.contains("an adoption of a heavier branch was moving the head")) shouldBe true
     port.counted.size() shouldBe 0
     port.refusals.get() shouldBe 1
     snapChildren(testSetup) shouldBe empty
