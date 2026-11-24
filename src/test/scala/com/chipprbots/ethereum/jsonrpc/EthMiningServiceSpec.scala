@@ -30,6 +30,8 @@ import com.chipprbots.ethereum.consensus.mining.CoinbaseProvider
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
+import com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator
+import com.chipprbots.ethereum.consensus.pow.PoWMiningTestAccess
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
 import com.chipprbots.ethereum.consensus.pow.blocks.RestrictedPoWBlockGeneratorImpl
 import com.chipprbots.ethereum.consensus.pow.difficulty.EthashDifficultyCalculator
@@ -317,13 +319,29 @@ class EthMiningServiceSpec
       response.unsafeRunSync() shouldEqual Right(GetHashRateResponse(rate))
     }
 
-  it should "start mining via RPC" taggedAs (UnitTest, RPCTest) in new TestSetup:
+  it should "start mining via RPC, telling the built-in miner" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    val coordinator: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[PoWMiningCoordinator.CoordinatorProtocol] =
+      testKit.createTestProbe[PoWMiningCoordinator.CoordinatorProtocol]()
+    PoWMiningTestAccess.attachCoordinator(mining, coordinator.ref)
     val response: ServiceResponse[StartMinerResponse] = ethMiningService.startMiner(StartMinerRequest())
     response.unsafeRunSync() shouldEqual Right(StartMinerResponse(true))
+    coordinator.expectMessage(PoWMiningCoordinator.SetMiningMode(PoWMiningCoordinator.MiningMode.RecurrentMining))
 
-  it should "stop mining via RPC" taggedAs (UnitTest, RPCTest) in new TestSetup:
+  it should "stop mining via RPC, telling the built-in miner" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    val coordinator: org.apache.pekko.actor.testkit.typed.scaladsl.TestProbe[PoWMiningCoordinator.CoordinatorProtocol] =
+      testKit.createTestProbe[PoWMiningCoordinator.CoordinatorProtocol]()
+    PoWMiningTestAccess.attachCoordinator(mining, coordinator.ref)
     val response: ServiceResponse[StopMinerResponse] = ethMiningService.stopMiner(StopMinerRequest())
     response.unsafeRunSync() shouldEqual Right(StopMinerResponse(true))
+    coordinator.expectMessage(PoWMiningCoordinator.StopMining)
+
+  it should "refuse miner_start and miner_stop on a node that runs no built-in miner (B-279)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    // Mining disabled: nothing was spawned. Before, both answered true having told nothing.
+    ethMiningService.startMiner(StartMinerRequest()).unsafeRunSync().left.map(_.code) shouldBe Left(-32000)
+    ethMiningService.stopMiner(StopMinerRequest()).unsafeRunSync().left.map(_.code) shouldBe Left(-32000)
 
   it should "return detailed miner status" taggedAs (UnitTest, RPCTest) in new TestSetup:
     // Initially not mining
@@ -495,6 +513,10 @@ class EthMiningServiceSpec
         override protected def statePathLive: Boolean = true
 
     blockchainReader.holdsStateInPlace shouldBe true
+    PoWMiningTestAccess.attachCoordinator(
+      mining,
+      testKit.createTestProbe[PoWMiningCoordinator.CoordinatorProtocol]().ref
+    )
     ethMiningService.startMiner(StartMinerRequest()).unsafeRunSync() shouldEqual Right(StartMinerResponse(true))
     // no best block on an empty datadir: no block is generated, and the answer is the hash layout's
     ethMiningService.getWork(GetWorkRequest()).unsafeRunSync() shouldBe Left(JsonRpcError.InternalError)

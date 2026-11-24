@@ -59,6 +59,12 @@ object PoWMiningCoordinator:
   /** The sync controller's answer to the miner's GetStatus, or the ask's failure (B-424). */
   final private case class SyncStatusReply(status: Try[SyncProtocol.Status]) extends CoordinatorProtocol
 
+  /** A mining round (a block built and a nonce searched, off the actor, EthashMiner.processMining) has ended. Only a
+    * round's own end starts the next: one round at most is in flight, whatever starts and stops arrive meanwhile
+    * (B-279, forge: a round that ended after a stop and a start ran beside the resumed one, two loops for good).
+    */
+  private case object RoundDone extends CoordinatorProtocol
+
   /** The key of the timer that asks for a turn again while the miner cannot mine: one at a time. */
   private case object NotReadyRetryKey
 
@@ -129,6 +135,9 @@ class PoWMiningCoordinator private (
   // Why the miner is waiting, if it is: said once when the wait begins or its reason changes, not on every retry.
   private var waitingFor: Option[String] = None
 
+  // A round is running off the actor (B-279): nothing starts another until it ends (RoundDone).
+  private var roundInFlight: Boolean = false
+
   override def onMessage(msg: CoordinatorProtocol): Behavior[CoordinatorProtocol] = msg match
     case SetMiningMode(mode) =>
       log.info("Received message {}", SetMiningMode(mode))
@@ -158,7 +167,14 @@ class PoWMiningCoordinator private (
 
       case MineNext =>
         log.debug("Received message MineNext")
-        if syncedOnce then mineOnBestBlock() else askSyncStatus()
+        if roundInFlight then () // the running round's end asks for the next turn
+        else if syncedOnce then mineOnBestBlock()
+        else askSyncStatus()
+        Behaviors.same
+
+      case RoundDone =>
+        roundInFlight = false
+        context.self ! MineNext
         Behaviors.same
 
       case SyncStatusReply(reply) =>
@@ -178,9 +194,29 @@ class PoWMiningCoordinator private (
         Behaviors.same
 
       case StopMining =>
-        log.info("Stopping PoWMiningCoordinator...")
+        // B-279: paused, not stopped. PoWMining keeps this actor's ref for the node's life and spawns it only once, at
+        // start, so a stopped coordinator left every later miner_start messaging a dead actor while answering success.
+        // Paused, it mines nothing and waits for SetMiningMode (miner_start) to resume.
+        log.info("Mining stopped; the coordinator waits for a start")
+        timers.cancel(NotReadyRetryKey)
+        waitingFor = None
         PoWMiningMetrics.recordMinerRunning(false)
-        Behaviors.stopped
+        paused()
+    })
+
+  /** Mining stopped (miner_stop): nothing is mined; a start resumes it. A reply to work asked for before the stop, a
+    * turn or a sync status, is dropped.
+    */
+  private def paused(): Behavior[CoordinatorProtocol] =
+    recordStoppedOnPostStop(Behaviors.receiveMessage[CoordinatorProtocol] {
+      case SetMiningMode(mode) =>
+        log.info("Received message {}", SetMiningMode(mode))
+        switchMiningMode(mode)
+      case RoundDone =>
+        // the round that ran across the stop has ended; a start from here begins one at once
+        roundInFlight = false
+        Behaviors.same
+      case _ => Behaviors.same
     })
 
   private def handleMiningOnDemand(): Behavior[CoordinatorProtocol] =
@@ -213,6 +249,7 @@ class PoWMiningCoordinator private (
       case None => waitForTurn("the best block is not stored (its header only, during a SNAP sync)")
       case Some(block) if !blockchainReader.holdsStateOf(block.header) =>
         waitForTurn("the state of the best block is not held")
+      case Some(_) if roundInFlight => () // a status reply or a start that came while a round runs
       case Some(block) =>
         waitingFor.foreach(_ => log.info("Mining resumes on block {}", block.number))
         waitingFor = None
@@ -238,4 +275,5 @@ class PoWMiningCoordinator private (
     mine(miner, bestBlock)
 
   private def mine(miner: Miner, bestBlock: Block): Unit =
-    miner.processMining(bestBlock).foreach(_ => context.self ! MineNext)(using context.executionContext)
+    roundInFlight = true
+    miner.processMining(bestBlock).onComplete(_ => context.self ! RoundDone)(using context.executionContext)
