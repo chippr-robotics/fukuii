@@ -4994,17 +4994,18 @@ items:
   - id: B-494
     title: BytecodeRecoveryActor counts each ByteCodeDownloadProgress twice (downloadedCount += 1 twice), so the recovery progress log and gauge run at 2x
     priority: P3
-    status: in-progress
+    status: review
     area: sync
     size: S
     opened: 2026-11-24
     refs: []
-    links: {}
+    links:
+      prs: [2061]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T07:30:30Z
-      heartbeat: 2026-11-24T08:00:18Z
+      heartbeat: 2026-11-24T08:19:44Z
     notes: |-
       BytecodeRecoveryActor.downloading, case ByteCodeDownloadProgress(_): two increments, and the message's n is ignored. Found during B-217; not changed there.
       2026-11-24 blocked: waits #2056 (B-217 rewrites BytecodeRecoveryActor); one-line fix after
