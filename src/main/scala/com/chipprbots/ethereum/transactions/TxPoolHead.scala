@@ -16,19 +16,40 @@ import com.chipprbots.ethereum.domain.BlockHeader
   */
 final class TxPoolHead:
   private var head: Option[BlockHeader] = None
+  // how many resets were recorded: a writer that read it before its move knows whether another reset came since
+  private var recorded: Long = 0
 
   /** The head the pool was last reset to; None before the first reset this process told. */
   def current: Option[BlockHeader] = synchronized(head)
 
+  /** How many resets were recorded so far. Read before a move, it tells the writer, when it resets, whether another
+    * writer reset the pool in between ([[resetFrom]]).
+    */
+  def resets: Long = synchronized(recorded)
+
   /** Reset `pool` onto `to` from the head it was last reset to: `reset` computes what the pool is told from that head
-    * (`TxPoolReset.between`). `to` is recorded as the pool's head whatever `reset` returns, an empty reset included.
+    * (`TxPoolReset.between`). `to` is recorded as the pool's head whatever `reset` returns, an empty reset included. A
+    * `reset` that throws records nothing.
     */
   def resetOnto(to: BlockHeader, pool: ActorRef[PendingTransactionsManager.Command])(
       reset: Option[BlockHeader] => TxPoolReset.Reset
   ): Unit = synchronized {
     val told = reset(head)
-    head = Some(to)
+    record(Some(to))
     TxPoolReset.tell(pool, told)
+  }
+
+  /** Reset `pool` as `plan` says from the head it was last reset to and the count of resets recorded ([[resets]]):
+    * `plan` answers the head the reset leaves the pool on and the reset, both computed under this lock, so that no
+    * other writer's reset comes between what it was computed from and what it records. A head of None keeps the
+    * recorded one. A `plan` that throws records nothing.
+    */
+  def resetFrom(pool: ActorRef[PendingTransactionsManager.Command])(
+      plan: (Option[BlockHeader], Long) => (Option[BlockHeader], TxPoolReset.Reset)
+  ): Unit = synchronized {
+    val (to, reset) = plan(head, recorded)
+    record(to)
+    TxPoolReset.tell(pool, reset)
   }
 
   /** Tell `pool` of `reset`, a move whose branches the writer knows (`TxPoolReset.ofBranches`), and record `to`, the
@@ -38,8 +59,8 @@ final class TxPoolHead:
       to: Option[BlockHeader],
       pool: ActorRef[PendingTransactionsManager.Command],
       reset: TxPoolReset.Reset
-  ): Unit =
-    synchronized {
-      to.foreach(header => head = Some(header))
-      TxPoolReset.tell(pool, reset)
-    }
+  ): Unit = resetFrom(pool)((_, _) => (to, reset))
+
+  private def record(to: Option[BlockHeader]): Unit =
+    to.foreach(header => head = Some(header))
+    recorded += 1

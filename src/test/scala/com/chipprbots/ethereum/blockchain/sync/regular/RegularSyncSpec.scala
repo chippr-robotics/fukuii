@@ -353,6 +353,9 @@ class RegularSyncSpec
   ) extends Fixture:
     val answer: java.util.concurrent.atomic.AtomicReference[BlockImportResult] =
       new java.util.concurrent.atomic.AtomicReference(BlockEnqueued)
+    // what happens while a batch is evaluated, after its blocks are committed and before the importer tells of them
+    val duringImport: java.util.concurrent.atomic.AtomicReference[() => Unit] =
+      new java.util.concurrent.atomic.AtomicReference(() => ())
     // the head the pool was last reset to, as the node shares it with the fork choice (B-515)
     val txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead =
       new com.chipprbots.ethereum.transactions.TxPoolHead
@@ -374,7 +377,7 @@ class RegularSyncSpec
       override def evaluateBranch(blocks: NonEmptyList[Block])(implicit
           blockExecutionScheduler: IORuntime,
           blockchainConfig: BlockchainConfig
-      ): IO[BlockImportResult] = IO { evaluations.incrementAndGet(); answer.get() }
+      ): IO[BlockImportResult] = IO { evaluations.incrementAndGet(); duringImport.get()(); answer.get() }
       // an announced block is answered the same
       override def evaluateBranchBlock(block: Block)(implicit
           blockExecutionScheduler: IORuntime,
@@ -4224,6 +4227,43 @@ class RegularSyncSpec
 
           resetsOfThePool() shouldBe 1
           txPoolHead.current shouldBe Some(batch.last.header)
+      )
+
+      // B-515: a fork choice resets the pool between the import's commit and the importer's tell, onto a head above the
+      // batch. The importer resets from the head the pool was last reset to, not from the batch's own branches: from
+      // the fork choice's head onto the head the store holds, which is that one, so it tells nothing more, and the
+      // pool and its recorded head end on the final head
+      "reset nothing more when a fork choice reset the pool between the import's commit and its tell" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new BatchImportTells("b515-interleaved"):
+          import com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset
+          import com.chipprbots.ethereum.transactions.TxPoolReset
+          val batch: List[Block] = testBlocks.take(2)
+          val above: Block = testBlocks(2)
+          // the pool stands on genesis, where the batch starts
+          txPoolHead.told(Some(BlockHelpers.genesis.header), pool.ref, TxPoolReset.Reset.empty)
+          duringImport.set { () =>
+            // the import commits the batch, and the fork choice moves the head on to `above` and resets the pool
+            (batch :+ above).foldLeft(ChainWeight.totalDifficultyOnly(0)) { (weight, block) =>
+              val next = weight.increase(block.header)
+              blockchainWriter.save(block, Nil, next, saveAsBestBlock = true)
+              next
+            }
+            txPoolHead.resetOnto(above.header, pool.ref)(from =>
+              TxPoolReset.between(from, above.header, blockchainReader)
+            )
+          }
+          answer.set(BlockImportedToTop(batch.map(weighed)))
+
+          importBatch(batch)
+
+          // the fork choice's reset, of the three blocks, and none after it
+          pool.expectMessage(5.seconds, HeadReset((batch :+ above).map(_.body.transactionList), Nil))
+          newHeads.receiveMessages(2, 5.seconds)
+          pool.expectNoMessage(500.millis)
+          txPoolHead.current shouldBe Some(above.header)
       )
 
       // Spec 018 C4b: the same for a state fault, which carries the adopted prefix itself

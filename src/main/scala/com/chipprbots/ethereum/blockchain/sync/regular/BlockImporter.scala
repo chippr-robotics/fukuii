@@ -1651,8 +1651,10 @@ final private class BlockImporterLogic(
         val evaluated =
           balFetcher.fold(IO.pure(Map.empty[ByteString, BlockAccessList]))(_.fetch(nel.toList)).flatMap { accessLists =>
             timedImport(
-              if accessLists.isEmpty then consensus.evaluateBranch(nel)
-              else consensus.evaluateBranchWithAccessLists(nel, accessLists)
+              evaluatedFromThePoolHead(
+                if accessLists.isEmpty then consensus.evaluateBranch(nel)
+                else consensus.evaluateBranchWithAccessLists(nel, accessLists)
+              )
             )
           }
         evaluated.flatMap {
@@ -1962,7 +1964,7 @@ final private class BlockImporterLogic(
         )
     importWith(
       IO(doLog(importMessages.preImport()))
-        .flatMap(_ => timedImport(consensus.evaluateBranchBlock(block)))
+        .flatMap(_ => timedImport(evaluatedFromThePoolHead(consensus.evaluateBranchBlock(block))))
         .tap(importMessages.messageForImportResult.andThen(doLog))
         .tap {
           case move: BlockImportedToTop => headMoved(move)
@@ -2092,15 +2094,36 @@ final private class BlockImporterLogic(
     broadcaster ! BroadcastBlocks(newBlocks)
 
   // go-ethereum's pool reset (B-253): the blocks moved onto leave the pool, and the transactions of those moved off
-  // that the new chain does not include go back, unless the heads are more than 64 blocks apart (TxPoolReset). The head
-  // the move left is recorded as the pool's in the node's one record of it, which the fork choice's resets read too
-  // (B-515): a fork choice after this move resets the pool from here.
+  // that the new chain does not include go back, unless the heads are more than 64 blocks apart (TxPoolReset).
+  //
+  // From the head the pool was last reset to (B-515), the node's one record of it, which the fork choice resets from
+  // and records too, and under its lock, where the reset is computed, told and recorded. When no other writer reset the
+  // pool since this import's evaluation began (`poolResetsAtImport`), the pool stands where the move started, and the
+  // reset is the move's own two branches, read from the import's result (`TxPoolReset.ofBranches`, no store read). When
+  // one did (a fork choice between this import's commit and this tell), the reset is from the head it left onto the
+  // head the store holds now, read from the chain as the fork choice reads it (`TxPoolReset.between`): the two resets
+  // agree, and the pool and its recorded head end on the final head.
   private def updateTxPool(blocksAdded: Seq[Block], blocksRemoved: Seq[Block]): Unit =
-    txPoolHead.told(
-      headTheMoveLeft(blocksAdded, blocksRemoved),
-      pendingTransactionsManager,
-      TxPoolReset.ofBranches(blocksAdded, blocksRemoved)
-    )
+    txPoolHead.resetFrom(pendingTransactionsManager) { (poolHead, resets) =>
+      val moveHead = headTheMoveLeft(blocksAdded, blocksRemoved)
+      val inStep = poolResetsAtImport.get.forall(_ == resets)
+      // the next tell of this import follows this one
+      poolResetsAtImport.set(Some(resets + 1))
+      if inStep then (moveHead, TxPoolReset.ofBranches(blocksAdded, blocksRemoved))
+      else
+        Try(blockchainReader.getBestBlockHeader).toOption.flatten.orElse(moveHead) match
+          case Some(now) => (Some(now), TxPoolReset.between(poolHead, now, blockchainReader))
+          case None      => (None, TxPoolReset.Reset.empty)
+    }
+
+  /** The count of the pool's resets ([[TxPoolHead.resets]]) as this import's evaluation began, read again after each of
+    * its own tells: a count that moved meanwhile is another writer's reset (B-515). None before the first import.
+    */
+  private val poolResetsAtImport = new java.util.concurrent.atomic.AtomicReference[Option[Long]](None)
+
+  /** The consensus call of an import, with the pool's reset count taken as it begins ([[poolResetsAtImport]]). */
+  private def evaluatedFromThePoolHead(evaluate: => IO[BlockImportResult]): IO[BlockImportResult] =
+    IO(poolResetsAtImport.set(Some(txPoolHead.resets))) >> evaluate
 
   /** The head a move onto `added` off `removed` left, as [[TxPoolReset.ofBranches]] reads it: the highest block added,
     * or with none added the parent of the lowest removed. None for no move, or a parent that is not stored.
