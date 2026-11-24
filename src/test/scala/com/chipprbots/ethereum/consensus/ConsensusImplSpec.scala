@@ -490,6 +490,55 @@ class ConsensusImplSpec extends AnyFlatSpec with Matchers with ScalaFutures with
       case other => fail(s"expected ExtendedCurrentBestBranchPartially, got $other")
     }
 
+  // B-336 (forge F1 on B-291): a local fault met after a prefix became the head judged no block. The prefix stays the
+  // head, and the failing block and those after it are handed back to wait in the queue; no block is reported
+  // invalid. A block's own error after a prefix hands nothing back, as before.
+  it should "hand back the blocks a local state fault stopped an extension at, after a prefix became the head" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new ConsensusSetup:
+    var reported: List[ByteString] = Nil
+    val reporter: com.chipprbots.ethereum.consensus.engine.InvalidChainReporter =
+      (blockHash: ByteString, _: ByteString) => reported ::= blockHash
+    val reporting = new ConsensusImpl(blockchainReader, blockchainWriter, blockExecution, Some(reporter), None)
+
+    val partly: List[Block] = BlockHelpers.generateChain(4, initialBestBlock)
+    setFailingBlockWith(partly(1), localStateFault)
+    whenReady(reporting.evaluateBranch(NonEmptyList.fromListUnsafe(partly)).unsafeToFuture()) {
+      case ExtendedCurrentBestBranchPartially(imported, BranchExecutionFailure(toEnqueue, failing, error)) =>
+        imported.map(_.block) shouldBe partly.take(1)
+        failing shouldBe partly(1).hash.value
+        toEnqueue shouldBe partly.drop(1)
+        Consensus.isLocalStateFault(error) shouldBe true
+      case other => fail(s"expected ExtendedCurrentBestBranchPartially, got $other")
+    }
+    blockchainReader.getBestBlock shouldBe Some(partly.head)
+    reported shouldBe Nil
+
+    withClue("a fault at the first block hands the whole branch back: ") {
+      val first: List[Block] = BlockHelpers.generateChain(2, partly.head)
+      setFailingBlockWith(first.head, localStateFault)
+      whenReady(reporting.evaluateBranch(NonEmptyList.fromListUnsafe(first)).unsafeToFuture()) {
+        case BranchExecutionFailure(toEnqueue, _, error) =>
+          toEnqueue shouldBe first
+          Consensus.isLocalStateFault(error) shouldBe true
+        case other => fail(s"expected BranchExecutionFailure, got $other")
+      }
+    }
+
+    withClue("a block's own error after a prefix hands nothing back: ") {
+      val invalid: List[Block] = BlockHelpers.generateChain(3, partly.head)
+      setFailingBlockWith(invalid(1), ValidationAfterExecError("Block has invalid state root"))
+      whenReady(reporting.evaluateBranch(NonEmptyList.fromListUnsafe(invalid)).unsafeToFuture()) {
+        case ExtendedCurrentBestBranchPartially(imported, BranchExecutionFailure(toEnqueue, failing, error)) =>
+          imported.map(_.block) shouldBe invalid.take(1)
+          failing shouldBe invalid(1).hash.value
+          toEnqueue shouldBe Nil
+          Consensus.isLocalStateFault(error) shouldBe false
+        case other => fail(s"expected ExtendedCurrentBestBranchPartially, got $other")
+      }
+    }
+
   it should "write a trie error that is not a missing node as a local state fault when reorganising, and nothing else" taggedAs (
     UnitTest,
     ConsensusTest

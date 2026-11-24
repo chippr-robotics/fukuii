@@ -233,6 +233,23 @@ class ConsensusAdapter(
         case ExtendedCurrentBestBranchPartially(
               blockImportData,
               BranchExecutionFailure(blocksToEnqueue, failingBlockHash, error)
+            ) if Consensus.isLocalStateFault(error) =>
+          // B-336: a fault of this node's own state (spec 022 T062) after a prefix became the head. The prefix is
+          // imported, and the head's followers are told of it; the failing block was not judged, so it and those after
+          // it wait in the queue, none is dropped as an invalid block's descendants are, and the failure is answered
+          // as the fault it is, with the prefix, so that the importer escalates it from the failing block and blames
+          // no peer.
+          queuedAgain(blocksToEnqueue)
+          log.warn(
+            "extended best branch by {} block(s), then met a fault of this node's own state: {}",
+            blockImportData.size,
+            error
+          )
+          toldOfTheHead(blockImportData.lastOption.map(_.block))
+          new BlockImportFailedAt(error, failingBlockHash, blockImportData)
+        case ExtendedCurrentBestBranchPartially(
+              blockImportData,
+              BranchExecutionFailure(blocksToEnqueue, failingBlockHash, error)
             ) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           blockQueue.removeSubtree(BlockHash(failingBlockHash))
@@ -242,6 +259,11 @@ class ConsensusAdapter(
         case KeptCurrentBestBranch =>
           newBranch.toList.foreach(blockQueue.enqueueBlock(_))
           BlockEnqueued
+        case BranchExecutionFailure(blocksToEnqueue, failingBlockHash, error) if Consensus.isLocalStateFault(error) =>
+          // a fault of this node's own state judged no block: the failing block and what hangs from it stay queued
+          // (B-336), as a block's own error does not leave them
+          queuedAgain(blocksToEnqueue)
+          new BlockImportFailedAt(error, failingBlockHash)
         case BranchExecutionFailure(blocksToEnqueue, failingBlockHash, error) =>
           blocksToEnqueue.foreach(blockQueue.enqueueBlock(_))
           blockQueue.removeSubtree(BlockHash(failingBlockHash))
@@ -365,6 +387,12 @@ class ConsensusAdapter(
           log.warn("[STATE-ESCALATION] The weight of a branch out of reach could not be read", failed)
           false
     }
+
+  /** Blocks a fault of this node's own state left unjudged, queued again against the head as it is now (B-336). */
+  private def queuedAgain(blocks: List[Block]): Unit =
+    if blocks.nonEmpty then
+      val bestBlockNumber = blockchainReader.getBestBlockNumber
+      blocks.foreach(blockQueue.enqueueBlock(_, bestBlockNumber))
 
   private def toldOfTheHead(head: Option[Block]): Unit =
     head.foreach(block => toldTheFeed("a head that moved")(_.headMoved(block)))

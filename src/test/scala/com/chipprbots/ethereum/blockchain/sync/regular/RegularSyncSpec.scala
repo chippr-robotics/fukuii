@@ -2635,6 +2635,57 @@ class RegularSyncSpec
           finally BlockImporter.exhaustBackoff = 5.minutes
       )
 
+      // B-336: the same fault met after a prefix of the batch became the head. The prefix is counted as imported, and the
+      // escalation is of the failing block, not of the batch's first block, which is on the chain already.
+      "escalate a trie error met after a prefix of the batch became the head from the failing block, blaming no peer" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val prefixBlock: Block = testBlocksChunked.head.head
+          val failingBlock: Block = testBlocksChunked.head(1)
+          val localFault: String = BlockExecutionError.MPTError(new MPTException("Invalid Node")).toString
+          // the prefix became the head at the first try only: a try again starts at the failing block
+          val tries = new java.util.concurrent.atomic.AtomicInteger(0)
+          // two exhausts met below the prefix: the chain moves past them when the prefix is imported, as at any import,
+          // and the escalation counts from the failing block (unaccounted, the third exhaust is at once, of block 1)
+          exhausts.increment()
+          exhausts.increment()
+          BlockImporter.exhaustBackoff = 200.millis
+          try
+            setImportResult(
+              failingBlock,
+              IO {
+                val imported =
+                  if tries.getAndIncrement() == 0 then
+                    val weight = ChainWeight.totalDifficultyOnly(10001)
+                    // as the import leaves it: the prefix is the head
+                    blockchainWriter.save(prefixBlock, Nil, weight, saveAsBestBlock = true)
+                    List(BlockData(prefixBlock, Nil, weight))
+                  else Nil
+                new BlockImportFailedAt(localFault, failingBlock.hash.value, imported)
+              }
+            )
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            supervisor.fishForSpecificMessage(max = 15.seconds) {
+              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _))
+                  if number == failingBlock.number.value =>
+                true
+              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _)) =>
+                fail(s"escalated block $number, not the failing block ${failingBlock.number}")
+            }
+            withClue("neither blacklisted nor evicted: ") {
+              peersClient.receiveWhile(500.millis) { case m => m }.collect { case b: PeersClient.BlacklistPeer =>
+                b
+              } shouldBe
+                empty
+            }
+          finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
       // Spec 018 Track C, C4b: the state a block was to be executed on was moved from under the batch by another
       // writer, or is not held. The block was not judged. It is fetched and tried again, and nobody is blamed for it.
       "try a block again that this node's state could not take, and space the tries out from the third: no peer blamed" taggedAs (

@@ -1623,9 +1623,10 @@ final private class BlockImporterLogic(
             IO.pure((adoptedPrefix(adopted, importedBlocks), Some(stateFault)))
 
           // This node's own state failed, not the block: no strike, so the peer that sent it is not evicted and no fork
-          // is detected (spec 022 T062). The caller backs off and escalates instead.
+          // is detected (spec 022 T062). The caller backs off and escalates instead. A prefix of the batch that became
+          // the head before the fault is counted as above, so that the escalation starts at the failing block (B-336).
           case err @ BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
-            IO.pure((importedBlocks, Some(err)))
+            IO.pure((adoptedPrefix(BlockImportFailedAt.importedBefore(err), importedBlocks), Some(err)))
 
           case err @ (UnknownParent | BlockImportFailed(_)) =>
             val failedBlock = nel.head
@@ -1824,6 +1825,10 @@ final private class BlockImporterLogic(
             IO.raiseError(missingNodeException)
           case BlockImportFailed(error) if informFetcherOnFail && !Consensus.isLocalStateFault(error) =>
             fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
+          // a fault of this node's own state after a prefix became the head (B-336): nothing is said of the failing
+          // block, and the prefix is announced as any imported blocks are
+          case failed @ BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
+            announceAdopted(BlockImportFailedAt.importedBefore(failed), internally)
           case UnknownParent => announcedBy.foreach(handleOrphanAnnounce(block, _))
           // Not judged, so nothing is said of it to the fetcher or of the peer that announced it; what was adopted
           // before the fault is announced as any imported blocks are.

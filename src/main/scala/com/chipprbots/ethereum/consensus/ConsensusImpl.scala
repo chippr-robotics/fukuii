@@ -334,18 +334,25 @@ class ConsensusImpl(
         // Nothing executed, so the failing block is the branch head and its parent is the current best block
         // (guaranteed by handleBranchImport's `currentBestHeader.hash == branch.head.header.parentHash` guard).
         reportIfProvenInvalid(branch.head, error, branch.tail)
-        BranchExecutionFailure(Nil, branch.head.header.hash.value, error.toString)
+        // A fault of this node's own state (spec 022 T062) judged no block: the branch waits in the queue to be tried
+        // again (B-336). A block's own error drops it, as before.
+        val toEnqueue = if Consensus.isLocalStateFault(error.toString) then branch.toList else Nil
+        BranchExecutionFailure(toEnqueue, branch.head.header.hash.value, error.toString)
 
       case (importedBlocks, Some(error)) =>
         saveLastBlock(importedBlocks)
         val unexecuted = branch.toList.drop(importedBlocks.length)
         val failingBlock = unexecuted.head
-        // NB: this arm maps to `BlockImportedToTop` in ConsensusAdapter, which DISCARDS `error`. Reporting here is
-        // the only signal that escapes a partially-successful batch at all.
+        // NB: for a block's own error this arm maps to `BlockImportedToTop` in ConsensusAdapter, which DISCARDS
+        // `error`. Reporting here is the only signal that escapes a partially-successful batch at all.
         reportIfProvenInvalid(failingBlock, error, unexecuted.tail)
+        // A fault of this node's own state (spec 022 T062): the prefix stays the head, and the failing block and those
+        // after it were not judged. They wait in the queue to be tried again, and the adapter answers the fault, with
+        // the prefix, so that the importer escalates it and blames no peer (B-336).
+        val toEnqueue = if Consensus.isLocalStateFault(error.toString) then unexecuted else Nil
         ExtendedCurrentBestBranchPartially(
           importedBlocks,
-          BranchExecutionFailure(Nil, failingBlock.hash.value, error.toString)
+          BranchExecutionFailure(toEnqueue, failingBlock.hash.value, error.toString)
         )
 
   /** A branch without peer-supplied lists (every ETC and pre-Amsterdam branch) takes the unchanged call. */
