@@ -7,6 +7,7 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.collection.mutable
+import scala.concurrent.duration.*
 
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -107,8 +108,20 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
         None
     // what the node's stop was asked for: a write of the store refused (B-440)
     val stopped: mutable.ArrayBuffer[Throwable] = mutable.ArrayBuffer.empty
+    // the adapter's clock, in nanoseconds: moved by hand
+    var now: Long = 0L
     val adapter =
-      new ConsensusAdapter(consensus, reader, queue, validation, IORuntime.global, None, Some(feed), stopped += _)
+      new ConsensusAdapter(
+        consensus,
+        reader,
+        queue,
+        validation,
+        IORuntime.global,
+        None,
+        Some(feed),
+        stopped += _,
+        () => now
+      )
     def imported(blocks: NonEmptyList[Block]): Any = adapter.evaluateBranch(blocks).unsafeRunSync()
 
   private def data(block: Block): BlockData = BlockData(block, Nil, ChainWeight.totalDifficultyOnly(0))
@@ -348,7 +361,8 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
   }
 
   // forge W1: a store busy batch after batch takes no write. Every busy answer is counted, whichever block the batch
-  // stands on, until a block becomes the head; at the fifth the node stops as for a store that failed
+  // stands on, until a block becomes the head; once five have come over ten minutes from the first, the node stops as
+  // for a store that failed
   private class BusyRig:
     val busy: Throwable = Thrown.busy.head
     private var answer: NonEmptyList[Block] => ConsensusResult = _ => throw busy
@@ -364,13 +378,16 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
       answer = result
       try rig.imported(blocks)
       finally answer = _ => throw busy
-    def stopsOn(blocks: NonEmptyList[Block]): Unit =
+    // the clock moves on
+    def later(by: FiniteDuration = ConsensusAdapter.BusyStopAfter): Unit = rig.now += by.toNanos
+    // the next busy answer, ten minutes on, is the `count`th since the head moved, and stops the node
+    def stopsOn(blocks: NonEmptyList[Block], count: Int = ConsensusAdapter.BusyBeforeStop): Unit =
       rig.stopped shouldBe empty
+      later()
       rig.imported(blocks) match
         case BlockImportStateFault(fault, _) =>
-          fault.getMessage should include(
-            s"was busy ${ConsensusAdapter.BusyBeforeStop} times with no block made the head between"
-          )
+          fault.getMessage should include(s"was busy $count times over")
+          fault.getMessage should include("with no block made the head between")
           fault.getMessage should include("the node stops")
         case other => fail(s"not a fault of this node's state: $other")
       rig.stopped.toList.map(_ eq busy) shouldBe List(true)
@@ -381,10 +398,12 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
   it should "stop the node when the store is busy too many times with no block made the head" taggedAs UnitTest in {
     val on = new BusyRig
     val blocks = branch(5, 3)
-    // four, then a batch evaluated that moved the head: the count starts again
+    // four over ten minutes, then a batch evaluated that moved the head: the count and its clock start again
     on.busyAnswers(blocks, UnderStop)
+    on.later()
     on.answering(blocks)(moved => ExtendedCurrentBestBranch(moved.toList.map(data))) shouldBe a[BlockImportedToTop]
     on.busyAnswers(blocks, UnderStop)
+    on.rig.stopped shouldBe empty
     // the fifth stops the node
     on.stopsOn(blocks)
     // nothing of it is told to the escalation
@@ -432,10 +451,54 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     val blocks = branch(5, 3)
     val corrupt = new ReorgTooDeep(ReorgRefusal.Corrupt, "a record is not what it should be")
     on.busyAnswers(blocks, UnderStop)
+    on.later()
     on.answering(blocks)(batch => ConsensusStateFault(corrupt, List(data(batch.head)), batch.tail)) match
       case BlockImportStateFault(_, imported) => imported.map(_.block) shouldBe List(blocks.head)
       case other                              => fail(s"not a fault of this node's state: $other")
     on.busyAnswers(blocks, UnderStop)
+    on.stopsOn(blocks)
+  }
+
+  // forge W1: a write stall, a compaction behind or a lock timed out clears in seconds. Busy answers that come fast, as
+  // batches alternating between branches do (the importer spaces its tries out only on the same block), do not stop
+  // the node however many they are, until ten minutes have passed since the first
+  it should "not stop the node for a store busy many times within seconds" taggedAs UnitTest in {
+    val on = new BusyRig
+    val one = branch(5, 3)
+    val other = branch(9, 2, parent = otherParent)
+    (1 to 4 * ConsensusAdapter.BusyBeforeStop).foreach { i =>
+      on.busyAnswer(if i % 2 == 1 then one else other)
+      on.later(1.second)
+    }
+    // and up to the last moment before the ten minutes
+    on.later(ConsensusAdapter.BusyStopAfter - (4 * ConsensusAdapter.BusyBeforeStop).seconds - 1.nano)
+    on.busyAnswer(one)
+    on.rig.stopped shouldBe empty
+  }
+
+  // forge W1: busy answers that go on past ten minutes from the first, with no block made the head, stop the node at
+  // the next one
+  it should "stop the node at the next busy answer once the store has been busy for ten minutes" taggedAs UnitTest in {
+    val on = new BusyRig
+    val one = branch(5, 3)
+    val other = branch(9, 2, parent = otherParent)
+    (1 to ConsensusAdapter.BusyBeforeStop).foreach(i => on.busyAnswer(if i % 2 == 1 then one else other))
+    on.rig.stopped shouldBe empty
+    on.stopsOn(other, count = ConsensusAdapter.BusyBeforeStop + 1)
+  }
+
+  // forge W1: both floors hold. A store busy once, then again after a long quiet with no block made the head, has said
+  // little: it stops only once five busy answers have come
+  it should "not stop the node for fewer than five busy answers, however long apart" taggedAs UnitTest in {
+    val on = new BusyRig
+    val blocks = branch(5, 3)
+    on.busyAnswer(blocks)
+    on.later()
+    on.later()
+    (2 to UnderStop).foreach { _ =>
+      on.busyAnswer(blocks)
+      on.rig.stopped shouldBe empty
+    }
     on.stopsOn(blocks)
   }
 
