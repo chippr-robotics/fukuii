@@ -4,9 +4,10 @@
 
 **Created**: 2026-10-30
 
-**Status**: Planned (2026-11-03). Clarified 2026-10-31; plan with the GT-2 hook-point table, record schema (with block body), topic and golden-vector contracts, 91 tasks. Phase A: schema freeze with `vault` (018 F2) and `forge`/`beacon` hook sign-off; code in phase C. **Amended
-2026-11-24**: transaction-pool records on a second topic, a safe-head watermark, and a chain-start record for chains
-that reset (US-4, US-5; DC-10, DC-11; FR-013 to FR-019). v1 is not frozen yet (GT-1 open), so the new types join v1.
+**Status**: Planned (2026-11-03). Clarified 2026-10-31; plan with the GT-2 hook-point table, record schema (with block body), topic and golden-vector contracts, 114 tasks (23 from the 2026-11-24 amendment: pool, safe-head and chain-start records). Phase A: schema freeze with `vault` (018 F2) and `forge`/`beacon` hook sign-off; code in phase C.
+Amendment 2026-11-24: transaction-pool records on a second topic, a safe-head watermark, and a chain-start record for
+chains that reset (US-4, US-5; DC-10, DC-11; FR-013 to FR-019). v1 is not frozen yet (GT-1 open), so the new types
+join v1.
 
 **Input**: Spec 023 Goal "define the change-record contract on Kafka that replicas, the archive role, the indexer and
 history tables all consume, with reorg and finality semantics". User decisions D-3 (Kafka) and D-6 (ETC finality is
