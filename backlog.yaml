@@ -5584,12 +5584,12 @@ items:
     opened: 2026-11-24
     refs: ["sync reports v0.12.117, 2026-11-23/24"]
     links:
-      prs: [2110]
+      prs: [2110, 2111]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T22:16:36Z
-      heartbeat: 2026-11-24T22:17:13Z
+      heartbeat: 2026-11-24T22:27:43Z
     notes: |-
       SnapFinalization:226 header-hold is expected on a genesis start, so INFO not WARN; SyncProgressMonitor:369 completion rates divide by total elapsed, use each phase's own time.
       ByteCodeCoordinator:520-531 logs BYTECODE-COORD 100% on every pulse after completion, log once; SyncController:2441 says an audit pass is 'owed' on a brand-new datadir, reword.
