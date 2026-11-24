@@ -214,7 +214,9 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
         Option.when(guard)((block, config) =>
           consensusAdapter.evaluateBranchBlock(block)(using cats.effect.unsafe.IORuntime.global, config)
         ),
-        Option.when(guard)(ChainImporter.adoptingOnLayers(blockchainReader, blockchainWriter, execution, blockchain))
+        Option.when(guard)(ChainImporter.adoptingOnLayers(blockchainReader, blockchainWriter, execution, blockchain)),
+        // on the hash store, go-ethereum's writeKnownBlock, as the node wires it (N1)
+        Option.when(!guard)(ChainImporter.knownBlockAsHead(blockchainReader, blockchainWriter, blockchain))
       )
 
     def importStrict(file: Path): Either[ChainImporter.ImportFailure, ChainImporter.ImportSummary] =
@@ -763,6 +765,76 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     fault.getMessage should include("is not the block whose state is held")
     node.keys shouldBe keys
     node.storagesInstance.storages.pathStateStorage.get.anchor shouldBe Some(refOf(fixtureBlocks(19).header))
+  }
+
+  // N1: go-ethereum's insertChain ignores a block it has with its state only when it is on the canonical chain at or
+  // below the head; any other such block is written as the head by writeKnownBlock (a reorg when its parent is not the
+  // head), and after the merge every block of the file is the head. The hash store makes that move without executing
+  // the block again; the unified layout adopts it on layers, as it adopts any block after the merge beside the head.
+  "importChainFile on either layout" should "make a block after the merge it has, beside or above the head, the head again" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    Seq((true, false), (false, false), (false, true)).foreach { (guard, basicPruning) =>
+      withClue(s"unified layout $guard, basic pruning $basicPruning: ") {
+        val node = new Node(basicPruning = basicPruning, guard = guard)
+        lenient(node, fixtureBlocks.take(50)) shouldBe (50, 0, 0)
+        val head = fixtureBlocks(49)
+        head.header.difficulty shouldBe Difficulty.Zero
+        val beside = head.copy(header = head.header.copy(extraData = ByteString("beside the head")))
+        lenient(node, Seq(beside)) shouldBe (1, 0, 0)
+        node.head.hash shouldBe beside.hash
+        // the block the head left, again: stored, and no longer canonical
+        @volatile var executed = false
+        if !guard then node.beforeExecution = Some(() => executed = true)
+        lenient(node, Seq(head)) shouldBe (1, 0, 0)
+        if guard then holdsExactly(node, head.header)
+        else
+          // known with its state: made the head by the fork choice's move, not executed again
+          executed shouldBe false
+          node.beforeExecution = None
+          node.head.hash shouldBe head.hash
+          node.blockchainReader.getBlockHeaderByNumber(50).map(_.hash) shouldBe Some(head.hash)
+        // on the canonical chain at or below the head: ignored
+        lenient(node, Seq(head)) shouldBe (0, 1, 0)
+        node.head.hash shouldBe head.hash
+        // and the chain goes on from it
+        lenient(node, fixtureBlocks.drop(50)) shouldBe (10, 0, 0)
+        node.head.hash shouldBe fixtureBlocks.last.hash
+        node.head.stateRoot shouldBe fixtureBlocks.last.header.stateRoot
+        if !guard then
+          // canonical above the head (the best block alone moved back, as only the hash store allows): not ignored,
+          // each made the head in turn without being executed again
+          node.blockchainWriter.saveBestKnownBlocks(head.hash, head.header.number.value)
+          node.beforeExecution = Some(() => executed = true)
+          lenient(node, fixtureBlocks.drop(50)) shouldBe (10, 0, 0)
+          executed shouldBe false
+          node.beforeExecution = None
+          node.head.hash shouldBe fixtureBlocks.last.hash
+      }
+    }
+  }
+
+  // W2: the adoption's unsafeRunSync waits for a thread of the blocking pool that takes the chain insert lock shared:
+  // asked under this thread's hold of it, the import would hang with nothing said. Refused at once instead.
+  "importChainFile's adoption on layers" should "refuse to run while the thread holds the chain insert lock" taggedAs UnitTest in {
+    val node = new Node
+    given BlockchainConfig = node.blockchainConfig
+    val block = fixtureBlocks(50)
+    @volatile var asked = 0
+    val adopt: (Block, BlockchainConfig) => com.chipprbots.ethereum.consensus.Consensus.ConsensusResult = (_, _) =>
+      asked += 1
+      com.chipprbots.ethereum.consensus.Consensus.ExtendedCurrentBestBranch(Nil)
+    val underExclusive = the[IllegalStateException] thrownBy
+      com.chipprbots.ethereum.ledger.ChainInsertLock.exclusive(node.importer.adoptedOnLayers(block, adopt))
+    underExclusive.getMessage should include("holds the chain insert lock")
+    val underShared = the[IllegalStateException] thrownBy
+      com.chipprbots.ethereum.ledger.ChainInsertLock.shared(node.importer.adoptedOnLayers(block, adopt))
+    underShared.getMessage should include("holds the chain insert lock")
+    asked shouldBe 0
+    // and with the lock not held, the adoption is asked
+    node.importer.adoptedOnLayers(block, adopt) shouldBe node.importer.LenientOutcome.Imported(0)
+    asked shouldBe 1
   }
 
   "admin_exportChain / admin_importChain" should "round-trip through the RPC service" taggedAs (UnitTest, RPCTest) in {

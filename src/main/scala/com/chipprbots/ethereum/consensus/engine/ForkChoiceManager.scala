@@ -15,7 +15,6 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
-import com.chipprbots.ethereum.domain.CanonicalHeadLock
 import com.chipprbots.ethereum.ledger.AdoptedChainWeights
 import com.chipprbots.ethereum.utils.Logger
 
@@ -135,22 +134,15 @@ class ForkChoiceManager(
         // Under the head's lock (B-511), the move with the reference counts that follow it: a branch the p2p import
         // executes and settles holds it, so this moves the head from the index that settle leaves, and the settle
         // never sees the head moved under it.
-        val move = CanonicalHeadLock.held(s"the fork choice to block ${header.number.value}") {
-          // Reference counts follow the canonical index: a block is applied exactly while it is canonical (see
-          // ReorgStateHandler). The blocks the move adopts are put back before its batch is written, and those it drops
-          // are taken out after, as ConsensusImpl.settleHead does: a stop between them leaves a block counted that is
-          // not indexed, which only keeps nodes longer, never one indexed that is not counted, whose nodes the prune
-          // would delete under the head (B-511, vault). Both are idempotent, so the fork choice made again after a
-          // stop counts nothing twice.
-          val move = blockchainWriter.promoteToCanonicalHead(
-            header,
-            blockchainReader,
-            beforeTheWrite =
-              planned => reorgState.readoptBlockStates(planned.adopted.map { case (n, h) => (n, h.value) })
-          )
-          reorgState.abandonBlockStates(move.dropped.map { case (n, h) => (n, h.value) })
-          move
-        }
+        // Reference counts follow the canonical index: a block is applied exactly while it is canonical (see
+        // ReorgStateHandler). The blocks the move adopts are put back before its batch is written, and those it drops
+        // are taken out after, as ConsensusImpl.settleHead does (BlockchainWriter.promoteToCanonicalHeadCounted).
+        val move = blockchainWriter.promoteToCanonicalHeadCounted(
+          header,
+          blockchainReader,
+          reorgState,
+          s"the fork choice to block ${header.number.value}"
+        )
         rederiveWeights(move.adopted.map(_._2))
       }
 

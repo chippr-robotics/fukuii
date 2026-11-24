@@ -91,7 +91,7 @@ object ConfigValidator extends Logger:
     * The chain file imported at start is taken since C3c, and with parity since B-220: a block built on the head is
     * committed in place, a block before the merge that is not goes through the node's fork choice (queued, executed on
     * layers and moved to once its branch outweighs the head), and one after the merge is adopted as the head when it is
-    * valid, as on the hash store and in core-geth.
+    * valid, as on the hash store and in go-ethereum.
     *
     * Test mode is taken since C3c too, and since C4b and B-220 with parity but for a fork deeper than the changeset
     * records reach: a heavier branch is reorganised to on layers, `test_rewindToBlock` moves the head back to any block

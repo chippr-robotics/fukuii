@@ -400,6 +400,31 @@ class BlockchainWriter(
       promoteUnderTheLock(head, reader, beforeTheWrite)
     )
 
+  /** [[promoteToCanonicalHead]] with the reference counts that follow it, under the head's lock: go-ethereum's move to
+    * a block it has with its state, `SetCanonical` for a fork choice and `writeKnownBlock` for an import, neither of
+    * which executes the block. A block is applied exactly while it is canonical (`ReorgStateHandler`): the blocks the
+    * move adopts are put back before its batch is written, and those it drops are taken out after, as
+    * `ConsensusImpl.settleHead` does. A stop between them leaves a block counted that is not indexed, which only keeps
+    * nodes longer, never one indexed that is not counted, whose nodes the prune would delete under the head (B-511,
+    * vault). Both are idempotent, so the move made again after a stop counts nothing twice. Hash layout only, as
+    * [[promoteToCanonicalHead]] is. `what` names the move in the head lock's WARN.
+    */
+  def promoteToCanonicalHeadCounted(
+      head: BlockHeader,
+      reader: BlockchainReader,
+      reorgState: com.chipprbots.ethereum.consensus.ReorgStateHandler,
+      what: => String
+  ): CanonicalMove =
+    CanonicalHeadLock.held(what) {
+      val move = promoteToCanonicalHead(
+        head,
+        reader,
+        beforeTheWrite = planned => reorgState.readoptBlockStates(planned.adopted.map { case (n, h) => (n, h.value) })
+      )
+      reorgState.abandonBlockStates(move.dropped.map { case (n, h) => (n, h.value) })
+      move
+    }
+
   /** `beforeTheWrite` is told the move before its batch is written, as [[rewriteCanonicalIndex]]'s is: the fork choice
     * puts back the reference counts of the blocks it adopts there (B-511, vault).
     */

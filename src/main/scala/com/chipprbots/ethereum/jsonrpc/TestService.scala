@@ -622,12 +622,13 @@ class TestService(
   /** `answer`, which reads the state of a block. On the unified state layout a block behind the head is read from the
     * changeset records, as the JSON-RPC reads one ([[StateRead]]): in one scope of reads, run again on a fresh view
     * when the state moved under it (B-220; geth answers `debug_storageRangeAt` and `debug_accountRange` at any block
-    * whose state it has). Every read `answer` makes is done before it returns its value. A state that is not held is
-    * refused as the read starts, and answered as that. On the hash store `answer` is what it was.
+    * whose state it has). Every read `answer` makes is done before it returns its value, on a thread of the blocking
+    * pool: the reads go to disk and may be run again. A state that is not held is refused as the read starts, and
+    * answered as that. On the hash store `answer` is what it was.
     */
   private def ofAStateHeld[A](answer: => ServiceResponse[A]): ServiceResponse[A] =
     if blockchainReader.holdsStateInPlace then
-      IO.defer(StateRead.attemptingOrThrow(answer)).recover(notOnTheUnifiedLayout)
+      IO.blocking(StateRead.attemptingOrThrow(answer)).flatten.recover(notOnTheUnifiedLayout)
     else answer
 
   private def accountsInRange(request: AccountsInRangeRequest): ServiceResponse[AccountsInRangeResponse] =
