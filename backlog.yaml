@@ -1940,11 +1940,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T05:14:33Z
-      heartbeat: 2026-11-24T06:03:08Z
+      heartbeat: 2026-11-24T06:36:16Z
     notes: |-
-      2026-11-24 in-progress: Pushed fix/b210-rpc-reads-above-best (c734f955ee); PR not opened yet. Follow-ups B-484, B-485.
       2026-11-24 in-progress: pushed c734f955ee; conduit+beacon review
       2026-11-24 in-progress: conduit+beacon CHANGES: getProof missing-node recover, delegate resolveHeader; brief scratchpad b210-round2.md; queued for next free clone
+      2026-11-24 in-progress: Round 2 pushed: 0bf6c67834 (proof missing-node, ResolveHeader delegation). Follow-up B-489.
   - id: B-211
     title: "RPC: GraphQL call and estimateGas reach EthInfoService without the controller, so without the stale-view retry (StateRead.request)"
     priority: P3
