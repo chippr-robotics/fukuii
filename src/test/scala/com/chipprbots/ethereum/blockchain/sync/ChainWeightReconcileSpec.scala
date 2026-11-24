@@ -730,6 +730,28 @@ class ChainWeightReconcileSpec extends AnyFlatSpec with Matchers:
     appState.hasChainWeightInvariant() shouldBe true
     appState.isChainWeightSnapPending() shouldBe false
 
+  // B-490: the SNAP hand-off (`SyncHandoff.commit`) makes its pivot canonical with the weight the sync decided. No pass
+  // runs while SNAP does (a SNAP start withdraws the marker and stops the pass; the next starts with regular sync, after
+  // the hand-off), so no repair lands between that weight and this check, which reads the pivot's weight against its
+  // parent's as they are at the hand-off. A pivot whose weight does not follow sets no marker, and the pass from
+  // genesis, which sees the pivot (the index names it), repairs it.
+  it should "not be set by the hand-off of a SNAP that began exact when the pivot's weight does not follow its parent's (B-490)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Chain:
+    val chain: Vector[BlockHeader] = Genesis +: headers(Genesis, 100)
+    put(chain, exact(chain).map(Some(_)))
+    appState.markChainWeightInvariant().commit()
+    atSnapStart(blockchainReader, appState) shouldBe true
+    // the pivot's weight, taken from its parent's before that was rewritten (or an estimate): not its parent's plus its
+    // difficulty
+    put(Vector(chain.last), Vector(Some(exact(chain).last + 1000)))
+    HeadChainWeight.classify(blockchainReader, chain.last) shouldBe a[HeadChainWeight.Status.Derivable]
+
+    atSnapHandOff(blockchainReader, appState, BigInt(100)) shouldBe false
+    appState.hasChainWeightInvariant() shouldBe false
+    appState.isChainWeightSnapPending() shouldBe false
+
   it should "count a datadir with no header above genesis as exact at a SNAP start" taggedAs (
     UnitTest,
     SyncTest

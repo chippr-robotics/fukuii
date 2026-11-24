@@ -78,8 +78,11 @@ import com.chipprbots.ethereum.utils.Hex
   *
   * '''Payloads stored by hash only.''' A side payload (and on the unified layout every payload) has no number entry, so
   * the pass never sees it, and it keeps the weight its parent had when `newPayload` ran. The forkchoiceUpdated that
-  * makes it canonical re-derives it from its parent's weight then (`ForkChoiceManager.rederiveWeights`, B-126), under
-  * the chain insert lock (shared), so never between the finish's check and its marker.
+  * makes it canonical re-derives it from its parent's weight then (`AdoptedChainWeights.rederive`, B-126), under the
+  * chain insert lock (shared), so never between the finish's check and its marker. So does the recovery that makes it
+  * canonical instead (`StateRecovery`'s adoption of a branch and its catch-up, which the p2p import path's hand-off
+  * reaches too), for those blocks and for each it commits in place, whose parent's weight it reads before the commit's
+  * lock (B-490).
   */
 object ChainWeightReconcile:
 
