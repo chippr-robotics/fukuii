@@ -2690,11 +2690,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-18T00:57:40Z
-      heartbeat: 2026-11-24T11:35:10Z
+      heartbeat: 2026-11-24T11:40:30Z
     notes: |-
-      2026-11-18 blocked: The hive client switch for path-live landed (#1910). Remaining: the gate run itself, which needs a hive host or a dispatch: gh workflow run hive-engine.yml --ref staging -f path_live=true -f sim_limit='/re-?org' (or scripts/hive/local.sh ethereum/engine --limit '/re-?org' --path-live).
       2026-11-24 in-progress: hive-engine.yml dispatched on staging 2026-11-24 03:17Z, path_live=true, sim_limit=/re-?org; awaiting result
       2026-11-24 in-progress: hive engine path_live on staging 4a722435c5 (run 45372923367): 78/83 fail, all re-org (Invalid Missing Ancestor Syncing ReOrg P8/P9, Withdrawals Fork re-org); hash layout same filter passes. Root-causing from sim logs.
+      2026-11-24 in-progress: root cause: path-live PoS-from-genesis startup guard killed every hive client at launch (78/78 'client did not start'; re-orgs never exercised). User 2026-11-24: allow by default. Fix queued (scratchpad b314-fix.md), then re-run the gate.
   - id: B-315
     title: "Weight arm of reorganiseOnLayers: weigh again when the head moved between the comparison and the move"
     priority: P3
