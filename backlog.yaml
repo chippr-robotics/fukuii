@@ -5016,3 +5016,14 @@ items:
     links:
       spec: 018
     notes: "Found in B-482 round 2 (vault item 5). EthTxService.getTransactionDataByHash: transactionMappingStorage.get -> getBlockByHash, no check that the block is at its number in the index and <= best (getTransactionReceipt does both; eth_getBlockByNumber goes through BestBranch, gated by tip). Any stale lookup is served as included. Owners: conduit (RPC), beacon (semantics vs geth)."
+  - id: B-496
+    title: ConsensusAdapter OfTheState logs a StateBusy as [STATE-FAULT] ERROR; tag it [STATE-BUSY] WARN through tagOf (B-440 + B-462 both merged)
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "Left for whichever of #2045/#2049 merged second (both merged 2026-11-24)."
