@@ -624,6 +624,123 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
             node.bestHash shouldBe next.hash
       }
   }
+  // B-315 (forge's area, core-geth parity): the weight arm moves the head to a branch it weighed against the head it
+  // read. A block committed on that head, or a move of it, between the weight comparison and the move (an operator's
+  // admin_importChain on a live node takes no import lock, nor do the test RPC's rewind and mining) gives the node
+  // another head. Moved anyway, it took a lighter chain than the one it held: core-geth weighs a side chain against the
+  // head it holds under `chainmu`. The move is refused as busy, with nothing written; the branch is queued again, no
+  // peer blamed and nothing counted, and the next offer weighs it against the head as it is. Forced into the window on
+  // both of the arm's ways to the head: the move of the executed branch, and its commit in place at the cap, where the
+  // head is read again before the hold (a sibling of the head at its height was not seen there, by number alone).
+  it should "refuse, as busy, a move of the head to a branch weighed against a head that a block was committed on, or that moved, since; and weigh it again against the head as it is" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    final case class Race(
+        what: String,
+        cap: StateConfig => StateConfig,
+        atThePin: Boolean,
+        meanwhile: HeadRacedReorg => Block,
+        // what is the head's chain above the fork once the branch is offered again: None when it is kept beside it
+        leftAgain: (HeadRacedReorg, Block) => Option[List[Block]]
+    )
+    def committedOn(f: HeadRacedReorg, difficulty: BigInt): Block =
+      val onTheHead = f.oracle.extendSide(f.oldChain.last, 1, difficulty = difficulty, tag = 0x86, miner = OtherMiner)
+      f.node.importOne(onTheHead.head) shouldBe a[BlockImportedToTop]
+      onTheHead.head
+    val races = Seq(
+      // 14000 against the branch's 13000: before, the lighter branch was taken
+      Race("a heavier block committed on the head", identity, false, committedOn(_, 2000), (_, _) => None),
+      Race(
+        "a lighter block committed on the head",
+        identity,
+        false,
+        committedOn(_, 500),
+        (f, committed) => Some(f.oldChain.drop(3) :+ committed)
+      ),
+      Race(
+        "the head moved back to block 10",
+        identity,
+        false,
+        { f =>
+          f.movedBackTo(f.oldChain(9))
+          f.oldChain(9)
+        },
+        (f, _) => Some(f.oldChain.slice(3, 10))
+      ),
+      Race(
+        "a heavier block committed on the head, at the cap",
+        pinnedCap(1L),
+        true,
+        committedOn(_, 2000),
+        (_, _) => None
+      ),
+      // moved back to 11 and a sibling of the old head committed at 12, 14000 against 13000: the head read again
+      // at the cap is at the height the branch was weighed at, and is another block
+      Race(
+        "a heavier sibling of the head at its height, at the cap",
+        pinnedCap(1L),
+        true,
+        { f =>
+          f.movedBackTo(f.oldChain(10))
+          val sibling = f.oracle.extendSide(f.oldChain(10), 1, difficulty = 3000, tag = 0x87, miner = OtherMiner).head
+          f.node.importOne(sibling) shouldBe a[BlockImportedToTop]
+          sibling
+        },
+        (_, _) => None
+      )
+    )
+    for race <- races do
+      withClue(s"${race.what}: ") {
+        new HeadRacedReorg(race.cap, race.atThePin):
+          val headMeanwhile = new java.util.concurrent.atomic.AtomicReference[Block]()
+          val untouched = new java.util.concurrent.atomic.AtomicReference[Map[java.nio.ByteBuffer, Array[Byte]]]()
+          meanwhile = () =>
+            headMeanwhile.set(race.meanwhile(this))
+            untouched.set(datadir.storage)
+          val (first, said) = com.chipprbots.ethereum.testing.LogCapture.capture(classOf[ConsensusImpl])(offer())
+          ranMeanwhile shouldBe true
+          val now = headMeanwhile.get
+          first match
+            case BlockImportStateFault(refused: StateBusy, Nil) =>
+              refused.reason should include(s"block ${oldChain.last.number.value}")
+              refused.holder should include(s"block ${now.number.value}")
+            case other => fail(s"not refused as busy: $other")
+          // nothing of the adoption was written: the head is where the other writer left it
+          if race.atThePin then
+            // the branch was executed after `meanwhile`, under its pin, up to the cap: what that stores is by the
+            // blocks' hashes. Nothing of the head (the index of blocks by number, the best block, the anchor) changed
+            val before = untouched.get
+            val written = (datadir.storage.keySet ++ before.keySet).filterNot(key =>
+              java.util.Arrays.equals(datadir.storage.getOrElse(key, null), before.getOrElse(key, null))
+            )
+            written.map(_.get(0)) should contain noneOf (
+              Namespaces.HeightsNamespace.head,
+              Namespaces.AppStateNamespace.head
+            )
+          else (datadir.storage eq untouched.get) shouldBe true
+          state.headGeneration % 2 shouldBe 0
+          validHead(node, datadir).hash shouldBe now.hash
+          // queued again, and said at WARN as busy, never at ERROR
+          branch.foreach(block => node.blockQueue.isQueued(block.hash) shouldBe true)
+          said.filter(_.getLevel == ch.qos.logback.classic.Level.ERROR) shouldBe empty
+          said.exists(e => e.getFormattedMessage.startsWith("[STATE-BUSY]")) shouldBe true
+          // offered again: weighed against the head as it is
+          val again: BlockImportResult = offer()
+          race.leftAgain(this, now) match
+            case None =>
+              again shouldBe BlockEnqueued
+              validHead(node, datadir).hash shouldBe now.hash
+            case Some(left) =>
+              again match
+                case ChainReorganised(oldBranch, newBranch, _, _) =>
+                  oldBranch.map(_.hash) shouldBe left.map(_.hash)
+                  newBranch.map(_.hash) shouldBe branch.map(_.hash)
+                case other => fail(s"not adopted: $other")
+              validHead(node, datadir).hash shouldBe branch.last.hash
+      }
+  }
+
   // B-503: a batch the store was busy for is queued again (B-440), and regular sync fetches it again and adopts it
   // with `evaluateBranch`. The blocks it made the head must leave the queue, as a branch the queue resolved does: left
   // in it, the next block announced is resolved with them as its branch, and the node reorganises onto its own chain,
@@ -2408,6 +2525,70 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       import node.blockchainConfig
       import node.runtime
       adapter.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
+
+  /** [[KilledReorg]]'s two chains on a node that runs on, with `cap` on the pinned layers (B-315). `meanwhile` runs
+    * once, on the same thread, after the branch was weighed against the head and before the head is moved to it: as the
+    * move of the head to the executed branch is asked for, or, with `atThePin`, as the branch's pin is opened, before
+    * anything of it is executed (the branch committed in place at the cap reads the head again after that). The branch
+    * is offered through an import adapter over this fixture's `consensus` and the node's queue.
+    */
+  class HeadRacedReorg(cap: StateConfig => StateConfig, atThePin: Boolean) extends KilledReorg(cap):
+    val datadir = new EphemDataSource(Map.empty)
+    val node = new Node(guard = true, cap, Some(datadir))
+    node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+    val state: PathStateStorage = node.storagesInstance.storages.pathStateStorage.get
+    @volatile var meanwhile: () => Unit = () => ()
+    @volatile var ranMeanwhile = false
+    private def once(): Unit =
+      if !ranMeanwhile then
+        ranMeanwhile = true
+        meanwhile()
+    private val storages = node.storagesInstance.storages
+    private val writer = new BlockchainWriter(
+      storages.blockHeadersStorage,
+      storages.blockBodiesStorage,
+      storages.blockNumberMappingStorage,
+      storages.transactionMappingStorage,
+      storages.receiptStorage,
+      storages.chainWeightStorage,
+      storages.appStateStorage,
+      storages.blockAccessListStorage,
+      pathState = storages.pathStateStorage
+    ):
+      override def withPinnedBranch[A](name: String)(
+          body: Option[com.chipprbots.ethereum.db.storage.pathstate.BranchPin] => A
+      ): A =
+        if atThePin then once()
+        super.withPinnedBranch(name)(body)
+      override def moveHeadInPlace(
+          target: BlockHeader,
+          reader: BlockchainReader,
+          refuse: com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan.Chunk => Option[String],
+          finalized: Option[FinalizedBlock],
+          admit: com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan => Option[String],
+          forkChoice: Boolean
+      ): PathStateStorage.MoveOutcome =
+        if !atThePin then once()
+        super.moveHeadInPlace(target, reader, refuse, finalized, admit, forkChoice)
+    val consensus = new ConsensusImpl(node.blockchainReader, writer, node.blockExecution, reorgState = node.blockchain)
+    private val adapter = new ConsensusAdapter(
+      consensus,
+      node.blockchainReader,
+      node.blockQueue,
+      new com.chipprbots.ethereum.ledger.BlockValidation(node.mining, node.blockchainReader, node.blockQueue),
+      node.runtime
+    )
+
+    /** The branch, offered through the import adapter over this fixture's `consensus`. */
+    def offer(): BlockImportResult =
+      import node.blockchainConfig
+      import node.runtime
+      adapter.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
+
+    /** The head moved back along its own chain to `to`, as a rewind moves it. */
+    def movedBackTo(to: Block): Unit =
+      node.blockchainWriter.moveHeadInPlace(to.header, node.blockchainReader)
+      node.bestHash shouldBe to.hash
 
   /** Canonical h1..h12 at difficulty 1000; the branch leaves it after h3, 9 blocks below the head, with 10 blocks at
     * 1000 sealed for another miner: heavier, and of another state at every height.
