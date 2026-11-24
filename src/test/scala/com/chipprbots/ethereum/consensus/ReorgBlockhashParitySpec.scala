@@ -21,8 +21,10 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockEnqueued
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
+import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
 import com.chipprbots.ethereum.consensus.Consensus.*
 import com.chipprbots.ethereum.consensus.engine.BranchHandOff
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
@@ -37,14 +39,17 @@ import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
+import com.chipprbots.ethereum.db.storage.StagedBlockState
 import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
+import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.db.storage.pathstate.StateAnchor
 import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.ledger.BlockExecution
 import com.chipprbots.ethereum.ledger.BlockExecutionError
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.ledger.StateRecovery
@@ -459,6 +464,51 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     settledOn(oldChain(8))
     toldWhereTheHeadIs(result, oldChain(8))
     adoptedAgain()
+  )
+
+  // B-294 (spec 018 C4e part 4; forge): while the branch is committed in place, the head stands on blocks of its way
+  // that it may not stay on. An import onto that head from another thread, and a branch that would reorganise it, are
+  // refused, asking again, with nothing of the head written; once the adoption has ended they are judged, on the head
+  // it ended on.
+  it should "refuse, asking again, an import from another thread onto a block of its way, and judge it once it has ended" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in (new RacedReorg(at = 1):
+    // on the head while the branch's second block is executed in place: its first
+    val onTheWay: Block = oracle.extendSide(branch(0), 1, difficulty = 1000, tag = 0x83, miner = OtherMiner).head
+    // two blocks from the fork, which outweigh that head
+    val across: List[Block] = oracle.extendSide(fork, 2, difficulty = 1000, tag = 0x84)
+    var imported: Option[BlockImportResult] = None
+    var reorganised: Option[BlockImportResult] = None
+    meanwhile = () =>
+      node.bestHash shouldBe branch(0).hash
+      val untouched = datadir.storage
+      imported = Some(node.importOne(onTheWay))
+      // nothing at all was written
+      (datadir.storage eq untouched) shouldBe true
+      reorganised = Some(node.importAll(across))
+      node.bestHash shouldBe branch(0).hash
+      state.anchor.map(_.hash) shouldBe Some(branch(0).hash.value)
+    evaluate(branch) shouldBe a[SelectedNewBestBranch]
+    ranMeanwhile shouldBe Some(scala.util.Success(()))
+    // not judged, as any fault of this node's state: queued, and no peer blamed
+    for (what, answer) <- Seq("the import" -> imported, "the reorganisation" -> reorganised) do
+      withClue(s"$what: ") {
+        answer match
+          case Some(BlockImportStateFault(refused: StateUnavailable, Nil)) =>
+            refused.askAgain shouldBe true
+            refused.getMessage should include("is moving the head")
+          case other => fail(s"not refused, asking again: $other")
+      }
+    // the adoption went on as if they had not been: the branch is the head, whole
+    validHead(node, datadir).hash shouldBe branch.last.hash
+    state.headGeneration % 2 shouldBe 0
+    // asked again, both are judged on that head: the block waits in the queue it was put back in, and the branch is
+    // lighter and is kept beside the head; and the branch's next block is its head
+    node.importOne(onTheWay) shouldBe DuplicateBlock
+    node.importAll(across) shouldBe BlockEnqueued
+    node.importOne(next) shouldBe a[BlockImportedToTop]
+    node.bestHash shouldBe next.hash
   )
 
   "Chain-file import (hive consensus simulator path)" should
@@ -884,6 +934,49 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
       import node.blockchainConfig
       import node.runtime
       consensus.evaluateBranch(NonEmptyList.fromListUnsafe(branch)).unsafeRunSync()
+
+  /** [[KilledReorg]]'s two chains on a node that runs on, at the cap with nothing kept under the pin, so that the whole
+    * branch is committed in place. An import of the branch through this fixture's `consensus` stops at the execution in
+    * place of the branch's block `at`, runs `meanwhile` on another thread, and waits for it (B-294).
+    */
+  class RacedReorg(at: Int) extends KilledReorg(pinnedCap(1L)):
+    val datadir = new EphemDataSource(Map.empty)
+    val node = new Node(guard = true, pinnedCap(1L), Some(datadir))
+    node.importAll(oldChain) shouldBe a[BlockImportedToTop]
+    val state: PathStateStorage = node.storagesInstance.storages.pathStateStorage.get
+    @volatile var meanwhile: () => Unit = () => ()
+    // what `meanwhile` came to: an assertion of it that failed is said on the test's own thread
+    @volatile var ranMeanwhile: Option[scala.util.Try[Unit]] = None
+    private val execution = new BlockExecution(
+      node.blockchain,
+      node.blockchainReader,
+      node.blockchainWriter,
+      node.storagesInstance.storages.evmCodeStorage,
+      node.mining.blockPreparator,
+      node.blockValidation
+    ):
+      override def executeAndValidateStaged(block: Block, alreadyValidated: Boolean, staged: StagedBlockState)(implicit
+          blockchainConfig: BlockchainConfig
+      ): Either[BlockExecutionError, (Seq[Receipt], Seq[ByteString], Option[BlockAccessList])] =
+        // in place: the attempt is open, and the head is the block this one stands on
+        if block.hash == branch(at).hash && state.headGeneration % 2 == 1 && ranMeanwhile.isEmpty then
+          val result = new java.util.concurrent.atomic.AtomicReference[scala.util.Try[Unit]]()
+          val thread = new Thread(() => result.set(scala.util.Try(meanwhile())))
+          thread.start()
+          thread.join()
+          ranMeanwhile = Some(result.get)
+        super.executeAndValidateStaged(block, alreadyValidated, staged)
+    val consensus = new ConsensusImpl(
+      node.blockchainReader,
+      node.blockchainWriter,
+      execution,
+      reorgState = node.blockchain
+    )
+
+    def evaluate(blocks: List[Block]): ConsensusResult =
+      import node.blockchainConfig
+      import node.runtime
+      consensus.evaluateBranch(NonEmptyList.fromListUnsafe(blocks)).unsafeRunSync()
 
   /** Canonical h1..h12 at difficulty 1000; the branch leaves it after h3, 9 blocks below the head, with 10 blocks at
     * 1000 sealed for another miner: heavier, and of another state at every height.
