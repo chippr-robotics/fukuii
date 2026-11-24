@@ -2776,8 +2776,10 @@ items:
       by: cloud-dc960fdc
       agent: forge-b336
       since: 2026-11-23T22:32:27Z
-      heartbeat: 2026-11-23T22:54:56Z
-    notes: "forge F2 on B-291's review: ConsensusImpl reorganised's MissingNode arm (~:1190) answers ConsensusErrorDueToMissingNode(executed, reason) with imported = Nil after settleHead adopted; the hash-layout stateFault arm ignores adopted too (assert it). The B-291 hole for the missing-node answer."
+      heartbeat: 2026-11-24T00:29:28Z
+    notes: |-
+      forge F2 on B-291's review: ConsensusImpl reorganised's MissingNode arm (~:1190) answers ConsensusErrorDueToMissingNode(executed, reason) with imported = Nil after settleHead adopted; the hash-layout stateFault arm ignores adopted too (assert it). The B-291 hole for the missing-node answer.
+      2026-11-24 in-progress: Branch fix/b337-reorg-missing-node-prefix (01a61b096) stacked on B-336; PR after #2016 merges.
   - id: B-338
     title: One import result for both partial arms (extension and reorganisation) that blames the invalid block's peer and updates the pool
     priority: P3
