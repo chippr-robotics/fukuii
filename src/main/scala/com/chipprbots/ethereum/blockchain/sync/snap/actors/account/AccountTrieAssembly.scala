@@ -8,6 +8,8 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
+import scala.util.Try
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.ProgressMilestones
 import com.chipprbots.ethereum.blockchain.sync.snap.AccountTask
@@ -282,11 +284,25 @@ private[actors] trait AccountTrieAssembly:
         log.debug(s"Stored all $totalCount accounts via StackTrie ($accountsDownloaded total)")
         ctx.self ! CheckCompletion
     catch
-      case e: Exception =>
-        log.error(s"Failed to store account chunk: ${e.getMessage}", e)
-        // Re-queue task for retry
+      case NonFatal(e) =>
+        // A local fault (B-190): a RocksDB write in the trie's flush or the Path node callbacks, an out-of-order key, or a
+        // missing Path node store. Nothing a peer sent, so no retry. The task's cursor is already past this whole
+        // response (AccountTaskLifecycle advances `next` before the store), so re-queueing it, as this did, skipped the
+        // failed chunk and the unsent rest for good, and the range could still complete with a hole that its committed
+        // fragment claims is whole (spec 022's present-means-complete). Drop the range's trie and stop the run instead:
+        // the controller restarts SNAP (AccountTrieFinalizationFailed), as geth stops on a failed account write
+        // (snap/sync.go forwardAccountTask: log.Crit "Failed to persist accounts").
+        log.error(
+          s"Failed to store account chunk of ${task.rangeString} (${storedSoFar} of $totalCount stored); " +
+            "stopping the account phase",
+          e
+        )
         storingTasks.remove(task.last)
-        pendingTasks.enqueue(task.copy(pending = false, done = false))
+        // Best effort: on Path, reset deletes the right-boundary stubs through the store that may just have failed.
+        taskStackTries.remove(task.last).foreach(trie => Try(trie.reset()))
+        snapSyncController ! SNAPSyncController.AccountTrieFinalizationFailed(
+          s"account store failed for ${task.rangeString} after $storedSoFar of $totalCount accounts: ${e.getMessage}"
+        )
 
   /** Get-or-create the per-task [[SnapTrie]] for the StackTrie path. Each task gets its own streaming trie keyed by
     * `task.last` (the end-of-range boundary, unique per task).

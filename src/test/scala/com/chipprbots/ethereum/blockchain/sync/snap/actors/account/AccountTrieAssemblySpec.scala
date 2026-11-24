@@ -57,14 +57,20 @@ import com.chipprbots.ethereum.testing.TrieStoreSpy
 /** An in-memory trie store that records every raw-node batch the Hash-scheme StackTrie flushes to it. */
 private class RecordingMptStorage extends TrieStoreSpy:
   val flushed: mutable.ArrayBuffer[ByteString] = mutable.ArrayBuffer.empty
+  /** When set, a flush fails as a RocksDB write would (B-190). */
+  var failWrites: Boolean = false
   override def storeRawNodes(rawNodes: Seq[(ByteString, Array[Byte])]): Unit =
+    if failWrites then throw new java.io.IOException("injected node write failure")
     flushed ++= rawNodes.map(_._1)
     super.storeRawNodes(rawNodes)
 
 /** A path-keyed node store that records the account-node paths the Path-scheme StackTrie writes. */
 private class RecordingPathNodeStorage extends PathNodeStorage(EphemDataSource()):
   val written: mutable.ArrayBuffer[Seq[Byte]] = mutable.ArrayBuffer.empty
+  /** When set, a node write fails as a RocksDB write would (B-190). */
+  var failWrites: Boolean = false
   override def writeAccountNode(nibblePath: Array[Byte], rlp: Array[Byte]): Unit =
+    if failWrites then throw new java.io.IOException("injected node write failure")
     written += nibblePath.toSeq
     super.writeAccountNode(nibblePath, rlp)
 
@@ -312,7 +318,19 @@ class AccountTrieAssemblySpec extends ScalaTestWithActorTestKit with AnyFlatSpec
     h.mpt.writes shouldBe 0
   }
 
-  it should "re-queue the task when the Path scheme has no node store" taggedAs UnitTest in {
+  // B-190: a failed store is a local fault. The task's cursor is already past the response, so a re-queue would skip the
+  // unstored accounts for good; the run stops instead and the controller restarts SNAP.
+  private def assertStoppedOnStoreFault(h: Harness, t: AccountTask): Unit =
+    val m = h.module
+    m.storingTasks shouldBe empty
+    withClue("not re-queued (its cursor is past the unstored accounts): ")(m.pendingTasks shouldBe empty)
+    m.completedTasks shouldBe empty
+    m.taskStackTries shouldBe empty
+    h.selfMessages() shouldBe empty
+    val failures = h.controller.receiveAll().collect { case f: SNAPSyncController.AccountTrieFinalizationFailed => f }
+    failures.map(_.error).loneElement should include("account store failed")
+
+  it should "stop the account phase, not re-queue, when the Path scheme has no node store (B-190)" taggedAs UnitTest in {
     val h = new Harness(scheme = StorageScheme.Path, pathNodes = None)
     val m = h.module
     val t = storedTask(m, 2)
@@ -320,11 +338,34 @@ class AccountTrieAssemblySpec extends ScalaTestWithActorTestKit with AnyFlatSpec
 
     h.call(_.handleStoreAccountChunk(t, accounts(2), 2, storedSoFar = 0, isTaskRangeComplete = true))
 
-    m.storingTasks shouldBe empty
-    m.pendingTasks.dequeue() shouldBe t.copy(pending = false, done = false)
-    m.completedTasks shouldBe empty
     m.accountsDownloaded shouldBe 0L
-    h.selfMessages() shouldBe empty
+    assertStoppedOnStoreFault(h, t)
+  }
+
+  it should "stop the account phase, not re-queue, when a Hash-scheme node write fails (B-190)" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    h.mpt.failWrites = true
+    val t = storedTask(m, 4)
+    m.storingTasks(t.last) = t
+
+    // The range completes in this chunk, so its commit flushes through the failing store.
+    h.call(_.handleStoreAccountChunk(t, accounts(4), 4, storedSoFar = 0, isTaskRangeComplete = true))
+
+    assertStoppedOnStoreFault(h, t)
+  }
+
+  it should "stop the account phase, not re-queue, when a Path-scheme node write fails (B-190)" taggedAs UnitTest in {
+    val pns = new RecordingPathNodeStorage
+    pns.failWrites = true
+    val h = new Harness(scheme = StorageScheme.Path, pathNodes = Some(pns))
+    val m = h.module
+    val t = storedTask(m, 4)
+    m.storingTasks(t.last) = t
+
+    h.call(_.handleStoreAccountChunk(t, accounts(4), 4, storedSoFar = 0, isTaskRangeComplete = true))
+
+    assertStoppedOnStoreFault(h, t)
   }
 
   it should "commit straggler StackTries on finalisation and report the pivot's root" taggedAs UnitTest in {
