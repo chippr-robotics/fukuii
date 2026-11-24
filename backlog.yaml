@@ -384,17 +384,18 @@ items:
   - id: B-035
     title: Re-walk EIP-1459 DNS trees periodically (geth re-checks roots every 30 min)
     priority: P3
-    status: claimed
+    status: review
     area: p2p
     size: S
     opened: 2026-11-08
     refs: ["#1746 follow-up"]
-    links: {}
+    links:
+      prs: [2087]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T13:35:00Z
-      heartbeat: 2026-11-24T13:35:00Z
+      heartbeat: 2026-11-24T13:35:30Z
     notes: herald.
   - id: B-036
     title: "Chore: list enrtree:// URLs in the chain confs, document dns-tree-deadline/dns-concurrency, refresh a sync.conf comment"
