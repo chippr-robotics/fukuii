@@ -1947,7 +1947,6 @@ trait Node
       blockchainReader,
       blockchainWriter,
       forkChoiceManager,
-      Some(pendingTransactionsManagerTyped),
       Some(blockTopic),
       // go-ethereum's --miner.gaslimit equivalent. hive's rpc-compat sets HIVE_TARGET_GAS_LIMIT
       // to 60000000 so every client converges to the same next-block gas limit; fukuii's default

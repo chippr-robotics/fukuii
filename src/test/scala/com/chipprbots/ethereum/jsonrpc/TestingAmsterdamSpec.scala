@@ -136,7 +136,6 @@ class TestingAmsterdamSpec extends AnyWordSpec with Matchers:
       blockchainReader,
       blockchainWriter,
       new ForkChoiceManager(blockchainReader, blockchainWriter),
-      Some(pendingTxManager),
       blockTopic = None,
       gasLimitTarget = ConfiguredTarget
     )(using config)

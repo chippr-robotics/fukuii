@@ -499,7 +499,6 @@ class ProposerOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
       rig.node.blockchainWriter,
       rig.node.forkChoiceManager,
       None,
-      None,
       BigInt(60000000),
       Some(importInPlace)
     )
