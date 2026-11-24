@@ -831,6 +831,252 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         node.bestHash shouldBe side.last.hash
     )
 
+  // B-343: the side blocks a branch stands on whose state a restart lost are read and executed again a chunk at a time,
+  // under the pin and when committed in place at the cap. What is answered, the head, the index, the weights and the
+  // state on disk must be what one run over all of them gives (a chunk no smaller than the side chain), for every depth
+  // and every chunk, and when a side block in a middle chunk fails, is not stored whole, or its commit meets a fault.
+  for (layout, cap) <- Seq[(String, StateConfig => StateConfig)](
+      ("on layers", identity),
+      ("at the cap", pinnedCap(1L)),
+      ("the cap met among the side blocks", pinnedCap(MidCap))
+    )
+  do
+    s"A heavier branch on the unified layout ($layout) that stands on side blocks a restart lost" should
+      "be answered, and leave the head and the state, as one run over all of them does, whatever the chunk" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in {
+        for lost <- Seq(3, 8, 13) do
+          val chain = new LostSideChain(lost, cap)
+          import chain.*
+          val whole = evaluated(Unchunked)
+          withClue(s"$lost side blocks, in one run: ") {
+            whole.result should startWith("SelectedNewBestBranch")
+            whole.head shouldBe aMore.last.hash
+            whole.index shouldBe (aChain ++ aMore).map(block => Some(block.hash))
+          }
+          for chunk <- Seq(1, 2, 5) do
+            withClue(s"$lost side blocks, chunks of $chunk: ")(evaluated(chunk) shouldBe whole)
+      }
+
+    it should "be answered alike whatever the chunk when a side block in a middle chunk fails as it is executed again" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new LostSideChain(8, cap):
+      // a7, the fifth of the eight side blocks a3..a10: in the third chunk of two, the second of three
+      val diverging: (Node, Faulty) => Unit = (node, _) =>
+        node.storagesInstance.storages.blockBodiesStorage
+          .put(aChain(6).hash.value, BlockBody(Nil, Seq(aChain(0).header)))
+          .commit()
+      val whole: Seen = evaluated(Unchunked, diverging)
+      whole.result should include("block 7, which the branch stands on and was executed before, fails now")
+      whole.head shouldBe bChain.last.hash
+      for chunk <- Seq(1, 2, 3) do withClue(s"chunks of $chunk: ")(evaluated(chunk, diverging) shouldBe whole)
+    )
+
+    it should "be answered alike whatever the chunk when a side block in a middle chunk is not stored whole" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new LostSideChain(8, cap):
+      val unstored: (Node, Faulty) => Unit =
+        (node, _) => node.storagesInstance.storages.blockBodiesStorage.remove(aChain(6).hash.value).commit()
+      val whole: Seen = evaluated(Unchunked, unstored)
+      whole.result should include("block 7, which the branch stands on, is not stored whole")
+      whole.head shouldBe bChain.last.hash
+      for chunk <- Seq(1, 2, 3) do withClue(s"chunks of $chunk: ")(evaluated(chunk, unstored) shouldBe whole)
+    )
+
+  "A heavier branch committed in place at the cap that stands on side blocks a restart lost" should
+    "be answered alike whatever the chunk when the commit of a side block in a middle chunk meets a fault" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new LostSideChain(8, pinnedCap(1L)):
+      val faults: Seq[(String, (Node, Faulty) => Unit, Seen => Unit)] = Seq(
+        (
+          "a fault of the state: back to the old head",
+          (_, datadir) => datadir.failAt(aChain(6), new StateUnavailable("injected: the commit of block 7")),
+          seen =>
+            seen.result should include("injected: the commit of block 7")
+            seen.head shouldBe bChain.last.hash
+        ),
+        (
+          "a write that throws: back to the old head, and thrown",
+          (_, datadir) => datadir.failAt(aChain(6), new java.io.IOException("injected: the disk refused block 7")),
+          seen =>
+            seen.result should startWith("thrown java.io.IOException")
+            seen.head shouldBe bChain.last.hash
+        ),
+        (
+          "a fault, and a move back that fails before it wrote: where the head is left is said",
+          (_, datadir) =>
+            datadir.failAt(aChain(6), new StateUnavailable("injected: the commit of block 7"))
+            // the move back from a6 to b7 is one batch: it fails, and the head stays on the side blocks committed
+            datadir.failAt(bChain.last, new StateUnavailable("injected: the move back"))
+          ,
+          seen =>
+            seen.result should include("the head could not be moved back to block 7 and is at block 6")
+            seen.head shouldBe aChain(5).hash
+        )
+      )
+      for (what, fault, expected) <- faults do
+        val whole = evaluated(Unchunked, fault)
+        withClue(s"$what, in one run: ")(expected(whole))
+        for chunk <- Seq(1, 2, 3) do withClue(s"$what, chunks of $chunk: ")(evaluated(chunk, fault) shouldBe whole)
+    )
+
+  "The side blocks a heavier branch stands on, executed again under the pin" should
+    "be read a chunk at a time, each chunk once the one before it was executed" taggedAs (UnitTest, ConsensusTest) in (
+      new LostSideChain(8, identity):
+        val lostHeaders: List[BlockHeader] = aChain.drop(2).map(_.header)
+        val lostHashes: Set[BlockHash] = lostHeaders.map(_.hash).toSet
+        // each read of a side block whole, with how many of the side blocks had their state held as it was read
+        def reads(chunk: Int): List[(BlockHash, Int)] =
+          val seen = new java.util.concurrent.ConcurrentLinkedQueue[(BlockHash, Int)]
+          val result = evaluated(
+            chunk,
+            reader = node =>
+              new ObservingReader(
+                node.storagesInstance.storages,
+                hash =>
+                  if lostHashes(hash) then
+                    val held = lostHeaders.count(node.blockchainWriter.stateHeldInPlaceOf)
+                    seen.add(hash -> held): Unit
+              )
+          )
+          result.head shouldBe aMore.last.hash
+          val all = seen.asScala.toList
+          // what reads them once all of them were executed (the move of the head) is not the run's
+          all.drop(2 * lostHeaders.size).foreach(_._2 shouldBe lostHeaders.size)
+          all.take(2 * lostHeaders.size)
+        // each is checked stored whole first, with nothing executed; then read again to run
+        val checked: List[(BlockHash, Int)] = lostHeaders.map(_.hash -> 0)
+        reads(3) shouldBe checked ++ lostHeaders.zipWithIndex.map((header, i) => header.hash -> (i / 3) * 3)
+        // in one run, every one is read before any is executed
+        reads(Unchunked) shouldBe checked ++ checked
+    )
+
+  // B-343 (forge): of the side blocks executed again only the `oldBranchToldAtMost` nearest the branch are kept, and
+  // what is told of a side block that is not kept is read back from the store (`sideParentsTold`). With a bound smaller
+  // than the side chain the keeping is trimmed: what is told must still be the bound's nearest blocks, with their
+  // weights, in chunks or in one run.
+  for (layout, cap) <- Seq[(String, StateConfig => StateConfig)](
+      ("on layers", identity),
+      ("at the cap", pinnedCap(1L)),
+      ("the cap met among the side blocks", pinnedCap(MidCap))
+    )
+  do
+    s"A heavier branch on the unified layout ($layout) that stands on more lost side blocks than the told bound" should
+      "tell the bound's nearest blocks, with their weights, whatever the chunk" taggedAs (
+        UnitTest,
+        ConsensusTest
+      ) in {
+        for bound <- Seq(2, 3, 5) do
+          val chain = new LostSideChain(8, cap, bound)
+          import chain.*
+          val whole = evaluated(Unchunked)
+          withClue(s"a bound of $bound, in one run: ") {
+            whole.toldNew shouldBe (aChain.drop(2) ++ aMore).takeRight(bound).map(_.hash)
+            whole.toldOld shouldBe bChain.takeRight(bound).map(_.hash)
+            whole.head shouldBe aMore.last.hash
+          }
+          for chunk <- Seq(1, 3) do withClue(s"a bound of $bound, chunks of $chunk: ")(evaluated(chunk) shouldBe whole)
+      }
+
+  "A heavier branch on the unified layout whose told side blocks are partly held and partly executed again" should
+    "tell the held ones as they are stored, and the others as they were executed, whatever the chunk" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new LostSideChain(8, identity, bound = 5):
+      // a3..a8 held, a9 and a10 executed again: the five told are a8, read from the store, a9, a10, and the branch
+      val whole: Seen = evaluated(Unchunked, held = 6)
+      whole.toldNew shouldBe (aChain.drop(7) ++ aMore).map(_.hash)
+      whole.head shouldBe aMore.last.hash
+      evaluated(1, held = 6) shouldBe whole
+    )
+
+  /** A side chain a restart lost the state of (B-343): canonical a1..a(lost + 2); b3.., heavier, from a2, which leaves
+    * a3..a(lost + 2) beside the head; the node is started again, which keeps no layer; then a heavier `aMore` on the a
+    * tip is evaluated, standing on the `lost` side blocks, none of them held. With `held`, the `held` lowest of them
+    * are held again first, by an attempt that stopped above them. `bound` is what is told at most.
+    */
+  class LostSideChain(lost: Int, cap: StateConfig => StateConfig, bound: Int = ConsensusImpl.OldBranchToldAtMost):
+    val oracle = new Oracle
+    val aChain: List[Block] = oracle.extendCanonical(oracle.genesis, lost + 2, difficulty = 1000)
+    private val bLength = lost / 2 + 1
+    val bChain: List[Block] = oracle.extendSide(aChain(1), bLength, difficulty = 2000, tag = 0x91, miner = OtherMiner)
+    val aMore: List[Block] = oracle.extendSide(aChain.last, 2, difficulty = 2000 * bLength, tag = 0x92)
+
+    /** What an evaluation of `aMore` is seen to leave: its answer, the head, the anchor, the index above genesis, the
+      * weight of every block, and the rows of the state on disk.
+      */
+    final case class Seen(
+        result: String,
+        toldNew: List[BlockHash],
+        toldOld: List[BlockHash],
+        head: BlockHash,
+        anchor: Option[com.chipprbots.ethereum.db.storage.pathstate.BlockRef],
+        index: Seq[Option[BlockHash]],
+        weights: Seq[Option[ChainWeight]],
+        rows: (Map[ByteString, ByteString], Map[ByteString, ByteString])
+    )
+
+    def evaluated(
+        chunk: Int,
+        prepare: (Node, Faulty) => Unit = (_, _) => (),
+        reader: Node => BlockchainReader = _.blockchainReader,
+        held: Int = 0
+    ): Seen =
+      val datadir = new Faulty
+      val first = new Node(guard = true, cap, Some(datadir))
+      first.importAll(aChain) shouldBe a[BlockImportedToTop]
+      first.importAll(bChain) shouldBe a[ChainReorganised]
+      val node = new Node(guard = true, cap, Some(datadir), restart = true)
+      if held > 0 then
+        // a first attempt, on another consensus, whose side block above the `held` lowest diverges: those below it were
+        // executed again and are kept, by their layers, beside the head; then the block is stored whole again
+        val bodies = node.storagesInstance.storages.blockBodiesStorage
+        val diverging = aChain(2 + held)
+        bodies.put(diverging.hash.value, BlockBody(Nil, Seq(aChain(0).header))).commit()
+        val attempt = new ConsensusImpl(node.blockchainReader, node.blockchainWriter, node.blockExecution)
+        locally {
+          import node.blockchainConfig
+          import node.runtime
+          attempt.evaluateBranch(NonEmptyList.fromListUnsafe(aMore)).unsafeRunSync() shouldBe a[ConsensusStateFault]
+        }
+        bodies.put(diverging.hash.value, diverging.body).commit()
+        aChain.slice(2, 2 + held).foreach(block => node.blockchainWriter.stateHeldInPlaceOf(block.header) shouldBe true)
+      node.bestHash shouldBe bChain.last.hash
+      aChain.drop(2 + held).foreach(block => node.blockchainWriter.stateHeldInPlaceOf(block.header) shouldBe false)
+      prepare(node, datadir)
+      val consensus = new ConsensusImpl(
+        reader(node),
+        node.blockchainWriter,
+        node.blockExecution,
+        reorgState = node.blockchain,
+        oldBranchToldAtMost = bound,
+        reorgChunkBlocks = chunk
+      )
+      val result =
+        import node.blockchainConfig
+        import node.runtime
+        scala.util.Try(consensus.evaluateBranch(NonEmptyList.fromListUnsafe(aMore)).unsafeRunSync()).toEither
+      val all = aChain ++ bChain ++ aMore
+      val (toldNew, toldOld) = result match
+        case Right(SelectedNewBestBranch(oldBranch, newBranch, weights, _)) =>
+          weights shouldBe newBranch.map(block => node.blockchainReader.getChainWeightByHash(block.hash).get)
+          (newBranch.map(_.hash), oldBranch.map(_.hash))
+        case _ => (Nil, Nil)
+      Seen(
+        told(result),
+        toldNew,
+        toldOld,
+        node.bestHash,
+        node.storagesInstance.storages.appStateStorage.getStateAnchor(),
+        (1 to all.map(_.number.value.toInt).max).map(node.indexed),
+        all.map(block => node.blockchainReader.getChainWeightByHash(block.hash)),
+        PathStateTestKit.allRows(new PathNodeStorage(datadir))
+      )
+
   "A branch of the head's own weight on a proof-of-work chain (the unified layout)" should
     "be kept beside the head: no consensus layer names a head there" taggedAs (UnitTest, ConsensusTest) in (
       new Fixture(guard = true):
@@ -1255,6 +1501,31 @@ object ReorgBlockhashParitySpec extends SecureRandomBuilder:
     override def getReceiptsByHash(blockhash: BlockHash): Option[Seq[Receipt]] =
       receipts.add(blockhash)
       super.getReceiptsByHash(blockhash)
+
+  /** A reader over the same stores that hands every hash a block is read whole by to `observe` first (B-343). */
+  class ObservingReader(s: BlockchainStorages, observe: BlockHash => Unit)
+      extends BlockchainReader(
+        s.blockHeadersStorage,
+        s.blockBodiesStorage,
+        s.blockNumberMappingStorage,
+        s.stateStorage,
+        s.receiptStorage,
+        s.appStateStorage,
+        s.chainWeightStorage,
+        s.blockAccessListStorage,
+        s.pathStateStorage
+      ):
+    override def getBlockByHash(hash: BlockHash): Option[Block] =
+      observe(hash)
+      super.getBlockByHash(hash)
+
+  /** A chunk no side chain here reaches: the side blocks executed again in one run (B-343). */
+  val Unchunked: Int = Int.MaxValue
+
+  /** An answer, or what was thrown, as text that two runs on two nodes of the same blocks can be compared by. */
+  def told(result: Either[Throwable, ConsensusResult]): String = result match
+    case Left(thrown)  => s"thrown ${thrown.getClass.getName}: ${thrown.getMessage}"
+    case Right(answer) => answer.toString
 
   /** A cap on the pinned layers that a branch of these blocks meets after its first blocks. */
   val MidCap: Long = 3500L
