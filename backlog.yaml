@@ -5523,12 +5523,17 @@ items:
   - id: B-519
     title: eth_simulateV1 on ETH gives London's activation block base fee 0 (inline computeNextBaseFee); import's calcBaseFee gives 1 gwei
     priority: P3
-    status: open
+    status: claimed
     area: rpc
     size: S
     opened: 2026-11-24
     refs: ["forge, #2101 review"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T22:36:28Z
+      heartbeat: 2026-11-24T22:36:28Z
     notes: "Found by forge while fixing the ETC Olympia activation base fee in #2101 (which uses BaseFeeCalculator.calcBaseFee). ETH path: beacon. Reuse calcBaseFee as #2101 does for ETC; test a simulated block at London activation."
   - id: B-520
     title: "Exit paths run the node's stop on daemon threads (TUI q, SIGTERM, Ephemery reset): the JVM ends after the actor system step, before the DB close"
