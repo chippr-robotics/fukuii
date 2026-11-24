@@ -4962,3 +4962,13 @@ items:
     links:
       spec: 018
     notes: "beacon review of B-126: W1 ForkChoiceManager ~:272 silent Nil at cap; W2 ~:270 vs scaladoc ~:257 partial branch on missing header; W3 ~:138/:216 head move and weights in separate batches — a crash between leaves stale weights the repair never revisits (record in ChainWeightReconcile 'not covered' or put weights in the move's batch)."
+  - id: B-492
+    title: "Unified layout: index entries a sync left above the head with a gap at the committed height are not cleared by the block's commit (B-482 edge)"
+    priority: P3
+    status: open
+    area: storage
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: B-482's clean-up (BlockExecution.withIndexLeft) runs only where the index names ANOTHER block at the committed height. An index with no entry there but entries above (a gap) keeps them; same-chain entries above a catch-up's tip also stay (by design). Decide whether StateReconciliation-style gap scan is wanted at hand-off instead.
