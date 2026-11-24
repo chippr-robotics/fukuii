@@ -5608,22 +5608,18 @@ items:
   - id: B-524
     title: "SNAP log noise and wording from the v0.12.117 sync reports: header-hold WARN, completion-line rates, repeating bytecode 100% line, audit-owed on a new datadir"
     priority: P3
-    status: review
+    status: done
     area: snap
     size: S
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: ["sync reports v0.12.117, 2026-11-23/24"]
     links:
       prs: [2110, 2111]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T22:16:36Z
-      heartbeat: 2026-11-24T22:27:43Z
     notes: |-
-      SnapFinalization:226 header-hold is expected on a genesis start, so INFO not WARN; SyncProgressMonitor:369 completion rates divide by total elapsed, use each phase's own time.
       ByteCodeCoordinator:520-531 logs BYTECODE-COORD 100% on every pulse after completion, log once; SyncController:2441 says an audit pass is 'owed' on a brand-new datadir, reword.
       AccountRangeCoordinator:429-433 calls the storage-file count 'storage-task entries', and :284 still says ~20% of ~67M; both mislead on ETC, where ~85% of accounts are contracts.
+      2026-11-24 done: merged 5b5966f13
   - id: B-525
     title: "'Finalising 1 uncommitted task StackTries (unexpected)' on both Mordor and ETC mainnet at the end of the account phase: find the missed per-task commit"
     priority: P3
