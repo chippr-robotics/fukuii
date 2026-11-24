@@ -492,7 +492,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
             .setCanonicalChainHead(chain(1).header.number.value, chain(1).header.hash, chain.last.header.number.value)
         ),
         "rewriteCanonicalIndex" -> (() =>
-          on.writer.rewriteCanonicalIndex(Nil, Seq(chain.last.header.number.value), None, on.reader)
+          on.writer.rewriteCanonicalIndex(Nil, Seq(chain.last.header.number.value), None, Nil, Nil, on.reader)
         ),
         "promoteToCanonicalHead" -> (() => on.writer.promoteToCanonicalHead(chain(1).header, on.reader)),
         "removeBlock" -> (() => on.node.blockchain.removeBlock(chain.last.header.hash)),

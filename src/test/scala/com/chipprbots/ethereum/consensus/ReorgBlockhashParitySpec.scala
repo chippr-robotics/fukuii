@@ -41,6 +41,7 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.StagedBlockState
+import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
@@ -1334,15 +1335,95 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         node.bestHash shouldBe aChain.last.hash
     )
 
-  /** A node on the unified layout past the merge (a terminal total difficulty of 0), with a `ConsensusImpl` that has a
-    * head the consensus layer names and a reporter of invalid blocks, as the node builds one with the Engine API on.
-    * `aChain` is blocks 1 to 5; `bChain` leaves it after block 2 and is blocks 3 to 6.
+  // B-088: the transaction lookups follow the head across a reorganisation, as core-geth's `reorg` keeps them
+  // (core/blockchain.go: `types.HashDifference(deletedTxs, addedTxs)`, then `rawdb.DeleteTxLookupEntry`). A transaction
+  // only the blocks the head left include has no lookup; one the new chain includes too is looked up in the new chain's
+  // block. eth_getTransactionByHash follows a lookup without asking whether its block is canonical.
+  for (layout, guard) <- Seq("the hash layout" -> false, "the unified layout" -> true) do
+    (s"A heavier, shorter branch ($layout)" should
+      "drop the lookups of the transactions only the old chain held, and point a shared one at its new block").taggedAs(
+      UnitTest,
+      ConsensusTest
+    ) in (new Fixture(guard):
+      val common: List[Block] = oracle.extendCanonical(oracle.genesis, 3, difficulty = 1000)
+      // a4 and a6 hold transactions; a6 is above the new head, a4 is replaced at its height
+      val aChain: List[Block] =
+        oracle.extendWith(common.last, List(Seq(Shared), Nil, Seq(OnlyA)), difficulty = 1000, tag = 0x61)
+      val bChain: List[Block] =
+        oracle.extendWith(common.last, List(Nil, Seq(Shared, OnlyB)), difficulty = 2000, tag = 0x62)
+      node.importAll(common ++ aChain) shouldBe a[BlockImportedToTop]
+      node.lookup(OnlyA) shouldBe Some(TransactionLocation(aChain(2).hash.value, 0))
+      node.lookup(Shared) shouldBe Some(TransactionLocation(aChain.head.hash.value, 0))
+
+      node.importAll(bChain) shouldBe a[ChainReorganised]
+      node.bestHash shouldBe bChain.last.hash
+      node.indexed(6) shouldBe None
+      node.lookup(OnlyA) shouldBe None
+      node.lookup(Shared) shouldBe Some(TransactionLocation(bChain(1).hash.value, 0))
+      node.lookup(OnlyB) shouldBe Some(TransactionLocation(bChain(1).hash.value, 1))
+
+      // and back: the old chain's blocks, now the side chain a heavier block stands on, are looked up again
+      val a7: List[Block] = oracle.extendWith(aChain.last, List(Nil), difficulty = 2000, tag = 0x61)
+      node.importAll(a7) shouldBe a[ChainReorganised]
+      node.bestHash shouldBe a7.last.hash
+      node.lookup(OnlyB) shouldBe None
+      node.lookup(OnlyA) shouldBe Some(TransactionLocation(aChain(2).hash.value, 0))
+      node.lookup(Shared) shouldBe Some(TransactionLocation(aChain.head.hash.value, 0))
+    )
+
+    it should "drop the lookups of an executed prefix that does not outweigh the head it keeps" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new Fixture(guard):
+      val common: List[Block] = oracle.extendCanonical(oracle.genesis, 3, difficulty = 1000)
+      val aChain: List[Block] =
+        oracle.extendWith(common.last, List(Seq(Shared), Nil, Nil), difficulty = 1000, tag = 0x61)
+      // b4 alone (1000) does not outweigh a4..a6 (3000); with the invalid b5 (5000) the branch does
+      val b4: List[Block] = oracle.extendWith(common.last, List(Seq(Shared, OnlyB)), difficulty = 1000, tag = 0x62)
+      val b5Invalid: Block = oracle.invalidChild(b4.head, difficulty = 5000)
+      node.importAll(common ++ aChain) shouldBe a[BlockImportedToTop]
+
+      node.importAll(b4 :+ b5Invalid) shouldBe a[BlockImportFailed]
+      node.bestHash shouldBe aChain.last.hash
+      node.lookup(OnlyB) shouldBe None
+      node.lookup(Shared) shouldBe Some(TransactionLocation(aChain.head.hash.value, 0))
+    )
+
+    (s"The consensus layer's branch ($layout)" should
+      "drop the lookups of the transactions only the chain it left held, and the index above its head").taggedAs(
+      UnitTest,
+      ConsensusTest
+    ) in (new DesignatedFixture(guard = guard):
+      val common: List[Block] = oracle.extendCanonical(oracle.genesis, 2, difficulty = 0)
+      val left: List[Block] =
+        oracle.extendWith(common.last, List(Seq(Shared), Nil, Seq(OnlyA)), difficulty = 0, tag = 0x61)
+      val designated: List[Block] =
+        oracle.extendWith(common.last, List(Nil, Seq(Shared, OnlyB)), difficulty = 0, tag = 0x62)
+      node.importAll(common ++ left) shouldBe a[BlockImportedToTop]
+      named.set(Some(designated.last.hash.value))
+
+      evaluate(designated) shouldBe a[SelectedNewBestBranch]
+      node.bestHash shouldBe designated.last.hash
+      (3 to 4).foreach(n => node.indexed(n) shouldBe Some(designated(n - 3).hash))
+      node.indexed(5) shouldBe None
+      node.lookup(OnlyA) shouldBe None
+      node.lookup(Shared) shouldBe Some(TransactionLocation(designated(1).hash.value, 0))
+      node.lookup(OnlyB) shouldBe Some(TransactionLocation(designated(1).hash.value, 1))
+    )
+
+  /** A node past the merge (a terminal total difficulty of 0), on the unified layout unless `guard` is false, with a
+    * `ConsensusImpl` that has a head the consensus layer names and a reporter of invalid blocks, as the node builds one
+    * with the Engine API on. `aChain` is blocks 1 to 5; `bChain` leaves it after block 2 and is blocks 3 to 6.
     */
-  class DesignatedFixture(tune: StateConfig => StateConfig = identity, handOff: Option[BranchHandOff] = None):
+  class DesignatedFixture(
+      tune: StateConfig => StateConfig = identity,
+      handOff: Option[BranchHandOff] = None,
+      guard: Boolean = true
+  ):
     private val merged = (config: BlockchainConfig) => config.copy(terminalTotalDifficulty = Some(BigInt(0)))
     val oracle: Oracle = new Oracle:
       implicit override lazy val blockchainConfig: BlockchainConfig = merged(super.blockchainConfig)
-    val node: Node = new Node(guard = true, tune):
+    val node: Node = new Node(guard, tune):
       implicit override lazy val blockchainConfig: BlockchainConfig = merged(super.blockchainConfig)
     val named = new java.util.concurrent.atomic.AtomicReference[Option[ByteString]](None)
     def namedNow(): Option[ByteString] = named.get()
@@ -1614,6 +1695,14 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         acc :+ made
       }
 
+    /** A block on `parent` for each of `txs`, with those transactions, stored by hash only. */
+    def extendWith(parent: Block, txs: List[Seq[SignedTransaction]], difficulty: BigInt, tag: Int): List[Block] =
+      txs.foldLeft(List.empty[Block]) { (acc, blockTxs) =>
+        val made = seal(acc.lastOption.getOrElse(parent), blockTxs, difficulty, tag)
+        blockchainWriter.storeBlockByHashOnly(made).commit()
+        acc :+ made
+      }
+
     /** A correctly-linked child whose header commits to a state root no execution produces. */
     def invalidChild(parent: Block, difficulty: BigInt): Block =
       val valid = seal(parent, Nil, difficulty, tag = 0x7f)
@@ -1677,6 +1766,10 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     def bestHash: BlockHash = BlockHash(storagesInstance.storages.appStateStorage.getBestBlockInfo().hash)
 
     def indexed(number: Int): Option[BlockHash] = blockchainReader.getBlockHeaderByNumber(number).map(_.hash)
+
+    /** Where the node looks `tx` up: what eth_getTransactionByHash follows. */
+    def lookup(tx: SignedTransaction): Option[TransactionLocation] =
+      storagesInstance.storages.transactionMappingStorage.get(tx.hash.value)
 
     def storedBlockhash(block: Block, slot: BigInt): ByteString =
       val world = InMemoryWorldStateProxy(
@@ -1904,6 +1997,26 @@ object ReorgBlockhashParitySpec extends SecureRandomBuilder:
   val SenderKeyPair: AsymmetricCipherKeyPair = generateKeyPair(secureRandom)
   val SenderAddress: Address = Address(SenderKeyPair)
   val Miner: Address = Address(0x6d696e)
+
+  /** A value transfer from the funded sender (B-088): `nonce` and `value` make it the transaction it is. */
+  def transfer(nonce: BigInt, value: BigInt): SignedTransaction =
+    SignedTransaction.sign(
+      LegacyTransaction(
+        nonce = nonce,
+        gasPrice = GasPrice(1),
+        gasLimit = GasAmount(21000),
+        receivingAddress = Address(0x7265637674L),
+        value = value,
+        payload = ByteString.empty
+      ),
+      SenderKeyPair,
+      None
+    )
+
+  /** In the old chain and the new; in the old chain only; in the new chain only. */
+  val Shared: SignedTransaction = transfer(nonce = 0, value = 1)
+  val OnlyA: SignedTransaction = transfer(nonce = 1, value = 2)
+  val OnlyB: SignedTransaction = transfer(nonce = 1, value = 3)
 
   /** `PUSH1 0; CALLDATALOAD; BLOCKHASH; NUMBER; SSTORE; STOP` — storage[NUMBER] := BLOCKHASH(calldata[0..32]). */
   val BlockhashRecorder: Address = Address(0xb10c4a54L)
