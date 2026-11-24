@@ -4606,11 +4606,17 @@ items:
   - id: B-469
     title: "Refresh stale spec headers: 021 (S0 merged), 022 (slice 6 merged, T063 by 018 C7), 027 (slice 5 merged)"
     priority: P3
-    status: open
+    status: claimed
     area: docs
     size: S
     opened: 2026-11-24
     refs: []
     links:
       prs: [2029]
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-24T03:42:27Z
+      heartbeat: 2026-11-24T03:42:27Z
+      branch: ccr-719c6644-afp6qz
     notes: "Found in the 2026-11-24 backlog validation (PR #2029)."
