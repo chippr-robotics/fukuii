@@ -414,3 +414,17 @@ class MempoolViewSpec extends AnyFlatSpec with Matchers with OptionValues with B
     rows(far).exists(_.contains(txs(100).hash.take(6))) shouldBe true
     rows(s).exists(_.contains(txs(100).hash.take(6))) shouldBe false
   }
+
+  // B-267: the table used to start at the selection's row minus the screenful, so the selected row was always the last
+  // one and Up scrolled the list instead of moving the cursor. It pages now, as the Peers list does.
+  it should "page the table, so the cursor moves within a screenful" taggedAs (UnitTest) in {
+    val s = mempool(TuiFixtures.mempoolEtc())
+    val txs = s.pendingTxs
+    def showsNext(at: Int): Boolean =
+      rows(s.copy(selectedTx = Some(txs(at).hash))).exists(_.contains(txs(at + 1).hash.take(6)))
+    // Within any run of selections one page long, all but the page's last show the row below them.
+    (90 to 110).count(showsNext) should be > 10
+    // Moving up from the page's second row keeps the page: its first row stays on screen.
+    val (first, second) = (90 to 110).iterator.map(i => (i, i + 1)).find((a, b) => showsNext(a) && showsNext(b)).value
+    rows(s.copy(selectedTx = Some(txs(second).hash))).exists(_.contains(txs(first).hash.take(6))) shouldBe true
+  }
