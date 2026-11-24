@@ -406,7 +406,10 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     // four over ten minutes, then a batch evaluated that moved the head: the count and its clock start again
     on.busyAnswers(blocks, UnderStop)
     on.later()
-    on.answering(blocks)(moved => ExtendedCurrentBestBranch(moved.toList.map(data))) shouldBe a[BlockImportedToTop]
+    on.answering(blocks) { moved =>
+      on.theHead(moved.toList)
+      ExtendedCurrentBestBranch(moved.toList.map(data))
+    } shouldBe a[BlockImportedToTop]
     on.busyAnswers(blocks, UnderStop)
     on.rig.stopped shouldBe empty
     // the fifth stops the node
@@ -457,7 +460,10 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     val corrupt = new ReorgTooDeep(ReorgRefusal.Corrupt, "a record is not what it should be")
     on.busyAnswers(blocks, UnderStop)
     on.later()
-    on.answering(blocks)(batch => ConsensusStateFault(corrupt, List(data(batch.head)), batch.tail)) match
+    on.answering(blocks) { batch =>
+      on.theHead(List(batch.head))
+      ConsensusStateFault(corrupt, List(data(batch.head)), batch.tail)
+    } match
       case BlockImportStateFault(_, imported) => imported.map(_.block) shouldBe List(blocks.head)
       case other                              => fail(s"not a fault of this node's state: $other")
     on.busyAnswers(blocks, UnderStop)
@@ -522,6 +528,23 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
         case other => fail(s"not a store that was busy: $other")
     }
     on.stopsOn(blocks)
+  }
+
+  // forge W1 (round 6): the blocks of a busy batch that all sit below the head on its chain are answered as imported,
+  // and the last of them is told as the head; the stored head did not move, and the count goes on
+  it should "count on through busy batches whose blocks all sit below the head on its chain" taggedAs UnitTest in {
+    val on = new BusyRig
+    val chain = branch(5, 4)
+    on.theHead(chain.toList)
+    val below = NonEmptyList.fromListUnsafe(chain.toList.take(2))
+    (1 to UnderStop).foreach { _ =>
+      on.rig.imported(below) match
+        case BlockImportStateFault(fault: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable, imported) =>
+          fault.askAgain shouldBe true
+          imported.map(_.block) shouldBe below.toList
+        case other => fail(s"not a store that was busy: $other")
+    }
+    on.stopsOn(below)
   }
 
   // forge W1: a store read as corrupt with no block made the head took no write; the count goes on

@@ -506,12 +506,11 @@ class ConsensusAdapter(
         val now = nanoClock()
         busySinceTheHeadMoved
           .updateAndGet {
-            case Some(run) => Some(run.copy(count = run.count + 1))
-            // the head as the first busy answer leaves it: a read that fails leaves none, and any head told resets
-            case None =>
-              Some(
-                ConsensusAdapter.BusyRun(1, now, Try(blockchainReader.getBestBlockHeader).toOption.flatten.map(_.hash))
-              )
+            // a head not read yet is read again, at the next busy answer
+            case Some(run) =>
+              Some(run.copy(count = run.count + 1, headAtFirst = run.headAtFirst.orElse(storedHead())))
+            // the stored head as the first busy answer leaves it; a read that fails leaves none for now
+            case None => Some(ConsensusAdapter.BusyRun(1, now, storedHead()))
           }
           .map(run => (run.count, (now - run.firstNanos).nanos))
       // no reset here: a store corrupt or a fault of the state wrote nothing; only a head that moved starts the count
@@ -609,19 +608,27 @@ class ConsensusAdapter(
       val bestBlockNumber = blockchainReader.getBestBlockNumber
       blocks.foreach(blockQueue.enqueueBlock(_, bestBlockNumber))
 
-  /** A block became the head: the escalation's feed is told, and the store took a write, so the count of busy answers
-    * starts again (forge W1). Unless the block is the head the first busy answer left: the blocks of a busy batch the
-    * head's chain already held are told as imported (a batch from below the head, as after SNAP's pivot), and that head
-    * did not move (forge, round 5).
+  /** A block became the head: the escalation's feed is told, and the count of busy answers starts again (forge W1) if
+    * the stored head changed since the first of them: the store took a write. Not the told block's hash: the blocks of
+    * a busy batch the head's chain already held are told as imported, at the head or below it (a batch from below the
+    * head, as after SNAP's pivot), and the head did not move (forge, rounds 5 and 6). A stored head that cannot be read
+    * now keeps the count; one not read at the first busy answer is read at the next, and until then any head told
+    * starts the count again.
     */
   private def toldOfTheHead(head: Option[Block]): Unit =
     head.foreach { block =>
-      busySinceTheHeadMoved.updateAndGet {
-        case Some(run) if run.headAtFirst.contains(block.hash) => Some(run)
-        case _                                                 => None
-      }
+      if busySinceTheHeadMoved.get.isDefined then
+        val now = storedHead()
+        busySinceTheHeadMoved.updateAndGet {
+          case Some(run) if run.headAtFirst.isEmpty                                 => None
+          case Some(run) if now.exists(stored => !run.headAtFirst.contains(stored)) => None
+          case kept                                                                 => kept
+        }
       toldTheFeed("a head that moved")(_.headMoved(block))
     }
+
+  /** The hash of the stored head, `None` when it cannot be read. */
+  private def storedHead(): Option[BlockHash] = Try(blockchainReader.getBestBlockHeader).toOption.flatten.map(_.hash)
 
   /** The escalation's feed is told after the import is done, and says only: whatever goes wrong in it is logged, and
     * the import's result stands (forge).
