@@ -9,6 +9,7 @@ import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager.BeaconHead
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.domain.BlockHash
@@ -80,6 +81,24 @@ class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     val received: BeaconHead = probe.expectMsgType[ForkChoiceManager.BeaconHead]
     received.headHash shouldBe knownHeadHash
     received.knownHeader.map(_.number) shouldBe Some(BigInt(12345))
+
+  // B-511: on the hash layout the fork choice holds the head's lock over its move AND the reference counts that follow
+  // it, so that a branch the p2p import settles is never between the move and the counts: it would re-adopt or abandon
+  // against an index the counts do not match yet. The move's own lock (promoteToCanonicalHead) covers the move alone.
+  it should "take the reference counts that follow a move of the head under the head's lock" taggedAs UnitTest in (
+    new Fixture:
+      @volatile var countedUnderTheLock: List[Boolean] = Nil
+      val recording: ReorgStateHandler = new com.chipprbots.ethereum.consensus.ReorgStateHandler:
+        override def abandonBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit =
+          countedUnderTheLock :+= com.chipprbots.ethereum.domain.CanonicalHeadLock.isHeldByCurrentThread
+        override def readoptBlockStates(blocks: Seq[(BigInt, ByteString)]): Unit =
+          countedUnderTheLock :+= com.chipprbots.ethereum.domain.CanonicalHeadLock.isHeldByCurrentThread
+      val counted = new ForkChoiceManager(blockchainReader, blockchainWriter, recording)
+      counted.applyForkChoiceState(ForkChoiceState(knownHeadHash, ByteString.empty, ByteString.empty)) shouldBe Right(
+        ()
+      )
+      countedUnderTheLock shouldBe List(true, true)
+  )
 
   it should "not throw when no listener is registered" taggedAs UnitTest in new Fixture:
     // No listener — must still succeed
