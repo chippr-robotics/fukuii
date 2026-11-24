@@ -4631,3 +4631,14 @@ items:
       heartbeat: 2026-11-24T03:44:02Z
       branch: ccr-719c6644-afp6qz
     notes: "Found in the 2026-11-24 backlog validation (PR #2029)."
+  - id: B-470
+    title: "replySyncing reports target 0: the health checker reads SYNCED (not STARTING) before Start and in the B-435 states; importChain refusal reads 'block N of 0'"
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: "forge review of B-441 (#2030): NodeJsonRpcHealthChecker.isConsideredSyncing computes 0 - current > threshold; report target = best, or treat target == 0 as STARTING"
