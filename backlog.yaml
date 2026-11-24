@@ -2378,19 +2378,15 @@ items:
   - id: B-259
     title: "TUI pixel mode: free the least recently shown images instead of holding every sprite frame until a clear"
     priority: P3
-    status: review
+    status: done
     area: tui
     size: S
     opened: 2026-11-14
+    closed: 2026-11-24
     refs: ["prism review of 029 slice 2a, 2026-11-14"]
     links:
       prs: [2092]
       spec: specs/029-tui-command-center
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T14:07:58Z
-      heartbeat: 2026-11-24T15:37:24Z
     notes: console/gfx/PixelLayer.images only grows while pixel mode stays on. At scale 4 the mascot's 28 frames are about 112 MB at the terminal; kitty's quota is about 320 MB, and an evicted image would stay 'known' and blank until the next clear.
   - id: B-261
     title: RegularSync progress line reports a stale current/lag and rate=0.0/s on a PoS node that is at head via the Engine API
