@@ -321,7 +321,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T13:30:05Z
-      heartbeat: 2026-11-24T13:47:26Z
+      heartbeat: 2026-11-24T15:37:24Z
     notes: |-
       herald.
       2026-11-24 rescoped: per-hash dedup and 256-hash batches done; left: one GetPooledTransactions in flight per peer and the 128 KB cap
@@ -1317,7 +1317,7 @@ items:
       by: cloud-719c6644
       agent: forge
       since: 2026-11-24T13:54:12Z
-      heartbeat: 2026-11-24T15:06:20Z
+      heartbeat: 2026-11-24T15:37:24Z
     notes: |-
       Consensus-adjacent (what counts as a valid header): needs forge review, and a cost check for Ethash on ETC.
       2026-11-24: absorbs B-143 (validation of 2026-11-24)
@@ -1775,7 +1775,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T14:07:45Z
-      heartbeat: 2026-11-24T14:08:33Z
+      heartbeat: 2026-11-24T15:37:24Z
     notes: "Slice 3 overlaps local reads with the asks, which absorbs a slow read but not a hung one: TuiStatusProbe.apply blocks, no snapshot is published, agedAt flips both sources to Unresponsive and Alerts raise peer manager / sync controller Unresponsive."
   - id: B-194
     title: "Protocol: no metrics-object initialiser on an IO path (rule in agent-protocols); init EngineApiMetrics/PoWMiningMetrics off it"
@@ -1904,7 +1904,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T15:12:26Z
-      heartbeat: 2026-11-24T15:13:08Z
+      heartbeat: 2026-11-24T15:37:24Z
     notes: "Root can create the directory the test expects to be refused. Seen in a cloud container on staging 0.11.44 and on #1788 alike."
   - id: B-206
     title: "StackTrieSpec: two cases take 3.5 min of Tier 1 because TestMptStorage re-stores the whole trie on every put"
@@ -1920,7 +1920,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T15:12:34Z
-      heartbeat: 2026-11-24T15:13:16Z
+      heartbeat: 2026-11-24T15:37:24Z
     notes: "'10 000 random 32-byte keys' (2 min) and 'large random corpus' (1.2 min), the same on staging 0.11.44 and on #1788. Quadratic in the test double, not in the trie."
   - id: B-207
     title: "Spec 018 T026, the half that waits: the position mirror on the ethereum/tests pre-Atlantis networks, and the comparison with C0's ethtests baseline"
@@ -2285,7 +2285,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T15:12:31Z
-      heartbeat: 2026-11-24T15:13:12Z
+      heartbeat: 2026-11-24T15:37:24Z
     notes: The test's last assertion calls JdkHttpsTransport.default with HTTPS_PROXY credentials and expects Left; default prefers the JDK https.proxyHost property over the environment (ReleaseTransport.scala:376-378), which cloud containers set in JAVA_TOOL_OPTIONS, so it answers Right there. Isolate the test from the JVM's properties (inject props) like the environment map. Seen in testEssential on the C4b part 2a branch, which does not touch ephemery/.
   - id: B-248
     title: "SYNC-FORK resolver: discardBlocksAfter deletes the index entries before rewindCanonicalChain reads them"
@@ -2391,7 +2391,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T14:07:58Z
-      heartbeat: 2026-11-24T14:08:45Z
+      heartbeat: 2026-11-24T15:37:24Z
     notes: console/gfx/PixelLayer.images only grows while pixel mode stays on. At scale 4 the mascot's 28 frames are about 112 MB at the terminal; kitty's quota is about 320 MB, and an evicted image would stay 'known' and blank until the next clear.
   - id: B-261
     title: RegularSync progress line reports a stale current/lag and rate=0.0/s on a PoS node that is at head via the Engine API
@@ -2440,7 +2440,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T14:07:54Z
-      heartbeat: 2026-11-24T14:08:41Z
+      heartbeat: 2026-11-24T15:37:24Z
     notes: LOGSLEVEL=ERROR (the Ephemery launch) drops 'TUI graphics ...' and every INFO line the Logs view would show.
   - id: B-267
     title: "TUI lists: keep a scroll offset so the cursor moves within the screenful (Block Observatory and Mempool pending list pin the cursor to the bottom row)"
@@ -2457,7 +2457,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T14:07:50Z
-      heartbeat: 2026-11-24T14:08:37Z
+      heartbeat: 2026-11-24T15:37:24Z
     notes: prism, slice 4. ObservatoryPanels and MempoolPanels compute the first row from the selection; Up scrolls the list instead of moving the cursor.
   - id: B-268
     title: "PendingTransactionsManager: a by-hash query, so the TUI explorer does not copy the whole pool to open one pending transaction"
@@ -2603,7 +2603,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T14:08:02Z
-      heartbeat: 2026-11-24T14:08:49Z
+      heartbeat: 2026-11-24T15:37:24Z
     notes: |-
       contracts/actions.md listed UPnP state under net. NetworkAddressInfo keeps the detected address and its step, not the mapping's outcome.
       PortForwarder would have to record it.
@@ -3156,7 +3156,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T15:36:30Z
-      heartbeat: 2026-11-24T15:36:55Z
+      heartbeat: 2026-11-24T15:37:24Z
     notes: "Seen on origin/staging 18194e219 alone: 'No common block is found' failed 1 of 3 runs; on the B-298 branch 'highest common block is in the first half' failed once. NetworkPeerManagerAutoPilot answers by request count; a reply lost to the bus race times out, the resolver restarts, and the script is off by one. Found by forge-b298."
   - id: B-351
     title: "Hash layout: check a re-SNAP for a heavier fork below the SYNC-FORK floor lands on the peer's branch (canonical index from the common block to the pivot)"
