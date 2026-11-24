@@ -20,7 +20,10 @@ import scala.concurrent.duration.*
 import com.typesafe.config.Config as TypesafeConfig
 import org.json4s.DefaultFormats
 import org.json4s.Formats
+import org.json4s.JArray
 import org.json4s.JInt
+import org.json4s.JValue
+import org.json4s.jvalue2extractable
 import org.json4s.native
 import org.json4s.native.Serialization
 
@@ -115,47 +118,51 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
         }
       } ~ (pathEndOrSingleSlash & post & caller) { who =>
         val controller = who.controller
-        // Materialize the request entity BEFORE the two `entity(as[...])` alternatives below.
-        //
-        // Those alternatives are tried in order, and for a BATCH request (a JSON array) the
-        // first one MUST fail — an array is not a single JsonRpcRequest. Pekko then tries the
-        // second. That only works if the entity can be read twice. A streamed entity
-        // (HttpEntity.Default / Chunked) is a one-shot source: the first failed unmarshal
-        // drains it, the second alternative rejects too, and myRejectionHandler above turns
-        // the resulting MalformedRequestContentRejection into
-        //   400 {"jsonrpc":"2.0","error":{"code":-32700,...},"id":0}
-        // for a batch that was perfectly well-formed.
-        //
-        // Whether a given batch arrives Strict or streamed depends on TCP arrival timing, so
-        // the bug is intermittent and load-dependent: measured in hive's engine-withdrawals
-        // suite failing after 1, 3, 5, 7, 11, 19 or 25 successful batches, or not at all
-        // within 30, for the SAME test with the SAME payloads across two runs.
-        //
-        // toStrictEntity gives both alternatives a re-readable buffered entity. The GraphQL
-        // branch above already does this with extractStrictEntity for the same reason.
-        toStrictEntity(5.seconds) {
-          entity(as[JsonRpcRequest]) {
-            case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
-              handleRequest(controller, statusReq)
-            case jsonReq =>
-              rateLimit {
-                handleRequest(controller, jsonReq)
-              }
-          } ~ entity(as[Seq[JsonRpcRequest]]) {
-            case _ if config.rateLimit.enabled =>
-              complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
-            case reqSeq =>
-              // each element is answered on its own, by the caller's controller (US3 scenario 3)
-              complete {
-                reqSeq.toList
-                  .traverse(request => controller.handleRequest(request))
-                  .unsafeToFuture()
-              }
-          }
+        // The body is parsed once, as JSON, and routed by its shape: an array is a batch, anything else one request
+        // (B-105). It used to be unmarshalled as a single request first and, for a batch, failed and was parsed again
+        // as a list; that needed the entity buffered to be read twice (toStrictEntity), since a streamed entity is a
+        // one-shot source and a batch then failed with -32700 depending on TCP timing (hive engine-withdrawals). One
+        // read needs neither. A body that is not JSON, or not requests, is still the -32700 of myRejectionHandler.
+        entity(as[JValue]) {
+          case JArray(items) =>
+            asRequests(items) match
+              case Left(rejection) => reject(rejection)
+              case Right(_) if config.rateLimit.enabled =>
+                complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
+              case Right(reqSeq) =>
+                // each element is answered on its own, by the caller's controller (US3 scenario 3)
+                complete {
+                  reqSeq
+                    .traverse(request => controller.handleRequest(request))
+                    .unsafeToFuture()
+                }
+          case single =>
+            asRequests(List(single)) match
+              case Left(rejection) => reject(rejection)
+              case Right(statusReq :: Nil) if statusReq.method == FaucetJsonRpcController.Status =>
+                handleRequest(controller, statusReq)
+              case Right(jsonReq :: Nil) =>
+                rateLimit {
+                  handleRequest(controller, jsonReq)
+                }
+              case Right(_) =>
+                reject(MalformedRequestContentRejection("not one JSON-RPC request", new IllegalStateException))
         }
       }
     }
   }
+
+  /** `values` read as JSON-RPC requests, as the entity unmarshaller read them before (B-105); a value that is not one
+    * is a malformed body, as it was.
+    */
+  private def asRequests(values: List[JValue]): Either[Rejection, List[JsonRpcRequest]] =
+    values.traverse { value =>
+      scala.util
+        .Try(value.extract[JsonRpcRequest])
+        .toEither
+        .left
+        .map(e => MalformedRequestContentRejection(Option(e.getMessage).getOrElse(e.toString), e))
+    }
 
   def handleRequest(request: JsonRpcRequest): StandardRoute = handleRequest(jsonRpcController, request)
 
