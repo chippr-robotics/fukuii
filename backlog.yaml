@@ -4603,22 +4603,18 @@ items:
   - id: B-462
     title: "Ask-again refusals during an adoption (B-294): typed answers on the layers move, ChainImporter, testing_commitBlockV1; keep them out of the escalation count"
     priority: P3
-    status: review
+    status: done
     area: state
     opened: 2026-11-24
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2045]
       spec: 018
-    claim:
-      by: cloud-dc960fdc
-      agent: main
-      since: 2026-11-24T05:12:53Z
-      heartbeat: 2026-11-24T06:20:02Z
     notes: |-
-      2026-11-24 in-progress: clone-d consensus lane; forge design in scratchpad b462-b463-forge-ruling.md
       2026-11-24 in-progress: pushed 1a07bf0844; forge + beacon review
       2026-11-24 in-progress: forge+beacon APPROVE; round 2 fold-ins (HeadBusy msg = B-486, FCM case, feed PoW-only, gauge from store clock, docs) queued for next free clone; brief scratchpad b462-round2.md
+      2026-11-24 done: merged b25d311051
   - id: B-463
     title: "Race before the hold: a block committed on the settled head between ConsensusImpl reading oldHead and opening withRecordsHeld"
     priority: P3
