@@ -2672,16 +2672,17 @@ items:
   - id: B-316
     title: The consensus layer's branch that forks below what a view reaches is adopted by no one (archive)
     priority: P2
-    status: in-progress
+    status: review
     area: consensus
     opened: 2026-11-16
     refs: [B-297]
-    links: {}
+    links:
+      prs: [2042]
     claim:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T04:08:42Z
-      heartbeat: 2026-11-24T05:14:49Z
+      heartbeat: 2026-11-24T05:17:22Z
     notes: |-
       2026-11-24 in-progress: branch pushed; beacon review running
       2026-11-24 in-progress: beacon: main code approved; CHANGES test-only: fold B-480 guard test (fork choice whose head chain is indexed above the anchor with no view must still catch up, not viewless-adopt; also above.nonEmpty). Queued for next free clone.
