@@ -4575,11 +4575,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T05:12:53Z
-      heartbeat: 2026-11-24T05:48:28Z
+      heartbeat: 2026-11-24T05:52:18Z
     notes: |-
-      B-294 refuses writers on another thread with StateUnavailable(askAgain). ConsensusImpl.settleOnLayers rethrows a refused move with an ERROR 'move stopped' log; ChainImporter and testing_commitBlockV1 surface it as an error; PowEscalationFeed.notJudged counts it like any state fault. forge to rule on the count.
       2026-11-24 in-progress: clone-d consensus lane; forge design in scratchpad b462-b463-forge-ruling.md
       2026-11-24 in-progress: pushed 1a07bf0844; forge + beacon review
+      2026-11-24 in-progress: forge+beacon APPROVE; round 2 fold-ins (HeadBusy msg = B-486, FCM case, feed PoW-only, gauge from store clock, docs) queued for next free clone; brief scratchpad b462-round2.md
   - id: B-463
     title: "Race before the hold: a block committed on the settled head between ConsensusImpl reading oldHead and opening withRecordsHeld"
     priority: P3
