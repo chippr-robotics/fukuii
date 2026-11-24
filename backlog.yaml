@@ -5585,3 +5585,15 @@ items:
     notes: |-
       AccountTrieAssembly.scala:359 logs it when a task's StackTrie is still open at assembly; it appeared once in each run, and both syncs completed with a matching root.
       Find which completion path skips the per-task commit (last task, or a task finished during a pivot move) and either commit it there or document why the late commit is fine.
+  - id: B-526
+    title: "ETC mainnet SNAP: 421 account-range requests timed out (30 s) against 2 on Mordor; find whether peers or response size cause it"
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-24
+    refs: ["sync reports v0.12.117, 2026-11-23/24"]
+    links: {}
+    notes: |-
+      Mainnet account download ran at 23,000 accounts/s against 36,600/s on Mordor; not caused by the contract classification, which only feeds the storage file.
+      Check per-peer timeout counts (AccountRangeWorker:200) and whether the 512 KB starting response size is too large for mainnet peers within the 30 s timeout.
