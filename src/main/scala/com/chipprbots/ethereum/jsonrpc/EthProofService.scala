@@ -6,21 +6,20 @@ import cats.effect.IO
 import cats.implicits.*
 
 import com.chipprbots.ethereum.consensus.blocks.BlockGenerator
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
-import com.chipprbots.ethereum.domain.BlockHash
-import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.UInt256
-import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofRequest
 import com.chipprbots.ethereum.jsonrpc.ProofService.GetProofResponse
 import com.chipprbots.ethereum.jsonrpc.ProofService.ProofAccount
 import com.chipprbots.ethereum.jsonrpc.ProofService.StorageProof
 import com.chipprbots.ethereum.jsonrpc.ProofService.StorageProof.asRlpSerializedNode
 import com.chipprbots.ethereum.jsonrpc.ProofService.StorageProofKey
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingNodeException
 import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.mpt.MptTraversals
 
@@ -162,10 +161,17 @@ trait ProofService:
   */
 class EthProofService(
     blockchain: Blockchain,
-    blockchainReader: BlockchainReader,
+    val blockchainReader: BlockchainReader,
     blockGenerator: BlockGenerator,
-    ethCompatibleStorage: Boolean
-) extends ProofService:
+    ethCompatibleStorage: Boolean,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
+) extends ProofService
+    with ResolveHeader:
+
+  // The block is named as every other state read names it (ResolveHeader): "safe" and "finalized" are the consensus
+  // client's, not the head
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
+  override protected def pendingBlockGenerator: BlockGenerator = blockGenerator
 
   def getProof(req: GetProofRequest): ServiceResponse[GetProofResponse] =
     getProofAccount(req.address, req.storageKeys, req.blockNumber)
@@ -186,11 +192,12 @@ class EthProofService(
       storageKeys: Seq[StorageProofKey],
       block: BlockParam
   ): IO[Either[JsonRpcError, ProofAccount]] = IO {
-    resolveHeader(block).map(_.header).flatMap { header =>
+    resolveHeader(block).flatMap { resolved =>
+      val header = resolved.header
       val blockNumber = header.number.value
       // The account, its proof and its storage proofs come from one state: a proof is of one block.
       StateRead
-        .at(blockchainReader, header) { state =>
+        .of(blockchainReader, resolved) { state =>
           for accountProof <- Either.fromOption(
               blockchainReader.accountProofIn(state, header, address).map(_.map(asRlpSerializedNode)),
               noAccountProof(address, blockNumber)
@@ -213,6 +220,9 @@ class EthProofService(
         }
         .flatten
     }
+  }.recover { case _: MissingNodeException =>
+    // a block whose state was pruned or never synced: as eth_getBalance and the other state reads answer it
+    Left(JsonRpcError.NodeNotFound)
   }
 
   /** The proofs of `storageKeys` in the storage of `address`, whose account in `state` is `account`. */
@@ -243,40 +253,3 @@ class EthProofService(
 
   private def asRlpSerializedNode(node: MptNode): ByteString =
     ByteString(MptTraversals.encodeNode(node))
-
-  /** The header the proof is of, by header and number index alone (geth `StateAndHeaderByNumberOrHash`): a block whose
-    * body was never stored (checkpoint import, SNAP pivot) still has a state to prove against. "pending" is as it was:
-    * the generator's last build when the state is not held in place, else the head.
-    */
-  private def resolveHeader(blockParam: BlockParam): Either[JsonRpcError, ResolvedHeader] =
-    def getHeader(number: BigInt): Either[JsonRpcError, BlockHeader] =
-      val header = blockchainReader.getBestBranch match
-        case BestBranch(_, tip) if tip >= number && number >= 0 => blockchainReader.getBlockHeaderByNumber(number)
-        case _                                                  => None
-      header.toRight(JsonRpcError.InvalidParams(s"Block $number not found"))
-
-    def getLatestHeader(): Either[JsonRpcError, BlockHeader] =
-      blockchainReader.getBestBlockHeader
-        .toRight(JsonRpcError.InvalidParams("Latest block not found"))
-
-    blockParam match
-      case BlockParam.WithNumber(blockNumber) => getHeader(blockNumber).map(ResolvedHeader(_, pendingState = None))
-      case BlockParam.WithHash(hash) =>
-        blockchainReader
-          .getBlockHeaderByHash(BlockHash(hash))
-          .toRight(JsonRpcError.InvalidParams("Block not found for hash"))
-          .map(ResolvedHeader(_, pendingState = None))
-      case BlockParam.Earliest  => getHeader(0).map(ResolvedHeader(_, pendingState = None))
-      case BlockParam.Latest    => getLatestHeader().map(ResolvedHeader(_, pendingState = None))
-      case BlockParam.Safe      => getLatestHeader().map(ResolvedHeader(_, pendingState = None))
-      case BlockParam.Finalized => getLatestHeader().map(ResolvedHeader(_, pendingState = None))
-      case BlockParam.Pending   =>
-        // On the unified state layout the pending block's state is held nowhere: the block was built on a layer that
-        // was dropped, and only the state of the head is on disk. So "pending" is the head there, which is what it
-        // is on any node with no pending block. With the guard off it is the block the generator last built.
-        Option
-          .unless(blockchainReader.holdsStateInPlace)(blockGenerator.getPendingBlockAndState)
-          .flatten
-          .map(pb => ResolvedHeader(pb.pendingBlock.block.header, pendingState = Some(pb.worldState)))
-          .map(Right.apply)
-          .getOrElse(resolveHeader(BlockParam.Latest)) // Default behavior in other clients

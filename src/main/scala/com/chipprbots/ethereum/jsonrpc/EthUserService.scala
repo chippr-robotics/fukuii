@@ -101,9 +101,10 @@ class EthUserService(
     */
   def getStorageValues(req: GetStorageValuesRequest): ServiceResponse[GetStorageValuesResponse] =
     IO {
-      resolveHeader(req.block).flatMap { case ResolvedHeader(header, _) =>
+      resolveHeader(req.block).flatMap { resolved =>
+        val header = resolved.header
         // one state for every account and slot of the request
-        StateRead.at(blockchainReader, header) { state =>
+        StateRead.of(blockchainReader, resolved) { state =>
           val values = req.entries.map { entry =>
             val account = blockchainReader
               .accountIn(state, header, entry.address)
@@ -136,10 +137,10 @@ class EthUserService(
       makeResponse: (MptStorage, Account) => T
   ): ServiceResponse[T] =
     IO {
-      resolveHeader(blockParam).flatMap { case ResolvedHeader(header, _) =>
-        StateRead.at(blockchainReader, header) { state =>
+      resolveHeader(blockParam).flatMap { resolved =>
+        StateRead.of(blockchainReader, resolved) { state =>
           val account = blockchainReader
-            .accountIn(state, header, address)
+            .accountIn(state, resolved.header, address)
             .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
           makeResponse(state, account)
         }

@@ -141,4 +141,43 @@ class PendingBlockCodeSpec extends AnyFlatSpec with Matchers:
     node.ethInfoService.call(CallRequest(callArgs, BlockParam.Latest)).unsafeRunSync() shouldBe
       Right(CallResponse(ByteString.empty))
   }
+  // B-210: the account readers read "pending" over the stores by the pending header, where the build's nodes are not, and
+  // answered the pending block, which is above the best block, with no account: a zero nonce and balance for every
+  // address. geth answers from the pending state.
+  "The pending block's accounts" should "be read from its world: the sender's nonce and balance after the deploy" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val node = new Node
+    def nonce(at: BlockParam) =
+      node.ethUserService.getTransactionCount(GetTransactionCountRequest(Sender, at)).unsafeRunSync()
+    def balance(address: Address, at: BlockParam) =
+      node.ethUserService.getBalance(GetBalanceRequest(address, at)).unsafeRunSync().map(_.value)
+    val start = mordor.accountStartNonce.toBigInt
+    nonce(BlockParam.Latest) shouldBe Right(GetTransactionCountResponse(start))
+    nonce(BlockParam.Pending) shouldBe Right(GetTransactionCountResponse(start + 1))
+    balance(Sender, BlockParam.Latest) shouldBe Right(BigInt(10).pow(19))
+    balance(Sender, BlockParam.Pending) match
+      case Right(paid) => paid should ((be > BigInt(0)).and(be < BigInt(10).pow(19)))
+      case other       => fail(s"eth_getBalance on pending: $other")
+    // the contract the pending block deploys is an account there, with its code's hash
+    val pendingWorld = node.mining.blockGenerator.getPendingBlockAndState.get.worldState
+    node.ethUserService
+      .getStorageRoot(GetStorageRootRequest(Contract, BlockParam.Pending))
+      .unsafeRunSync()
+      .map(_.storageRoot) shouldBe Right(pendingWorld.getAccount(Contract).get.storageRoot.value)
+
+    val proofs = new EthProofService(
+      node.blockchain,
+      node.blockchainReader,
+      node.mining.blockGenerator,
+      mordor.ethCompatibleStorage
+    )
+    val proved = proofs
+      .getProof(ProofService.GetProofRequest(Sender, Nil, BlockParam.Pending))
+      .unsafeRunSync()
+      .map(_.proofAccount)
+    proved.map(_.nonce.toBigInt) shouldBe Right(start + 1)
+    proved.map(_.balance) shouldBe balance(Sender, BlockParam.Pending)
+  }
 // scalastyle:on magic.number
