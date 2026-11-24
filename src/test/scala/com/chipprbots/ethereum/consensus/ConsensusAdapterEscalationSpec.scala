@@ -368,6 +368,11 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     private var answer: NonEmptyList[Block] => ConsensusResult = _ => throw busy
     private val on = new ThrowingRig(busy)
     val rig = new Rig(blocks => answer(blocks), on.host.blockchainReader, on.queue)
+    // `blocks` stored, the last of them the head, as a sync before the batches left them
+    def theHead(blocks: List[Block]): Unit =
+      blocks.foreach(block =>
+        on.host.blockchainWriter.save(block, Nil, ChainWeight.totalDifficultyOnly(block.number.value), true)
+      )
     def busyAnswer(blocks: NonEmptyList[Block]): Unit = rig.imported(blocks) match
       case BlockImportStateFault(fault: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable, _) =>
         fault.askAgain shouldBe true
@@ -498,6 +503,23 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     (2 to UnderStop).foreach { _ =>
       on.busyAnswer(blocks)
       on.rig.stopped shouldBe empty
+    }
+    on.stopsOn(blocks)
+  }
+
+  // forge W1 (round 5): the blocks of a busy batch the head's chain already held (a batch from below the head, as after
+  // SNAP's pivot) are answered as imported and told as the head, which did not move. That is no write the store took,
+  // and the count goes on
+  it should "count on through busy batches whose blocks the head's chain already held" taggedAs UnitTest in {
+    val on = new BusyRig
+    val blocks = branch(5, 4)
+    on.theHead(blocks.toList.take(3))
+    (1 to UnderStop).foreach { _ =>
+      on.rig.imported(blocks) match
+        case BlockImportStateFault(fault: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable, imported) =>
+          fault.askAgain shouldBe true
+          imported.map(_.block) shouldBe blocks.toList.take(3)
+        case other => fail(s"not a store that was busy: $other")
     }
     on.stopsOn(blocks)
   }

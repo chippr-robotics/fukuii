@@ -509,8 +509,8 @@ trait ConsensusBuilder:
     }
 
   /** What stops the node when the store failed during an import (B-440): a write refused, a read that failed, or a
-    * store busy [[ConsensusAdapter.BusyBeforeStop]] times on the same block. Nothing but a log line here; [[BaseNode]]
-    * wires its stop.
+    * store busy [[ConsensusAdapter.BusyBeforeStop]] times with no block made the head, and for at least
+    * [[ConsensusAdapter.BusyStopAfter]]. Nothing but a log line here; [[BaseNode]] wires its stop.
     */
   def onFatalStoreFailure: Throwable => Unit = ConsensusAdapter.NoStopWired
 

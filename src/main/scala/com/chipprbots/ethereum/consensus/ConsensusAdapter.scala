@@ -90,13 +90,12 @@ class ConsensusAdapter(
     */
   private val stopAskedFor = new AtomicBoolean(false)
 
-  /** How many times the store answered a batch busy since a block last became the head, and when ([[nanoClock]]) the
-    * first of them came (B-440, forge W1); `None` while none did. Whichever block the batches stand on: batches that
-    * alternate between branches, on the same parent or not, count together. Only a head that moved starts it again
-    * ([[toldOfTheHead]]): a branch kept as it is, or another failure, wrote nothing, and says nothing of a store that
-    * takes writes.
+  /** The store's busy answers since a block last became the head (B-440, forge W1); `None` while none came. Whichever
+    * block the batches stand on: batches that alternate between branches, on the same parent or not, count together.
+    * Only a head that moved starts it again ([[toldOfTheHead]]): a branch kept as it is, or another failure, wrote
+    * nothing, and says nothing of a store that takes writes.
     */
-  private val busySinceTheHeadMoved = new AtomicReference[Option[(Int, Long)]](None)
+  private val busySinceTheHeadMoved = new AtomicReference[Option[ConsensusAdapter.BusyRun]](None)
 
   /** Report a block the import path has PROVEN consensus-invalid, so `engine_newPayload` / `engine_forkchoiceUpdated`
     * can answer INVALID for it and its descendants.
@@ -507,10 +506,14 @@ class ConsensusAdapter(
         val now = nanoClock()
         busySinceTheHeadMoved
           .updateAndGet {
-            case Some((count, first)) => Some((count + 1, first))
-            case None                 => Some((1, now))
+            case Some(run) => Some(run.copy(count = run.count + 1))
+            // the head as the first busy answer leaves it: a read that fails leaves none, and any head told resets
+            case None =>
+              Some(
+                ConsensusAdapter.BusyRun(1, now, Try(blockchainReader.getBestBlockHeader).toOption.flatten.map(_.hash))
+              )
           }
-          .map((count, first) => (count, (now - first).nanos))
+          .map(run => (run.count, (now - run.firstNanos).nanos))
       // no reset here: a store corrupt or a fault of the state wrote nothing; only a head that moved starts the count
       // again, and a store that failed stops the node
       case _ => None
@@ -607,11 +610,16 @@ class ConsensusAdapter(
       blocks.foreach(blockQueue.enqueueBlock(_, bestBlockNumber))
 
   /** A block became the head: the escalation's feed is told, and the store took a write, so the count of busy answers
-    * starts again (forge W1).
+    * starts again (forge W1). Unless the block is the head the first busy answer left: the blocks of a busy batch the
+    * head's chain already held are told as imported (a batch from below the head, as after SNAP's pivot), and that head
+    * did not move (forge, round 5).
     */
   private def toldOfTheHead(head: Option[Block]): Unit =
     head.foreach { block =>
-      busySinceTheHeadMoved.set(None)
+      busySinceTheHeadMoved.updateAndGet {
+        case Some(run) if run.headAtFirst.contains(block.hash) => Some(run)
+        case _                                                 => None
+      }
       toldTheFeed("a head that moved")(_.headMoved(block))
     }
 
@@ -700,6 +708,11 @@ object ConsensusAdapter extends Logger:
     * block, and batches that alternate between branches come at once.
     */
   private[consensus] val BusyStopAfter: FiniteDuration = 10.minutes
+
+  /** The store's busy answers since a block last became the head: how many, when the first came (the adapter's
+    * `nanoClock`), and the head the first left, if it could be read.
+    */
+  final private[consensus] case class BusyRun(count: Int, firstNanos: Long, headAtFirst: Option[BlockHash])
 
   /** Whether a store busy `count` times over `busyFor`, with no block made the head between, stops the node: both
     * floors must be reached.

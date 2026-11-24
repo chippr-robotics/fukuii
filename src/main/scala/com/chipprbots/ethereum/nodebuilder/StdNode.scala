@@ -824,7 +824,8 @@ abstract class BaseNode extends Node:
     stoppedCleanly
 
   /** The store failed during an import (B-440, the user's decision of 2026-11-24): a write refused, a read that failed,
-    * or a store busy too long on the same block. The node stops, on a thread of its own, and exits non-zero
+    * or a store busy `ConsensusAdapter.BusyBeforeStop` times with no block made the head, and for at least
+    * `ConsensusAdapter.BusyStopAfter`. The node stops, on a thread of its own, and exits non-zero
     * ([[StopSignal.stopThenExitAside]]).
     */
   override lazy val onFatalStoreFailure: Throwable => Unit =
