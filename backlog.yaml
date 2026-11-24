@@ -2923,10 +2923,11 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T09:53:40Z
-      heartbeat: 2026-11-24T09:53:43Z
+      heartbeat: 2026-11-24T10:48:33Z
     notes: |-
       forge F3 on B-291's review: after a partial insert core-geth's downloader drops the peer; fukuii answers BlockImportedToTop / ChainReorganised and the batch's rest is dropped silently, blamed only if an orphan rewind refetches the invalid block. E.g. ImportedPartially(base, failingHash, error), handled as BlockImportFailedAt for blame and as success for the pool.
       2026-11-24 in-progress: forge agent clone-d (B-253 merged #2066)
+      2026-11-24 in-progress: pushed 1af6249ed9; beacon review (ETH regular sync impact)
   - id: B-339
     title: SecureRandomBuilder reads secure-random-algo from the global ConfigFactory.load(), not the instance config
     priority: P3
