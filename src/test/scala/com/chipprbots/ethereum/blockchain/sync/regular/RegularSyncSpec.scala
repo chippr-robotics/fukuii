@@ -22,6 +22,10 @@ import scala.concurrent.Promise
 import scala.concurrent.duration.*
 import scala.math.BigInt
 
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import org.scalamock.scalatest.AsyncMockFactory
 import org.scalatest.Assertion
 import org.scalatest.diagrams.Diagrams
@@ -2817,6 +2821,65 @@ class RegularSyncSpec
             }
             attempts.get shouldBe 3
           finally BlockImporter.exhaustBackoff = 5.minutes
+      )
+
+      // B-462: refused because another thread's adoption holds the head (B-294). No fault of this node's state: tried
+      // again and spaced out as a fault is, and said at WARN as busy, never at ERROR. No peer blamed.
+      "try again a block refused while another adoption holds the head, spaced out, said at WARN as busy and never at ERROR" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new Fixture:
+          val failingBlock: Block = testBlocksChunked.head.head
+          val attempts = new java.util.concurrent.atomic.AtomicInteger(0)
+          // the importer logs through Pekko to SLF4J, off this thread: what it says is collected as it arrives
+          val logger: Logger = org.slf4j.LoggerFactory
+            .getLogger("com.chipprbots.ethereum.blockchain.sync.regular")
+            .asInstanceOf[Logger]
+          val appender = new ListAppender[ILoggingEvent]
+          val previousLevel = logger.getLevel
+          appender.start()
+          logger.addAppender(appender)
+          logger.setLevel(Level.WARN)
+          def said: List[ILoggingEvent] =
+            import scala.jdk.CollectionConverters.*
+            appender.synchronized(appender.list.asScala.toList)
+          BlockImporter.exhaustBackoff = 1.hour
+          try
+            setImportResult(
+              failingBlock,
+              IO {
+                attempts.incrementAndGet()
+                BlockImportStateFault(
+                  new com.chipprbots.ethereum.db.storage.pathstate.StateBusy(
+                    "the adoption on thread 'adopter'",
+                    "the commit of the block was not made: an adoption is moving the head"
+                  )
+                )
+              }
+            )
+            peersClient.setAutoPilot(new PeersClientAutoPilot)
+
+            regularSync ! SyncProtocol.Start
+
+            awaitCond(attempts.get == 3, 15.seconds)
+            // the third in a row is said once, at WARN, with the back-off
+            awaitCond(said.exists(_.getFormattedMessage.contains("times running while another adoption")), 15.seconds)
+            withClue("neither blacklisted nor evicted: ") {
+              peersClient
+                .receiveWhile(syncConfig.syncRetryInterval * 3) { case m => m }
+                .collect { case b: PeersClient.BlacklistPeer => b } shouldBe empty
+            }
+            attempts.get shouldBe 3
+            val busy = said.filter(_.getFormattedMessage.startsWith("[STATE-BUSY]"))
+            busy.size should be >= 3
+            busy.map(_.getLevel).distinct shouldBe List(Level.WARN)
+            said.filter(e => e.getLevel == Level.ERROR && e.getFormattedMessage.contains("STATE")) shouldBe empty
+            said.exists(_.getFormattedMessage.contains("[LOCAL-STATE-FAULT]")) shouldBe false
+          finally
+            BlockImporter.exhaustBackoff = 5.minutes
+            logger.setLevel(previousLevel)
+            logger.detachAppender(appender)
       )
 
       // Spec 018 C5a, B-297: the consensus layer's branch refused for what no attempt changes while the head stays (the

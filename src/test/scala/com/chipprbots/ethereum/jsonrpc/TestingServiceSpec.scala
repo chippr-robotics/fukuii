@@ -253,6 +253,29 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       blockchainReader.getReceiptsByHash(BlockHash(res.blockHash)).isDefined shouldBe true
       blockchainReader.getBestBlockNumber shouldBe BigInt(1)
 
+    // B-462: on the unified layout the import is refused, with nothing written, while another thread's adoption holds
+    // the head: answered as a state to ask for again, and not as a difference between the builder and the import
+    "answer a commit refused while another adoption holds the head as busy, and not move the head" taggedAs UnitTest in new Setup:
+      val busyService = new TestingService(
+        engineApi,
+        blockchainReader,
+        blockchainWriter,
+        forkChoiceManager,
+        Some(pendingTxManager),
+        blockTopic = None,
+        gasLimitTarget = GasLimitTarget,
+        importInPlace = Some(_ =>
+          throw new com.chipprbots.ethereum.db.storage.pathstate.StateBusy(
+            "the adoption on thread 'adopter'",
+            "the commit of block 1 was not made"
+          )
+        )
+      )(using blockchainConfig)
+      busyService
+        .commitBlock(CommitBlockRequest(attrs(), Some(Nil), Some(ByteString.empty)))
+        .unsafeRunSync() shouldBe Left(JsonRpcError.HeadBusy)
+      blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+
     "NOT move the head when a transaction cannot be applied" taggedAs UnitTest in new Setup:
       val res: Either[JsonRpcError, CommitBlockResponse] = service
         .commitBlock(CommitBlockRequest(attrs(), Some(Seq(rawTx(nonce = 999))), Some(ByteString.empty)))

@@ -185,3 +185,22 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
       registry.get("app.db.state.anchor.number").gauge().value() shouldBe 5d
     }
   }
+
+  // B-462: the age of the oldest attempt that holds the records, read from the store by its own clock; 0 for none
+  it should "read the age of the open attempt from the store, by the store's clock, and 0 once none is" taggedAs UnitTest in {
+    StateMetrics.register()
+    val now = new java.util.concurrent.atomic.AtomicLong(5000000L)
+    val source = new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty)
+    val state = new PathStateStorage(
+      new com.chipprbots.ethereum.db.storage.PathNodeStorage(source),
+      new com.chipprbots.ethereum.db.storage.AppStateStorage(source),
+      settings = CommitSettings(observer = StateMetrics, nowMillis = () => now.get)
+    )
+    StateMetrics.attemptAgeSeconds shouldBe 0d
+    state.withRecordsHeld(block(5, EmptyRoot)) {
+      now.addAndGet(90000L)
+      StateMetrics.attemptAgeSeconds shouldBe 90d
+      registry.find(s"$prefix.db.state.attempt.age.seconds").gauge().value() shouldBe 90d
+    }
+    StateMetrics.attemptAgeSeconds shouldBe 0d
+  }

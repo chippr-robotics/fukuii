@@ -302,11 +302,23 @@ class ChainImporter(
         try importStrict(new ChainFile.Reader(in, filePath), filePath, progress)
         finally in.close()
       catch
+        // refused, with nothing of the block written, because another thread's adoption holds the head (B-294): no
+        // fault of this node's state and no verdict on the block. Carried by its type, for the caller to answer it as
+        // one to ask again (B-462), and said at WARN
+        case busy: com.chipprbots.ethereum.db.storage.pathstate.StateBusy =>
+          val failure = ImportFailure(
+            s"chain import of $filePath stopped: ${busy.getMessage}",
+            progress.summary,
+            Some(busy)
+          )
+          log.warn(s"[STATE-BUSY] Chain import (strict): ${failure.describe}")
+          Left(failure)
         case scala.util.control.NonFatal(e) =>
           val failure =
             ImportFailure(
               s"chain import of $filePath failed: ${e.getClass.getSimpleName}: ${e.getMessage}",
-              progress.summary
+              progress.summary,
+              Some(e).collect { case fault: com.chipprbots.ethereum.db.storage.pathstate.StateFault => fault }
             )
           log.error(s"Chain import (strict): ${failure.describe}")
           Left(failure)
@@ -438,7 +450,15 @@ object ChainImporter:
   /** What a strict import did before it finished or stopped. `head` is the last block it imported. */
   final case class ImportSummary(imported: Long, skipped: Long, head: Option[BlockHeader])
 
-  final case class ImportFailure(reason: String, progress: ImportSummary):
+  /** Why a strict import stopped, and what it did before. `fault` is the fault of this node's state that stopped it, if
+    * one did, by its type: a caller answers a [[com.chipprbots.ethereum.db.storage.pathstate.StateBusy]] as one to ask
+    * again, not as a failed import (B-462).
+    */
+  final case class ImportFailure(
+      reason: String,
+      progress: ImportSummary,
+      fault: Option[com.chipprbots.ethereum.db.storage.pathstate.StateFault] = None
+  ):
     def describe: String =
       s"$reason (imported ${progress.imported}, skipped ${progress.skipped} before stopping" +
         progress.head.map(h => s"; last imported #${h.number}").getOrElse("") + ")"

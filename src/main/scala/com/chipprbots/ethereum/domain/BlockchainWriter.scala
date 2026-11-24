@@ -379,7 +379,8 @@ class BlockchainWriter(
     *   written
     * @param forkChoice
     *   a consensus client's fork choice, which is made while another thread's adoption is open; any other move is
-    *   refused then ([[PathStateStorage.moveHead]]'s `forkChoice`, B-294)
+    *   refused then, with a [[com.chipprbots.ethereum.db.storage.pathstate.StateBusy]] ([[PathStateStorage.moveHead]]'s
+    *   `forkChoice`, B-294, B-462)
     * @throws IllegalStateException
     *   on the hash layout, which holds the state of every block and has no head of the state to move
     * @throws com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep

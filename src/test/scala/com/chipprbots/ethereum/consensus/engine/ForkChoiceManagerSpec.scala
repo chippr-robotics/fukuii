@@ -155,3 +155,39 @@ class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     fcm.notifyBeaconHead(ForkChoiceState(newer, newer, newer))
     fcm.forgetRefused(unknownHeadHash)
     fcm.getRequestedHeadBlockHash shouldBe Some(newer)
+
+  // B-462 (beacon Note A): a move of the head refused because another thread's adoption holds it wrote nothing and is
+  // no fault of this node. SYNCING, never a LocalFault, which the escalation counts: not even on a store that failed
+  // closed, where a StateUnavailable would be answered as one
+  it should "answer a fork choice refused while another adoption holds the head SYNCING, never as a local fault" taggedAs UnitTest in new Fixture:
+    val busyWriter: com.chipprbots.ethereum.domain.BlockchainWriter =
+      new com.chipprbots.ethereum.domain.BlockchainWriter(
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        pathState = Some(null)
+      ):
+        override def stateFailedClosed: Boolean = true
+        override def finalizedOfTheState: Option[com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock] = None
+        override def moveHeadInPlace(
+            target: BlockHeader,
+            reader: com.chipprbots.ethereum.domain.BlockchainReader,
+            refuse: com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan.Chunk => Option[String],
+            finalized: Option[com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock],
+            admit: com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan => Option[String],
+            forkChoice: Boolean
+        ): com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.MoveOutcome =
+          throw new com.chipprbots.ethereum.db.storage.pathstate.StateBusy(
+            "the adoption on thread 'adopter'",
+            s"the move of the head to block ${target.number.value} was not made"
+          )
+    val busy = new ForkChoiceManager(blockchainReader, busyWriter)
+    busy.applyForkChoiceState(
+      ForkChoiceState(knownHeadHash, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash)
+    ) shouldBe Left(ForkChoiceManager.Refusal.Syncing)
+    busy.getHeadBlockHash shouldBe None

@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
 import com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.db.storage.pathstate.StateMetrics
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
@@ -544,8 +545,8 @@ class StateRecovery(
                 case refused: ReorgTooDeep => Outcome.NotAdopted(refused.getMessage)
                 // another thread's adoption is moving the head (B-294): no fault of this node, and no verdict on the
                 // branch. Superseded, as a state that moved under it: asked for again at once, with no cool-down,
-                // and not counted by the escalation's watch (beacon)
-                case busy: StateUnavailable if !holding && busy.askAgain => Outcome.Superseded
+                // and not counted by the escalation's watch (beacon). The hold refused is a `StateBusy` (B-462)
+                case _: StateBusy if !holding => Outcome.Superseded
               finally adopting = None
     logEnd(head, why, outcome)
     outcome
@@ -629,9 +630,11 @@ class StateRecovery(
             None
           catch
             case _: StateFault if ahead.met => Some(Outcome.Superseded)
-            // refused, asking again, while another thread's adoption moves the head (B-294), or moved by another writer
-            // between two of its batches: the head is where it was, or on the extension, and nothing is to be moved
-            // back. Superseded, as for a commit refused on the way up: asked again at once, and not counted (beacon)
+            // refused while another thread's adoption moves the head (B-294, a `StateBusy`: B-462), or moved by another
+            // writer between two of its batches (a `StateUnavailable` asking again): the head is where it was, or on the
+            // extension, and nothing is to be moved back. Superseded, as for a commit refused on the way up: asked
+            // again at once, and not counted (beacon)
+            case _: StateBusy                            => Some(Outcome.Superseded)
             case busy: StateUnavailable if busy.askAgain => Some(Outcome.Superseded)
             case fault: StateFault => Some(if asked() then Outcome.NotAdopted(fault.getMessage) else Outcome.Superseded)
         refused.getOrElse(next(chain, 0))

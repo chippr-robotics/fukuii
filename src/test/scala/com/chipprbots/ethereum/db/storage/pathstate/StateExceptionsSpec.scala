@@ -22,6 +22,7 @@ class StateExceptionsSpec extends AnyFlatSpec with Matchers:
   private val faults: Seq[StateFault] = Seq(
     new StaleStateViewException(block, 4, 8, "the log of state moves no longer reaches back to it"),
     new StateUnavailable("no layer for that block"),
+    new StateBusy("thread 'adopter'", "the commit of block 7 was not made"),
     new ReorgTooDeep(ReorgRefusal.Deep, "the fork point is 900 blocks below the head"),
     new BranchTooLarge(300L << 20, 256L << 20)
   )
@@ -51,6 +52,12 @@ class StateExceptionsSpec extends AnyFlatSpec with Matchers:
     stale.getMessage should (include("block 7").and(include("epoch 4")).and(include("now 8")))
 
     new StateUnavailable("no layer for that block").reason shouldBe "no layer for that block"
+
+    // B-462: who holds the head, and what was refused; and never a StateUnavailable, whose askAgain is counted
+    val busy = new StateBusy("thread 'adopter'", "the commit of block 7 was not made")
+    (busy.holder, busy.reason) shouldBe ("thread 'adopter'", "the commit of block 7 was not made")
+    busy.getMessage should include("the commit of block 7 was not made")
+    (busy: StateFault) should not be a[StateUnavailable]
 
     val refused = new ReorgTooDeep(ReorgRefusal.Incomplete, "block 12 has no complete record")
     refused.reason shouldBe ReorgRefusal.Incomplete

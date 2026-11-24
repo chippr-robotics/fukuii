@@ -503,7 +503,13 @@ class AdminService(
           chainImporter
             .importChainFileStrict(req.file)(using blockchainConfig)
             .left
-            .map(failure => JsonRpcError.LogicError(failure.describe))
+            .map { failure =>
+              failure.fault match
+                // another thread's adoption holds the head: nothing of the block was written, ask again (B-462)
+                case Some(_: com.chipprbots.ethereum.db.storage.pathstate.StateBusy) =>
+                  JsonRpcError.HeadBusy.copy(data = Some(org.json4s.JString(failure.describe)))
+                case _ => JsonRpcError.LogicError(failure.describe)
+            }
             .map(_ => AdminImportChainResponse(true))
         }
     }

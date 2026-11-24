@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
@@ -101,22 +102,30 @@ final class PowEscalationFeed(
       firstInvalidHeader: List[BlockHeader] => Option[(BlockHeader, String)]
   ): Unit =
     // A post-merge branch (difficulty 0) is the Engine API's: this filter is also what keeps the consensus layer's
-    // refusals (`RefusedForThisHead`, `HandedToRecovery`, B-297) out of the proof-of-work count
+    // refusals (`RefusedForThisHead`, `HandedToRecovery`, B-297) out of the proof-of-work count, and keeps the feed
+    // silent on proof of stake, a `StateBusy` included (beacon)
     if headers.nonEmpty && headers.last.difficulty.value > 0 then
       val name = s"[${headers.head.number}-${headers.last.number}]"
-      (weighed(headers, forkWeightOf), headWeight()) match
-        case (None, _) | (_, None) => note(s"branch $name is not counted: its weight, or the head's, is not stored")
-        case (Some(of), Some(head)) if of <= head =>
-          note(s"branch $name is not counted: it does not outweigh the head")
-        case (Some(of), _) =>
-          firstInvalidHeader(headers) match
-            case Some((header, why)) =>
-              note(s"branch $name is not counted: the header of its block ${header.number} is not valid ($why)")
-            case None =>
-              val first = firstAboveFork(headers.head, headerOf, onTheChain)
-              messLeavesOut(first, of) match
-                case Some(why) => note(s"branch $name is not counted: $why")
-                case None      => counted(headers, name, of, first, fault)
+      // A branch refused because another thread's adoption holds the head (`StateBusy`, B-462) is no fault of this
+      // node and no verdict on the branch: it is asked for again once the adoption ends. Never counted, and its weight
+      // is not taken as refused, so that it cannot hold off the end of a run when the head moves (forge, 2026-11-24).
+      // No bound: an adoption that never ends is said by the store, and by its gauge
+      if fault.isInstanceOf[StateBusy] then
+        note(s"branch $name is not counted: another adoption holds the head (${fault.getMessage})")
+      else
+        (weighed(headers, forkWeightOf), headWeight()) match
+          case (None, _) | (_, None) => note(s"branch $name is not counted: its weight, or the head's, is not stored")
+          case (Some(of), Some(head)) if of <= head =>
+            note(s"branch $name is not counted: it does not outweigh the head")
+          case (Some(of), _) =>
+            firstInvalidHeader(headers) match
+              case Some((header, why)) =>
+                note(s"branch $name is not counted: the header of its block ${header.number} is not valid ($why)")
+              case None =>
+                val first = firstAboveFork(headers.head, headerOf, onTheChain)
+                messLeavesOut(first, of) match
+                  case Some(why) => note(s"branch $name is not counted: $why")
+                  case None      => counted(headers, name, of, first, fault)
 
   /** Whether the branch of `headers`, from the stored weight of the block it stands on, outweighs the head, by the
     * weights a branch is counted by. False where either weight is not stored. It reads and says only: nothing is
@@ -331,6 +340,7 @@ object PowEscalationFeed:
     * head moved under the branch) is gone at the next try, and the run with it.
     */
   def classify(fault: StateFault): Refusal = fault match
+    // never met: a `StateBusy` is left out before anything is counted ([[PowEscalationFeed.notJudgedHeaders]], B-462)
     // `Finalized` is Unreachable too, and never met on proof of work, which finalizes nothing. `BeyondTheFetch` is a
     // branch regular sync cannot fetch whole, which no wait mends either (B-300 g)
     case deep: ReorgTooDeep if deep.reason != ReorgRefusal.Corrupt => Refusal.Unreachable

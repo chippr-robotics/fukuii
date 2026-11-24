@@ -1075,8 +1075,8 @@ class HeadMoveSpec extends AnyFlatSpec with Matchers with LayerChains with Plann
         thread.join()
         result.get
       def askedAgain(attempt: scala.util.Try[?]): Unit = attempt.failed.toOption match
-        case Some(refused: StateUnavailable) =>
-          refused.askAgain shouldBe true
+        // B-462: as busy, which no escalation counts; never a StateUnavailable, whose askAgain is counted
+        case Some(refused: StateBusy) =>
           refused.getMessage should include("is moving the head")
         case other => fail(s"not refused, asking again: $other")
 

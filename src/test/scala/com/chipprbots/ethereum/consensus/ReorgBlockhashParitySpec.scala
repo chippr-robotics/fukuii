@@ -47,6 +47,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.db.storage.pathstate.StateAnchor
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.*
@@ -481,23 +482,35 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
     val across: List[Block] = oracle.extendSide(fork, 2, difficulty = 1000, tag = 0x84)
     var imported: Option[BlockImportResult] = None
     var reorganised: Option[BlockImportResult] = None
+    var said: List[ch.qos.logback.classic.spi.ILoggingEvent] = Nil
     meanwhile = () =>
       node.bestHash shouldBe branch(0).hash
       val untouched = datadir.storage
-      imported = Some(node.importOne(onTheWay))
-      // nothing at all was written
-      (datadir.storage eq untouched) shouldBe true
-      reorganised = Some(node.importAll(across))
+      val (_, events) = com.chipprbots.ethereum.testing.LogCapture.capture(classOf[ConsensusImpl]) {
+        imported = Some(node.importOne(onTheWay))
+        // nothing at all was written
+        (datadir.storage eq untouched) shouldBe true
+        reorganised = Some(node.importAll(across))
+      }
+      said = events
       node.bestHash shouldBe branch(0).hash
       state.anchor.map(_.hash) shouldBe Some(branch(0).hash.value)
     evaluate(branch) shouldBe a[SelectedNewBestBranch]
     ranMeanwhile shouldBe Some(scala.util.Success(()))
+    // B-462: said at WARN as busy, never at ERROR as a fault of this node's state
+    withClue(said.map(e => s"${e.getLevel} ${e.getFormattedMessage}").mkString("\n")) {
+      said.filter(_.getLevel == ch.qos.logback.classic.Level.ERROR) shouldBe empty
+      val busy = said.filter(_.getFormattedMessage.startsWith("[STATE-BUSY]"))
+      busy should not be empty
+      busy.map(_.getLevel).distinct shouldBe List(ch.qos.logback.classic.Level.WARN)
+      said.exists(_.getFormattedMessage.startsWith("[STATE-FAULT]")) shouldBe false
+    }
     // not judged, as any fault of this node's state: queued, and no peer blamed
     for (what, answer) <- Seq("the import" -> imported, "the reorganisation" -> reorganised) do
       withClue(s"$what: ") {
         answer match
-          case Some(BlockImportStateFault(refused: StateUnavailable, Nil)) =>
-            refused.askAgain shouldBe true
+          // B-462: as busy, which no escalation counts
+          case Some(BlockImportStateFault(refused: StateBusy, Nil)) =>
             refused.getMessage should include("is moving the head")
           case other => fail(s"not refused, asking again: $other")
       }

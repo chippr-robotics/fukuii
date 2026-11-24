@@ -9,6 +9,7 @@ import scala.annotation.tailrec
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.pathstate.ReadScope
 import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -115,22 +116,25 @@ object StateRead extends Logger:
       }
     attempt(Attempts)
 
-  /** What a client is told when the state it asked about cannot be read. Three answers, since a client does three
-    * different things with them: a state that is not held is not asked for again ([[JsonRpcError.StateNotHeld]]); one
-    * that is not handed out right now, and one that moved under every view of it, are ([[JsonRpcError.StateBusy]],
-    * [[JsonRpcError.StateMoved]]). None of them is the execution error a client takes for a revert. The backstop of the
-    * controllers answers a [[StateFault]] that escapes a method with these too.
+  /** What a client is told when the state it asked about cannot be read. A state that is not held is not asked for
+    * again ([[JsonRpcError.StateNotHeld]]); one that is not handed out right now, one that moved under every view of
+    * it, and a head that another thread's adoption is moving are ([[JsonRpcError.StateBusy]],
+    * [[JsonRpcError.StateMoved]], [[JsonRpcError.HeadBusy]]). None of them is the execution error a client takes for a
+    * revert. The backstop of the controllers answers a [[StateFault]] that escapes a method with these too.
     */
-  /** Whether `error` is one of the three answers of [[unavailable]]: for a caller that gives a default for any other
-    * error of a method, and must not give it for a state that could not be read.
+  /** Whether `error` is one of the answers of [[unavailable]]: for a caller that gives a default for any other error of
+    * a method, and must not give it for a state that could not be read.
     */
   def isStateError(error: JsonRpcError): Boolean =
-    error == JsonRpcError.StateNotHeld || error == JsonRpcError.StateBusy || error == JsonRpcError.StateMoved
+    error == JsonRpcError.StateNotHeld || error == JsonRpcError.StateBusy || error == JsonRpcError.StateMoved ||
+      error == JsonRpcError.HeadBusy
 
   def unavailable(fault: StateFault, attempts: Int = 1): JsonRpcError =
-    // the client is told which of the three; why is said here
+    // the client is told which; why is said here
     log.debug(s"A read of the state is answered as unavailable after $attempts attempt(s): ${fault.getMessage}")
     fault match
-      case _: StaleStateViewException                    => JsonRpcError.StateMoved
+      case _: StaleStateViewException => JsonRpcError.StateMoved
+      // another thread's adoption is moving the head (B-462): nothing was written, ask again
+      case _: StateBusy                                  => JsonRpcError.HeadBusy
       case refused: StateUnavailable if refused.askAgain => JsonRpcError.StateBusy
       case _                                             => JsonRpcError.StateNotHeld

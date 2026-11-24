@@ -994,6 +994,39 @@ class TestServiceOnPositionsSpec
       side.foreach(block => onPositions.pathState.holdsLayer(onPositions.refOf(block.header)) shouldBe false)
     }
 
+  // B-462: a rewind refused, with nothing written, while another thread's adoption holds the head is answered as a
+  // state to ask for again: not as a rewind that cannot be made, and not as a limit of the layout
+  it should "answer a rewind refused while another thread's adoption holds the head as busy, and rewind once it ends" taggedAs
+    UnitTest in {
+      val pair = new Pair(chainA)
+      import pair.*
+      val firstBlock = step(Seq(transfer(0, Address(42), 9000)))
+      step(Seq(transfer(1, Address(43), 9000)))
+      val before = onPositions.everything
+      val cleared = onPositions.cleared
+      val opened = new java.util.concurrent.CountDownLatch(1)
+      val done = new java.util.concurrent.CountDownLatch(1)
+      val holder = new Thread(
+        () =>
+          onPositions.pathState.withRecordsHeld(onPositions.refOf(firstBlock.header)) {
+            opened.countDown()
+            done.await()
+          },
+        "the-adoption"
+      )
+      holder.start()
+      opened.await()
+      try
+        onPositions.rewind(1) shouldBe Left(JsonRpcError.HeadBusy)
+        onPositions.everything shouldBe before
+        onPositions.cleared shouldBe cleared
+      finally
+        done.countDown()
+        holder.join()
+      onPositions.rewind(1) shouldBe Right(RewindToBlockResponse())
+      onPositions.head.header.hash shouldBe firstBlock.header.hash
+    }
+
   it should "rewind to its head, to a block of its chain by moving its head back, and to its genesis" taggedAs
     UnitTest in {
       val pair = new Pair(chainA)

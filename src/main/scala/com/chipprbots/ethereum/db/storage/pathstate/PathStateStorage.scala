@@ -876,8 +876,10 @@ final class PathStateStorage(
     * @param block
     *   the block being committed, with the state root its header carries
     * @throws StateUnavailable
-    *   when the block does not extend the anchor, or there is no anchor; and, asking again, while another thread's
-    *   attempt that holds the records is open ([[withRecordsHeld]]): nothing is written
+    *   when the block does not extend the anchor, or there is no anchor: nothing is written
+    * @throws StateBusy
+    *   while another thread's attempt that holds the records is open ([[withRecordsHeld]]): nothing is written, and the
+    *   caller asks again once it has ended
     */
   def commitCanonical(
       staged: Option[PathStagedState],
@@ -1179,7 +1181,7 @@ final class PathStateStorage(
         // asked under the state lock, where a hold is opened: an attempt that is not listed here begins after the clear
         attemptThreads.values().iterator().asScala.nextOption().foreach { holder =>
           throw new StateClearRefused(
-            s"an adoption on thread '${holder.getName}' holds the records and is moving the head, which the chain may " +
+            s"an adoption on thread '${holder.thread.getName}' holds the records and is moving the head, which the chain may " +
               "follow from where it ends. Ask again once it has ended"
           )
         }
@@ -1564,7 +1566,9 @@ final class PathStateStorage(
     *
     * @throws StateUnavailable
     *   when `block` has no forward layer, or its parent is not the anchor, or its layer was not built on the state the
-    *   disk holds; and, asking again, while another thread's attempt that holds the records is open
+    *   disk holds
+    * @throws StateBusy
+    *   while another thread's attempt that holds the records is open: nothing is written, and the caller asks again
     */
   def promote(block: BlockRef, extra: Option[DataSourceBatchUpdate]): CommitOutcome =
     extra.foreach(other =>
@@ -1685,10 +1689,26 @@ final class PathStateStorage(
     */
   private val recordHolds = new ConcurrentHashMap[Object, BigInt]()
 
-  /** The thread of each attempt that holds the records, by the attempt (B-294). An attempt adopts its branch on the
-    * thread that opened it: its moves and its commits are made there, one after another.
+  /** Each attempt that holds the records, by the attempt (B-294): the thread that opened it, what it holds and when it
+    * was opened. An attempt adopts its branch on the thread that opened it: its moves and its commits are made there,
+    * one after another.
     */
-  private val attemptThreads = new ConcurrentHashMap[Object, Thread]()
+  private val attemptThreads = new ConcurrentHashMap[Object, OpenAttempt]()
+
+  /** How long the oldest attempt that is open has been, in milliseconds of [[CommitSettings.nowMillis]]: none when none
+    * is open (B-462). Read at any time, from any thread, without the state lock: what the gauge of its age reads.
+    */
+  def oldestAttemptAgeMillis: Option[Long] =
+    attemptThreads
+      .values()
+      .iterator()
+      .asScala
+      .map(_.openedAt)
+      .minOption
+      .map(opened => math.max(0L, settings.nowMillis() - opened))
+
+  // the gauge of the open attempt's age reads this store, by its own clock (B-462)
+  told("the age of the open attempt")(settings.observer.attemptAgeOf(() => oldestAttemptAgeMillis))
 
   /** Whether an attempt holds the records right now ([[withRecordsHeld]]), read without a lock: for a caller that would
     * undo work of its own before a clear that is then refused (B-465). The clear's own check, under the state lock, is
@@ -1709,14 +1729,26 @@ final class PathStateStorage(
     * does ([[adopting]]): for one move of the head under way on another thread, which takes no gate, and is then
     * refused. Asked under the state lock, where an attempt is opened: a writer that passes it finds the head settled,
     * or its own attempt's.
+    *
+    * The refusal is a [[StateBusy]] (B-462): no fault of this node, never counted by the escalation, said at WARN. An
+    * attempt found open for longer than [[CommitSettings.attemptAgeWarnMillis]] is said once more, at WARN, the first
+    * time a writer is refused by it: an adoption that holds the head that long is stuck, and every writer it refuses
+    * meanwhile is asked to ask again, without end.
     */
   private def refuseInAnotherAttempt(what: String)(using StateLockHeld): Unit =
     val self = Thread.currentThread()
-    attemptThreads.values().iterator().asScala.find(_ ne self).foreach { other =>
-      throw new StateUnavailable(
-        s"$what was not made: an adoption on thread '${other.getName}' is moving the head, which stands on a block it " +
-          "may not stay on until the adoption ends. Ask again then",
-        askAgain = true
+    attemptThreads.values().iterator().asScala.find(_.thread ne self).foreach { other =>
+      val holder = s"the adoption on thread '${other.thread.getName}' (${other.what})"
+      val age = math.max(0L, settings.nowMillis() - other.openedAt)
+      if age > settings.attemptAgeWarnMillis && other.warned.compareAndSet(false, true) then
+        log.warn(
+          s"[STATE-BUSY] $holder has held the head for ${age / 1000}s, more than " +
+            s"${settings.attemptAgeWarnMillis / 1000}s: every writer is refused until it ends, and $what was not made"
+        )
+      throw new StateBusy(
+        holder,
+        s"$what was not made: an adoption on thread '${other.thread.getName}' is moving the head, which stands on a " +
+          "block it may not stay on until the adoption ends. Ask again then"
       )
     }
 
@@ -1731,10 +1763,10 @@ final class PathStateStorage(
     * '''The attempt is the calling thread's''' (B-294): while it runs, no other thread adopts a block, moves the head
     * (but a fork choice) or begins an attempt ([[refuseInAnotherAttempt]]). So `body` must run synchronously on the
     * calling thread, its moves and commits included: one it hands to another thread, or makes on one (an `IO` shifted
-    * off this thread, a future), is refused as another thread's write, asking again.
+    * off this thread, a future), is refused as another thread's write, with a [[StateBusy]].
     */
   @throws[ReorgTooDeep]("when the records above `above` are not all kept already: the way back is not there")
-  @throws[StateUnavailable]("asking again, when another thread's attempt is open: nothing was held")
+  @throws[StateBusy]("when another thread's attempt is open: nothing was held, and the caller asks again")
   def withRecordsHeld[A](above: BlockRef)(body: => A): A =
     val hold = new Object
     // under the lock, so that no commit prunes between the look at what is kept and the hold
@@ -1747,7 +1779,10 @@ final class PathStateStorage(
         )
       }
       recordHolds.put(hold, above.number + 1)
-      attemptThreads.put(hold, Thread.currentThread())
+      attemptThreads.put(
+        hold,
+        new OpenAttempt(Thread.currentThread(), s"the records above block ${above.show}", settings.nowMillis())
+      )
     }
     // the hold is the attempt: the head is not settled until it ends, whatever moves and commits it makes. Opened
     // inside the `try`, so that nothing between the hold and its release can leave the hold, or its thread, behind
@@ -1832,7 +1867,7 @@ final class PathStateStorage(
     * @param forkChoice
     *   a move a consensus client's fork choice asks for, which is made while another thread's attempt is open: the
     *   attempt follows the head the consensus client names, and stops when another is named (`StateRecovery`). Any
-    *   other move is refused then, before its first batch, asking again ([[refuseInAnotherAttempt]], B-294)
+    *   other move is refused then, before its first batch, with a [[StateBusy]] ([[refuseInAnotherAttempt]], B-294)
     * @param extraFor
     *   the caller's rows for the batch that ends on a block. It is called with no lock of this store held but the one
     *   that keeps other moves and commits out, once for each batch, and again if the move is planned again; what it
@@ -1846,7 +1881,9 @@ final class PathStateStorage(
     * @throws StateUnavailable
     *   when a block on the way up has neither record nor layer (`heldTo` says how far a move could be made), when the
     *   target's chain does not lead to this node's state, or when a layer was found not to stand and was dropped; and,
-    *   asking again, when it is no fork choice and another thread's attempt is open: nothing was written
+    *   asking again, when the state was moved by another writer between two of its batches, or under every plan of it
+    * @throws StateBusy
+    *   when it is no fork choice and another thread's attempt is open: nothing was written, and the caller asks again
     */
   def moveHead(
       target: BlockRef,
@@ -2378,6 +2415,22 @@ object PathStateStorage:
     */
   val MaxKeysDestroyed: Long = 1000000L
 
+  /** How long an attempt that holds the records (an adoption by reverse-then-commit, or the fork choice's recovery) may
+    * be open before a writer it refuses says so, once, at WARN (B-462): ten minutes. Such an attempt moves the head
+    * down to a fork and commits the branch above it in place, a branch no longer than what the changeset records reach
+    * and regular sync fetches whole: at the speed blocks are executed again (several a second, even on mainnet),
+    * seconds to a few minutes. Ten minutes is well past that and short of what an operator would take for a node that
+    * stopped following the chain. It changes nothing but the log: the refusal is never counted, however old the
+    * attempt.
+    */
+  val AttemptAgeWarnMillis: Long = 10L * 60 * 1000
+
+  /** An attempt that holds the records ([[PathStateStorage.withRecordsHeld]]), by the thread that opened it, what it
+    * holds and when it was opened; `warned` once a writer it refused has said it is old (B-462).
+    */
+  final private[pathstate] class OpenAttempt(val thread: Thread, val what: String, val openedAt: Long):
+    val warned = new java.util.concurrent.atomic.AtomicBoolean(false)
+
   private val NotBuiltForDestruction =
     "The state of a data directory is destroyed only in test mode (fukuii.testmode), for a new genesis"
 
@@ -2439,7 +2492,11 @@ object PathStateStorage:
       maxReversePoolBytes: Long = 128L * 1024 * 1024,
       // How many reads of a state behind the anchor callers of the JSON-RPC may have in flight: each may hold an
       // index of maxReverseIndexBytes that is not kept. A constant until it is measured (M5).
-      maxReadsBehindHead: Int = 4
+      maxReadsBehindHead: Int = 4,
+      // The wall clock, in milliseconds: what the age of an attempt that holds the records is read by (B-462).
+      nowMillis: () => Long = () => System.currentTimeMillis(),
+      // How long an attempt may hold the records before a writer it refuses says so at WARN, once (B-462).
+      attemptAgeWarnMillis: Long = AttemptAgeWarnMillis
   )
 
   object CommitSettings:
@@ -2610,6 +2667,11 @@ object PathStateStorage:
 
     /** A repair overwrote a row that decodes and is not the node the anchor's root names there (data-model 7.5). */
     def repairOverwrote(): Unit = ()
+
+    /** How to read the age of the oldest attempt that holds the records, in milliseconds, none when none is open: told
+      * once, when the store is made (B-462).
+      */
+    def attemptAgeOf(ageMillis: () => Option[Long]): Unit = ()
 
   object CommitObserver:
     val Silent: CommitObserver = new CommitObserver {}
