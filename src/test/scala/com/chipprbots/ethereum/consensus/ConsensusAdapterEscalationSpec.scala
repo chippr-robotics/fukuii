@@ -602,6 +602,42 @@ class ConsensusAdapterEscalationSpec extends AnyFlatSpec with Matchers:
     on.queuedAgain()
   }
 
+  // B-496: the line it is said with carries ConsensusImpl's tag. Another thread's adoption holding the head
+  // (`StateBusy`, B-462) is said at WARN as busy, never as a fault of this node's state; any other fault keeps
+  // `[STATE-FAULT]`, at WARN as before
+  it should "say a fault thrown out of the import with the tag ConsensusImpl says it with, at WARN" taggedAs UnitTest in {
+    import ch.qos.logback.classic.Level
+    val cases: Seq[(com.chipprbots.ethereum.db.storage.pathstate.StateFault, String, String)] = Seq(
+      (
+        new com.chipprbots.ethereum.db.storage.pathstate.StateBusy(
+          "injected: the adoption",
+          "injected: the head is held"
+        ),
+        "[STATE-BUSY]",
+        "[STATE-FAULT]"
+      ),
+      (new ReorgTooDeep(ReorgRefusal.Deep, "injected: 200 blocks below the head"), "[STATE-FAULT]", "[STATE-BUSY]")
+    )
+    cases.foreach { (thrown, tag, notTag) =>
+      withClue(s"$thrown: ") {
+        val on = new ThrowingRig(thrown)
+        val said = scala.util.Using.resource(
+          new com.chipprbots.ethereum.blockchain.sync.snap.SnapLogCapture(classOf[ConsensusAdapter].getName)
+        ) { capture =>
+          (on.answered().fault should be).theSameInstanceAs(thrown)
+          capture.events
+        }
+        withClue(said.map((level, line) => s"$level $line").mkString("\n")) {
+          val tagged = said.filter(_._2.startsWith(tag))
+          tagged.map(_._1) shouldBe List(Level.WARN)
+          tagged.head._2 should include(thrown.getMessage)
+          said.exists(_._2.contains(notTag)) shouldBe false
+          said.filter(_._1 == Level.ERROR) shouldBe empty
+        }
+      }
+    }
+  }
+
   // anything else is no failure of the store: a defect, or the node stopping. It is thrown on and fails loudly as
   // before, and nothing is stopped, queued or counted for it
   it should "leave anything else thrown out of the import thrown" taggedAs UnitTest in {
