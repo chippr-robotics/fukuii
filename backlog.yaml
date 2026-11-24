@@ -5511,17 +5511,18 @@ items:
   - id: B-520
     title: "Exit paths run the node's stop on daemon threads (TUI q, SIGTERM, Ephemery reset): the JVM ends after the actor system step, before the DB close"
     priority: P1
-    status: claimed
+    status: review
     area: node
     size: S
     opened: 2026-11-24
     refs: [B-452, B-426, "sync reports v0.12.117, 2026-11-23/24"]
-    links: {}
+    links:
+      prs: [2109]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T22:12:07Z
-      heartbeat: 2026-11-24T22:12:07Z
+      heartbeat: 2026-11-24T22:12:31Z
     notes: |-
       TuiQuit inherits daemon from TuiUpdateThread (TuiUpdater.scala:46,87); the JVM's SIGTERM handler thread and ephemery-reset-watchdog are daemons. Once the actor system step ends Pekko's threads, the JVM exits (status 0) and the hook leaves the stop under way.
       Seen on both q quits of v0.12.117 (Mordor 6 GB, ETC mainnet 44 GB): 13 of 15 steps, no metrics or DB close, 239 MB of WAL to replay. Unchanged on staging 0.12.164. SIGTERM checked on JDK 21: handler thread is a daemon, the JVM exits 0 mid-stop.
