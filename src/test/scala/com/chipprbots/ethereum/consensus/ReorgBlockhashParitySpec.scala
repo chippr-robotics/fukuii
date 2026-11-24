@@ -964,8 +964,15 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
             datadir.failAt(bChain.last, new StateUnavailable("injected: the move back"))
           ,
           seen =>
-            seen.result should include("the head could not be moved back to block 7 and is at block 6")
+            // B-461: a6 is a side block the branch stands on, committed before the fault, and not the chain the head
+            // left (b3..b7): said as that, and told as the head, though no block of the branch is
+            seen.result should include(
+              "the head could not be moved back to block 7 and is at block 6, on the side blocks the branch [11-12] " +
+                "stands on"
+            )
+            (seen.result should not).include("on the chain it left")
             seen.head shouldBe aChain(5).hash
+            seen.headOn shouldBe aChain.slice(2, 6).map(_.hash)
         )
       )
       for (what, fault, expected) <- faults do
@@ -1067,7 +1074,9 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         anchor: Option[com.chipprbots.ethereum.db.storage.pathstate.BlockRef],
         index: Seq[Option[BlockHash]],
         weights: Seq[Option[ChainWeight]],
-        rows: (Map[ByteString, ByteString], Map[ByteString, ByteString])
+        rows: (Map[ByteString, ByteString], Map[ByteString, ByteString]),
+        // the side blocks the answer tells as the head when a move back left it on them (B-461), oldest first
+        headOn: List[BlockHash] = Nil
     )
 
     def evaluated(
@@ -1124,7 +1133,8 @@ class ReorgBlockhashParitySpec extends AnyFlatSpec with Matchers with ScalaFutur
         node.storagesInstance.storages.appStateStorage.getStateAnchor(),
         (1 to all.map(_.number.value.toInt).max).map(node.indexed),
         all.map(block => node.blockchainReader.getChainWeightByHash(block.hash)),
-        PathStateTestKit.allRows(new PathNodeStorage(datadir))
+        PathStateTestKit.allRows(new PathNodeStorage(datadir)),
+        result.toOption.toList.flatMap(Consensus.headLeftOn).map(_.block.hash)
       )
 
   "A branch of the head's own weight on a proof-of-work chain (the unified layout)" should
