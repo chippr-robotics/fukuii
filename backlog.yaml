@@ -5319,13 +5319,18 @@ items:
   - id: B-510
     title: "B-490 nits: StateRecovery re-derive skipped on a non-fault exception (move into finally); WARN when the 8192 walk limit drops the moved blocks"
     priority: P3
-    status: open
+    status: claimed
     area: sync
     size: S
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-24T13:07:02Z
+      heartbeat: 2026-11-24T13:07:02Z
     notes: "vault review of B-490. adopt: rederiveWeights after try/finally; catchUp: after commitEach. Note B-491 too: closing fix is same-batch weight write or a pass on restart."
   - id: B-511
     title: "B-505 follow-ups: hash arm checks the named head once before the index write (re-check at the write); pruned prefix retry may hit MissingNode"
