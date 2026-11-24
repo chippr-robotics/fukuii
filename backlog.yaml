@@ -2260,19 +2260,15 @@ items:
   - id: B-247
     title: JdkHttpsTransportSpec 'refuse a proxy URL with credentials' fails where the JVM has https.proxyHost set
     priority: P3
-    status: review
+    status: done
     area: tests
     size: S
     opened: 2026-11-13
+    closed: 2026-11-24
     refs: []
     links:
       prs: [2094]
       spec: 028
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T15:12:31Z
-      heartbeat: 2026-11-24T15:37:24Z
     notes: The test's last assertion calls JdkHttpsTransport.default with HTTPS_PROXY credentials and expects Left; default prefers the JDK https.proxyHost property over the environment (ReleaseTransport.scala:376-378), which cloud containers set in JAVA_TOOL_OPTIONS, so it answers Right there. Isolate the test from the JVM's properties (inject props) like the environment map. Seen in testEssential on the C4b part 2a branch, which does not touch ephemery/.
   - id: B-248
     title: "SYNC-FORK resolver: discardBlocksAfter deletes the index entries before rewindCanonicalChain reads them"
