@@ -507,11 +507,12 @@ class StateRecovery(
               // whether the hold was taken: one that was refused held nothing and wrote nothing
               var holding = false
               // what the move up to `held` makes canonical, read before it while the index is the old head's ancestry,
-              // and the blocks committed above it: their weights are re-derived once the hold is let go (B-490)
-              val madeCanonical =
-                if state.isApplied(held.hash.value) then Nil else AdoptedChainWeights.notCanonicalBelow(held, reader)
+              // and the blocks committed above it: their weights are re-derived once the hold is let go (B-490), however
+              // the adoption ends, an exception out of a commit included (B-510). A block's exact weight depends only on
+              // its ancestry: right whether or not the head stays on it
+              val madeCanonical = notCanonicalBelow(held)
               val committed = scala.collection.mutable.ListBuffer.empty[BlockHash]
-              val ended =
+              rederivingAfter(madeCanonical ++ committed) {
                 try
                   // on the head read as `from`, which a move back leads to: a block committed on it since refuses the
                   // hold as busy, nothing written, and the next fork choice reads the head again (B-463)
@@ -565,9 +566,7 @@ class StateRecovery(
                   // is when a block was committed on the head since `from` was read (B-463)
                   case _: StateBusy if !holding => Outcome.Superseded
                 finally adopting = None
-              // a block's exact weight depends only on its ancestry: right whether or not the head stays on it
-              rederiveWeights(madeCanonical ++ committed)
-              ended
+              }
     logEnd(head, why, outcome)
     outcome
 
@@ -622,10 +621,11 @@ class StateRecovery(
           case Left(missing) => if committed > 0 then Outcome.Adopted(committed) else missing
           case Right(blocks) =>
             val chunkCommitted = scala.collection.mutable.ListBuffer.empty[BlockHash]
-            val ended = commitEach(head, blocks, sink, Some(asked), onCommitted = chunkCommitted += _.header.hash)
-            // what the chunk committed, once its commits have returned: on the chunk below, re-derived already (B-490)
-            rederiveWeights(chunkCommitted.toList)
-            ended match
+            // what the chunk committed, once its commits have returned or one has thrown (B-510): on the chunk below,
+            // re-derived already (B-490)
+            rederivingAfter(chunkCommitted.toList) {
+              commitEach(head, blocks, sink, Some(asked), onCommitted = chunkCommitted += _.header.hash)
+            } match
               case Outcome.Adopted(count)              => next(rest, committed + count)
               case invalid @ Outcome.Invalid(found, _) =>
                 // The blocks of the chunk above it were handed to the sink with it. Those of the chunks not read yet,
@@ -641,11 +641,13 @@ class StateRecovery(
       adopting = Some(Progress(held.number.value, held.number.value, chain.last.number.value))
       val ahead = aheadOfHeld(chain)
       // what the move up to `held` makes canonical, read before it while the index is the old head's ancestry (B-490)
-      val madeCanonical =
-        if state.isApplied(held.hash.value) then Nil else AdoptedChainWeights.notCanonicalBelow(held, reader)
+      val madeCanonical = notCanonicalBelow(held)
       try
-        // the executed blocks kept beside the disk, up to the block the chain stands on, become the head first
-        val refused =
+        // the executed blocks kept beside the disk, up to the block the chain stands on, become the head first. Their
+        // weights are re-derived once the move has returned or thrown (a move of more than one batch may have written
+        // some of them, B-510), and before the first chunk reads the weight of `held`; a block's exact weight depends
+        // only on its ancestry, so it is right whether or not the move was made
+        val refused = rederivingAfter(madeCanonical) {
           try
             if !state.isApplied(held.hash.value) then
               writer.moveHeadInPlace(
@@ -664,9 +666,7 @@ class StateRecovery(
             case _: StateBusy                            => Some(Outcome.Superseded)
             case busy: StateUnavailable if busy.askAgain => Some(Outcome.Superseded)
             case fault: StateFault => Some(if asked() then Outcome.NotAdopted(fault.getMessage) else Outcome.Superseded)
-        // once the move has returned, and before the first chunk reads the weight of `held`; a block's exact weight
-        // depends only on its ancestry, so it is right whether or not the move was made
-        rederiveWeights(madeCanonical)
+        }
         refused.getOrElse(next(chain, 0))
       finally adopting = None
 
@@ -772,12 +772,20 @@ class StateRecovery(
     * [[AdoptedChainWeights.rederive]]): those the move up to `held` made canonical kept the weights derived when they
     * were executed, and each block committed in place took its parent's as read before the commit's lock. A
     * chain-weight repair (`ChainWeightReconcile`) that rewrote a parent's weight in between, and whose final step
-    * checked the index before they were canonical, would leave them the old one under its marker. Called once the move
-    * or the commits have returned, outside the hold of the records: the chain insert lock (shared) is taken after them,
-    * never inside.
+    * checked the index before they were canonical, would leave them the old one under its marker. Run once the move or
+    * the commits have returned, or one of them has thrown (B-510: a block committed before an exception is canonical
+    * all the same), outside the hold of the records: the chain insert lock (shared) is taken after them, never inside.
     */
-  private def rederiveWeights(madeCanonical: Seq[BlockHash]): Unit =
-    AdoptedChainWeights.rederive(madeCanonical, reader, writer, "[STATE-RECOVERY] A commit in place (B-490)")
+  private def rederivingAfter[A](madeCanonical: => Seq[BlockHash])(body: => A): A =
+    AdoptedChainWeights.rederivingAfter(madeCanonical, reader, writer, WeightsBy)(body)
+
+  /** What a move of the head up to `held` makes canonical ([[AdoptedChainWeights.notCanonicalBelow]]): nothing when the
+    * head is on it already.
+    */
+  private def notCanonicalBelow(held: BlockHeader): Seq[BlockHash] =
+    if state.isApplied(held.hash.value) then Nil else AdoptedChainWeights.notCanonicalBelow(held, reader, WeightsBy)
+
+  private val WeightsBy = "[STATE-RECOVERY] A commit in place (B-490)"
 
   /** One block committed in place as the head, as an import commits it. A test stands here. */
   protected def adoptBlock(
