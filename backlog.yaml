@@ -4785,3 +4785,14 @@ items:
     links:
       spec: 018
     notes: "B-464 admits the move back after an invalid/faulted commit only from the block the adoption left the head on (plan admit, under the moves lock). The refused-first-move path checks asked() then moves back with no admit: a fork choice that names and moves to another head between the two is undone. The head there may be anywhere along the partial move, so the set of positions to admit from must be collected from the move (e.g. the observer or the chunk heads)."
+  - id: B-480
+    title: "StateRecovery walk (B-316): pin the anchor guard, a fork choice's walk must not stop at an index entry above the anchor"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-24
+    refs: [B-316]
+    links:
+      spec: 018
+    notes: B-316's viewless stop requires the block to be canonical AND below the anchor; removing the below-anchor half breaks no test (HeadMoveOnTheChainSpec, ReorgBlockhashParitySpec, EscalationWatch). Stage an index that runs ahead of the anchor (post-SNAP hand-off) and assert the catch-up still walks to the anchor.
