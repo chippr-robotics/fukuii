@@ -70,7 +70,6 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPe
 import com.chipprbots.ethereum.network.PeerEventBusActor.PublishCmd
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 import com.chipprbots.ethereum.testing.Tags.*
@@ -174,10 +173,10 @@ class BackgroundAuditSpec
       s.progress.writeAuditBadEntries(AuditBadEntries(s.app.snapAuditAnchor(), 0L, Map(hash -> entry)).encode)
 
   private def serve(fetch: StateNodeFetcher.FetchStateNode, bytes: Array[Byte]): Unit =
-    fetch.originalSender ! FetchedStateNode(NodeData(Seq(ByteString(bytes))))
+    fetch.originalSender ! FetchedStateNode(Seq(ByteString(bytes)))
 
   private def exhaust(fetch: StateNodeFetcher.FetchStateNode): Unit =
-    fetch.originalSender ! FetchedStateNode(NodeData(Seq.empty))
+    fetch.originalSender ! FetchedStateNode(Seq.empty)
 
   /** A state of a few accounts, one holding a storage trie, with a storage node well below its root. */
   private def populate(n: Node): ByteString =

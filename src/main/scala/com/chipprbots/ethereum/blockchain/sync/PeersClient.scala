@@ -5,7 +5,6 @@ import org.apache.pekko.actor.typed.Behavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 
-import scala.collection.mutable
 import scala.concurrent.duration.*
 import scala.reflect.ClassTag
 import scala.reflect.TypeTest
@@ -41,8 +40,8 @@ object PeersClient:
 
   // ---- Command ADT ----
   //
-  // The public request/control messages (Request, BlacklistPeer, RecordNodeDataFailure,
-  // PrintStatus) ARE the protocol — they extend Command directly. `Request` carries a Typed
+  // The public request/control messages (Request, BlacklistPeer, PrintStatus) ARE the protocol — they extend
+  // Command directly. `Request` carries a Typed
   // `replyTo: ActorRef[ResponseMessage]` so callers use the Typed AskPattern rather than the
   // Classic `?` ask (which relied on the now-removed Classic shell capturing `sender()`).
 
@@ -70,7 +69,6 @@ object PeersClient:
       (replyTo: TypedActorRef[ResponseMessage]) => Request(message, peerSelector, toSerializable, replyTo)
 
   final case class BlacklistPeer(peerId: PeerId, reason: BlacklistReason) extends Command
-  final case class RecordNodeDataFailure(peerId: PeerId) extends Command
   case object PrintStatus extends Command
 
   private case object ScanPeersTick extends Command
@@ -155,8 +153,6 @@ object PeersClient:
   ):
 
     private var _maintainedNodeIdHexes: Set[String] = Set.empty
-    private val nodeDataCooldownUntilMs = mutable.Map.empty[PeerId, Long]
-    private val nodeDataConsecutiveFailures = mutable.Map.empty[PeerId, Int]
     private var nextPrhId: Int = 0
 
     // Registered once at setup — safe to call ctx.messageAdapter here because Impl is
@@ -180,10 +176,6 @@ object PeersClient:
           Behaviors.same
 
         case PeerDisconnectedCmd(peerId) =>
-          // Intentionally do NOT clear nodeData cooldown on disconnect. A peer that closes
-          // the connection when asked for GetNodeData (e.g. BONSAI Besu) will immediately
-          // reconnect and repeat the same failure if we reset its state here. The time-based
-          // cooldown must be allowed to expire naturally so the peer stays suppressed.
           peerHelper.handlePeerDisconnected(peerId)
           Behaviors.same
 
@@ -194,14 +186,6 @@ object PeersClient:
 
         case BlacklistPeer(peerId, reason) =>
           peerHelper.blacklistIfHandshaked(peerId, reason.duration(syncConfig.blacklistDuration), reason)
-          Behaviors.same
-
-        case RecordNodeDataFailure(peerId) =>
-          val count = nodeDataConsecutiveFailures.getOrElse(peerId, 0) + 1
-          nodeDataConsecutiveFailures(peerId) = count
-          val cooldownMs = if count >= 3 then 3_600_000L else count * 30_000L
-          nodeDataCooldownUntilMs(peerId) = System.currentTimeMillis() + cooldownMs
-          ctx.log.debug("Peer {} GetNodeData failure #{} — cooldown {}ms", peerId, count, Long.box(cooldownMs))
           Behaviors.same
 
         case PrintStatus | PrintStatusTick =>
@@ -340,19 +324,6 @@ object PeersClient:
           )
           bestPeer(snapPeers, ctx.log)
 
-        case BestNodeDataPeer =>
-          val now = System.currentTimeMillis()
-          val nodeDataPeers = peerHelper.peersToDownloadFrom.filter { case (peerId, _) =>
-            !nodeDataCooldownUntilMs.get(peerId).exists(_ > now)
-          }
-          ctx.log.debug(
-            "Selecting best GetNodeData-capable peer from {} available peers ({} capable, {} on cooldown)",
-            peerHelper.peersToDownloadFrom.size,
-            nodeDataPeers.size,
-            nodeDataCooldownUntilMs.count { case (_, exp) => exp > now }
-          )
-          bestPeer(nodeDataPeers, ctx.log)
-
         case ExcludingPeers(exclude) =>
           val filteredPeers = peerHelper.peersToDownloadFrom.filterNot { case (peerId, _) => exclude.contains(peerId) }
           ctx.log.debug(
@@ -460,19 +431,6 @@ object PeersClient:
             )
             bestPeer(unknownHeadPeers, ctx.log)
 
-        case BestNodeDataPeerExcluding(exclude) =>
-          val now = System.currentTimeMillis()
-          val nodeDataPeers = peerHelper.peersToDownloadFrom.filter { case (peerId, _) =>
-            !exclude.contains(peerId) &&
-            !nodeDataCooldownUntilMs.get(peerId).exists(_ > now)
-          }
-          ctx.log.debug(
-            "Selecting best GetNodeData peer excluding {} tried peers ({} capable remaining)",
-            exclude.size,
-            nodeDataPeers.size
-          )
-          bestPeer(nodeDataPeers, ctx.log)
-
     /** Adapts message format based on peer's negotiated capability. ETH68+ always uses request-id — no adaptation
       * needed.
       */
@@ -542,13 +500,11 @@ object PeersClient:
   sealed trait PeerSelector
   case object BestPeer extends PeerSelector
   case object BestSnapPeer extends PeerSelector
-  case object BestNodeDataPeer extends PeerSelector
   case class ExcludingPeers(exclude: Set[PeerId]) extends PeerSelector
 
   /** A peer that negotiated eth/71 or later (EIP-8159 `GetBlockAccessLists`), skipping `exclude`. */
   case class BestEth71PeerExcluding(exclude: Set[PeerId]) extends PeerSelector
   case class BestSnapPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
-  case class BestNodeDataPeerExcluding(exclude: Set[PeerId]) extends PeerSelector
 
   /** Pick a peer whose advertised chain head is at least `minBlock`. Use this for absolute-block-number requests (e.g.
     * PivotHeaderBootstrap targeting a specific pivot) where peers behind that height literally have nothing to return.

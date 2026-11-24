@@ -216,7 +216,7 @@ object SerializingMptStorage extends Logger:
       size() > MaxLoggedCorrupt
 
   /** True the first time `hash` is met, until it is forgotten. */
-  private[storage] def firstReport(hash: ByteString): Boolean =
+  private[ethereum] def firstReport(hash: ByteString): Boolean =
     loggedCorrupt.synchronized(loggedCorrupt.put(hash, java.lang.Boolean.TRUE) == null)
 
   /** The exception for a stored entry that is not the node `hash` names, logged the first time that hash is met. At

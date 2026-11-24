@@ -68,7 +68,6 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerId
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers
@@ -644,7 +643,7 @@ final private class BlockImporterLogic(
   // State nodes that arrived while an import ran, oldest first, for that import's ImportDone to act on (B-408). The
   // import sends its fetch from inside its own IO, before its ImportDone moves the importer into the wait: a node
   // answered in that gap was written as a late arrival, and the wait then ran out its 30 s for a node already there.
-  private var nodesDuringImport: Vector[NodeData] = Vector.empty
+  private var nodesDuringImport: Vector[Seq[ByteString]] = Vector.empty
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
 
   // The blocks a fork recovery was already started for, on the unified state layout (spec 018 C4e part 6). Nothing is
@@ -806,7 +805,7 @@ final private class BlockImporterLogic(
           case _                       => None
         val arrived = nodesDuringImport
         nodesDuringImport = Vector.empty
-        val answer = arrived.find(data => waitedFor.contains(kec256(data.values.head)))
+        val answer = arrived.find(nodes => waitedFor.contains(kec256(nodes.head)))
         arrived.filterNot(answer.contains).foreach(saveLateNode)
         val newBehavior = reported match
           case r: ResolvingMissingNode if answer.isDefined          => r.copy(alreadyExhausted = false)
@@ -885,26 +884,26 @@ final private class BlockImporterLogic(
       // An exhausted fetch, landing while an import runs: a 30 s retry of the blocked import, most likely. Dropped, it
       // was lost, and the re-import started the fetch again from its first try. So that import's ImportDone ends its
       // wait with it, if it waits on a node again (forge, #1694).
-      case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.isEmpty && state.importing =>
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodes)) if nodes.isEmpty && state.importing =>
         exhaustedDuringImport = true
         Behaviors.same
 
       // A state node, landing while an import runs: most likely the answer to the fetch that import has just sent, which
       // its ImportDone then waits for. Held for that ImportDone (B-408), as an exhausted fetch is (#1694).
-      case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.nonEmpty && state.importing =>
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodes)) if nodes.nonEmpty && state.importing =>
         // The fetcher answers one request at a time, so one node is held in practice. A fetcher that answers more
         // cannot grow the list without bound: past the cap the oldest is saved as a late arrival, as before B-408.
         if nodesDuringImport.size >= HeldNodesCapacity then
           saveLateNode(nodesDuringImport.head)
           nodesDuringImport = nodesDuringImport.tail
-        nodesDuringImport = nodesDuringImport :+ nodeData
+        nodesDuringImport = nodesDuringImport :+ nodes
         Behaviors.same
 
       // Late-arriving state node from a previous resolvingMissingNode phase.
       // ReceiveTimeout may have moved us back to running before the fetch completed.
       // Save the node so the next import attempt finds it in storage.
-      case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.nonEmpty =>
-        saveLateNode(nodeData)
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodes)) if nodes.nonEmpty =>
+        saveLateNode(nodes)
         Behaviors.same
 
       case StartForkRecovery(failedBlockNumber, beyondTheFetch) =>
@@ -1000,11 +999,11 @@ final private class BlockImporterLogic(
       state: ImporterState
   ): Behavior[Command] =
     Behaviors.receiveMessage {
-      case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.isEmpty =>
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodes)) if nodes.isEmpty =>
         fetchExhausted(blocksToRetry, state)
 
-      case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) =>
-        val node = nodeData.values.head
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodes)) =>
+        val node = nodes.head
         val hash = kec256(node)
         log.info(
           "Received missing state node {}, saving and retrying block {}",
@@ -1295,7 +1294,7 @@ final private class BlockImporterLogic(
       case ResolvingMissingNode(blocksToRetry, alreadyExhausted) =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.resolvingRetryInterval)
         // Sent here, not from the import: there it would reach `running`, which does not wait on a node.
-        if alreadyExhausted then selfRef ! FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(Nil)))
+        if alreadyExhausted then selfRef ! FetcherResponse(BlockFetcher.FetchedStateNode(Nil))
         resolvingMissingNode(blocksToRetry, blockImportType)(state)
       case ResolvingBranch(from, upTo) =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
@@ -1440,8 +1439,8 @@ final private class BlockImporterLogic(
                   case Some(_) =>
                     fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                   case None =>
-                    // With no position the fetcher would ask by hash alone (GetNodeData), which no eth/68+ peer serves,
-                    // and wait out its retries for nothing (forge, #1694). So nobody is asked: this is an exhausted
+                    // With no position the fetcher has nothing to ask a peer with (a hash alone is no SNAP request, and
+                    // GetNodeData is gone, EIP-4938), and would only wait out its retries (forge, #1694). So nobody is asked: this is an exhausted
                     // fetch at once, with its backoff, and the audit may fill the hole meanwhile.
                     log.warning(
                       "Storage node {} could not be located under its storage root: asking no peer, and backing off",
@@ -1544,8 +1543,7 @@ final private class BlockImporterLogic(
                       catch case _: Exception => None
                     pendingStateNodeHash = Some(codeHash)
                     pendingFetchPosition = None
-                    // isByteCode=true routes the fetch through SNAP GetByteCodes (works on ETH68+)
-                    // instead of the legacy GetNodeData path (which has no peers on modern networks).
+                    // isByteCode=true routes the fetch through SNAP GetByteCodes (works on ETH68+, needs no position)
                     fetcher ! BlockFetcher.FetchStateNode(
                       codeHash,
                       fetcherResponseAdapter,
@@ -1977,8 +1975,8 @@ final private class BlockImporterLogic(
     * and valid is left as it is.
     */
   /** Saves a state node no wait is taken by, so the next import finds it in storage. */
-  private def saveLateNode(nodeData: NodeData): Unit =
-    val node = nodeData.values.head
+  private def saveLateNode(nodes: Seq[ByteString]): Unit =
+    val node = nodes.head
     val hash = kec256(node)
     log.info("Saving late-arriving fetched state node {}", ByteStringUtils.hash2string(hash))
     // repairFetched, not a blind upsert (#1692): a node already there and valid is left as it is.

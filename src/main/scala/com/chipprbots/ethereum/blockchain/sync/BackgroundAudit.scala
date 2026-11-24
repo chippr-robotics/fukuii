@@ -391,8 +391,8 @@ object BackgroundAudit:
             onPositionDeleted(hole, where, outcome)
           case _: PositionRepaired | _: PositionDeleted =>
             Behaviors.same // of a pass that has ended
-          case FetchReply(BlockFetcher.FetchedStateNode(data)) =>
-            onFetchReply(data.values)
+          case FetchReply(BlockFetcher.FetchedStateNode(nodes)) =>
+            onFetchReply(nodes)
           case FetchReply(_) =>
             Behaviors.same
           case FetchTimedOut(hash) =>

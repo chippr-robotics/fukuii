@@ -553,7 +553,7 @@ class BlockFetcher(
           "BlockFetcher child actor 'state-node-fetcher' terminated unexpectedly: spawning it again, its fetch counted as exhausted"
         )
         stateNodeFetcher = spawnStateNodeFetcher()
-        stateNodeReplyTo.foreach(_ ! FetchedStateNode(ETHPackets.NodeData(Nil)))
+        stateNodeReplyTo.foreach(_ ! FetchedStateNode(Nil))
         stateNodeReplyTo = None
         Behaviors.same
 
@@ -783,9 +783,7 @@ object BlockFetcher:
       paths: Option[Seq[Seq[ByteString]]] = None,
       networkHead: BigInt = BigInt(0),
       // True when `hash` is a contract codeHash and the recovery should use SNAP GetByteCodes.
-      // False (default) means it's a trie-node hash and should use GetTrieNodes / GetNodeData.
-      // Discriminating here avoids an infinite GetNodeData loop on ETH68-only peer sets, where
-      // GetNodeData was removed but GetByteCodes is still served by every snap-capable peer.
+      // False (default) means it's a trie-node hash and should use GetTrieNodes, which needs its position (`paths`).
       isByteCode: Boolean = false
   ) extends FetchCommand
   case object RetryFetchStateNode extends FetchCommand
@@ -837,7 +835,7 @@ object BlockFetcher:
 
   sealed trait FetchResponse
   final case class PickedBlocks(blocks: NonEmptyList[Block]) extends FetchResponse
-  final case class FetchedStateNode(stateNode: ETHPackets.NodeData) extends FetchResponse
+  final case class FetchedStateNode(nodes: Seq[ByteString]) extends FetchResponse
 
   /** The answer to a [[FetchAncestorBodies]]: the headers it asked for, and the bodies found that match their headers,
     * each with its header. Empty when no peer served any.
