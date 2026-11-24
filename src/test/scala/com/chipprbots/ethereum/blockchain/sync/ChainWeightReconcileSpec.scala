@@ -12,6 +12,9 @@ import cats.effect.IO
 
 import scala.concurrent.duration.*
 
+import ch.qos.logback.classic.Logger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.AppenderBase
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -433,6 +436,83 @@ class ChainWeightReconcileSpec extends AnyFlatSpec with Matchers:
     put(Vector(chain(61)), Vector(weights(61)))
     appState.putBestBlockInfo(BlockInfo(chain.last.hash.value, chain.last.number.value)).commit()
     e.step(waiting) shouldBe a[Step.Advanced]
+
+  // B-121: a height the index does not name, under headers that are stored (a datadir written with no number entries
+  // below its pivot). The backfill never fills it, so a wait would last for ever: the pass walks the parent links from
+  // the best block down to its cursor instead, and finishes.
+  it should "walk the parent links across heights the index does not name, repair them, and set the marker (B-121)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Chain:
+    val chain: Vector[BlockHeader] = Genesis +: headers(Genesis, 300)
+    // a jump in the gap (from 100) and another above it (from 250), as an estimate and a calibration leave
+    val weights: Vector[Option[BigInt]] =
+      exact(chain).zipWithIndex.map((w, n) => Some(if n >= 250 then w + 77 else if n >= 100 then w + 5 else w))
+    put(chain.take(41), weights.take(41))
+    // 41..180 stored by their hashes only, with their weights
+    chain.slice(41, 181).zip(weights.slice(41, 181)).foreach { (h, w) =>
+      blockchainWriter.storeBlockHeaderByHashOnly(h).commit()
+      w.foreach(td => blockchainWriter.storeChainWeight(h.hash, ChainWeight.totalDifficultyOnly(td)).commit())
+    }
+    put(chain.drop(181), weights.drop(181))
+    blockchainReader.getHashesByNumbersNoFill(Seq(BigInt(41), BigInt(180))) shouldBe Seq(None, None)
+
+    val epoch = new Epoch
+    // a pass that waits at height 41 instead would never end
+    ChainWeightReconcile
+      .run(engine(), ImportLock(), epoch, epoch.current, appState)
+      .timeout(20.seconds)
+      .unsafeRunSync() shouldBe a[Outcome.Done]
+    stored(chain) shouldBe exact(chain).map(Some(_))
+    appState.hasChainWeightInvariant() shouldBe true
+
+  it should "say once, with a WARN and a gauge, that it cannot reach a height whose headers are not stored at all (B-121)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in new Chain:
+    // chain download off: nothing below the pivot (61) but genesis; the walk down from the best block ends at 61
+    val chain: Vector[BlockHeader] = Genesis +: headers(Genesis, 120)
+    val weights: Vector[Option[BigInt]] = exact(chain).map(Some(_))
+    put(chain.take(1), weights.take(1))
+    put(chain.drop(61), weights.drop(61))
+
+    val logger: Logger = org.slf4j.LoggerFactory.getLogger(LoggerName).asInstanceOf[Logger]
+    val warnings = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+    val warned = new CountDownLatch(1)
+    val polledOn = new CountDownLatch(1)
+    val appender: AppenderBase[ILoggingEvent] =
+      new AppenderBase[ILoggingEvent]:
+        override def append(event: ILoggingEvent): Unit =
+          if event.getLevel == ch.qos.logback.classic.Level.WARN then
+            warnings.add(event.getFormattedMessage)
+            warned.countDown()
+          // the poll after the WARN's: one more check, and no second WARN
+          else if warned.getCount == 0 && event.getFormattedMessage.contains("[CW-RECONCILE] checking again") then
+            polledOn.countDown()
+    appender.start()
+    val level = logger.getLevel
+    logger.setLevel(ch.qos.logback.classic.Level.DEBUG)
+    logger.addAppender(appender)
+    val epoch = new Epoch
+    val fiber: FiberIO[Outcome] =
+      ChainWeightReconcile
+        .run(engine(Small.copy(warnAfterPolls = 3)), ImportLock(), epoch, epoch.current, appState)
+        .start
+        .unsafeRunSync()
+    try
+      warned.await(20, TimeUnit.SECONDS) shouldBe true
+      polledOn.await(20, TimeUnit.SECONDS) shouldBe true
+      Metrics.waitingPolls should be >= 4d
+    finally
+      fiber.cancel.unsafeRunSync()
+      logger.detachAppender(appender)
+      logger.setLevel(level)
+
+    warnings.size shouldBe 1
+    warnings.peek should include("waiting at block 1:")
+    warnings.peek should include("stops at block 60")
+    appState.hasChainWeightInvariant() shouldBe false
+    Metrics.waitingPolls shouldBe 0d
 
   "ChainWeightReconcile.Progress" should "survive its encoding" taggedAs (UnitTest, SyncTest) in {
     val base = Position(BigInt(199), ByteString(Array.fill(32)(7.toByte)), BigInt("123456789012345"))

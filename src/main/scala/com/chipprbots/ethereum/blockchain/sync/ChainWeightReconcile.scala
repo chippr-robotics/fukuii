@@ -43,6 +43,14 @@ import com.chipprbots.ethereum.utils.Hex
   * so a jump costs one entry however many blocks sit above it. Its place is saved every `persistEvery` blocks. A height
   * with no header waits and retries; a reorg below the place goes back to the highest earlier place still canonical.
   *
+  * '''Heights the index does not name''' (B-121). The header backfill writes a header with its number entry, so a
+  * height with neither is one it has not reached yet. But a datadir written with headers and no number entries below
+  * its pivot never gets them. At such a height the pass walks the parent links down from the best block to its cursor
+  * ([[Bridge]]): first the difficulties, for the best block's exact weight, then down again, writing each weight that
+  * differs. Its cursor is then the best block. Where the walk finds a header not stored (chain download off: none below
+  * the pivot), it waits, and resumes the walk there at the next check. A wait that lasts `warnAfterPolls` checks is
+  * said once, with a WARN, and the `waiting.polls` gauge counts the checks.
+  *
   * '''Repair''', without any lock: each run is re-derived from its base and the headers, bottom-up, one chunk of
   * `writeChunk` weights at a time, paced like the scan. A block's exact weight depends only on its ancestry, so the
   * value written is right whether or not the block stays canonical, and writing it twice is harmless; a crash between
@@ -125,6 +133,36 @@ object ChainWeightReconcile:
     /** The block at `lost` is no longer canonical: back to the highest earlier place that is. */
     case Rewound(progress: Progress, lost: BigInt)
 
+  /** A walk down the parent links from `top`, the best block when it began, past heights the index does not name:
+    * `next` is the hash of the block at `nextNumber` to read next, and `sum` the difficulties of the blocks read, from
+    * `top` down to the one above `next`.
+    */
+  final case class Bridge(top: Position, next: ByteString, nextNumber: BigInt, sum: BigInt)
+
+  /** What one step of the walk down did. */
+  enum Walked:
+    case More(bridge: Bridge)
+
+    /** The walk met the cursor: `top` with its exact weight. */
+    case Linked(top: Position)
+
+    /** The header of `bridge.next` (at `bridge.nextNumber`) is not stored. */
+    case Stuck(bridge: Bridge)
+
+    /** The walk reached the cursor's height on another block, or a header not at its height. */
+    case Unlinked(at: BigInt)
+
+  /** What one step of the second walk down, the one that writes, did. */
+  enum Descended:
+    case More(at: Position, written: Long)
+    case Done(written: Long)
+
+    /** A header it read on the first walk is gone, or the walk did not end on the cursor. */
+    case Broken(at: BigInt, written: Long)
+
+  /** Why a height cannot be checked: the index names nothing there. */
+  val NoIndexEntry: String = "no canonical hash stored at this height"
+
   /** Where the repair is: run `run` of the progress, next height `next`, and the block below it with its exact weight.
     */
   final case class RepairPlace(run: Int, next: BigInt, prev: Position)
@@ -184,6 +222,8 @@ object ChainWeightReconcile:
       tailLockLimit: Int = 1_000,
       maxCatchUps: Int = 5,
       waitRetry: FiniteDuration = 10.minutes,
+      // A wait at one height said with a WARN once it has lasted this many checks (B-121).
+      warnAfterPolls: Int = 6,
       // Test seams: just before the import lock is requested; inside both locks, before the tail is checked; after
       // each repair chunk is committed.
       beforeLock: IO[Unit] = IO.unit,
@@ -347,14 +387,78 @@ object ChainWeightReconcile:
             if !stored.contains(td) then runs = extend(runs, n, prev, stored.map(td - _))
             prev = Position(n, hashes(i), td)
             i += 1
-      if stop.isEmpty && hashes.size < numbers.size then
-        stop = Some(numbers(hashes.size) -> "no canonical hash stored at this height")
+      if stop.isEmpty && hashes.size < numbers.size then stop = Some(numbers(hashes.size) -> NoIndexEntry)
       (p.copy(cursor = prev, runs = runs, scanned = p.scanned + i), stop)
 
     private def extend(runs: Vector[Run], n: BigInt, base: Position, delta: Option[BigInt]): Vector[Run] =
       runs.lastOption match
         case Some(last) if last.to == n - 1 && last.delta == delta => runs.init :+ last.copy(to = n)
         case _                                                     => runs :+ Run(n, n, base, delta)
+
+    /** The start of a walk down the parent links from the best block, which the index names, above the cursor. */
+    def bridgeStart(p: Progress): Option[Bridge] =
+      val best = reader.getBestBlockNumber
+      if best <= p.cursor.number then None
+      else
+        reader.getHashesByNumbersNoFill(Seq(best)).headOption.flatten.map { hash =>
+          Bridge(Position(best, hash, BigInt(0)), hash, best, BigInt(0))
+        }
+
+    /** Whether `b` can go on: its top is still canonical. */
+    def bridgeHolds(b: Bridge): Boolean = canonical(b.top)
+
+    /** One step of the walk down: up to `budget` headers, summing their difficulties, until the cursor. */
+    def walkDown(p: Progress, b: Bridge, budget: Int = settings.batchSize): Walked =
+      var at = b
+      var left = budget.max(1)
+      var result: Option[Walked] = None
+      while result.isEmpty do
+        if at.nextNumber == p.cursor.number then
+          result = Some(
+            if p.cursor.number < 0 || at.next == p.cursor.hash then
+              Walked.Linked(at.top.copy(td = p.cursor.td + at.sum))
+            else Walked.Unlinked(at.nextNumber)
+          )
+        else if left == 0 then result = Some(Walked.More(at))
+        else
+          reader.getBlockHeadersByHashesNoFill(Seq(at.next)).headOption.flatten match
+            case None                                       => result = Some(Walked.Stuck(at))
+            case Some(h) if h.number.value != at.nextNumber => result = Some(Walked.Unlinked(at.nextNumber))
+            case Some(h) =>
+              at = at.copy(next = h.parentHash.value, nextNumber = at.nextNumber - 1, sum = at.sum + h.difficulty.value)
+              left -= 1
+      result.get
+
+    /** One step of the second walk down, from `from` (its exact weight known) to the cursor: up to `batchSize` headers,
+      * and the weights there that differ written in one update. With no lock: each value depends only on the block's
+      * ancestry.
+      */
+    def descendStep(p: Progress, from: Position): Descended =
+      var at = from
+      var pending = Vector.empty[(BlockHash, ChainWeight)]
+      var broken = false
+      var left = settings.batchSize.max(1)
+      while !broken && at.number > p.cursor.number && left > 0 && pending.size < settings.writeChunk do
+        reader.getBlockHeadersByHashesNoFill(Seq(at.hash)).headOption.flatten match
+          case Some(h) if h.number.value == at.number =>
+            if !reader
+                .getChainWeightsByHashesNoFill(Seq(at.hash))
+                .headOption
+                .flatten
+                .map(_.totalDifficulty.value)
+                .contains(at.td)
+            then pending :+= BlockHash(at.hash) -> ChainWeight.totalDifficultyOnly(at.td)
+            at = Position(at.number - 1, h.parentHash.value, at.td - h.difficulty.value)
+            left -= 1
+          case _ => broken = true
+      if pending.nonEmpty then
+        writer.storeChainWeights(pending).commit()
+        settings.afterChunk()
+      val done = at.number <= p.cursor.number
+      if broken || (done && p.cursor.number >= 0 && (at.hash != p.cursor.hash || at.td != p.cursor.td)) then
+        Descended.Broken(at.number, pending.size.toLong)
+      else if done then Descended.Done(pending.size.toLong)
+      else Descended.More(at, pending.size.toLong)
 
     /** Where the repair of `p` starts, if it has runs. */
     def repairStart(p: Progress): Option[RepairPlace] =
@@ -488,13 +592,16 @@ object ChainWeightReconcile:
 
     final case class Totals(written: Long, runs: Int, rewinds: Int)
 
+    // A wait at height `at`: how many checks it has lasted, and the walk down to take up again at the next (B-121).
+    final case class Wait(at: BigInt, polls: Int, bridge: Option[Bridge])
+
     def loop(
         p: Progress,
         batch: Int,
         unsaved: Long,
         nextLog: BigInt,
         t: Totals,
-        waitingAt: Option[BigInt]
+        waiting: Option[Wait]
     ): IO[Outcome] =
       if !isCurrent then IO.pure(Outcome.Superseded)
       else
@@ -515,8 +622,11 @@ object ChainWeightReconcile:
               .fold(catchUp(atHead, 0, batch, nextLog, t))(start =>
                 repair(atHead, start, batch, nextLog, t.copy(runs = t.runs + atHead.runs.size))
               )
-          case (Step.Waiting(next, at, reason), _) => waitAt(next, batch, at, reason, t, waitingAt)
-          case (Step.Rewound(next, lost), _)       => rewound(next, batch, lost, nextLog, t)
+          case (Step.Waiting(next, at, reason), _) =>
+            val before = waiting.filter(_.at == at)
+            if reason == NoIndexEntry then bridge(next, batch, at, reason, t, before)
+            else waitAt(next, batch, at, reason, t, before, None)
+          case (Step.Rewound(next, lost), _) => rewound(next, batch, lost, nextLog, t)
         }
 
     def progressLine(p: Progress, nextLog: BigInt): BigInt =
@@ -619,18 +729,115 @@ object ChainWeightReconcile:
         )
       ) >> loop(p, batch, 0L, nextLog, t.copy(rewinds = t.rewinds + 1), None)
 
-    def waitAt(p: Progress, batch: Int, at: BigInt, reason: String, t: Totals, waitingAt: Option[BigInt]): IO[Outcome] =
-      Metrics.waiting(p)
+    /** A height the index does not name: the walk down the parent links from the best block, taken up where the last
+      * check left it while its top is still canonical.
+      */
+    def bridge(p: Progress, batch: Int, at: BigInt, reason: String, t: Totals, before: Option[Wait]): IO[Outcome] =
+      before.flatMap(_.bridge).filter(engine.bridgeHolds).orElse(engine.bridgeStart(p)) match
+        case None    => waitAt(p, batch, at, reason, t, before, None)
+        case Some(b) => walk(p, b, batch, at, reason, t, before)
+
+    def walk(
+        p: Progress,
+        b: Bridge,
+        batch: Int,
+        at: BigInt,
+        reason: String,
+        t: Totals,
+        before: Option[Wait]
+    ): IO[Outcome] =
+      if !isCurrent then IO.pure(Outcome.Superseded)
+      else
+        timed(engine.walkDown(p, b)).flatMap {
+          case (Walked.More(next), nanos) => pace(nanos) >> walk(p, next, batch, at, reason, t, before)
+          case (Walked.Linked(top), _) =>
+            IO(
+              log.info(
+                s"[CW-RECONCILE] blocks ${p.cursor.number + 1}..${top.number}: the index names no block at $at; " +
+                  s"checking them along the parent links down from block ${top.number}"
+              )
+            ) >> descend(p, top, top, batch, t)
+          case (Walked.Stuck(stuck), _) =>
+            val why = s"$reason, and the walk down the parent links from block ${stuck.top.number} stops at block " +
+              s"${stuck.nextNumber}, whose header is not stored"
+            waitAt(p, batch, at, why, t, before, Some(stuck))
+          case (Walked.Unlinked(n), _) =>
+            waitAt(
+              p,
+              batch,
+              at,
+              s"$reason, and the parent links from the best block do not lead to it (at $n)",
+              t,
+              before,
+              None
+            )
+        }
+
+    def descend(p: Progress, top: Position, from: Position, batch: Int, t: Totals): IO[Outcome] =
+      if !isCurrent then IO.pure(Outcome.Superseded)
+      else
+        timed(engine.descendStep(p, from)).flatMap {
+          case (Descended.More(next, written), nanos) =>
+            pace(nanos) >> descend(p, top, next, batch, t.copy(written = t.written + written))
+          case (Descended.Done(written), _) =>
+            val across = p.copy(
+              cursor = top,
+              scanned = p.scanned + (top.number - p.cursor.number),
+              recent = (p.recent :+ top).takeRight(s.keepRecent)
+            )
+            save(across) >> loop(
+              across,
+              batch,
+              0L,
+              across.cursor.number + s.logEvery,
+              t.copy(written = t.written + written),
+              None
+            )
+          case (Descended.Broken(at, written), _) =>
+            IO(
+              log.warn(s"[CW-RECONCILE] the walk down the parent links broke at block $at (the chain moved under it)")
+            ) >>
+              loop(
+                p,
+                batch,
+                0L,
+                p.cursor.number + s.logEvery,
+                t.copy(written = t.written + written, rewinds = t.rewinds + 1),
+                None
+              )
+        }
+
+    def waitAt(
+        p: Progress,
+        batch: Int,
+        at: BigInt,
+        reason: String,
+        t: Totals,
+        before: Option[Wait],
+        bridge: Option[Bridge]
+    ): IO[Outcome] =
+      val polls = before.fold(1)(_.polls + 1)
+      Metrics.waiting(p, polls)
       val say =
-        if waitingAt.contains(at) then IO.unit
-        else
+        if polls == 1 then
           IO(
             log.info(
               s"[CW-RECONCILE] waiting at block $at: $reason. Checking again every ${s.waitRetry} (the header " +
                 "backfill fills this)"
             )
           )
-      save(p) >> say >> IO.sleep(s.waitRetry) >> loop(p, batch, 0L, p.cursor.number + s.logEvery, t, Some(at))
+        else if polls == s.warnAfterPolls then
+          IO(
+            log.warn(
+              s"[CW-RECONCILE] still waiting at block $at: $reason, after $polls checks. The chain-weight marker stays " +
+                "off until it is filled. The header backfill fills it; with chain download off " +
+                "(sync.chain-download-enabled = false) nothing does: turn it on, or seed a trusted weight above the gap " +
+                s"(-D${ChainWeightSeed.Property}). Fork choice keeps the weights as they are meanwhile"
+            )
+          )
+        else IO(log.debug(s"[CW-RECONCILE] checking again at block $at (check $polls)"))
+      save(p) >> say >> IO.sleep(s.waitRetry) >>
+        loop(p, batch, 0L, p.cursor.number + s.logEvery, t, Some(Wait(at, polls, bridge)))
 
     IO.blocking(appState.hasChainWeightInvariant())
       .flatMap { marked =>
@@ -659,18 +866,27 @@ object ChainWeightReconcile:
     private val Repaired = new AtomicDouble(0d)
     // 0 idle or done, 1 scanning, 2 waiting for headers, 3 repairing and finishing.
     private val State = new AtomicDouble(0d)
+    // The checks a wait at one height has lasted (B-121); 0 when not waiting.
+    private val WaitingPolls = new AtomicDouble(0d)
     metrics.registry.gauge("chainweight.reconcile.block.gauge", Block)
     metrics.registry.gauge("chainweight.reconcile.differing.blocks.gauge", Differing)
     metrics.registry.gauge("chainweight.reconcile.repaired.blocks.gauge", Repaired)
     metrics.registry.gauge("chainweight.reconcile.state.gauge", State)
+    metrics.registry.gauge("chainweight.reconcile.waiting.polls.gauge", WaitingPolls)
 
-    private def at(p: Progress, state: Double): Unit =
+    private def at(p: Progress, state: Double, polls: Int = 0): Unit =
       Block.set(p.cursor.number.toDouble)
       Differing.set(p.diffBlocks.toDouble)
       State.set(state)
+      WaitingPolls.set(polls.toDouble)
 
     def scanning(p: Progress): Unit = at(p, 1d)
-    def waiting(p: Progress): Unit = at(p, 2d)
+    def waiting(p: Progress, polls: Int): Unit = at(p, 2d, polls)
     def repairing(p: Progress): Unit = at(p, 3d)
     def done(written: Long): Unit = Repaired.set(written.toDouble)
-    def idle(): Unit = State.set(0d)
+    def idle(): Unit =
+      State.set(0d)
+      WaitingPolls.set(0d)
+
+    /** The `waiting.polls` gauge's value. */
+    def waitingPolls: Double = WaitingPolls.get()
