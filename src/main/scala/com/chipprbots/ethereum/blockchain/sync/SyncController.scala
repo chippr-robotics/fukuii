@@ -2839,8 +2839,15 @@ object SyncController:
             blockchainReader,
             blockchainWriter,
             stateStorage,
-            evmCodeStorage,
-            { val br = new BranchResolution(blockchainReader, designatedHeadOpt); br.messConfig = messConfig; br },
+            evmCodeStorage, {
+              val br = new BranchResolution(
+                blockchainReader,
+                designatedHeadOpt,
+                backfillStallAfter = syncConfig.backfillStallTimeout
+              )
+              br.messConfig = messConfig
+              br
+            },
             validators.blockValidator,
             blacklist,
             syncConfig,

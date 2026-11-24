@@ -4,6 +4,7 @@ import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 
+import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
@@ -25,6 +26,7 @@ import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
+import com.chipprbots.ethereum.domain.BackfillCursors
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
@@ -915,6 +917,75 @@ class BranchResolutionSpec
         ownChain(missing = Some(5), pivot = Some(4))
         weightsStored()
       abovePivot.branchResolution.acrossAGap(abovePivot.extendsFromSix).map(_.firstMissing) shouldBe Some(BigInt(5))
+
+    // B-410: a gap at or below the pivot is left to the backfill only while the backfill may still fill it
+
+    "leave a gap at or below the SNAP pivot to the backfill while its cursors move" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5), pivot = Some(5))
+      weightsStored()
+      backfillAt(BackfillCursors(header = 3, body = 2, receipt = 2))
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      advance(StallAfter - 1.second)
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      // the header cursor moves to 4, still below the gap: the clock starts again
+      backfillAt(BackfillCursors(header = 4, body = 2, receipt = 2))
+      advance(2.seconds)
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      // a receipt moving is a move too
+      advance(StallAfter - 1.second)
+      backfillAt(BackfillCursors(header = 4, body = 2, receipt = 3))
+      advance(2.seconds)
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      timed.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+
+    "name a gap at or below the SNAP pivot once the backfill's header cursor has passed it" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5), pivot = Some(5))
+      weightsStored()
+      backfillAt(BackfillCursors(header = 5, body = 5, receipt = 5))
+      timed.acrossAGap(extendsFromSix) shouldBe
+        Some(ChainGap(BigInt(5), bodyOnly = false, NonEmptyList.fromListUnsafe(extendsFromSix.toList.drop(4))))
+      // the verdict is compareBranch's, unchanged: only what the importer tells the feed moves
+      timed.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+
+    "name a body gap at or below the SNAP pivot once the backfill's body cursor, not its header cursor, has passed it" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, withoutBody = Set(8), pivot = Some(10))
+      weightsStored()
+      // every header is stored, the bodies to 7: the body of 8 is the backfill's still
+      backfillAt(BackfillCursors(header = 10, body = 7, receipt = 7))
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      backfillAt(BackfillCursors(header = 10, body = 8, receipt = 7))
+      timed.acrossAGap(extendsFromSix) shouldBe
+        Some(ChainGap(BigInt(8), bodyOnly = true, NonEmptyList.fromListUnsafe(extendsFromSix.toList.drop(6))))
+
+    "name a gap at or below the SNAP pivot once the backfill has stood still for the stall timeout" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5), pivot = Some(5))
+      weightsStored()
+      backfillAt(BackfillCursors(header = 3, body = 2, receipt = 2))
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      advance(StallAfter - 1.nanosecond)
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      advance(1.nanosecond)
+      timed.acrossAGap(extendsFromSix).map(_.firstMissing) shouldBe Some(BigInt(5))
+      timed.acrossAGap(extendsFromSix).map(_.firstMissing) shouldBe Some(BigInt(5))
+      // the backfill moves again: left to it again
+      backfillAt(BackfillCursors(header = 4, body = 2, receipt = 2))
+      timed.acrossAGap(extendsFromSix) shouldBe None
   }
 
   /** The events BranchResolution logs at WARN and above while `body` runs: the level and the message. */
@@ -985,6 +1056,19 @@ class BranchResolutionSpec
 
     def weightsStored(): Unit =
       blockchainReader.getChainWeightByHash.expects(*).anyNumberOfTimes().returning(Some(ChainWeight.zero))
+
+    /** The backfill's cursors as read, and the clock its progress is timed by (B-410). */
+    private var cursors: BackfillCursors = BackfillCursors(0, 0, 0)
+    private var now: Long = 0L
+    (() => blockchainReader.getBackfillCursors).expects().anyNumberOfTimes().onCall(() => cursors)
+
+    def backfillAt(at: BackfillCursors): Unit = cursors = at
+    def advance(by: FiniteDuration): Unit = now += by.toNanos
+
+    val StallAfter: FiniteDuration = 10.minutes
+
+    /** Resolution with the stall timeout `StallAfter`, on the clock above. */
+    lazy val timed: BranchResolution = new BranchResolution(blockchainReader, None, StallAfter, () => now)
 
     def weightsNotStored(): Unit =
       blockchainReader.getChainWeightByHash.expects(*).anyNumberOfTimes().returning(None)
