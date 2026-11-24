@@ -4860,3 +4860,13 @@ items:
     links:
       spec: 018
     notes: "B-462 maps StateBusy (adoption holds the head) to JsonRpcError.StateBusy (-32005), whose message names reads in flight. Same code, ask-again semantics; only the text misleads. Changing client-visible text: decide whether to split into a second -32005 error or generalise the message (StateReadRetrySpec, RpcReadersBehindHeadSpec pin it)."
+  - id: B-487
+    title: Lenient chain import (hive loader / start-up import) on the unified layout ends with an ERROR on StateBusy instead of a typed, retryable stop (B-462)
+    priority: P3
+    status: open
+    area: state
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: B-462 typed StateBusy for importChainFileStrict/admin_importChain only. ChainImporter.importLenientStream/importInPlace let it end the import like any fault. It runs at start before any adoption, so not reachable today; revisit if the lenient import can run beside sync.
