@@ -5007,7 +5007,7 @@ items:
       by: cloud-dc960fdc
       agent: main
       since: 2026-11-24T07:30:30Z
-      heartbeat: 2026-11-24T07:30:50Z
+      heartbeat: 2026-11-24T08:00:13Z
     notes: |-
       BytecodeRecoveryActor.downloading, case ByteCodeDownloadProgress(_): two increments, and the message's n is ignored. Found during B-217; not changed there.
       2026-11-24 blocked: waits #2056 (B-217 rewrites BytecodeRecoveryActor); one-line fix after
