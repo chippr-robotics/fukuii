@@ -4386,3 +4386,13 @@ items:
     links:
       spec: 018
     notes: "forge B-343: commitInPlaceAtTheCap, fault at a side parent then a move back that fails before it wrote leaves the head on the committed side parents (e.g. a6); the answer labels it the old chain and imported=Nil (only branch blocks are checked). Pinned by ReorgBlockhashParitySpec 'middle chunk meets a fault'. Decide wording and whether those side parents are told as the head."
+  - id: B-462
+    title: "Ask-again refusals during an adoption (B-294): typed answers on the layers move, ChainImporter, testing_commitBlockV1; keep them out of the escalation count"
+    priority: P3
+    status: open
+    area: state
+    opened: 2026-11-24
+    refs: []
+    links:
+      spec: 018
+    notes: B-294 refuses writers on another thread with StateUnavailable(askAgain). ConsensusImpl.settleOnLayers rethrows a refused move with an ERROR 'move stopped' log; ChainImporter and testing_commitBlockV1 surface it as an error; PowEscalationFeed.notJudged counts it like any state fault. forge to rule on the count.
