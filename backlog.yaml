@@ -3621,12 +3621,17 @@ items:
   - id: B-379
     title: Pin checkpoint-expected-block-hash per public chain (ETC, Mordor, ETH, Sepolia, Hoodi) once each has a v2 archive
     priority: P2
-    status: open
+    status: claimed
     area: consensus
     opened: 2026-11-18
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-25T17:15:07Z
+      heartbeat: 2026-11-25T17:15:07Z
     notes: "C5c PR2 (B-066) added the chain-conf key, empty on every public chain: no v2 archive exists yet. Pin from the EG-9 (Sepolia, Mordor) and EG-12 (ETC) exports; until then the operator must set sync.checkpoint-sync-expected-hash."
   - id: B-380
     title: "C5c: SyncController-level test that a refused checkpoint archive is skipped at start (T292 wiring)"
