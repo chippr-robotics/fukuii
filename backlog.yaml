@@ -480,7 +480,7 @@ items:
   - id: B-049
     title: "Spec 021 S1: the limb type behind the same API, with GT-2"
     priority: P2
-    status: claimed
+    status: in-progress
     area: evm
     size: L
     opened: 2026-10-17
@@ -492,11 +492,11 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T18:18:49Z
-      heartbeat: 2026-11-25T18:18:49Z
+      heartbeat: 2026-11-25T18:18:52Z
     notes: |-
-      beacon + forge. Blockers: T006 (gate row 10b with jar A), T008 (GT-1 part B), RP-2 sign-offs.
       2026-11-17 blocked: waits for B-046, B-047
       2026-11-24 open: B-046/B-047 gate S1's merge (GT-3, row 10b), not its code; pre-swap tests T023-T031 can start (plan.md Gates)
+      2026-11-25 in-progress: wave 6: pre-swap tasks T023-T031 only (forge, fix/spec021-s1-preswap); swap gated on T008, T022, B-046/B-047
   - id: B-050
     title: "Spec 021 S2: the T-005 hot-path conversions"
     priority: P2
