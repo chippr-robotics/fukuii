@@ -365,7 +365,7 @@ items:
   - id: B-031
     title: SNAP pivot roll fires at the serve window's edge with no slack; roll at about 3/4 of the window
     priority: P2
-    status: claimed
+    status: in-progress
     area: snap
     size: M
     opened: 2026-11-05
@@ -375,8 +375,10 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:10:49Z
-      heartbeat: 2026-11-25T04:10:49Z
-    notes: "T063: 338 ERROR lines over 4 min, recovered on its own."
+      heartbeat: 2026-11-25T04:12:19Z
+    notes: |-
+      T063: 338 ERROR lines over 4 min, recovered on its own.
+      2026-11-25 in-progress: wave 4C beacon, fix/b031-snap-serve-window
   - id: B-032
     title: "[HEAL-SERVE-ROOT] WARN prints a serve root that moving-root heal never advances"
     priority: P3
