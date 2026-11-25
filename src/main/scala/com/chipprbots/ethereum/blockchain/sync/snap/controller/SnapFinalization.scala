@@ -390,6 +390,17 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     stateIngest.chainWriter.storeBlockHeader(pivotHeader).commit()
     applyPivotBodyCheck(pivotHeader)
 
+    // B-351: nothing of the index above the pivot is of the chain this node is on from here (on proof of work, where
+    // the index below it is the validated download's). After a re-SNAP for a heavier chain below the fork recovery's
+    // floor, the chain it left would otherwise still answer for those heights.
+    if !headerChainCheck.trustsPinnedPivot then
+      val cleared = PivotAnchor.clearIndexAbove(stateIngest, pivot)
+      if cleared > pivot then
+        ctx.log.warn(
+          s"SNAP finalize: the index of blocks by number above pivot $pivot named blocks up to $cleared that are of no " +
+            "chain this node is on; deleted"
+        )
+
     // Store a ChainWeight so fork choice can weigh new blocks; every block above the pivot inherits it (#1654).
     // REAL_DB_TD only when the stored weight is exact (HeadChainWeight.classify): the parent's weight clears the
     // plausibility floor and the pivot's is the parent's plus its difficulty. The hold above guarantees that: the
@@ -476,7 +487,15 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       if completion.storageComplete then appState.storageRecoveryDone() else appState.clearStorageRecoveryDone()
     val codeFlag =
       if completion.bytecodeComplete then appState.bytecodeRecoveryDone() else appState.clearBytecodeRecoveryDone()
-    appState.snapSyncDone().and(storageFlag).and(codeFlag).and(appState.clearSnapCodeScanOwed()).commitSync()
+    appState
+      .snapSyncDone()
+      .and(storageFlag)
+      .and(codeFlag)
+      .and(appState.clearSnapCodeScanOwed())
+      // the sync took its pivot where it was held to (B-307, B-351): the next sync is bound by nothing, as at the
+      // unified layout's hand-off
+      .and(appState.removePivotOnBranch())
+      .commitSync()
 
     warnOfWhatIsWithheld(completion)
 

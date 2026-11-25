@@ -36,6 +36,8 @@ import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdate
 import com.chipprbots.ethereum.db.storage.Namespaces
+import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.VMImpl
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -677,6 +679,83 @@ class SyncControllerSpec
       someTimePasses()
       assert(syncController.children.exists(_.path.name.startsWith("snap-sync")))
     }
+    // a stuck that names no branch holds the re-SNAP to none (B-351)
+    storagesInstance.storages.appStateStorage.getPivotOnBranch() shouldBe None
+  }
+
+  /** B-351: the block a heavier chain leaves this one at (B-346), in the index, and an earlier sync's header download
+    * well above it: the stores a hash-layout node has when the importer escalates such a chain.
+    */
+  private def heavierChainBelowTheFloor(testSetup: TestSetup): (BlockHeader, GivenUpBranch) =
+    import testSetup.*
+    val common = baseBlockHeader.copy(number = BlockNumber(300))
+    blockchainWriter.storeBlockHeader(common).commit()
+    val appState = storagesInstance.storages.appStateStorage
+    appState
+      .putBackfillBestHeader(400)
+      .and(appState.putBackfillBestHeaderHash(ByteString(Array.fill[Byte](32)(0x40))))
+      .commit()
+    (common, GivenUpBranch(BigInt(301), ByteString(Array.fill[Byte](32)(0x42))))
+
+  private def heldToTheBranch(testSetup: TestSetup, common: BlockHeader, branch: GivenUpBranch): Unit =
+    val appState = testSetup.storagesInstance.storages.appStateStorage
+    appState.getPivotOnBranch() shouldBe Some(PivotOnBranch(branch.number, branch.hash))
+    withClue("the header download goes on from the common block, on the branch: ") {
+      appState.getBackfillBestHeader() shouldBe BigInt(300)
+      appState.getBackfillBestHeaderHash() shouldBe Some(common.hash.value)
+    }
+
+  // B-351 (forge): a re-SNAP for a heavier chain that leaves this one below the fork recovery's floor (B-346) is held
+  // to it on the hash layout, as the sync after an escalation is on the unified layout (B-307): the pivot on it, and
+  // the header download set back to the common block, so that every height above it is taken from the branch. Nothing
+  // held it before: the download went on from the cursor at 400, on the chain this node leaves
+  it should "hold the re-SNAP to the heavier branch a RegularSyncStuck names, from the common block up (B-351)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    val (common, branch) = heavierChainBelowTheFloor(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    regularSyncChild(testSetup)
+
+    syncController ! SyncController.WrappedSyncProtocol(
+      SyncProtocol.RegularSyncStuck(BigInt(300), "a heavier chain below the floor", branch = Some(branch))
+    )
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    heldToTheBranch(testSetup, common, branch)
+  }
+
+  it should "hold a re-SNAP that waits out its back-off to the heavier branch, once it is due, and not before (B-351)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    val appState = storagesInstance.storages.appStateStorage
+    appState.fastSyncDone().and(appState.putRegularSyncStuck(2, Some(appState.getBestBlockNumber()))).commit()
+    val (common, branch) = heavierChainBelowTheFloor(testSetup)
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+    val running = regularSyncChild(testSetup)
+
+    syncController ! SyncController.WrappedSyncProtocol(
+      SyncProtocol.RegularSyncStuck(BigInt(300), "a heavier chain below the floor", branch = Some(branch))
+    )
+    someTimePasses()
+    withClue("regular sync runs on, and nothing of the sync after it is written yet: ") {
+      syncController.children.map(_.path.name) should contain(running)
+      appState.getPivotOnBranch() shouldBe None
+      appState.getBackfillBestHeader() shouldBe BigInt(400)
+    }
+
+    timePasses(61.minutes)
+    eventually {
+      someTimePasses()
+      assert(snapChildren(testSetup).nonEmpty)
+    }
+    heldToTheBranch(testSetup, common, branch)
   }
 
   // Spec 018 C5a part 7b: the state given up. The handler decides; the controller stops the import, clears the state

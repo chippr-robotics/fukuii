@@ -57,6 +57,12 @@ import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 
+/** The fork choice of a chain that follows a consensus layer (`followsConsensusLayer`), where the importer's SYNC-FORK
+  * keeps the blind rewind (B-347 changed it only where the resolver weighs the branch: proof of work).
+  */
+class FollowingAConsensusLayer(reader: BlockchainReader) extends BranchResolution(reader):
+  override def followsConsensusLayer: Boolean = true
+
 // Fixture classes are wrapped in a trait due to problems with making mocks available inside of them
 trait RegularSyncFixtures:
   self: Matchers & AsyncMockFactory =>

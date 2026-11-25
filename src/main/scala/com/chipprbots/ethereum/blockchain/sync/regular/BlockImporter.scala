@@ -48,6 +48,7 @@ import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored
+import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
 import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
 import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
@@ -2797,7 +2798,9 @@ final private class BlockImporterLogic(
       )
       supervisor ! SyncProtocol.RegularSyncStuck(
         heavier.commonBlock,
-        s"a heavier chain leaves this one at block ${heavier.commonBlock}, below the fork recovery floor"
+        s"a heavier chain leaves this one at block ${heavier.commonBlock}, below the fork recovery floor",
+        // the re-SNAP is held to the branch, and the index above the common block is taken from it (B-351)
+        branch = heavier.firstOfBranch.map(first => GivenUpBranch(first.number.value, first.hash.value))
       )
     fetcher ! BlockFetcher.InvalidateBlocksFrom(
       best + 1,
@@ -2868,6 +2871,13 @@ final private class BlockImporterLogic(
               "SYNC-FORK branch-resolver rollback",
               state.withoutDeferredBatches()
             )
+          // the resolver took this node's blocks above the common block off the chain for a branch it weighed: the
+          // head is there already, and nothing below it is taken for a branch no one weighed (B-347)
+          case None if rewindsOnlyWeighed =>
+            goOnFromTheHead(
+              s"the common block $lca the resolver discarded down to has no header here: nothing is rewound",
+              state.withoutDeferredBatches()
+            )
           case None =>
             log.warning("SYNC-FORK: no header at resolver LCA {} — falling back to blind rewind", lca)
             blindRewind(capturedBest, snapPivot, state.withoutDeferredBatches())
@@ -2886,24 +2896,25 @@ final private class BlockImporterLogic(
               notFollowed: FastSyncBranchResolverActor.BranchResolutionFailed.BranchNotFollowed
             )
           ) if !holds =>
-        val best = bestKnownBlockNumber
-        log.warning(
-          "[SYNC-FORK] The master peer's chain is not followed ({}): nothing is rewound, the fetcher goes on from the " +
-            "head {}",
-          notFollowed,
-          best
-        )
-        unknownParentStrikes = Map.empty
-        fetcher ! BlockFetcher.InvalidateBlocksFrom(
-          best + 1,
-          "SYNC-FORK: the master peer's chain is not followed",
-          shouldBlacklist = false
-        )
-        running(state.withoutDeferredBatches())
+        goOnFromTheHead(s"the master peer's chain is not followed ($notFollowed)", state.withoutDeferredBatches())
+
+      // B-347: on the hash layout of a chain that chooses by work, a resolution that ends with no branch weighed takes
+      // nothing off this chain, as core-geth's downloader sets no head back when its search for the common block
+      // fails. The resolver itself refuses, and blames the peer, where the peer's chain is the reason
+      case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(failure)) if rewindsOnlyWeighed =>
+        goOnFromTheHead(s"the branch resolver failed ($failure): nothing is rewound", state.withoutDeferredBatches())
 
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(_)) =>
         log.warning("SYNC-FORK: branch resolver failed — falling back to 128-block blind rewind")
         blindRewind(capturedBest, snapPivot, state.withoutDeferredBatches())
+
+      // a resolver that stopped without an answer (a failure inside it, its discard's among them) weighed nothing this
+      // importer can act on: as a failed resolution, B-347 included
+      case BranchResolverStopped(stopped) if stopped == resolver && rewindsOnlyWeighed =>
+        goOnFromTheHead(
+          "the branch resolver stopped without an answer: nothing is rewound",
+          state.withoutDeferredBatches()
+        )
 
       case BranchResolverStopped(stopped) if stopped == resolver =>
         // Stopped without an answer (a failure inside it): what a failed resolution does.
@@ -3058,6 +3069,28 @@ final private class BlockImporterLogic(
         ),
         BranchHeadersFetchName
       ): Unit
+
+  /** Whether a SYNC-FORK on this importer takes this node's blocks off the chain only for a branch weighed the heavier
+    * (B-347): the hash layout of a chain that chooses by work, where the resolver weighs the branch (B-298) or refuses
+    * it. A resolution that ends with nothing weighed rewinds nothing there, as core-geth's downloader sets no head back
+    * when `findAncestor` fails: the sync with that peer ends, and the peer is dropped where its chain is the reason.
+    *
+    * Not on the unified layout, whose fork recovery moves no state (spec 018 C4e part 6), nor on a chain that follows a
+    * consensus layer, whose branches the resolver does not weigh: the blind rewind stays there, as before (beacon's).
+    */
+  private def rewindsOnlyWeighed: Boolean =
+    !blockchainWriter.holdsStateInPlace && !branchResolution.followsConsensusLayer
+
+  /** A fork recovery that moves nothing: the fetcher goes on from the head, no peer is blamed here (the resolver blames
+    * the one its refusal is for), and the strikes start over, so that the next recovery comes only from blocks fetched
+    * after this one.
+    */
+  private def goOnFromTheHead(why: String, state: ImporterState): Behavior[Command] =
+    val best = bestKnownBlockNumber
+    log.warning("[SYNC-FORK] {}: the fetcher goes on from the head {}", why, best)
+    unknownParentStrikes = Map.empty
+    fetcher ! BlockFetcher.InvalidateBlocksFrom(best + 1, s"SYNC-FORK: $why", shouldBlacklist = false)
+    running(state)
 
   /** The fork recovery's rewind when no common block was found, then `state`: in `running`, or in [[rewinding]] until
     * the hash layout's rewind, made under the import lock, has landed.

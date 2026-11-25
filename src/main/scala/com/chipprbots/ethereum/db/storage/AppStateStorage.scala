@@ -167,6 +167,21 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       .and(putBackfillBestReceipt(getBackfillBestReceipt().min(header)))
       .and(update(toRemove = Seq(Keys.BackfillTarget, Keys.BackfillTargetHash), toUpsert = Nil))
 
+  /** The update that holds the next sync to `branch` on the hash layout (B-351): the requirement that it take its pivot
+    * on the branch, and the header download's cursors set back to the block under the branch's first one, the block the
+    * chains share ([[headerCursorsBackTo]]), as the clear of an escalation writes them for the sync after it on the
+    * unified layout (B-307, B-303). Nothing of the index is deleted here: the download writes each height above the
+    * common block again from the branch, and the hand-off clears what lies above its pivot.
+    *
+    * @param hashAt
+    *   the index of blocks by number
+    */
+  def holdTheSyncToTheBranch(
+      branch: pathstate.PivotOnBranch,
+      hashAt: BigInt => Option[ByteString]
+  ): DataSourceBatchUpdate =
+    putPivotOnBranch(branch).and(headerCursorsBackTo(branch.number - 1, hashAt))
+
   /** The update that takes the header download's cursors no higher than the pivot a sync hands off at (spec 018 C5a
     * part 10, forge): an earlier, higher pivot's target left above it would be resumed from where the index no longer
     * has an entry, and download every header again from the genesis, writing entries above the head as it goes. The

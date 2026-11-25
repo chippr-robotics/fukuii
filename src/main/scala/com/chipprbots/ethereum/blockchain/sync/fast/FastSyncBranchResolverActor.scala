@@ -49,7 +49,10 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
   * downloader likewise refuses an ancestor below its fork-ancestry floor, and never sets its head back for a branch it
   * has not weighed. A chain that leaves this node's below the floor is searched for its common block there and weighed
   * from it, with headers only (B-346): the heavier is answered with [[BranchHeavierBeyondReach]] for the caller to
-  * escalate, and nothing below the floor is ever discarded.
+  * escalate, and nothing below the floor is ever discarded. Where the branch is weighed, no failure of the resolution
+  * is left to the caller's unweighed fallback (B-347): a chain that shares no block above the genesis is weighed from
+  * the genesis, and one whose weighing needs a header this node does not hold is refused
+  * ([[BranchResolutionFailed.HeaderNotStored]]).
   *
   * Pekko Typed migration (Group S2 — narrowed): `Behavior[Command]` with a sealed Command ADT. Three named behavior
   * states: `waitingForPeerWithHighestBlock` / `waitingForRecentBlockHeaders` / `waitingForBinarySearchBlock`. Peer-list
@@ -144,6 +147,15 @@ object FastSyncBranchResolverActor:
       */
     final case class BranchNotHeavier(commonBlock: BigInt) extends BranchNotFollowed
 
+    /** This node holds no header at `blockNumber`, which the search for the common block, or the weighing of the master
+      * peer's branch from it, needs (B-347): the branch cannot be weighed, so it is not followed, as a branch that
+      * cannot be shown the heavier never is (B-298). Nothing is discarded, and the peer is blacklisted so that the next
+      * recovery does not ask it again for the same branch. core-geth's downloader likewise takes a header it does not
+      * hold for one that is not common, and drops the peer when no common block is left within its floor
+      * (`errInvalidAncestor`); it never sets its head back for a branch it has not weighed.
+      */
+    final case class HeaderNotStored(blockNumber: BigInt) extends BranchNotFollowed
+
   /** The master peer's chain leaves this node's at `commonBlock`, deeper than a fork recovery may rewind to, and its
     * branch above it was weighed and is the heavier (B-346): this node cannot follow the chain with what it holds.
     * Nothing was taken off this node's chain; the caller escalates to a SNAP re-sync instead of rewinding. The peer is
@@ -153,12 +165,17 @@ object FastSyncBranchResolverActor:
     *   the hash of the common block, by which the caller asks for the escalation once per fork
     * @param weighed
     *   how many of the peer's headers were weighed; 0 where the fork was escalated already and was not weighed again
+    * @param firstOfBranch
+    *   the branch's first block above the common block, as the peer served it (B-351): the SNAP re-sync is held to the
+    *   branch by it, as the sync after an escalation on the unified layout is (B-307). None where it was not weighed
+    *   again
     */
   final case class BranchHeavierBeyondReach(
       commonBlock: BigInt,
       commonHash: org.apache.pekko.util.ByteString,
       masterPeer: Peer,
-      weighed: Int
+      weighed: Int,
+      firstOfBranch: Option[BlockHeader] = None
   ) extends BranchResolverResponse
 
   /** What the weighing of a branch whose common block lies below the floor says of it (B-346). */
@@ -344,6 +361,12 @@ object FastSyncBranchResolverActor:
     // the runtime the discard under the import lock runs on (B-012), as BlockImporter's imports do
     private given runtime: IORuntime = IORuntime.global
 
+    /** Whether this resolver weighs the master peer's branch before it takes anything off this node's chain: the hash
+      * layout of a chain that chooses by work (B-298). Where it does, no failure of the resolution is left to the
+      * caller's fallback, which rewinds unweighed (B-347): each is weighed, or refused.
+      */
+    private val weighs: Boolean = discardGuard.exists(_.heavier.isDefined)
+
     private val prhResultAdapter: TypedActorRef[PeerRequestHandler.Result] =
       context.messageAdapter[PeerRequestHandler.Result](PeerRequestResult(_))
 
@@ -473,7 +496,7 @@ object FastSyncBranchResolverActor:
                 case Some(deepestHeader) =>
                   val handler = sendGetBlockHeadersRequest(masterPeer, childOf(deepest), 1)
                   waitingForDeepestCommonBlock(masterPeer, bestBlockNumber, deepestHeader, handler)
-                case None => stopWithFailure(BranchResolutionFailed.blockHeaderNotFound(deepest))
+                case None => notStored(masterPeer, deepest)
             case None =>
               requestBlockHeaderForBinarySearch(
                 SearchState(minBlockNumber = 1, maxBlockNumber = bestBlockNumber, masterPeer)
@@ -546,15 +569,28 @@ object FastSyncBranchResolverActor:
       // (B-346): never the caller's fallback, which rewinds
       def failed(failure: BranchResolutionFailed): Behavior[Command] =
         belowFloor.fold(stopWithFailure(failure))(refuseBeyondReach(searchState.masterPeer, _))
-      blockchainReader.getBlockHeaderByNumber(parentOf(childHeader.number.value)) match
+      val parentNumber = parentOf(childHeader.number.value)
+      blockchainReader.getBlockHeaderByNumber(parentNumber) match
         case Some(parentHeader) =>
           validateBlockHeaders(parentHeader, childHeader, searchState) match
+            // The search never asks below block 1, so the chains may still share the genesis (B-347): what core-geth's
+            // findAncestor finds for a chain that parts at block 1. Where the branch is weighed, it is weighed from
+            // there, as from any common block; the peer's first header must name this node's genesis as its parent,
+            // or the peer is blamed for its headers. Below the floor that weighing is the one for an escalation
+            case NoCommonBlock if weighs =>
+              log.info(
+                "[SYNC-FORK] Peer {}'s chain shares no block above the genesis with this node's: its branch is " +
+                  "weighed from the genesis",
+                searchState.masterPeer.id
+              )
+              finalizeBranchResolver(0, searchState.masterPeer)
             case NoCommonBlock => failed(BranchResolutionFailed.noCommonBlock)
             case BinarySearchCompleted(highestCommonBlockNumber) =>
               finalizeBranchResolver(highestCommonBlockNumber, searchState.masterPeer)
             case ContinueBinarySearch(newSearchState) =>
               log.debug(s"Continuing binary search with new search state: $newSearchState")
               requestBlockHeaderForBinarySearch(newSearchState, belowFloor)
+        case None if weighs && belowFloor.isEmpty => refuseHeaderNotStored(searchState.masterPeer, parentNumber)
         case None => failed(BranchResolutionFailed.blockHeaderNotFound(childHeader.number.value))
 
     private def finalizeBranchResolver(firstCommonBlockNumber: BigInt, masterPeer: Peer): Behavior[Command] =
@@ -576,7 +612,8 @@ object FastSyncBranchResolverActor:
                 case Some(commonHeader) =>
                   val wanted = (best - firstCommonBlockNumber) + 2 * recentHeadersSize
                   requestBranchHeaders(masterPeer, commonHeader, Vector.empty, wanted, ToDiscard(guard, heavier))
-                case None => stopWithFailure(BranchResolutionFailed.blockHeaderNotFound(firstCommonBlockNumber))
+                // nothing to weigh the branch from: refused, never the caller's unweighed rewind (B-347)
+                case None => refuseHeaderNotStored(masterPeer, firstCommonBlockNumber)
             case _ => discardAndReply(firstCommonBlockNumber, masterPeer, guard)
 
     /** A common block below the floor (B-346): the master peer's branch above it is weighed from it, with no more than
@@ -715,7 +752,14 @@ object FastSyncBranchResolverActor:
                           deepest,
                           all.size
                         )
-                        replyTo ! BranchHeavierBeyondReach(common, commonHeader.hash.value, masterPeer, all.size)
+                        // the branch's first block goes with it: the SNAP re-sync is held to it (B-351)
+                        replyTo ! BranchHeavierBeyondReach(
+                          common,
+                          commonHeader.hash.value,
+                          masterPeer,
+                          all.size,
+                          firstOfBranch = all.headOption
+                        )
                         Behaviors.stopped
                       case BeyondReachVerdict.Invalid(why) =>
                         log.warn(
@@ -754,6 +798,29 @@ object FastSyncBranchResolverActor:
         BlacklistReason.ForkNotFollowed(s"its chain leaves ours below block $deepest")
       )
       stopWithFailure(BranchResolutionFailed(CommonBlockBeyondReach(deepest)))
+
+    /** This node holds no header at `blockNumber`: refused where the branch is weighed (B-347), the failure the caller
+      * falls back on otherwise, as before.
+      */
+    private def notStored(masterPeer: Peer, blockNumber: BigInt): Behavior[Command] =
+      if weighs then refuseHeaderNotStored(masterPeer, blockNumber)
+      else stopWithFailure(BranchResolutionFailed.blockHeaderNotFound(blockNumber))
+
+    private def refuseHeaderNotStored(masterPeer: Peer, blockNumber: BigInt): Behavior[Command] =
+      log.error(
+        "[SYNC-FORK] This node holds no header at block {} (best {}), which the search for where peer {}'s chain " +
+          "leaves this one needs: its branch cannot be weighed and is refused. Nothing is discarded and the peer is " +
+          "blacklisted",
+        blockNumber,
+        blockchainReader.getBestBlockNumber,
+        masterPeer.id
+      )
+      peerListHelper.blacklistIfHandshaked(
+        masterPeer.id,
+        syncConfig.blacklistDuration,
+        BlacklistReason.ForkNotFollowed(s"this node holds no header at block $blockNumber to weigh its chain from")
+      )
+      stopWithFailure(BranchResolutionFailed(HeaderNotStored(blockNumber)))
 
     private def refuseNotHeavier(masterPeer: Peer, common: BigInt, weighed: Int): Behavior[Command] =
       log.warn(
