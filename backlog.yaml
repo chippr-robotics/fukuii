@@ -190,18 +190,19 @@ items:
   - id: B-015
     title: "#1705 follow-up: SyncController leaks its peers client when the pipeline is replaced"
     priority: P2
-    status: in-progress
+    status: review
     area: sync
     size: S
     opened: 2026-11-07
     refs: ["#1705 item D"]
     links:
       issues: [1705]
+      prs: [2118]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:10:42Z
-      heartbeat: 2026-11-25T04:12:10Z
+      heartbeat: 2026-11-25T04:35:23Z
     notes: |-
       SyncController ~:858-916 (forge's analysis).
       2026-11-25 in-progress: wave 4B herald, fix/b139-fetcher-and-lifecycle
