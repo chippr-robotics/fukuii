@@ -1,7 +1,8 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
+# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
+# header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -1333,18 +1334,19 @@ items:
   - id: B-139
     title: Fetcher advances lastBlock at an announce the importer may drop, so the next announce reads as an orphan
     priority: P2
-    status: in-progress
+    status: review
     area: sync
     size: M
     opened: 2026-11-08
     refs: [B-007]
     links:
       issues: [1683]
+      prs: [2118]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:10:38Z
-      heartbeat: 2026-11-25T04:12:06Z
+      heartbeat: 2026-11-25T04:35:19Z
     notes: |-
       B-007 now rewinds without blame, but each false orphan still costs a rewind. Advance on the importer's ack, or compare the announced parentHash with the last handed-over hash.
       2026-11-25 in-progress: wave 4B herald, fix/b139-fetcher-and-lifecycle
