@@ -5727,3 +5727,13 @@ items:
     refs: []
     links: {}
     notes: "forge: decide whether ETC wants a system call there; ETH side done in #2117"
+  - id: B-529
+    title: BlockImporter drops an announce silently while busy; reply 'dropped' so the fetcher need not roll back (B-139 follow-up)
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: "#2118 rolls lastBlock back on an unconfirmed handover; an explicit reply removes the guesswork"
