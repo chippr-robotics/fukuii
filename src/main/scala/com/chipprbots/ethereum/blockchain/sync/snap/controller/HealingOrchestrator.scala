@@ -511,7 +511,7 @@ private[snap] trait HealingOrchestrator
             networkBest = networkBest
           )
           // Refresh cadence (HealPolicy.healRootStale). Moving-root heal (B-033): re-peg once the heal root (the
-          // pivot) is more than PivotPolicy.RootRollAgeBlocks (96, about 3/4 of the peers' 128-block serve window)
+          // pivot) is more than PivotPolicy.HealRepegAgeBlocks (112, 7/8 of the peers' 128-block serve window)
           // below the clock, and the clock has moved since the last re-peg this check asked for. The serve-root path
           // (U1): a serve root is fetched at `networkBest − margin`, so it STARTS `margin` blocks behind the head; it
           // is refreshed once the head is > 2×margin past the last one pushed, giving ~margin blocks of runway between
@@ -541,7 +541,7 @@ private[snap] trait HealingOrchestrator
                 // so an operator can tell which source drove this check without guessing from the numbers alone.
                 s"[HEAL-REPEG] Heal root stale (clock=$staleClockNow, networkBest=$networkBest, " +
                   s"root=${pivotBlock.getOrElse("none")} age=${rootAge.getOrElse("unknown")} > " +
-                  s"${PivotPolicy.RootRollAgeBlocks}, target=$target) " +
+                  s"${PivotPolicy.HealRepegAgeBlocks}, target=$target) " +
                   s"— re-pegging the single heal root via refreshPivotInPlace (#1374, moving-root delta heal)."
               )
               // countsTowardHealBudget=false: this is a proactive "is there a fresher CL pivot" probe, not a

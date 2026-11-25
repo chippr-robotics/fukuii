@@ -70,11 +70,14 @@ private[snap] object HealPolicy:
     * (the spec-004 serve-root path) on this tick.
     *
     * **Moving-root heal (B-033): on the root's own age.** The heal root is the pivot (`rootBlock`), which a re-peg
-    * moves with it. It is re-pegged once it is more than `PivotPolicy.RootRollAgeBlocks` (96, about 3/4 of the peers'
-    * 128-block serve window) below `staleClockNow`, the head [[staleReferenceHead]] picks. go-ethereum moves its pivot
-    * when it is `2 * fsMinFullBlocks` (128) below the head of its header stream, to `head - fsMinFullBlocks` (64); ours
-    * moves a quarter of the window earlier, because its new header is fetched from a peer rather than read from a
-    * stream it already has (see `RootRollAgeBlocks`).
+    * moves with it. It is re-pegged once it is more than `PivotPolicy.HealRepegAgeBlocks` (112, 7/8 of the peers'
+    * 128-block serve window) below `staleClockNow`, the head [[staleReferenceHead]] picks. go-ethereum
+    * (`movePivotIfStale`) moves its pivot once it is more than `2 * fsMinFullBlocks - 8` (120) below the skeleton (CL)
+    * head, to `head - fsMinFullBlocks` (64), about every 56 blocks. Ours re-pegs 8 blocks earlier, about every 48
+    * blocks (about 10.4 minutes on ETC), because its new header is fetched from a peer rather than read from a skeleton
+    * it already holds. It sends no readiness probe and runs on the 1-s tick, so it needs less headroom than the
+    * download roll (`PivotPolicy.RootRollAgeBlocks`, 96); 96 here would double ETC's re-peg rate, and each re-peg
+    * restarts spec 022's walk.
     *
     * This replaced a cadence on the clock since the last check, `clock - lastCheck > 2 * margin` (128). A re-peg lands
     * `margin` (64) below the head, so that rule let the root reach 128 blocks before the next re-peg on ETC, where the
@@ -103,6 +106,6 @@ private[snap] object HealPolicy:
       margin: BigInt
   ): Boolean =
     if movingRootDeltaHeal then
-      rootBlock.forall(root => staleClockNow - root > PivotPolicy.RootRollAgeBlocks) &&
+      rootBlock.forall(root => staleClockNow - root > PivotPolicy.HealRepegAgeBlocks) &&
       lastCheckClock.forall(staleClockNow > _)
     else lastCheckClock.forall(last => (staleClockNow - last) > margin * 2)

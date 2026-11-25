@@ -460,20 +460,20 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
 
   // B-033: on a CL-anchored proof-of-stake chain the last check recorded the CL head and the next waited for it to move
   // 2 × 64 past it. A re-peg lands 64 below the CL head, so the root reached 192 blocks; geth serves 128. The root is
-  // now re-pegged on its own age, at 3/4 of the window.
-  it should "re-peg a CL-anchored heal root once it is more than 96 blocks old, not 2 x 64 past the last check (B-033)" taggedAs UnitTest in {
+  // now re-pegged on its own age, at 7/8 of the window (112).
+  it should "re-peg a CL-anchored heal root once it is more than 112 blocks old, not 2 x 64 past the last check (B-033)" taggedAs UnitTest in {
     val h = movingRootHeal(lastCheck = pivot + 64) // the CL head when the root was taken, 64 below it
     h.module.posChain = true
     h.module.networkBest = Some(pivot + 500) // peers' heights are not the clock on PoS (BUG-BC3)
 
-    h.module.clPivotHint = clHeadAt(pivot + 96)
+    h.module.clPivotHint = clHeadAt(pivot + 112)
     h.call(_.maybeRequestHealingServeRoot())
     h.module.refreshes shouldBe empty
 
-    h.module.clPivotHint = clHeadAt(pivot + 97)
+    h.module.clPivotHint = clHeadAt(pivot + 113)
     h.call(_.maybeRequestHealingServeRoot())
     h.module.refreshes.toSeq shouldBe Seq(Stale)
-    h.module.lastHealingServeRootBlock shouldBe Some(pivot + 97)
+    h.module.lastHealingServeRootBlock shouldBe Some(pivot + 113)
   }
 
   // BUG-BC3 kept: a frozen CL head asks once, whatever the peers' heights do, and the clock must move before a check
@@ -496,17 +496,17 @@ class HealingOrchestratorSpec extends ScalaTestWithActorTestKit(ManualTime.confi
 
   // B-033 on a chain with no CL head (ETC): the same root age on the peers' best block. The old rule fired once the best
   // moved 2 × 64 past the recorded target, a root 128 blocks old, the window's edge.
-  it should "re-peg a heal root on the peers' best block once it is more than 96 blocks old on a chain with no CL head" taggedAs UnitTest in {
+  it should "re-peg a heal root on the peers' best block once it is more than 112 blocks old on a chain with no CL head" taggedAs UnitTest in {
     val h = movingRootHeal(lastCheck = pivot) // the old rule recorded the target, the root's own block
 
-    h.module.networkBest = Some(pivot + 96)
+    h.module.networkBest = Some(pivot + 112)
     h.call(_.maybeRequestHealingServeRoot())
     h.module.refreshes shouldBe empty
 
-    h.module.networkBest = Some(pivot + 97)
+    h.module.networkBest = Some(pivot + 113)
     h.call(_.maybeRequestHealingServeRoot())
     h.module.refreshes.toSeq shouldBe Seq(Stale)
-    h.module.lastHealingServeRootBlock shouldBe Some(pivot + 97)
+    h.module.lastHealingServeRootBlock shouldBe Some(pivot + 113)
   }
 
   it should "queue the missing bytecode of healed accounts, spawning a bytecode coordinator when none exists" taggedAs UnitTest in {

@@ -120,20 +120,30 @@ private[snap] object PivotPolicy:
     */
   private[snap] val SnapServeWindowBlocks: BigInt = BigInt(128)
 
-  /** The age at which SNAP moves its root, about 3/4 of [[SnapServeWindowBlocks]] (B-031, B-033): 96 blocks.
+  /** The age at which the proactive pivot roll moves the download pivot, 3/4 of [[SnapServeWindowBlocks]] (B-031): 96
+    * blocks.
     *
-    * go-ethereum moves its pivot when the head of its header stream is `2 * fsMinFullBlocks` (128) blocks above it, to
-    * `head - fsMinFullBlocks` (eth/downloader/downloader.go, `processSnapSyncContent`, "Pivot became stale, moving"),
-    * and its own comment says the move is already late at that point ("otherwise we're detecting the pivot move late
-    * and will drop peers due to unavailable state"). go-ethereum's move is synchronous: the new pivot header is in the
-    * stream it is reading. Ours is not: the new pivot's header is fetched from a peer (T063, 2026-11-05: 30 s waiting
-    * for an eligible peer), a proactive roll then probes the new root (up to 5 × 30 s), and the trigger runs on a 30-s
-    * tick (the roll) or a 1-s tick (the heal re-peg). Rolling near the window's edge (an age of 100, and 115 after the
-    * first roll; see [[proactiveRollDue]]) left little of that time, and T063 logged 338 ERROR lines over 4 minutes of
-    * requests for a pruned root. A quarter of the window, 32 blocks, is about 6.4 minutes on a 12-s chain and 7 minutes
-    * on a 13-s one.
+    * go-ethereum (eth/downloader/downloader.go, `movePivotIfStale`) returns early while the skeleton (CL) head is at
+    * most `pivot + 2 * fsMinFullBlocks - 8` (64 each), so it moves once the pivot is more than 120 blocks old, to `head
+    * \- fsMinFullBlocks` (64), about every 56 blocks ("Pivot seemingly stale, moving"), and not while snap holds a
+    * frozen pivot. Its new pivot header is already in the skeleton it holds. Ours is not: the new pivot's header is
+    * fetched from a peer (T063, 2026-11-05: 30 s waiting for an eligible peer), the roll then probes the new root (up
+    * to 5 × 30 s), and the trigger runs on a 30-s tick. That needs about 16 blocks more headroom than go-ethereum's 8.
+    * Rolling near the window's edge (an age of 100, and 115 after the first roll; see [[proactiveRollDue]]) left little
+    * of that time, and T063 logged 338 ERROR lines over 4 minutes of requests for a pruned root. A quarter of the
+    * window, 32 blocks, is about 6.4 minutes on a 12-s chain and 7 minutes on a 13-s one.
     */
   private[snap] val RootRollAgeBlocks: BigInt = SnapServeWindowBlocks * 3 / 4
+
+  /** The age at which moving-root heal re-pegs its root, 7/8 of [[SnapServeWindowBlocks]] (B-033): 112 blocks.
+    *
+    * Later than [[RootRollAgeBlocks]]: the heal re-peg sends no readiness probe and is checked on the 1-s healing tick,
+    * so it needs less headroom than the roll. A re-peg lands 64 blocks below the head, so 112 gives a re-peg about
+    * every 48 blocks (about 10.4 minutes on ETC) with 16 blocks of margin to the window's edge, close to go-ethereum's
+    * 120 and every 56 (see [[RootRollAgeBlocks]]). 96 would double ETC's re-peg rate against the cadence T062 gated,
+    * and each re-peg costs spec 022's walk a restart.
+    */
+  private[snap] val HealRepegAgeBlocks: BigInt = SnapServeWindowBlocks * 7 / 8
 
   /** The head a root's age is measured against for the proactive pivot roll (B-031): on a proof-of-stake chain, the
     * consensus layer's head once its header is known, because the roll's target is taken from it there

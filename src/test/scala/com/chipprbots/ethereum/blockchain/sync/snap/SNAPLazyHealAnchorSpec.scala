@@ -138,12 +138,12 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   private val HealMargin = BigInt(64)
 
   "SNAPSyncController.healRootStale" should
-    "re-peg a moving-root heal root once it is more than 96 blocks (3/4 of the serve window) below the clock" taggedAs UnitTest in {
+    "re-peg a moving-root heal root once it is more than 112 blocks (7/8 of the serve window) below the clock" taggedAs UnitTest in {
       val root = BigInt(284_534) // the CL head 284_598 - 64, as a re-peg takes it
       def stale(clock: BigInt): Boolean =
         SNAPSyncController.healRootStale(true, clock, Some(root), lastCheckClock = Some(root + HealMargin), HealMargin)
-      stale(root + 96) shouldBe false
-      stale(root + 97) shouldBe true
+      stale(root + 112) shouldBe false
+      stale(root + 113) shouldBe true
       // The old rule waited for the clock to move 2 x 64 past the recorded CL head: a root 192 blocks old.
       stale(root + HealMargin + 2 * HealMargin) shouldBe true
     }
@@ -153,10 +153,10 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     SNAPSyncController.healRootStale(true, BigInt(1_200), Some(root), Some(BigInt(1_200)), HealMargin) shouldBe false
     SNAPSyncController.healRootStale(true, BigInt(1_201), Some(root), Some(BigInt(1_200)), HealMargin) shouldBe true
     // nothing checked yet: the root's age alone decides
-    SNAPSyncController.healRootStale(true, BigInt(1_096), Some(root), None, HealMargin) shouldBe false
-    SNAPSyncController.healRootStale(true, BigInt(1_097), Some(root), None, HealMargin) shouldBe true
+    SNAPSyncController.healRootStale(true, BigInt(1_112), Some(root), None, HealMargin) shouldBe false
+    SNAPSyncController.healRootStale(true, BigInt(1_113), Some(root), None, HealMargin) shouldBe true
     // no root block known: engage, as an unset check did before
-    SNAPSyncController.healRootStale(true, BigInt(1_097), None, None, HealMargin) shouldBe true
+    SNAPSyncController.healRootStale(true, BigInt(1_113), None, None, HealMargin) shouldBe true
   }
 
   it should "keep the serve-root path (movingRootDeltaHeal = false) on 2 x margin past the last root pushed" taggedAs UnitTest in {
@@ -252,21 +252,21 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
   // forge review follow-up (2nd round), reworked for B-033: drives the REAL maybeRequestHealingServeRoot ->
   // refreshPivotInPlace path (via RequestTrieNodeHealing, not HealingAllPeersStateless, which never touches
   // lastHealingServeRootBlock) on the non-PoS test config (isPoSChain = false throughout this suite, the ETC path). A
-  // first stale-triggered re-peg moves the root to 1_936 (height 2_000 - 64); then networkBest moves to 1_936 + 97, a
-  // root 97 blocks old, one past the 96-block re-peg age (3/4 of the 128-block serve window). The rule before B-033 did
+  // first stale-triggered re-peg moves the root to 1_936 (height 2_000 - 64); then networkBest moves to 1_936 + 113, a
+  // root 113 blocks old, one past the 112-block re-peg age (7/8 of the 128-block serve window). The rule before B-033 did
   // not fire there: it waited for networkBest to move 2 x 64 past the recorded target (1_936), a root 128 blocks old.
   // Observed via updateBestBlockForPivot's unconditional AppStateStorage best-block write, the same signal repegUntil
   // uses elsewhere in this file.
   it should
-    "fire a SECOND heal-root-stale re-peg once the heal root is more than 96 blocks old (B-033), not 128, on a " +
+    "fire a SECOND heal-root-stale re-peg once the heal root is more than 112 blocks old (B-033), not 128, on a " +
     "non-PoS chain, pinning the exact call site forge flagged" taggedAs UnitTest in (new Fixture:
       val pivot0: BigInt = BigInt(1_000)
       val root0: ByteString = fakeRoot(0xaa)
       val height1 = 2_000L
       val pivot1: BigInt = BigInt(height1 - PivotOffset) // 1_936 — first stale-triggered re-peg's target
       val root1: ByteString = fakeRoot(0xbb)
-      val height2: Long = (pivot1 + 97).toLong // the root 97 blocks old: past 96 (B-033), short of the old 128
-      val pivot2: BigInt = BigInt(height2 - PivotOffset) // 1_969 — reached only under the fix
+      val height2: Long = (pivot1 + 113).toLong // the root 113 blocks old: past 112 (B-033), short of the old 128
+      val pivot2: BigInt = BigInt(height2 - PivotOffset) // 1_985 — reached only under the fix
       val root2: ByteString = fakeRoot(0xcc)
 
       storeGenesis()
