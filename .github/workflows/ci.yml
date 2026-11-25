@@ -90,6 +90,12 @@ jobs:
       - name: Check the outbound TLS allow-list (spec 030)
         run: scripts/check-outbound-tls.sh
 
+      # Spec 021 T028/T030: the self-test of the DC-3 usage check (planted BigInt references must fail). The check
+      # itself, scripts/spec021/check_uint256_bigint.sh, is red on today's BigInt-backed UInt256 by design; it joins
+      # this job at T037, with S1's allow-list fences (tasks.md, T028).
+      - name: Self-test the UInt256 DC-3 check (spec 021)
+        run: scripts/spec021/test_check_uint256_bigint.sh
+
       # sbt-retry.sh runs sbt again only when it failed to download something (sbt's launcher or a dependency
       # answered 429, 5xx or a reset); a compile, format or test failure fails at once (B-417).
       - name: Compile all modules
@@ -121,6 +127,31 @@ jobs:
         env:
           FUKUII_DEV: true
         timeout-minutes: 25  # Tier 1 runs ~11–15 min on GitHub runners; 15 left no headroom (spec 016 S0d, #1514)
+
+      # Spec 021 T028: GT-2's full differential, UInt256DifferentialFullSpec (tag DifferentialTest, >= 10^7 cases per
+      # operation against the BigInt oracle), on PRs that touch UInt256, vm/, or the suite and its oracle. Tiers 1
+      # and 2 exclude the tag; the nightly run is in ethereum-tests-nightly.yml.
+      - name: Detect UInt256 or vm/ changes (spec 021 GT-2)
+        id: gt2_paths
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if git diff --name-only "origin/$BASE_REF...HEAD" \
+               | grep -qE '^src/main/scala/com/chipprbots/ethereum/(domain/UInt256|vm/)|^src/test/scala/com/chipprbots/ethereum/domain/(UInt256Differential|oracle/)'; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: GT-2 full differential (spec 021)
+        if: github.event_name == 'pull_request' && steps.gt2_paths.outputs.run == 'true'
+        run: |
+          set -o pipefail
+          sbt -v "testOnly com.chipprbots.ethereum.domain.UInt256DifferentialFullSpec" 2>&1 | tee /tmp/sbt-gt2-full.log
+        env:
+          FUKUII_DEV: true
+        timeout-minutes: 30  # about 8 min on 4 cores before the swap (2026-11-25)
       
       - name: Run Standard Tests (Tier 2)
         # Uninstrumented pass/fail gate: `testStandard` = compile-all + every non-Tier-3 suite (SlowTest included).
@@ -281,17 +312,18 @@ jobs:
         # sub-modules' measurement files from the first one are kept.
         # The root run uses the testStandard exclusions from build.sbt plus -l SlowTest: scoverage's per-statement
         # Invoker makes the Ethash hot loops effectively never finish (EthashNonceSearchSpec ran >2 h), and the
-        # gating job runs SlowTest uninstrumented. It is a superset of the root half of testEssential, so
-        # testEssential is not run again. Test failures (instrumented runs are several times slower and expose
-        # timing-sensitive specs) must not stop the report, so this step is continue-on-error; pass/fail is gated
-        # by the uninstrumented job. -XX:-ReduceAllocationMerges comes from .jvmopts (sbt JVM) and build.sbt
-        # (forked test JVMs).
+        # gating job runs SlowTest uninstrumented. -l DifferentialTest likewise: spec 021's full GT-2 suites run
+        # 10^7 cases per operation, uninstrumented, in their own step; their fast siblings are measured here. It is a
+        # superset of the root half of testEssential, so testEssential is not run again. Test failures (instrumented
+        # runs are several times slower and expose timing-sensitive specs) must not stop the report, so this step is
+        # continue-on-error; pass/fail is gated by the uninstrumented job. -XX:-ReduceAllocationMerges comes from
+        # .jvmopts (sbt JVM) and build.sbt (forked test JVMs).
         id: coverage_tests
         continue-on-error: true
         run: |
           rc=0
           sbt -v "clean; coverage; rlp / test; bytes / test; crypto / test" 2>&1 | tee /tmp/sbt-coverage-submodules.log || rc=1
-          sbt -v "coverage; testOnly -- -l BenchmarkTest -l EthereumTest -l SyncTest -l DisabledTest -l SlowTest" 2>&1 | tee /tmp/sbt-coverage-root.log || rc=1
+          sbt -v "coverage; testOnly -- -l BenchmarkTest -l EthereumTest -l SyncTest -l DisabledTest -l SlowTest -l DifferentialTest" 2>&1 | tee /tmp/sbt-coverage-root.log || rc=1
           exit $rc
         env:
           FUKUII_DEV: true

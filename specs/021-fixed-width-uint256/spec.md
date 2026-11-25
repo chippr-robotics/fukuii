@@ -10,6 +10,8 @@ scheduled behind a storage gate. GT-1 reported 2026-11-06, and the Clarification
 interpreter design (fixed-width type plus an in-place word stack). The Gates and Design constraints sections are
 binding on the implementation.
 
+**In flight**: `fix/spec021-s1-preswap` (B-049): S1's pre-swap tests and checks, T023–T031
+
 **Sequence**: after spec 020 (Scala 3.9 LTS toolchain), in parallel with spec 017 (they touch different packages:
 this spec `domain/UInt256` and `vm/`, 017 `ledger/` and `db/`), before spec 018's Track R re-measures trace
 re-execution (018 SC-016) and before spec 019's SP-1b consumes the type (019 FR-003b). Chain of record: 016 → 020 →

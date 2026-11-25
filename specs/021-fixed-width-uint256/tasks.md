@@ -155,31 +155,52 @@ GT-2 has zero differences against the `BigInt` oracle (FR-002), and the DC-3 che
 
 ### Pin tests (green on the `BigInt` type and unchanged after the swap)
 
-- [ ] T023 [P] [US1] Copy today's M/domain/UInt256.scala verbatim, renamed, to T/domain/oracle/BigIntUInt256.scala
-- [ ] T024 [P] [US1] Add the `DifferentialTest` tag in T/testing/Tags.scala, and `-l DifferentialTest` to the `testEssential` and `testStandard` aliases in build.sbt
-- [ ] T025 [US1] GT-2 generators and named rows in T/domain/UInt256DifferentialRows.scala (depends on T023):
+- [x] T023 [P] [US1] Copy today's M/domain/UInt256.scala verbatim, renamed, to T/domain/oracle/BigIntUInt256.scala
+  - **Done (2026-11-25, `fix/spec021-s1-preswap`):** copied from staging c78c128d13 with `UInt256` → `BigIntUInt256` and the package → `domain.oracle`, nothing else; a header comment names the source commit and the exclusions.
+- [x] T024 [P] [US1] Add the `DifferentialTest` tag in T/testing/Tags.scala, and `-l DifferentialTest` to the `testEssential` and `testStandard` aliases in build.sbt
+  - **Done (2026-11-25, `fix/spec021-s1-preswap`):** also excluded in ci.yml's Coverage job, whose root run lists the testStandard exclusions by hand (scoverage would make 10⁷ cases per operation take hours). `testComprehensive` and `pp`'s `testQuick` have no exclusions, so they run the full suite.
+- [x] T025 [US1] GT-2 generators and named rows in T/domain/UInt256DifferentialRows.scala (depends on T023):
   - the generator strata from research R-12: uniform, bit-length, limb patterns, anchors ± δ, small values, `apply` inputs;
   - the rows E01–E35, C01–C12, P01–P06, P10–P16 and L01–L09, with L07 and L08 constructed per R-12.
-- [ ] T026 [US1] Two suites, each asserting `signum >= 0` and `bitLength <= 256` on every word (S1) (depends on T024, T025):
+  - **Done (2026-11-25, `fix/spec021-s1-preswap`):** 57 operations (every member but `/`; `Boolean` and `Byte` inputs enumerated), fixed seeds from the operation name over 16 fixed chunks (the case set does not depend on the core count), no shrinking. Each row asserts GT-1's literal result on both sides. Notes:
+    - E06, E29 and E30 are the named exclusions (`Exclusions`). E31 has no member until S2, so it is pinned at the CLZ opcode on ETH Osaka and ETC Olympia; T044 adds the `numberOfLeadingZeros` member rows.
+    - E10's fourth pair is ambiguous in part A ("2^255−1, −2^255 → −1"): truncation gives −1 for (−2^255) / (2^255−1) and 0 for the reverse. Both orders are pinned.
+    - L07 is HD's add-back case scaled to 64-bit digits; L08 starts from HD's "qhat = b + 1" case. A base-2⁶⁴ model of `divmnu` confirmed that L07 and its neighbours take D6 and that L08's cases take D3's correction twice. The kernels' scoverage at T039 is still the VERIFY.
+    - P15 calls `calcMemCost` on ETH Osaka and ETC Spiral, and P16 reads a balance through `MockWorldState`.
+- [x] T026 [US1] Two suites, each asserting `signum >= 0` and `bitLength <= 256` on every word (S1) (depends on T024, T025):
   - the fast suite, T/domain/UInt256DifferentialSpec.scala: ≥ 10⁴ cases per operation, `VMTest`;
   - the full suite, T/domain/UInt256DifferentialFullSpec.scala: ≥ 10⁷ cases per operation, `DifferentialTest`, fixed seeds, shrinking off.
-- [ ] T027 [P] [US1] Fill `UInt256Spec`'s GT-1 gaps in T/domain/UInt256Spec.scala:
+  - **Done (2026-11-25, `fix/spec021-s1-preswap`):** both green on the `BigInt` type, where the type under test still runs the oracle's code. The fast suite has 123 tests in about 5 s. The full suite took 7 min 52 s on 4 cores (58 tests: 57 operations and the rows, 0 differences; the slowest are `**` at 58 s and `bytes` at 50 s). That is before the swap: both sides run `BigInt`, so expect it to fall after T035. It is not §B row 1, which is S1's tip. A mutation check (the oracle's `toInt` and its reducer altered) turned 14 fast tests red.
+- [x] T027 [P] [US1] Fill `UInt256Spec`'s GT-1 gaps in T/domain/UInt256Spec.scala:
   - `<<`, `>>` and `sshift` on shifts 0–255;
   - `toLong`, `toHexString`, `toString`, `hashCode`;
   - the non-`UInt256` `equals`, `max`, `apply(Boolean)`, negative `apply(Long)`, `byte2UInt256`;
   - an `smod` property, and SDIV(−2²⁵⁵, −1);
   - replace the `"/"` test, which exercises `*`.
+  - **Done (2026-11-25, `fix/spec021-s1-preswap`):** the `"/"` test is replaced by `MaxValue.div(2)` = 2²⁵⁵−1, the P15 constant that T032 puts in place of `MaxValue / 2`. `/` itself stays untested: it is retired at T032 (D1).
 - [ ] T028 [US1] Add two CI steps to .github/workflows/ci.yml (depends on T026, T030):
   - the full GT-2 suite, nightly and on PRs touching M/domain/UInt256* or M/vm/;
   - `scripts/spec021/check_uint256_bigint.sh`, on every PR.
+  - **Partly done (2026-11-25, `fix/spec021-s1-preswap`):**
+    - The full GT-2 suite: in ci.yml, a path-filtered step for PRs (`domain/UInt256*`, `vm/`, and the suite and its oracle); nightly, as the `uint256-differential` job of ethereum-tests-nightly.yml. Both are green on the `BigInt` type.
+    - The DC-3 check: only its self-test, `test_check_uint256_bigint.sh`, runs in ci.yml now. That cannot fail before the swap. **T037 adds the check itself** (`scripts/spec021/check_uint256_bigint.sh`) beside the self-test, in the same commit as the fences that turn it green. Until then it is red by design (15 references in today's UInt256.scala).
 
 ### Failing-first tests (red on the `BigInt` type)
 
-- [ ] T029 [P] [US2] Allocation budget in T/domain/UInt256AllocationSpec.scala, over 10⁵ operations measured with `ThreadMXBean`:
+- [x] T029 [P] [US2] Allocation budget in T/domain/UInt256AllocationSpec.scala, over 10⁵ operations measured with `ThreadMXBean`:
   - `+`, `-`, `*`, `&` and `<<` allocate ≤ 64 bytes per result;
   - `div`, `mulmod` and `**` allocate ≤ 64 bytes plus one fixed scratch array.
-- [ ] T030 [P] [US3] The DC-3 usage check, `domain/` half: scripts/spec021/check_uint256_bigint.sh, with its self-test scripts/spec021/test_check_uint256_bigint.sh, in which planted references must fail. It is red on today's M/domain/UInt256.scala
-- [ ] T031 [P] [US3] The bytecode check scripts/spec021/check_no_closures.sh: no `LambdaMetafactory` invokedynamic and no lazy-val initialisers in the `UInt256` classes (R-1, R-16). It is red today, because of the by-name `zeroCheck` and the lazy `bytes` and `signedN`
+  - **Done (2026-11-25, `fix/spec021-s1-preswap`):** the scratch is data-model §2.2's fixed 26 limbs (an `Array[Long](26)`, 224 bytes). The operands go straight into `un` and `vn`, so the heavy budget is 288 bytes. Measured on the `BigInt` type: `+` 248, `-` 221, `*` 361, `&` 178, `<<` 334, `div` 378, `mulmod` 590, `**` 41,218 bytes per result. All eight are red.
+    - **Kept out of CI until the swap:** each budget runs inside `pendingUntilFixed`. A breach reports the test as *pending*, so `testEssential`, `testStandard` and Coverage stay green. A budget that is met **fails** the test.
+    - **T035 turns it on** by removing every `pendingUntilFixed` in UInt256AllocationSpec.
+    - Two harness controls, an identity at 0 bytes and an `Array[Long](4)` at 48, are ordinary tests.
+    - The 64-byte ceiling fits the field form (48 bytes, R-1). If a scratch layout over 26 limbs is needed, that is a data-model change for RP-2, not a looser number.
+- [x] T030 [P] [US3] The DC-3 usage check, `domain/` half: scripts/spec021/check_uint256_bigint.sh, with its self-test scripts/spec021/test_check_uint256_bigint.sh, in which planted references must fail. It is red on today's M/domain/UInt256.scala
+  - **Done (2026-11-25, `fix/spec021-s1-preswap`):** the self-test has 16 cases: planted references, fenced forms, comments, malformed fences, and a missing file (exit 2). It also runs as `check_uint256_bigint.sh --self-test`, the quickstart form. Comment lines are not usage. `UInt256Kernels.scala` is checked when it exists. The check reports 15 references on today's file (exit 1). **T037 turns it on** in ci.yml (see T028).
+- [x] T031 [P] [US3] The bytecode check scripts/spec021/check_no_closures.sh: no `LambdaMetafactory` invokedynamic and no lazy-val initialisers in the `UInt256` classes (R-1, R-16). It is red today, because of the by-name `zeroCheck` and the lazy `bytes` and `signedN`
+  - **Done (2026-11-25, `fix/spec021-s1-preswap`):** it counts each `invokedynamic` whose bootstrap is `LambdaMetafactory` (§B row 3's figure), and finds Scala 3 `$lzy`/`$lzyINIT` members, `LazyVals` and Scala 2 `$lzycompute`. Its self-test compiles Java fixtures with `javac` (10 cases); `--self-test` runs it.
+    - **Red today:** `UInt256.class` has 7 lambda sites (6 `zeroCheck` by-names, the constructor's `require`) plus the lazy `bytes` and `signedN`; `UInt256$.class` has 2 (`apply(ByteString)`'s `require`, and `Array.fill` for `Zeros`).
+    - **Not in CI.** It reads compiled classes, and its gate is S1's exit (T037, T039). T037 decides whether it joins ci.yml after the compile step.
 
 ### Implementation
 
@@ -198,8 +219,17 @@ GT-2 has zero differences against the `BigInt` oracle (FR-002), and the DC-3 che
   - the string renderers;
   - the shift members with EVM semantics (D2);
   - no `lazy val`.
+  - **Note from T029/T031 (2026-11-25):**
+    - Remove every `pendingUntilFixed` in T/domain/UInt256AllocationSpec.scala in this commit. Its eight budgets must then be green; under scoverage (the Coverage job) they may not be, so check that job.
+    - `require(cond, message)` compiles to `Predef.require(Boolean, Function0)`, a `LambdaMetafactory` closure, so T031 rejects R-16's `require` in `apply(ByteString)`. Write D3 as an explicit `throw new IllegalArgumentException(...)`. C04 and P04 compare only the exception type.
+    - `Array.fill(n)(elem)` is by-name too.
 - [ ] T036 [US1] Ordering and `CanEqual` per research R-7 in M/domain/UInt256.scala: add the `given Ordering[UInt256]` only if `summon` resolves without ambiguity and E205 stays silent; record the outcome in D/research.md R-7
 - [ ] T037 [US3] Add the DC-3 allow-list fences to M/domain/UInt256.scala and M/domain/UInt256Kernels.scala, so that T030 and T031 turn green. If T031 cannot pass, record R-1's fallback (array kernels) in D/research.md §B row 3, and have mithril review it
+  - **Note from T028/T030 (2026-11-25):**
+    - Add the `scripts/spec021/check_uint256_bigint.sh` step to ci.yml, beside its self-test.
+    - Make `UInt256Kernels.scala` a required file in the check.
+    - `toSign` returns `BigInt` and lives until T054, but R-15's allow-list does not name it. Either fence it (`// DC-3 allow: toSign`, removed at T054) or amend R-15 at RP-2.
+    - Decide whether `check_no_closures.sh` runs in ci.yml after the compile.
 - [ ] T038 [P] Write the ADR docs/adr/vm/VM-NNN-fixed-width-uint256.md (next free number): the representation, the kernel sharing, and the word stack and memory to come. Add its rows to docs/adr/vm/README.md and docs/adr/README.md
 
 ### Exit gate
