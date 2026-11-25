@@ -6077,3 +6077,13 @@ items:
     links:
       prs: [2137]
     notes: 3 HeadResets seen where 1 expected (TestServiceOnPositionsSpec.scala:1154). Wait for the prior moves' resets (rig.cleared) before clear().
+  - id: B-557
+    title: "Main ruleset requires hive run/engine + run/consume-engine, which skip on docs/workflow-only PRs: such hotfixes can't merge"
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-25
+    refs: ["PR #2133"]
+    links: {}
+    notes: "Required names never report when changes/detect skips the hive jobs (they report as 'run / inputs.label' skipped). Fix: have the skip path report the required names as success, or scope the rule. Ruleset edit needs repo admin."
