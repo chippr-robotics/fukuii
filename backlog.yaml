@@ -2840,20 +2840,17 @@ items:
   - id: B-317
     title: A head refused -38002 is still published to SNAP as a pivot hint (publishBeaconHead)
     priority: P2
-    status: review
+    status: done
     area: sync
     opened: 2026-11-16
+    closed: 2026-11-25
     refs: [B-297]
     links:
       prs: [2120]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-25T04:10:57Z
-      heartbeat: 2026-11-25T05:06:50Z
     notes: |-
       beacon, B-297 memo
       2026-11-25 in-progress: wave 4C beacon, fix/b031-snap-serve-window
+      2026-11-25 done: merged 09e57a7b6; live Mordor heal at the 112 cadence not yet run
   - id: B-318
     title: "B-297 polish: pin Deep/Incomplete/Pivot refusals one by one; a fault of the pin release after a hand-off; a head past the tip told as ChainReorganised again"
     priority: P3
