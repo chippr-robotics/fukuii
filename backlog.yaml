@@ -386,21 +386,18 @@ items:
   - id: B-033
     title: Moving-root heal lets the root age past the serve window (~192 blocks vs geth's 128); re-peg on the root's age
     priority: P2
-    status: review
+    status: done
     area: snap
     size: M
     opened: 2026-11-05
+    closed: 2026-11-25
     refs: [H9 rest, CHASE C]
     links:
       prs: [2120]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-25T04:10:53Z
-      heartbeat: 2026-11-25T05:06:46Z
     notes: |-
       beacon. Keep BUG-BC3's clock reasoning.
       2026-11-25 in-progress: wave 4C beacon, fix/b031-snap-serve-window
+      2026-11-25 done: merged 09e57a7b6; live Mordor heal at the 112 cadence not yet run
   - id: B-034
     title: Presence-only readers should use rawNodes + provablyBad (cheaper than before H3)
     priority: P2
