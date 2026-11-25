@@ -5858,3 +5858,13 @@ items:
     notes: |-
       failed CI on #2122; fix in #2124
       2026-11-25 done: merged f9ebf80f9
+  - id: B-539
+    title: Audit etcFork >= Olympia gates for ETH configs that also schedule the ETC forks (B-177 follow-up)
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: "beacon, #2126; hive as shipped unaffected"
