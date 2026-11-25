@@ -3216,7 +3216,7 @@ items:
   - id: B-351
     title: "Hash layout: check a re-SNAP for a heavier fork below the SYNC-FORK floor lands on the peer's branch (canonical index from the common block to the pivot)"
     priority: P1
-    status: claimed
+    status: in-progress
     area: sync
     opened: 2026-11-18
     refs: []
@@ -3227,10 +3227,11 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:11:04Z
-      heartbeat: 2026-11-25T04:12:35Z
+      heartbeat: 2026-11-25T05:38:12Z
     notes: |-
       B-346 escalates via RegularSyncStuck -> resnapNow. The branch anchoring after an escalation (B-307 PivotAnchor.branchCheck / PivotOffTheBranch) acts only with stateEscalation (unified layout). Check on Mordor that the hash-layout SNAP after B-346 adopts the heavier branch's headers between the common block and the pivot, and does not keep this node's old canonical entries. Found by forge-b298.
       2026-11-25 claimed: wave 4D forge, after 4A lands (BlockImporter overlap)
+      2026-11-25 in-progress: wave 4D forge, fix/b347-sync-fork-resolver
   - id: B-352
     title: "RegularSyncSpec timing flakes under load: 'save fetched node' and the ancestor-bodies deadline test each fail about 1 run in 5"
     priority: P3
