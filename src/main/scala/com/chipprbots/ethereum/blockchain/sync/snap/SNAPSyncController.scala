@@ -1519,7 +1519,7 @@ object SNAPSyncController:
   export controller.PivotPolicy.{clPivotNotYetAdvanced, MaxPeerTipLead}
   export controller.PivotPolicy.{healPivotAfterExcluded, pivotPassesFreshnessFloor, unservablePivotTarget}
   export controller.HealPolicy.{bytecodeRecoveryComplete, healRepegSuppressedByLocalWalk}
-  export controller.HealPolicy.{lastHealingServeRootBlockToRecord, shouldSkipHealingAfterDownloads, staleReferenceHead}
+  export controller.HealPolicy.{healRootStale, shouldSkipHealingAfterDownloads, staleReferenceHead}
   export controller.ResumePolicy.{checkResumable, fillResumeLayout, taskFilePaths}
   export controller.SnapPeerPolicy.{servesSnapState, snapExclusionReason, SnapExclusionAtGenesis}
   export controller.SnapPeerPolicy.{SnapExclusionLogIntervalMs, SnapExclusionMinLogIntervalMs}

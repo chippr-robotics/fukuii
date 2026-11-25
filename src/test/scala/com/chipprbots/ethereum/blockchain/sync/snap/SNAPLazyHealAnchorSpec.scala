@@ -132,38 +132,46 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
     ) shouldBe BigInt(284670)
   }
 
-  // forge review follow-up on b8f0700f6 (BUG-BC3): pins the lastHealingServeRootBlock bookkeeping choice — the
-  // value RECORDED after a stale-triggered re-peg, as distinct from staleReferenceHead (the value COMPARED
-  // against). Getting this wrong on ETC (moving-root-delta-heal ships true by default, base/sync.conf, no ETC
-  // override) silently doubled the effective networkBest-advance threshold between re-pegs (~64 -> ~128 blocks,
-  // ~14 -> ~28 min), approaching peers' serve window — see lastHealingServeRootBlockToRecord's doc for the full
-  // arithmetic. These pin BOTH branches directly and deterministically, without needing an actor at all.
-  "SNAPSyncController.lastHealingServeRootBlockToRecord" should
-    "record target (networkBest - margin), NOT networkBest, on a non-CL-anchored check (ETC/pre-merge, or PoS " +
-    "before a CL hint arrives) — byte-identical to base" taggedAs UnitTest in {
-      val networkBest = BigInt(284670)
-      val margin = BigInt(64)
-      val target = networkBest - margin // what recentRootTarget would have produced
-      // staleClockNow == networkBest is exactly what staleReferenceHead returns whenever it did NOT switch to
-      // the CL head (isPoSChain = false, or no CL hint yet) — see its own tests above.
-      SNAPSyncController.lastHealingServeRootBlockToRecord(
-        staleClockNow = networkBest,
-        networkBest = networkBest,
-        target = target
-      ) shouldBe target
+  // B-033: the heal-root re-peg is decided on the root's own age. It replaced lastHealingServeRootBlockToRecord, whose
+  // recorded value (forge's review of b8f0700f6, BUG-BC3) set how old the root got before the next re-peg: 128 blocks
+  // on ETC, where it recorded networkBest - margin, and 192 on a CL-anchored chain, where it recorded the CL head.
+  private val HealMargin = BigInt(64)
+
+  "SNAPSyncController.healRootStale" should
+    "re-peg a moving-root heal root once it is more than 96 blocks (3/4 of the serve window) below the clock" taggedAs UnitTest in {
+      val root = BigInt(284_534) // the CL head 284_598 - 64, as a re-peg takes it
+      def stale(clock: BigInt): Boolean =
+        SNAPSyncController.healRootStale(true, clock, Some(root), lastCheckClock = Some(root + HealMargin), HealMargin)
+      stale(root + 96) shouldBe false
+      stale(root + 97) shouldBe true
+      // The old rule waited for the clock to move 2 x 64 past the recorded CL head: a root 192 blocks old.
+      stale(root + HealMargin + 2 * HealMargin) shouldBe true
     }
 
-  it should
-    "record the CL head (staleClockNow) directly, NOT target, when the check WAS CL-anchored" taggedAs UnitTest in {
-      val networkBest = BigInt(284670)
-      val clHead = BigInt(284598) // staleReferenceHead's output when it switched to the CL head
-      val target = networkBest - BigInt(64)
-      SNAPSyncController.lastHealingServeRootBlockToRecord(
-        staleClockNow = clHead,
-        networkBest = networkBest,
-        target = target
-      ) shouldBe clHead
-    }
+  it should "not ask again until the clock moves past the last check, so a frozen CL head asks once (BUG-BC3)" taggedAs UnitTest in {
+    val root = BigInt(1_000)
+    SNAPSyncController.healRootStale(true, BigInt(1_200), Some(root), Some(BigInt(1_200)), HealMargin) shouldBe false
+    SNAPSyncController.healRootStale(true, BigInt(1_201), Some(root), Some(BigInt(1_200)), HealMargin) shouldBe true
+    // nothing checked yet: the root's age alone decides
+    SNAPSyncController.healRootStale(true, BigInt(1_096), Some(root), None, HealMargin) shouldBe false
+    SNAPSyncController.healRootStale(true, BigInt(1_097), Some(root), None, HealMargin) shouldBe true
+    // no root block known: engage, as an unset check did before
+    SNAPSyncController.healRootStale(true, BigInt(1_097), None, None, HealMargin) shouldBe true
+  }
+
+  it should "keep the serve-root path (movingRootDeltaHeal = false) on 2 x margin past the last root pushed" taggedAs UnitTest in {
+    SNAPSyncController.healRootStale(false, BigInt(1_128), Some(BigInt(0)), Some(BigInt(1_000)), HealMargin) shouldBe
+      false
+    SNAPSyncController.healRootStale(
+      false,
+      BigInt(1_129),
+      Some(BigInt(1_128)),
+      Some(BigInt(1_000)),
+      HealMargin
+    ) shouldBe
+      true
+    SNAPSyncController.healRootStale(false, BigInt(5), None, None, HealMargin) shouldBe true
+  }
 
   // coordinator follow-up (3rd round), BUG-BC3 2nd follow-up: pins clPivotNotYetAdvanced using the EXACT
   // Platåberget soak incident numbers (01:30:19.996 log line: "CL-based pivot 285486 not strictly newer than
@@ -241,28 +249,24 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       None
   }
 
-  // forge review follow-up (2nd round): the two lastHealingServeRootBlockToRecord unit tests above pin the
-  // HELPER's own logic but not the CALL SITE's wiring to it — reverting the call site to the pre-fix
-  // `Some(staleClockNow)` left them green, since they invoke the (still-correct) helper directly. This drives
-  // the REAL maybeRequestHealingServeRoot -> refreshPivotInPlace path (via RequestTrieNodeHealing, not
-  // HealingAllPeersStateless — the latter never touches lastHealingServeRootBlock at all) on the non-PoS test
-  // config (isPoSChain = false throughout this suite, exercising the ETC path byte-for-byte): a first
-  // stale-triggered re-peg (from lastHealingServeRootBlock = None, unconditionally stale — identical under old
-  // and new code) sets the bookkeeping baseline, then networkBest advances by exactly 100 blocks — strictly
-  // between the correct threshold (> margin = 64, base's target-based bookkeeping) and the pre-fix bug's
-  // threshold (> 2margin = 128, from recording networkBest itself instead of target). Fixed: 100 > 64, a SECOND
-  // re-peg fires. Pre-fix bug: 100 <= 128, it does not — observed via updateBestBlockForPivot's unconditional
-  // AppStateStorage best-block write, the same fix-independent signal repegUntil uses elsewhere in this file.
+  // forge review follow-up (2nd round), reworked for B-033: drives the REAL maybeRequestHealingServeRoot ->
+  // refreshPivotInPlace path (via RequestTrieNodeHealing, not HealingAllPeersStateless, which never touches
+  // lastHealingServeRootBlock) on the non-PoS test config (isPoSChain = false throughout this suite, the ETC path). A
+  // first stale-triggered re-peg moves the root to 1_936 (height 2_000 - 64); then networkBest moves to 1_936 + 97, a
+  // root 97 blocks old, one past the 96-block re-peg age (3/4 of the 128-block serve window). The rule before B-033 did
+  // not fire there: it waited for networkBest to move 2 x 64 past the recorded target (1_936), a root 128 blocks old.
+  // Observed via updateBestBlockForPivot's unconditional AppStateStorage best-block write, the same signal repegUntil
+  // uses elsewhere in this file.
   it should
-    "fire a SECOND heal-root-stale re-peg once networkBest has advanced by more than margin (not 2xmargin) on a " +
+    "fire a SECOND heal-root-stale re-peg once the heal root is more than 96 blocks old (B-033), not 128, on a " +
     "non-PoS chain, pinning the exact call site forge flagged" taggedAs UnitTest in (new Fixture:
       val pivot0: BigInt = BigInt(1_000)
       val root0: ByteString = fakeRoot(0xaa)
       val height1 = 2_000L
       val pivot1: BigInt = BigInt(height1 - PivotOffset) // 1_936 — first stale-triggered re-peg's target
       val root1: ByteString = fakeRoot(0xbb)
-      val height2: Long = height1 + 100 // strictly between the correct (+64) and pre-fix-buggy (+128) thresholds
-      val pivot2: BigInt = BigInt(height2 - PivotOffset) // 2_036 — reached only under the fix
+      val height2: Long = (pivot1 + 97).toLong // the root 97 blocks old: past 96 (B-033), short of the old 128
+      val pivot2: BigInt = BigInt(height2 - PivotOffset) // 1_969 — reached only under the fix
       val root2: ByteString = fakeRoot(0xcc)
 
       storeGenesis()

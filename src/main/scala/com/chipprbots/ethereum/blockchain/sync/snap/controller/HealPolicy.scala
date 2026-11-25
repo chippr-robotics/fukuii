@@ -66,34 +66,43 @@ private[snap] object HealPolicy:
   ): BigInt =
     if movingRootDeltaHeal && isPoSChain then clHeadNumber.getOrElse(networkBest) else networkBest
 
-  /** The value `maybeRequestHealingServeRoot` records as `lastHealingServeRootBlock` after a stale-triggered re-peg —
-    * i.e. the bookkeeping baseline the NEXT staleness check is compared against.
+  /** Whether `maybeRequestHealingServeRoot` re-pegs the heal root (moving-root heal) or asks for a newer serve root
+    * (the spec-004 serve-root path) on this tick.
     *
-    * forge review follow-up on b8f0700f6 (BUG-BC3): the fix originally recorded `staleClockNow` (the value
-    * `staleReferenceHead` picked for the CURRENT check) unconditionally. That is correct when `staleClockNow` is the CL
-    * head (`staleClockNow != networkBest`) — see below. But whenever `staleReferenceHead` fell through to `networkBest`
-    * (ETC/pre-merge, or a PoS chain before its first CL hint arrives — `staleClockNow == networkBest` in both), it
-    * silently replaced base's `target` (`networkBest − margin`, `recentRootTarget`) with the larger `networkBest`
-    * itself. Since `stale` is `(clockNow − lastBlock) > 2×margin`, recording `target` instead of `networkBest` is what
-    * makes the EFFECTIVE re-trigger threshold "`networkBest` has advanced by more than 1×margin since the last fire"
-    * (the `−margin` already baked into `target` cancels one of the two margins in the comparison) rather than 2×margin
-    * — recording `networkBest` instead silently DOUBLES the required advance (and so roughly doubles the wall-clock
-    * interval between re-pegs: on ETC mainnet, `moving-root-delta-heal = true` ships as the default with no ETC
-    * override, so this was a real, not merely theoretical, behavior change — from ~64 to ~128 blocks between checks,
-    * ~14 to ~28 minutes, approaching peers' ~128-block serve window). Recording `target` there instead is
-    * BYTE-IDENTICAL to base.
+    * **Moving-root heal (B-033): on the root's own age.** The heal root is the pivot (`rootBlock`), which a re-peg
+    * moves with it. It is re-pegged once it is more than `PivotPolicy.RootRollAgeBlocks` (96, about 3/4 of the peers'
+    * 128-block serve window) below `staleClockNow`, the head [[staleReferenceHead]] picks. go-ethereum moves its pivot
+    * when it is `2 * fsMinFullBlocks` (128) below the head of its header stream, to `head - fsMinFullBlocks` (64); ours
+    * moves a quarter of the window earlier, because its new header is fetched from a peer rather than read from a
+    * stream it already has (see `RootRollAgeBlocks`).
     *
-    * Recording the raw CL head (not a `−margin`-shifted value) for the CL-anchored case is intentional, not an
-    * oversight to mirror: `target`'s `−margin` shift was calibrated specifically for the peer-reported-best/
-    * serve-window cadence (see `maybeRequestHealingServeRoot`'s "Refresh cadence (U1)" comment). The CL-anchored check
-    * exists for a different reason — avoiding spurious re-triggers while the CL head is not advancing at all (BUG-BC3)
-    * — for which "the CL head has advanced by more than 2×margin since the last check" is already a direct,
-    * self-justifying threshold; borrowing the peer-cadence's margin-shift would only make the CL path harder to reason
-    * about for no corresponding benefit.
+    * This replaced a cadence on the clock since the last check, `clock - lastCheck > 2 * margin` (128). A re-peg lands
+    * `margin` (64) below the head, so that rule let the root reach 128 blocks before the next re-peg on ETC, where the
+    * last check recorded `networkBest - margin`, and 192 on a CL-anchored proof-of-stake chain, where it recorded the
+    * CL head itself (T063 on Sepolia, 2026-11-05: a root 138 blocks old when the peers went stateless). The recorded
+    * value was what set the threshold at 128 or 192 (forge's review of b8f0700f6, a BUG-BC3 follow-up: recording
+    * `networkBest` rather than `networkBest - margin` on ETC silently doubled it). Measured from the root itself, no
+    * recorded value changes how old the root may get.
+    *
+    * BUG-BC3's clock reasoning holds unchanged: the age is measured on the CL head on a proof-of-stake chain with a CL
+    * hint, so a frozen CL head (Lighthouse cannot advance while its EL reports SYNCING; Platåberget 2026-09-27) never
+    * ages the root by itself, however the peers' advertised heights climb. `lastCheckClock` is the clock at the last
+    * re-peg this rule asked for: a check that found no newer root is not made again until the clock has moved, so a
+    * frozen clock gives one check, not one per tick, and a moving one at most one per block. No such check counts
+    * against the re-peg budget (`refreshPivotInPlace(countsTowardHealBudget = false)`, BUG-BC3).
+    *
+    * **The serve-root path** (`movingRootDeltaHeal = false`, spec 004 U1): unchanged. The serve root is fetched at
+    * `networkBest - margin`, and is refreshed once the head is more than `2 * margin` past the block of the last root
+    * pushed (`lastCheckClock`), or at once when none was.
     */
-  private[snap] def lastHealingServeRootBlockToRecord(
+  private[snap] def healRootStale(
+      movingRootDeltaHeal: Boolean,
       staleClockNow: BigInt,
-      networkBest: BigInt,
-      target: BigInt
-  ): BigInt =
-    if staleClockNow == networkBest then target else staleClockNow
+      rootBlock: Option[BigInt],
+      lastCheckClock: Option[BigInt],
+      margin: BigInt
+  ): Boolean =
+    if movingRootDeltaHeal then
+      rootBlock.forall(root => staleClockNow - root > PivotPolicy.RootRollAgeBlocks) &&
+      lastCheckClock.forall(staleClockNow > _)
+    else lastCheckClock.forall(last => (staleClockNow - last) > margin * 2)
