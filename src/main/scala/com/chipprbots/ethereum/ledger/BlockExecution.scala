@@ -1094,8 +1094,8 @@ object BlockExecution:
     * the 31,566,720 total as execution gas, with no reservoir.
     *
     * Pre-Amsterdam (ETH Cancun to Osaka) the reservoir is 0 and the context is the one the EIP-7002/7251 calls always
-    * had, and the EIP-4788 / EIP-2935 calls to non-canonical code (B-517) share it. ETC never builds one: its only
-    * system-contract write, EIP-2935 at Olympia, is a direct storage write.
+    * had, and the EIP-4788 / EIP-2935 calls to non-canonical code (B-517) share it. On ETC the only system contract is
+    * EIP-2935's from Olympia (B-528): the canonical code gets the direct storage write, other code this context.
     *
     * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); empty, as every real block has it, the
     * context is what it was.
@@ -1256,10 +1256,11 @@ object BlockExecution:
 
       case _ => world
 
-  /** EIP-2935: Deploy history storage contract at fork block and store parent block hash.
+  /** EIP-2935: store the parent block hash in the history contract, from Prague (ETH) or Olympia (ETC).
     *
-    * At the Olympia activation block, deploys the history storage contract (sets nonce=1 and code). At every
-    * post-Olympia block, writes the parent hash to storage slot (blockNumber - 1) % HistoryServeWindow.
+    * The client never deploys the contract: EIP-2935's own deploy transaction does (B-528, and
+    * docs/runbooks/olympia-eip2935-deployment.md). With no code at the address nothing happens; with the canonical code
+    * the parent hash goes to slot (blockNumber - 1) % HistoryServeWindow; other code runs as a system call.
     */
   private def applyEip2935(
       block: Block,
