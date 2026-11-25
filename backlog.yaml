@@ -5873,3 +5873,13 @@ items:
     refs: []
     links: {}
     notes: needs a funded sender and a node with allow-unprotected-txs; first check eth_getCode at 0x0000F908...2935
+  - id: B-541
+    title: "Spec 021 RP-2 inputs from the pre-swap work: require/Array.fill closures, toSign vs R-15, E10 order, scratch size, Coverage after T035"
+    priority: P2
+    status: open
+    area: evm
+    size: S
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: see PR for spec021 pre-swap (T023-T031); decide at T022 sign-off
