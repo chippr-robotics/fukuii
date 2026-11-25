@@ -5741,10 +5741,11 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T17:15:12Z
-      heartbeat: 2026-11-25T17:15:36Z
+      heartbeat: 2026-11-25T17:18:53Z
     notes: |-
       forge: decide whether ETC wants a system call there; ETH side done in #2117
       2026-11-25 in-progress: wave 5 forge, fix/b164-etc-consensus
+      2026-11-25 in-progress: user decision 2026-11-25: EIP-2935 as written on Olympia (no client deploy; system call + canonical fast path). core-geth master has no Olympia code
   - id: B-529
     title: BlockImporter drops an announce silently while busy; reply 'dropped' so the fetcher need not roll back (B-139 follow-up)
     priority: P3
