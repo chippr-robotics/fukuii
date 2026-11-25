@@ -2525,20 +2525,18 @@ items:
   - id: B-270
     title: Regular sync's batch import (BlockImporter.tryImportBlocks) never removes mined transactions from the pool
     priority: P2
-    status: in-progress
+    status: done
     area: sync
     size: S
     opened: 2026-11-14
+    closed: 2026-11-25
     refs: []
-    links: {}
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-25T04:10:34Z
-      heartbeat: 2026-11-25T04:12:01Z
+    links:
+      prs: [2022]
     notes: |-
       Seen 2026-11-14 on an Ephemery side node with no CL: tx mined in 148073 stayed pending ~3 min, then left as 'expired unmined'. importBlock and announceAdopted call updateTxPool; the batch path does not (since Mantis). forge: check ETC/Mordor impact.
       2026-11-25 in-progress: wave 4A forge, fix/b011-head-writes-import-lock
+      2026-11-25 done: already fixed by B-448 (#2022): tryImportBlocks updates the pool on every head-moving result incl. reorg re-add
   - id: B-273
     title: "Bundled gorgoroth.conf sets mining.protocol = \"ethash\", which MiningConfig rejects: fukuii gorgoroth cannot start"
     priority: P2
