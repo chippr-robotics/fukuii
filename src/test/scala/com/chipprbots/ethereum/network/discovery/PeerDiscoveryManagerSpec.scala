@@ -15,7 +15,6 @@ import cats.effect.Resource
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.*
-import scala.math.Ordering.Implicits.*
 import scala.util.control.NoStackTrace
 
 import com.chipprbots.scalanet.discovery.crypto.PublicKey
@@ -48,6 +47,9 @@ class PeerDiscoveryManagerSpec extends AnyFlatSpecLike with Matchers with Eventu
     "enode://111bd28d5b2c1378d748383fd83ff59572967c317c3063a9f475a26ad3f1517642a164338fb5268d4e32ea1cc48e663bd627dec572f1d201c7198518e5a506b1@88.99.216.30:45834?discport=45834",
     "enode://2b69a3926f36a7748c9021c34050be5e0b64346225e477fe7377070f6289bd363b2be73a06010fd516e6ea3ee90778dd0399bc007bb1281923a79374f842675a@51.15.116.226:30303?discport=30303"
   ).map(new java.net.URI(_)).map(Node.fromUri)
+
+  /** Upper bound for a reply that is expected: it returns when the reply arrives, so only a bug waits this long. */
+  private val Guard: FiniteDuration = 60.seconds
 
   trait Fixture:
     val testKit: ActorTestKit = ActorTestKit()
@@ -273,39 +275,48 @@ class PeerDiscoveryManagerSpec extends AnyFlatSpecLike with Matchers with Eventu
 
   it should "do lookups taggedAs (UnitTest, NetworkTest) in the background as it's asked for random nodes" in test {
     new Fixture:
-      val bufferCapacity = 3
-      val randomNodes: Set[Node] = sampleNodes.take(2)
+      // Three distinct candidates from ONE lookup. The feeder pauses RandomNodeFeeder.MinDelay (2 s, real time) between
+      // lookups, so a test that needs a second lookup to produce its third node depends on that pause and on how
+      // slowly a coverage-instrumented JVM gets there. The queue holds one node: the feeder blocks offering the rest
+      // until each is taken.
+      val randomNodes: Set[Node] = sampleKnownUris.map(uri => Node.fromUri(uri))
       val lookupCount = new AtomicInteger(0)
-
-      @scala.annotation.unused
-      implicit val nodeOrd: Ordering[ENode] =
-        Ordering.by(_.id.value.toByteArray.toSeq)
+      val getNodesCount = new AtomicInteger(0)
 
       (() => discoveryService.getRandomNodes)
         .expects()
-        .returning(IO { lookupCount.incrementAndGet(); randomNodes.map(toENode).toSet })
+        .returning(IO { lookupCount.incrementAndGet(); randomNodes.map(toENode) })
         .atLeastOnce()
 
+      // Answered only once the manager is in its `started` state; see awaitStarted.
+      (() => discoveryService.getNodes)
+        .expects()
+        .returning(IO { getNodesCount.incrementAndGet(); Set.empty[ENode] })
+        .anyNumberOfTimes()
+
       override lazy val discoveryConfig: DiscoveryConfig =
-        defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = false, kademliaBucketSize = bufferCapacity)
+        defaultConfig.copy(discoveryEnabled = true, reuseKnownNodes = false)
+
+      /** GetRandomNodeInfoReq is dropped without a reply until the manager has finished starting ("caller retries on
+        * next tick"), so sending it right after Start races the start-up. A request that is dropped leaves its caller
+        * waiting for nothing, and one that is merely slow stays queued and swallows a node meant for the next caller.
+        * GetDiscoveredNodesInfoReq is always answered, and in `started` it asks the service for `getNodes`: ask until
+        * it has, and the start-up is over.
+        */
+      def awaitStarted(): Unit =
+        val deadline = System.nanoTime() + Guard.toNanos
+        while getNodesCount.get() == 0 do
+          if System.nanoTime() > deadline then fail(s"The manager did not reach started within $Guard")
+          getPeers(Guard)
 
       override def test(): Unit =
         peerDiscoveryManager ! PeerDiscoveryManager.Start
+        awaitStarted()
 
-        eventually {
-          val n0 = getRandomPeer().node
-          val n1 = getRandomPeer().node
-          val n2 = getRandomPeer().node
+        // One request per candidate and no retry: every reply is awaited, the bound only turns a bug into a failure.
+        val received = (1 to randomNodes.size).map(_ => getRandomPeer(Guard).node).toSet
 
-          // Verify that we're getting nodes from the random set
-          // Due to Set ordering in stream, we may get the same node multiple times
-          // but they should all be from the randomNodes set
-          randomNodes should contain(n0)
-          randomNodes should contain(n1)
-          randomNodes should contain(n2)
-        }
-
-        // Verify that lookups happened in the background
+        received shouldBe randomNodes
         lookupCount.get() should be >= 1
   }
 
