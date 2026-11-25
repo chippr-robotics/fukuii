@@ -7,7 +7,7 @@
 # - Audience-focused navigation tabs
 # - Dark/light mode toggle
 #
-# URL: https://chippr-robotics.github.io/fukuii/
+# URL: https://docs.fukuii.com/ (custom domain; chippr-robotics.github.io/fukuii/ redirects there)
 #
 # Triggers:
 # - Push to main/master/develop branches (docs changes)
@@ -48,6 +48,7 @@ on:
 permissions:
   contents: write
   pages: write
+  pull-requests: read
   id-token: write
 
 # Allow only one concurrent deployment, skipping runs queued between the run in-progress and latest queued.
@@ -92,6 +93,26 @@ jobs:
 
       - name: Build documentation
         run: mkdocs build --strict
+
+      # PR previews (docs-preview.yml) are pushed to pr-preview/pr-<N>/ on the gh-pages branch, but Pages serves
+      # this workflow's artifact, not that branch. Copy in the previews of PRs that are still open so
+      # docs.fukuii.com/pr-preview/pr-<N>/ resolves; previews of closed PRs left on the branch are not published.
+      # docs-preview.yml dispatches this workflow on main after it deploys or removes a preview.
+      - name: Add open PR previews
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! git fetch --depth=1 origin gh-pages; then
+            echo "::notice title=Previews::origin has no gh-pages branch; no previews published"
+            exit 0
+          fi
+          for n in $(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" --paginate --jq '.[].number'); do
+            if git cat-file -e "FETCH_HEAD:pr-preview/pr-$n" 2>/dev/null; then
+              git archive FETCH_HEAD "pr-preview/pr-$n" | tar -x -C site
+              echo "published preview for PR $n"
+            fi
+          done
 
       - name: Setup Pages
         uses: actions/configure-pages@v6
