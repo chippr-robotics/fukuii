@@ -5796,3 +5796,13 @@ items:
     refs: []
     links: {}
     notes: "pre-existing; flagged by forge in #2121"
+  - id: B-537
+    title: Hash-layout PivotOffTheBranch goes to HealingImpossible without counting the attempt or resetting cursors; unbounded if it fires
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: "flagged by forge in #2121; unreachable in normal flow"
