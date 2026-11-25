@@ -563,6 +563,11 @@ object SyncController:
     private var bootstrapGeneration: Long = 0
     private var syncGeneration: Long = 0
 
+    // B-015: the peers client of the regular sync that runs, or ran last. Each start spawns its own, named by its
+    // generation, and nothing stopped it with its regular sync: one leaked per restart, each subscribed to the peer
+    // event bus, and every re-SNAP, bulk recovery or unexpected stop of RegularSync is a restart.
+    private var regularSyncPeersClient: Option[TypedActorRef[PeersClient.Command]] = None
+
     // #1705: regular sync's import lock, ONE for the node's life. Every RegularSync started here and every importer it
     // spawns take this same one, so an import that a stopped importer, or a stopped RegularSync (`ctx.stop` stops
     // neither's running import), left running ends before a new importer reads its start block or imports.
@@ -1421,6 +1426,7 @@ object SyncController:
           )
           ctx.unwatch(regularSync)
           ctx.stop(regularSync)
+          stopRegularSyncPeersClient()
           stopBackgroundAudit()
           // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan. A checkpoint
           // a failed scan left goes: this scan is after code the best state needs, and `recoveryScanRoot` would keep that
@@ -1695,6 +1701,7 @@ object SyncController:
             timers.cancel(ResnapDueKey)
             timers.cancel(ResnapCheckKey)
             ctx.stop(regularSync)
+            stopRegularSyncPeersClient()
             stopBackgroundAudit()
             port.escalated(record.kind)
             // On proof of work the pivot is taken no lower than the first block of the refused branch above its fork
@@ -1828,6 +1835,7 @@ object SyncController:
       timers.cancel(ResnapDueKey)
       timers.cancel(ResnapCheckKey)
       ctx.stop(regularSync)
+      stopRegularSyncPeersClient()
       stopBackgroundAudit()
       appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
       appStateStorage.clearFastSyncDone().commit()
@@ -2823,6 +2831,8 @@ object SyncController:
       * path) use `._1`; callers that just transition use `._2`.
       */
     def startRegularSync(resumeBackfill: Boolean = true): (TypedActorRef[RegularSync.Command], Behavior[Command]) =
+      // The previous regular sync's, whichever way it ended (a stop is async, and the new one is named apart)
+      stopRegularSyncPeersClient()
       syncGeneration += 1
       stateEscalation.foreach(_.regularSyncStarted())
       txGossipGate.stateSyncFinished()
@@ -2921,6 +2931,7 @@ object SyncController:
           s"peers-client-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
         )
+      regularSyncPeersClient = Some(peersClient)
       val regularSync = ctx
         .spawn(
           RegularSync.apply(
@@ -3769,6 +3780,12 @@ object SyncController:
           log.info("Recovery recent-root: no usable peer height yet; declining the roll.")
           recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(0, None))
           recentRootRequester = None
+
+    /** Stops the peers client of the regular sync, with the regular sync it served (B-015); no-op when there is none.
+      */
+    private def stopRegularSyncPeersClient(): Unit =
+      regularSyncPeersClient.foreach(ctx.stop)
+      regularSyncPeersClient = None
 
     private def stopRecentRootBootstrap(): Unit =
       recentRootBootstrap.foreach { case (peersClient, bootstrap) =>
