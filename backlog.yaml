@@ -3164,17 +3164,18 @@ items:
   - id: B-347
     title: "SYNC-FORK hash layout: resolver failures other than B-298 refusals (no common block, header missing, stop) still blind-rewind 128 blocks unweighed"
     priority: P2
-    status: in-progress
+    status: review
     area: sync
     opened: 2026-11-18
     refs: []
     links:
+      prs: [2122]
       spec: "016"
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:11:01Z
-      heartbeat: 2026-11-25T05:38:08Z
+      heartbeat: 2026-11-25T07:04:15Z
     notes: |-
       B-298 follow-up (forge). BlockImporter.resolvingFork falls back to blindRewindOnTheHashLayout, which rewinds without weighing any branch; goal 3 of B-298 covers only the resolver's discard.
       2026-11-25 claimed: wave 4D forge, after 4A lands (BlockImporter overlap)
