@@ -79,8 +79,30 @@ case class BlockFetcherState(
     // in each response. Drained in ascending order by drainOrderedHeaders before appendHeaders
     // is called, so waitingHeaders always grows monotonically even when slot responses arrive
     // out of sequence. Cleared by clearQueues() on any invalidation.
-    responseBuffer: SortedMap[BigInt, Seq[BlockHeader]] = SortedMap.empty
+    responseBuffer: SortedMap[BigInt, Seq[BlockHeader]] = SortedMap.empty,
+    // The number of an announced block handed to the importer, which has not said it imported it (B-139). The
+    // importer drops an announce while it is busy, resolving a branch, or lacking the parent, so `lastBlock` at it is a
+    // guess: a child announced next would be handed over on that guess and read as an orphan, costing a rewind.
+    unconfirmedHandover: Option[BigInt] = None
 ):
+
+  /** An announced block is handed to the importer: it is the last block, until the importer says otherwise. */
+  def handedOver(nr: BigInt): BlockFetcherState =
+    copy(lastBlock = nr, knownTop = nr, unconfirmedHandover = Some(nr))
+
+  /** The importer imported announced block `nr`. A handover rolled back meanwhile (see [[withoutUnconfirmedHandover]])
+    * is the last block again when it is the one right after it and nothing is queued.
+    */
+  def handoverImported(nr: BigInt): BlockFetcherState =
+    if unconfirmedHandover.exists(_ <= nr) then copy(unconfirmedHandover = None)
+    else if hasEmptyBuffer && nr == lastBlock + 1 then copy(lastBlock = nr)
+    else this
+
+  /** The block handed over without an answer is not counted as the last: back to before it, so what follows it is
+    * fetched with it, whatever became of it.
+    */
+  def withoutUnconfirmedHandover: BlockFetcherState =
+    unconfirmedHandover.fold(this)(nr => copy(lastBlock = nr - 1, unconfirmedHandover = None))
 
   def isFetching: Boolean = isFetchingHeaders || isFetchingBodies
 
@@ -273,7 +295,10 @@ case class BlockFetcherState(
     if readyBlocks.nonEmpty then
       val (picked, rest) = readyBlocks.splitAt(amount)
       Some(
-        (NonEmptyList(picked.head, picked.tail.toList), copy(readyBlocks = rest, lastBlock = picked.last.number.value))
+        (
+          NonEmptyList(picked.head, picked.tail.toList),
+          copy(readyBlocks = rest, lastBlock = picked.last.number.value, unconfirmedHandover = None)
+        )
       )
     else None
 
@@ -292,7 +317,7 @@ case class BlockFetcherState(
       .map(blocks =>
         (
           NonEmptyList(blocks.head, blocks.tail.toList),
-          copy(readyBlocks = Vector.empty, lastBlock = blocks.last.number.value)
+          copy(readyBlocks = Vector.empty, lastBlock = blocks.last.number.value, unconfirmedHandover = None)
         )
       )
 
@@ -325,6 +350,7 @@ case class BlockFetcherState(
         .clearQueues()
         .copy(
           lastBlock = newLastBlock,
+          unconfirmedHandover = None,
           // clearQueues() sets nextDispatchBlock = old lastBlock + 1; override it to match the new lastBlock
           // so the next dispatch starts from the correct position after invalidation.
           nextDispatchBlock = newLastBlock + 1,
@@ -338,7 +364,7 @@ case class BlockFetcherState(
 
   private def existsInReadyBlocks(hash: ByteString): Boolean = readyBlocks.exists(_.hash.value == hash)
 
-  def withLastBlock(nr: BigInt): BlockFetcherState = copy(lastBlock = nr)
+  def withLastBlock(nr: BigInt): BlockFetcherState = copy(lastBlock = nr, unconfirmedHandover = None)
 
   def withKnownTopAt(nr: BigInt): BlockFetcherState = copy(knownTop = nr)
 

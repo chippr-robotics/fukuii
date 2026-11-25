@@ -301,6 +301,43 @@ class BlockFetcherSpec
       importerReplies.expectMessage(5.seconds, BlockFetcher.FetchedStateNode(Nil))
       fetchCode() // asked of a peer again, by the new one
 
+    // B-139: the importer drops an announce while busy, so the fetcher must not take a handed-over announce as imported
+    "should not hand over the child of an announce the importer has not confirmed, so no orphan and no rewind (B-139)" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in new TestSetup:
+      startFetcher(fromBlock = 5)
+      val parentAt5: Block = BlockHelpers.generateChain(5, FixtureBlocks.Genesis.block).last
+      val Seq(block6, block7) = BlockHelpers.generateChain(2, parentAt5)
+      val block7Sibling: Block = BlockHelpers.generateChain(1, block6).head
+      def announce(block: Block): Unit =
+        blockFetcher ! AdaptedMessageFromEventBus(NewBlock(block, 1), fakePeer.id)
+
+      announce(block6)
+      importer.expectMsg(BlockImporter.ImportNewBlock(block6, fakePeer.id))
+      // block 6 is dropped by the importer: no confirmation. Its child is not handed over on the guess it was imported.
+      announce(block7)
+      // The importer then says it imported block 6; the next announce is handed over. The probe's order is the barrier:
+      // had block7 been handed over, it would be the next message here, not block7Sibling.
+      blockFetcher ! BlockFetcher.AnnouncedBlockImported(6)
+      announce(block7Sibling)
+      importer.expectMsg(BlockImporter.ImportNewBlock(block7Sibling, fakePeer.id))
+      testKit.stop(blockFetcher)
+
+    "should hand over the child of an announce the importer confirmed (B-139)" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in new TestSetup:
+      startFetcher(fromBlock = 5)
+      val parentAt5: Block = BlockHelpers.generateChain(5, FixtureBlocks.Genesis.block).last
+      val Seq(block6, block7) = BlockHelpers.generateChain(2, parentAt5)
+      blockFetcher ! AdaptedMessageFromEventBus(NewBlock(block6, 1), fakePeer.id)
+      importer.expectMsg(BlockImporter.ImportNewBlock(block6, fakePeer.id))
+      blockFetcher ! BlockFetcher.AnnouncedBlockImported(6)
+      blockFetcher ! AdaptedMessageFromEventBus(NewBlock(block7, 1), fakePeer.id)
+      importer.expectMsg(BlockImporter.ImportNewBlock(block7, fakePeer.id))
+      testKit.stop(blockFetcher)
+
     "should include BlockRangeUpdateCode in peer event subscription" taggedAs (UnitTest, SyncTest) in new TestSetup:
       blockFetcher ! BlockFetcher.Start(importer.ref.toTyped[BlockImporter.Command], 0)
       val sub: SubscribeCmd = peerEventBus.expectMsgType[SubscribeCmd]

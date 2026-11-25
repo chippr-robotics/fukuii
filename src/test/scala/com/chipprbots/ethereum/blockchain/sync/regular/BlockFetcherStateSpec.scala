@@ -33,6 +33,37 @@ class BlockFetcherStateSpec extends ScalaTestWithActorTestKit with AnyWordSpecLi
       }
     }
 
+    "handing an announce over" should {
+      val start = BlockFetcherState.initial(importer, validators.blockValidator, 5)
+
+      "count it as the last block only until the next block is announced unconfirmed (B-139)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in {
+        val handed = start.handedOver(6)
+        handed.lastBlock shouldBe 6
+        handed.withoutUnconfirmedHandover.lastBlock shouldBe 5
+        handed.withoutUnconfirmedHandover.unconfirmedHandover shouldBe None
+      }
+
+      "keep it as the last block once the importer confirms it (B-139)" taggedAs (UnitTest, SyncTest) in {
+        val confirmed = start.handedOver(6).handoverImported(6)
+        confirmed.lastBlock shouldBe 6
+        confirmed.withoutUnconfirmedHandover.lastBlock shouldBe 6
+      }
+
+      "take a late confirmation of a block rolled back as the last block again (B-139)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in {
+        start.handedOver(6).withoutUnconfirmedHandover.handoverImported(6).lastBlock shouldBe 6
+      }
+
+      "forget it on an invalidation (B-139)" taggedAs (UnitTest, SyncTest) in {
+        start.handedOver(6).invalidateBlocksFrom(6, None)._2.unconfirmedHandover shouldBe None
+      }
+    }
+
     "handling requested blocks" should {
       "clear headers queue if got empty list of blocks" taggedAs (UnitTest, SyncTest) in {
         val headers = blocks.map(_.header)

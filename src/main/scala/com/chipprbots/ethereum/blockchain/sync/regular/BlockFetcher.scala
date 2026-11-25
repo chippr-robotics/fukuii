@@ -542,6 +542,10 @@ class BlockFetcher(
         val newState = state.withLastBlock(blockNr).withPossibleNewTopAt(blockNr)
         fetchBlocks(newState)
 
+      // the importer imported an announced block: it is the last block for good (B-139)
+      case AnnouncedBlockImported(blockNr) =>
+        processFetchCommands(state.handoverImported(blockNr))
+
       case ChildStopped("state-node-fetcher") =>
         // Left stopped, every later fetch went to dead letters, and the importer, which escalates on exhausted fetches
         // only (#1694), waited on a missing node for good. So it is spawned again, and the fetch it held is answered as
@@ -584,12 +588,16 @@ class BlockFetcher(
       state.isOnTop
     )
 
-    if state.hasEmptyBuffer && newBlockNr == nextExpectedBlock then
+    // The block before it was handed over and is not known imported (B-139): the importer may have dropped it, and this
+    // one would read there as an orphan, costing a rewind. It is fetched with its parent instead.
+    if state.unconfirmedHandover.isDefined && newBlockNr == nextExpectedBlock then
+      log.debug("Block {} follows a handed-over block not confirmed imported: fetching both", newBlockNr)
+      handleFutureBlock(block, state.withoutUnconfirmedHandover)
+    else if state.hasEmptyBuffer && newBlockNr == nextExpectedBlock then
       log.debug("Passing block {} directly to importer (buffer empty and sequential)", newBlockNr)
       val newState = state
         .withPeerForBlocks(peerId, Seq(newBlockNr))
-        .withLastBlock(newBlockNr)
-        .withKnownTopAt(newBlockNr)
+        .handedOver(newBlockNr)
       state.importer ! ImportNewBlock(block, peerId)
       supervisor ! ProgressProtocol.GotNewBlock(newState.knownTop)
       processFetchCommands(newState)
@@ -808,6 +816,9 @@ object BlockFetcher:
     */
   final case class BlamePeer(peerId: PeerId, reason: BlacklistReason) extends FetchCommand
   final case class InternalLastBlockImport(blockNr: BigInt) extends FetchCommand
+
+  /** The importer imported announced block `blockNr`, passed on by RegularSync (B-139). */
+  final case class AnnouncedBlockImported(blockNr: BigInt) extends FetchCommand
   final case class RetryBodiesRequest(
       failedPeerId: Option[PeerId] = None,
       triedPeers: Set[PeerId] = Set.empty,

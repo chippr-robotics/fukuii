@@ -309,6 +309,7 @@ object RegularSync:
           RegularSyncMetrics.incrementBlocksImported()
           if newState.toStatus == Status.SyncDone then onCaughtUp()
           if internally then pipeline.foreach(_.fetcher ! InternalLastBlockImport(blockNumber))
+          else pipeline.foreach(_.fetcher ! BlockFetcher.AnnouncedBlockImported(blockNumber))
           next(newState)
 
         case msg: SyncProtocol.MissingCodeNeedsBulkRecovery =>
