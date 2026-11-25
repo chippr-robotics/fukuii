@@ -1147,6 +1147,9 @@ class TestServiceOnPositionsSpec
         )
       )
       Seq(onHashes, onPositions).foreach { rig =>
+        // B-556: the resets of the moves above are messages, sent before those moves returned; an ask answered first
+        // has every one of them counted, so none lands after the clear
+        rig.cleared
         rig.resetsTold.clear()
         rig.importRaw(resealed).isRight shouldBe true
         rig.head.header.hash shouldBe resealed.header.hash
