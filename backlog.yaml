@@ -5935,3 +5935,13 @@ items:
     refs: []
     links: {}
     notes: see PR for spec021 pre-swap (T023-T031); decide at T022 sign-off
+  - id: B-542
+    title: "Txpool: address-keyed EIP-7702 authority index (geth lookup.auths) instead of the per-admission authoritiesByTx scan"
+    priority: P3
+    status: open
+    area: txpool
+    size: S
+    opened: 2026-11-25
+    refs: ["#1677"]
+    links: {}
+    notes: "item 3 of #1677; scan at PendingTransactionsManager.scala:297"
