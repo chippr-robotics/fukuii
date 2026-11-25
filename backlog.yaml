@@ -202,13 +202,18 @@ items:
   - id: B-016
     title: "#1705 follow-up: BodiesSliceFetcher workers are not watched by their parent"
     priority: P2
-    status: open
+    status: claimed
     area: sync
     size: S
     opened: 2026-11-07
     refs: ["#1705 item C"]
     links:
       issues: [1705]
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-25T04:10:46Z
+      heartbeat: 2026-11-25T04:10:46Z
   - id: B-017
     title: "SNAP review: StateValidator now reports wrong-hash list nodes as \"Corrupt trie node, not a hole\""
     priority: P2
