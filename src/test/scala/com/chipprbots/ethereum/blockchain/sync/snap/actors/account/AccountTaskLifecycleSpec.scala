@@ -13,6 +13,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 import scala.concurrent.duration.*
+import scala.util.Using
 
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -21,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.AccountTask
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapLogCapture
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.StoreAccountChunk
@@ -325,6 +327,30 @@ class AccountTaskLifecycleSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     m.activeTasks(BigInt(3)) = (exhausted, w.ref, p)
     h.call(_.handleTaskFailed(BigInt(3), "Peer disconnected"))
     h.controller.receiveAll() shouldBe Seq(unservable(SNAPSyncController.UnservableCause.Stateless))
+  }
+
+  // B-031: T063 logged an ERROR for every exhaustion, 338 in the 4 minutes its root took to move. The exhaustion is
+  // logged once per pivot cycle, at WARN, with the escalation; the rest of the cycle's are at DEBUG.
+  it should "log a requeue-budget exhaustion once per pivot cycle at WARN, the rest at DEBUG, never at ERROR" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    val p = peer("p1")
+    val w = TestInbox[AccountRangeWorker.Command]()
+    val exhausted = wholeRange(m).copy(pending = true, requeueCount = AccountRangeCoordinator.MaxRequeuesPerTask)
+    val line = "exhausted requeue budget"
+
+    Using.resource(new SnapLogCapture) { log =>
+      (1 to 3).foreach { i =>
+        m.activeTasks(BigInt(i)) = (exhausted, w.ref, p)
+        h.call(_.handleTaskFailed(BigInt(i), "Missing proof for empty account range"))
+      }
+      log.events.collect { case (level, text) if text.contains(line) => level } shouldBe Seq(
+        ch.qos.logback.classic.Level.WARN,
+        ch.qos.logback.classic.Level.DEBUG,
+        ch.qos.logback.classic.Level.DEBUG
+      )
+      h.controller.receiveAll() should have size 1
+    }
   }
 
   it should "redispatch to eligible peers, least loaded first, and revive the soonest cooling peer when none is eligible" taggedAs UnitTest in {
