@@ -576,10 +576,12 @@ addCommandAlias(
 // SyncTest: complex actor choreography (ADR-017) that times out under CI load.
 // DisabledTest: tests explicitly turned off (timing-flaky / WIP) — the tag exists to keep
 //   them out of the gate; see the silenced-test inventory before un-silencing.
+// DifferentialTest: spec 021's full GT-2 suites (>= 10^7 cases per operation, minutes of CPU). Their fast siblings
+//   stay in this tier; the full ones run in CI's own step (nightly, and on PRs touching domain/UInt256* or vm/).
 addCommandAlias(
   "testEssential",
   """; compile-all
-    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest
+    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest -l DifferentialTest
     |; rlp / test
     |; bytes / test
     |; crypto / test
@@ -589,10 +591,11 @@ addCommandAlias(
 // testStandard - Tier 2: Standard tests (< 30 minutes)
 // Runs unit and integration tests. Excludes only Tier 3 tests:
 // BenchmarkTest/EthereumTest: the 3-hour compliance suite — belongs in testComprehensive only.
+// DifferentialTest: spec 021's full GT-2 suites, run by their own CI step (see testEssential).
 addCommandAlias(
   "testStandard",
   """; compile-all
-    |; testOnly -- -l BenchmarkTest -l EthereumTest -l SyncTest -l DisabledTest
+    |; testOnly -- -l BenchmarkTest -l EthereumTest -l SyncTest -l DisabledTest -l DifferentialTest
     |""".stripMargin
 )
 
