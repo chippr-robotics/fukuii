@@ -156,14 +156,18 @@ class StopThenExitSpec extends AnyFlatSpec with Matchers:
     first.start()
     stop.inStop.await(10, TimeUnit.SECONDS) shouldBe true
 
-    // (status, interrupted, whether the other stop had ended) at the exit
-    val exits = new ConcurrentLinkedQueue[(Int, Boolean, Boolean)]()
+    // (status, whether the other stop had ended) at the exit. Since B-520 the exit runs on the stop's own thread, to
+    // which the caller passes its interrupt on asynchronously, so the interrupt is checked on the caller once
+    // stopThenExit returns: that is the deterministic contract.
+    val exits = new ConcurrentLinkedQueue[(Int, Boolean)]()
+    val interruptedAfter = new AtomicReference[Option[Boolean]](None)
     val waiter = daemon("b452-waiter") {
       StopSignal.stopThenExit(
         "test",
         stop.stopForExit,
-        code => exits.add((code, Thread.currentThread().isInterrupted, stop.once.outcome.isDefined)): Unit
+        code => exits.add((code, stop.once.outcome.isDefined)): Unit
       )
+      interruptedAfter.set(Some(Thread.currentThread().isInterrupted))
     }
     waiter.start()
     parked(waiter)
@@ -176,7 +180,9 @@ class StopThenExitSpec extends AnyFlatSpec with Matchers:
     waiter.join(10000)
     first.join(10000)
     // the clean status is the other stop's outcome: only a wait that lasted to its end could see it
-    exits.asScala.toList shouldBe List((StopSignal.CleanExit, true, true))
+    exits.asScala.toList shouldBe List((StopSignal.CleanExit, true))
+    // the caller's interrupt is set again on return, whether its wait threw or ended as the stop's thread ended
+    interruptedAfter.get shouldBe Some(true)
   }
 
   // B-520: every exit path asked from a daemon thread (the TUI's quitter, the JVM's SIGTERM handler, the Ephemery reset

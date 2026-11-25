@@ -100,7 +100,8 @@ object StopSignal extends Logger:
 
   /** Waits for `thread` to end. An interrupt does not cut the wait short: it is passed on to `thread`, where the stop
     * runs as it ran here before (its waits outlast an interrupt and set it again, [[StopOnce.run]]), and set again here
-    * after.
+    * after. The pass-on is asynchronous: a stop that ends before this thread wakes from the interrupt exits without it.
+    * What holds every time is the caller's flag on return: set, whether the wait threw or ended with `thread`.
     */
   private def joinUninterruptibly(thread: Thread): Unit =
     var interrupted = false
