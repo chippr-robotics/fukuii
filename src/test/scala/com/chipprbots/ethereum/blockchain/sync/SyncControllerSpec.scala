@@ -2279,6 +2279,27 @@ class SyncControllerSpec
       )
     }
 
+  it should "stop the peers client of a regular sync with it, when the regular sync is stopped for a re-SNAP (B-015)" taggedAs (
+    UnitTest,
+    SyncTest
+  ) in withTestSetup() { testSetup =>
+    import testSetup.*
+    storagesInstance.storages.appStateStorage.fastSyncDone().commit()
+    syncController ! SyncController.WrappedSyncProtocol(SyncProtocol.Start)
+
+    val generation = regularSyncChild(testSetup).stripPrefix("regular-sync-")
+    val peersClient = s"peers-client-$generation"
+    withClue("a peers client runs with the regular sync: ") {
+      syncController.children.map(_.path.name) should contain(peersClient)
+    }
+    stuckReport(testSetup)
+    // a stopped child stays listed until its stop completes: polled, no fixed wait
+    eventually {
+      someTimePasses()
+      assert(!syncController.children.map(_.path.name).exists(_ == peersClient))
+    }
+  }
+
   it should "re-SNAP at once twice in a row, then keep regular sync running and re-SNAP an hour later (H3)" taggedAs (
     UnitTest,
     SyncTest
