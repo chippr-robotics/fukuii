@@ -2854,16 +2854,17 @@ items:
   - id: B-317
     title: A head refused -38002 is still published to SNAP as a pivot hint (publishBeaconHead)
     priority: P2
-    status: in-progress
+    status: review
     area: sync
     opened: 2026-11-16
     refs: [B-297]
-    links: {}
+    links:
+      prs: [2120]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:10:57Z
-      heartbeat: 2026-11-25T04:12:27Z
+      heartbeat: 2026-11-25T05:06:50Z
     notes: |-
       beacon, B-297 memo
       2026-11-25 in-progress: wave 4C beacon, fix/b031-snap-serve-window
