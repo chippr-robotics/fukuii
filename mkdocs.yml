@@ -169,6 +169,7 @@ nav:
       - Branch Protection: development/branch-protection.md
       - Codespaces: development/codespaces.md
       - Spec Lifecycle: development/spec-lifecycle.md
+      - fukuii-project relationship: development/fukuii-project.md
       - Tracker: development/tracker/index.md
     - Testing:
       - testing/README.md

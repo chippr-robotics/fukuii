@@ -45,9 +45,9 @@ canonical:
     relationship: >-
       An independent, ground-up rewrite with no common ancestor and no shared
       source with this repository. It is NOT this release train and NOT a fork
-      of this tree. See issue #1399 for the divergence assessment and the
-      clean-room constraint.
-    tracking_issue: 1399
+      of this tree. See docs/development/fukuii-project.md for the divergence
+      assessment and the clean-room constraint (it replaces issue #1399).
+    record: docs/development/fukuii-project.md
 
 # ---------------------------------------------------------------------------
 # Required status checks. These are the contexts branch protection must list.
