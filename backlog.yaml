@@ -6079,3 +6079,11 @@ items:
     refs: ["PR #2133"]
     links: {}
     notes: "Required names never report when changes/detect skips the hive jobs (they report as 'run / inputs.label' skipped). Fix: have the skip path report the required names as success, or scope the rule. Ruleset edit needs repo admin."
+  - id: B-558
+    title: "TUI art reskin: redraw the spec 029 sprites as polished hand-drawn space-RPG pixel art (user, 2026-11-25)"
+    priority: P1
+    status: open
+    area: tui
+    opened: 2026-11-25
+    refs: [spec-029]
+    links: {}
