@@ -1191,7 +1191,7 @@ trait JSONRpcHealthcheckerBuilder:
 trait EngineApiBuilder extends Logger:
   self: ActorSystemBuilder & BlockchainBuilder & BlockchainConfigBuilder & ConsensusBuilder & StorageBuilder &
     MiningBuilder & PendingTransactionsManagerBuilder & InstanceConfigProvider & JSONRpcControllerBuilder &
-    TxGossipGateBuilder & SecureRandomBuilder & RpcIdentityBuilder =>
+    TxGossipGateBuilder & SecureRandomBuilder & RpcIdentityBuilder & EventTopicsBuilder =>
 
   import com.chipprbots.ethereum.consensus.engine.*
 
@@ -1204,7 +1204,15 @@ trait EngineApiBuilder extends Logger:
       jwtSecretPath = engineConf.flatMap(c => scala.util.Try(c.getString("jwt-secret-path")).toOption)
     )
 
-  lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter, blockchain)
+  lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(
+    blockchainReader,
+    blockchainWriter,
+    blockchain,
+    onNewCanonical = block =>
+      blockTopic ! org.apache.pekko.actor.typed.pubsub.Topic.Publish(
+        com.chipprbots.ethereum.jsonrpc.NewBlockImported(block)
+      )
+  )
 
   /** The recovery of a state that is no longer held, on the unified layout only (spec 018 C4d part 3). It covers
     * `state.recovery.max-blocks`, and no more than half of `state.overlay.max-forward-layers`: its layers are kept
