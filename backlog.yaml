@@ -1337,22 +1337,19 @@ items:
   - id: B-139
     title: Fetcher advances lastBlock at an announce the importer may drop, so the next announce reads as an orphan
     priority: P2
-    status: review
+    status: done
     area: sync
     size: M
     opened: 2026-11-08
+    closed: 2026-11-25
     refs: [B-007]
     links:
       issues: [1683]
       prs: [2118]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-25T04:10:38Z
-      heartbeat: 2026-11-25T04:35:19Z
     notes: |-
       B-007 now rewinds without blame, but each false orphan still costs a rewind. Advance on the importer's ack, or compare the announced parentHash with the last handed-over hash.
       2026-11-25 in-progress: wave 4B herald, fix/b139-fetcher-and-lifecycle
+      2026-11-25 done: merged 4e108e056
   - id: B-140
     title: "handleOrphanAnnounce: check the header seal before a strike; respect the maintained-peer exemption"
     priority: P3
