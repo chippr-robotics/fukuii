@@ -232,6 +232,28 @@ class SubscriptionManagerSpec
     hash should startWith("0x")
   }
 
+  // B-245: a fork choice that adopts several blocks publishes each (their logs are delivered), but newHeads announces
+  // the head only, as go-ethereum's SetCanonical sends one ChainEvent, for the head
+  it should "not push newHeads for a block published as adopted below the head" taggedAs UnitTest in {
+    val (mgr, blockTopic) = makeManagerWithBlockTopic()
+    val (queue, source) = makeQueue()
+    val connId = "conn-push-head-only"
+    val messages = collectN(source, 1)
+
+    mgr ! RegisterConnection(connId, queue)
+    subscribe(mgr, connId, "newHeads")
+
+    val below = fixtureBlock
+    val head = fixtureBlock.copy(header = fixtureBlock.header.copy(number = fixtureBlock.header.number + 1))
+    // one publisher: the topic keeps the order, so the first message pushed is the head's or the test fails
+    blockTopic ! org.apache.pekko.actor.typed.pubsub.Topic.Publish(NewBlockImported(below, head = false))
+    blockTopic ! org.apache.pekko.actor.typed.pubsub.Topic.Publish(NewBlockImported(head))
+
+    val received = Await.result(messages, 5.seconds)
+    val number = (parse(received.head) \ "params" \ "result" \ "number").values.toString
+    BigInt(number.drop(2), 16) shouldBe head.header.number.value
+  }
+
   it should "not push newHeads to other connections" taggedAs UnitTest in {
     val (mgr, blockTopic) = makeManagerWithBlockTopic()
     val (queue1, _) = makeQueue()

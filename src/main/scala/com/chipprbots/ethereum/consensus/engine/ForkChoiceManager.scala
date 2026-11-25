@@ -11,6 +11,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
+import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -33,7 +34,12 @@ class ForkChoiceManager(
     // What the canonical index move means for the state's reference counts: the blocks it drops are undone, the ones it
     // adopts are put back (idempotent). NoOp for callers with no reference-counted state; the node passes its
     // BlockchainImpl.
-    reorgState: ReorgStateHandler = ReorgStateHandler.NoOp
+    reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
+    // B-245: told of each block a fork choice makes canonical, after the move is committed, lowest first, with whether
+    // it is the new head. The node passes the publish to the `eth_subscribe` block topic: logs for every block, newHeads
+    // for the head only (go-ethereum's SetCanonical). The Engine API never reaches BlockImporter, which is the other
+    // publisher. A notification only: it takes no part in the move.
+    onNewCanonical: (Block, Boolean) => Unit = (_, _) => ()
 ) extends Logger:
 
   // EXECUTED heads only. Written solely by the head-known branch of `applyForkChoiceState`, never by
@@ -139,6 +145,8 @@ class ForkChoiceManager(
       // above the head deleted) and the best-block pointer moves to the head — whether the head moved up, sideways,
       // or DOWN to an ancestor or a shorter side chain.
       maybeHeader.foreach { header =>
+        // read before the move, while the index is still the old head's ancestry: these are the blocks it makes canonical
+        val adopting = notCanonicalBelow(header)
         // Under the head's lock (B-511), the move with the reference counts that follow it: a branch the p2p import
         // executes and settles holds it, so this moves the head from the index that settle leaves, and the settle
         // never sees the head moved under it.
@@ -152,6 +160,8 @@ class ForkChoiceManager(
           s"the fork choice to block ${header.number.value}"
         )
         rederiveWeights(move.adopted.map(_._2))
+        // after the move is committed (and the head's lock released): a block that was canonical before is not told again
+        publishCanonical(adopting)
       }
 
       Right(())
@@ -228,6 +238,8 @@ class ForkChoiceManager(
             )
         )
       }
+      // after the move returned: nothing is told of a move that threw part way
+      publishCanonical(adopting)
       log.info(
         s"Fork choice updated: head=${newState.headBlockHash} ($moved), " +
           s"safe=${newState.safeBlockHash}, finalized=${newState.finalizedBlockHash}"
@@ -274,6 +286,24 @@ class ForkChoiceManager(
         Left(Refusal.Unreachable(refused.getMessage))
       // `BeyondTheFetch` is said by proof-of-work regular sync only, never by a move of the head: not met here
       case refused: ReorgTooDeep => notMoved(refused.getMessage)
+
+  /** B-245: tells [[onNewCanonical]] of the blocks a fork choice made canonical, lowest first, once each, the last as
+    * the head. `adopting` is read before the move, so a block that was canonical already (imported and published by
+    * BlockImporter) is not in it, and a fork choice to the head already held tells nothing. A listener's failure is
+    * logged and never fails the fork choice, which has been committed.
+    */
+  private def publishCanonical(adopting: Seq[BlockHash]): Unit =
+    val head = adopting.lastOption
+    adopting.foreach { hash =>
+      blockchainReader.getBlockByHash(hash) match
+        case Some(block) =>
+          try onNewCanonical(block, head.contains(hash))
+          catch
+            case scala.util.control.NonFatal(e) =>
+              log.warn(s"New-head notification of block ${block.number.value} failed: ${e.getMessage}")
+        case None =>
+          log.warn(s"New-head notification skipped: body of canonical block ${hash.toHexString} is not stored")
+    }
 
   /** The blocks a move of the head to `head` makes canonical ([[AdoptedChainWeights.notCanonicalBelow]]). */
   private def notCanonicalBelow(head: BlockHeader): Seq[BlockHash] =
