@@ -5754,3 +5754,13 @@ items:
     refs: []
     links: {}
     notes: "found by forge in #2119; pre-existing (stop between discard and reply)"
+  - id: B-532
+    title: "B-317 rest: a head published at SYNCING (notifyBeaconHead) and later refused -38002 stays SNAP's CLPivotHint; retract it via SyncController"
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: deferred by beacon in wave 4C
