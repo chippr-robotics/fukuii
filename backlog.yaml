@@ -6079,10 +6079,15 @@ items:
   - id: B-556
     title: "TestServiceOnPositionsSpec pool-head test races: resetsTold.clear() before earlier HeadResets arrive"
     priority: P2
-    status: open
+    status: claimed
     area: test
     size: S
     opened: 2026-11-25
     refs: ["PR #2134 CI run 45702033700"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-25T22:04:16Z
+      heartbeat: 2026-11-25T22:04:16Z
     notes: 3 HeadResets seen where 1 expected (TestServiceOnPositionsSpec.scala:1154). Wait for the prior moves' resets (rig.cleared) before clear().
