@@ -480,7 +480,7 @@ items:
   - id: B-049
     title: "Spec 021 S1: the limb type behind the same API, with GT-2"
     priority: P2
-    status: open
+    status: claimed
     area: evm
     size: L
     opened: 2026-10-17
@@ -488,6 +488,11 @@ items:
     links:
       spec: specs/021-fixed-width-uint256
     depends_on: [B-046, B-047]
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-25T18:18:49Z
+      heartbeat: 2026-11-25T18:18:49Z
     notes: |-
       beacon + forge. Blockers: T006 (gate row 10b with jar A), T008 (GT-1 part B), RP-2 sign-offs.
       2026-11-17 blocked: waits for B-046, B-047
