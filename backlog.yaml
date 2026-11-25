@@ -130,20 +130,18 @@ items:
   - id: B-011
     title: promoteToCanonicalHead (forkchoiceUpdated) writes the best-block pointer with no lock
     priority: P2
-    status: in-progress
+    status: done
     area: sync
     size: M
     opened: 2026-11-07
+    closed: 2026-11-25
     refs: [10c, "#1705 review"]
-    links: {}
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-25T04:10:26Z
-      heartbeat: 2026-11-25T04:11:53Z
+    links:
+      prs: [2095]
     notes: |-
       beacon + vault. ETH, pre-existing (BlockExecution.scala:709-710): best can briefly go backwards.
       2026-11-25 in-progress: wave 4A forge, fix/b011-head-writes-import-lock
+      2026-11-25 done: already fixed by B-511 (#2095): fork choice + hash-layout head writes share CanonicalHeadLock; 6 B-511 tests fail without it (verified by forge, wave 4A)
   - id: B-012
     title: BlockImporter's fork-recovery rewinds write the head outside ImportLock
     priority: P2
