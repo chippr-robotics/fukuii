@@ -1562,7 +1562,7 @@ items:
   - id: B-164
     title: "EthashUtils.checkDifficulty: difficulty <= 0 is invalid and the target is computed as a BigInt (geth parity)"
     priority: P2
-    status: claimed
+    status: in-progress
     area: consensus
     size: S
     opened: 2026-11-09
@@ -1572,8 +1572,10 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T17:14:44Z
-      heartbeat: 2026-11-25T17:14:44Z
-    notes: "forge, 2026-11-09: the current code throws for difficulty 1 (2^256 overflows 32 bytes), divides by zero for 0, and truncates above 2^63 (difficulty.toLong). Block import never reaches it (the parent difficulty rule runs first). Consensus code: forge then beacon, bucket C, test vectors."
+      heartbeat: 2026-11-25T17:15:27Z
+    notes: |-
+      forge, 2026-11-09: the current code throws for difficulty 1 (2^256 overflows 32 bytes), divides by zero for 0, and truncates above 2^63 (difficulty.toLong). Block import never reaches it (the parent difficulty rule runs first). Consensus code: forge then beacon, bucket C, test vectors.
+      2026-11-25 in-progress: wave 5 forge, fix/b164-etc-consensus
   - id: B-166
     title: "eth_simulateV1 pre-Amsterdam: 4788/2935 writes happen before state overrides (stateDiff on those slots lands after); deposit logs parsed after queue calls"
     priority: P3
