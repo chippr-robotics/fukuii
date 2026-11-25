@@ -6076,3 +6076,13 @@ items:
     refs: ["#2131"]
     links: {}
     notes: "seen on #2131 2026-11-25: 3.09/6.16/3.92 ms vs 3.0 and the 25-min step timeout. Move the benchmark out of the essential tier (tag) or assert allocation/work counts instead of time; review Tier 1 headroom"
+  - id: B-556
+    title: "TestServiceOnPositionsSpec pool-head test races: resetsTold.clear() before earlier HeadResets arrive"
+    priority: P2
+    status: open
+    area: test
+    size: S
+    opened: 2026-11-25
+    refs: ["PR #2134 CI run 45702033700"]
+    links: {}
+    notes: 3 HeadResets seen where 1 expected (TestServiceOnPositionsSpec.scala:1154). Wait for the prior moves' resets (rig.cleared) before clear().
