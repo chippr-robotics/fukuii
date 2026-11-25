@@ -5724,17 +5724,18 @@ items:
   - id: B-530
     title: "BodiesFetcherSpec: pin that a slice worker which reports and then stops is not counted as dead (B-016 follow-up)"
     priority: P3
-    status: in-progress
+    status: review
     area: tests
     size: S
     opened: 2026-11-25
     refs: []
-    links: {}
+    links:
+      prs: [2123]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T06:43:12Z
-      heartbeat: 2026-11-25T06:43:20Z
+      heartbeat: 2026-11-25T07:17:22Z
     notes: |-
       #2118's WorkerStoppedConfirmed hop is the guard; no test pins it
       2026-11-25 in-progress: with the BodiesFetcherSpec flake from #2118 (B-016 tests time out under load); herald, fix/b016-bodiesfetcher-flake
