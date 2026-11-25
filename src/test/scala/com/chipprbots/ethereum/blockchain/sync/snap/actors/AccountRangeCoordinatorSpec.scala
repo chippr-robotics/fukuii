@@ -9,6 +9,7 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.Await
 import scala.concurrent.duration.*
 
+import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
@@ -47,7 +48,14 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   * observable effects on the `networkPeerManager` and `snapSyncController` probes — the same approach used in BCC/SRC.
   */
 class AccountRangeCoordinatorSpec
-    extends ScalaTestWithActorTestKit()
+    extends ScalaTestWithActorTestKit(
+      // A failure bound, never a pause: every wait in this suite ends on the event it waits for. The typed testkit's
+      // 3 s default fails the first test of a run on a loaded 4-core host (cold JVM, 8 busy threads), and its late
+      // reply to the shared `statusProbe` then breaks the next test that reads it.
+      ConfigFactory
+        .parseString("pekko.actor.testkit.typed.single-expect-default = 20s")
+        .withFallback(ConfigFactory.load())
+    )
     with AnyFlatSpecLike
     with Matchers
     with org.scalatest.BeforeAndAfterAll:
@@ -199,6 +207,21 @@ class AccountRangeCoordinatorSpec
       )
       .toTyped[AccountRangeCoordinator.WorkerMessage]
 
+  /** A mailbox round trip: when it returns, the coordinator has handled every message sent to it before the call.
+    * Dispatch is decided inside the coordinator (`activeTasks` is filled when it hands a task to a worker, before the
+    * worker is even running), so `tasksActive` not growing proves no request was, or ever will be, sent for the
+    * messages before the barrier: the spawned worker cannot send what the coordinator never gave it. This is what turns
+    * a "nothing is sent" check into a bounded one, in place of a fixed `expectNoMessage` wait.
+    */
+  private def settle(
+      coordinator: org.apache.pekko.actor.typed.ActorRef[AccountRangeCoordinator.Command]
+  ): AccountRangeStats =
+    coordinator ! AccountRangeCoordinator.AccountGetProgress(statusProbe.ref)
+    statusProbe.expectMessageType[AccountRangeStats]
+
+  /** The send to a probe is synchronous, so after a [[settle]] a message the coordinator sent is already queued. */
+  private val Now = Duration.Zero
+
   "AccountRangeCoordinator" should "initialize and create workers on demand" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
     val storage = new TestMptStorage()
@@ -270,7 +293,8 @@ class AccountRangeCoordinatorSpec
       )
       coordinator ! AccountRangeCoordinator.StartAccountRangeSync(stateRoot)
       coordinator ! AccountRangeCoordinator.PeerAvailable(peer)
-      networkPeerManager.expectNoMessage(500.millis)
+      settle(coordinator).tasksActive shouldBe 0 // the gate held: nothing was handed to a worker
+      networkPeerManager.expectNoMessage(Now)
 
       // The bytecode queue drains. Nothing is sent to the coordinator: its own recheck must notice.
       budget.byteCodeQueueDepth(0L)
@@ -323,8 +347,9 @@ class AccountRangeCoordinatorSpec
     coordinator ! AccountRangeCoordinator.StartAccountRangeSync(stateRoot)
     coordinator ! AccountRangeCoordinator.CheckCompletion
 
-    // Should not complete immediately (tasks pending)
-    snapSyncController.expectNoMessage(500.milliseconds)
+    // Should not complete immediately (tasks pending): the barrier shows CheckCompletion was handled
+    settle(coordinator).tasksPending should be > 0
+    snapSyncController.expectNoMessage(Now)
   }
 
   it should "handle task failures gracefully" taggedAs UnitTest in {
@@ -565,7 +590,7 @@ class AccountRangeCoordinatorSpec
     statusProbe.expectMessageType[AccountRangeStats]
 
     // PivotStateUnservable must NOT have been sent — peer was not marked stateless for rootR2
-    snapSyncController.expectNoMessage(200.millis)
+    snapSyncController.expectNoMessage(Now)
   }
 
   // ── postStop sends AccountRangeProgress snapshot ───────────────────────────
@@ -696,19 +721,25 @@ class AccountRangeCoordinatorSpec
     val reqId = sendMsg.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg.requestId
     val worker = resolveWorkerChild(coordinator)
 
-    // Worker times out — fires TaskFailed("Request timeout") to coordinator.
+    // Worker times out — fires TaskFailed("Request timeout") to coordinator. Coordinator requeues; the controller
+    // receives no escalation (not enough retries).
     worker ! AccountRangeCoordinator.RequestTimeout(reqId)
 
-    // Coordinator requeues; controller receives no escalation (not enough retries).
-    snapSyncController.expectNoMessage(300.millis)
-
     // Late AccountRangeResponse arrives at worker (now in idle state) — must be silently dropped;
-    // coordinator must NOT receive a second TaskFailed or TaskComplete for this request.
+    // coordinator must NOT receive a second TaskFailed or TaskComplete for this request. The mailbox is FIFO, so the
+    // worker takes the timeout before the late response.
     worker ! AccountRangeCoordinator.AccountRangeResponseMsg(
       AccountRange(requestId = reqId, accounts = Seq.empty, proof = Seq.empty)
     )
 
-    snapSyncController.expectNoMessage(300.millis)
+    // Barrier on the worker, which the coordinator cannot reach: a PoisonPill queues behind both messages above, and
+    // once the worker has terminated everything it sent the coordinator is already ahead of the coordinator's own
+    // `AccountGetProgress` below. Neither a settled coordinator nor a quiet window would show that by itself.
+    worker.toClassic ! org.apache.pekko.actor.PoisonPill
+    val workerGone = testKit.createTestProbe[Any]()
+    workerGone.expectTerminated(worker, 10.seconds)
+    settle(coordinator)
+    snapSyncController.expectNoMessage(Now)
   }
 
   // ── Peer cooldown (gray-list) ──────────────────────────────────────────────
@@ -748,7 +779,6 @@ class AccountRangeCoordinatorSpec
     val sendMsg1 = networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
     sendMsg1.peerId shouldBe peer1.id
     val reqId1 = sendMsg1.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg.requestId
-    val worker1 = resolveWorkerChild(coordinator)
 
     // B-313: peer2 is known to the coordinator before peer1's failure reaches it, and takes the other task. In the other
     // order the rule is not this one: with peer1 the only peer it knows, the eligible-set floor revives the cooling peer
@@ -760,19 +790,20 @@ class AccountRangeCoordinatorSpec
 
     // peer1 times out: it enters cooldown, and its task is requeued. Seen through the coordinator's own count, so
     // nothing below runs before the failure has reached it.
-    worker1 ! AccountRangeCoordinator.RequestTimeout(reqId1)
-    val stats = testKit.createTestProbe[AccountRangeStats]()
-    eventually {
-      coordinator ! AccountRangeCoordinator.AccountGetProgress(stats.ref)
-      val now = stats.expectMessageType[AccountRangeStats]
-      now.tasksPending shouldBe 1
-      now.tasksActive shouldBe 1
-    }
+    // Delivered to the coordinator directly: the worker would send this same message, one hop later, and nothing
+    // observable says when it has.
+    coordinator ! AccountRangeCoordinator.TaskFailed(reqId1, "Request timeout")
+    val failed = settle(coordinator)
+    failed.tasksPending shouldBe 1
+    failed.tasksActive shouldBe 1
 
     // The requeued task is not sent to the cooling peer1 (peer2 is busy with its own), nor when peer1 is announced again
     // while it cools
     coordinator ! AccountRangeCoordinator.PeerAvailable(peer1)
-    networkPeerManager.expectNoMessage(500.millis)
+    val after = settle(coordinator)
+    after.tasksPending shouldBe 1 // nothing was handed out
+    after.tasksActive shouldBe 1
+    networkPeerManager.expectNoMessage(Now)
   }
 
   // ── Resume durability (StackTrie path, observable via dispatch behaviour) ──
@@ -801,7 +832,10 @@ class AccountRangeCoordinatorSpec
     coord ! AccountRangeCoordinator.PeerAvailable(peer)
 
     // Nothing to download — no GetAccountRange dispatched.
-    networkPeerManager.expectNoMessage(500.millis)
+    val stats = settle(coord)
+    stats.tasksPending shouldBe 0
+    stats.tasksActive shouldBe 0
+    networkPeerManager.expectNoMessage(Now)
 
     testKit.stop(coord)
   }
@@ -830,7 +864,8 @@ class AccountRangeCoordinatorSpec
     coord ! AccountRangeCoordinator.StorageQueuePressure(paused = true)
     coord ! AccountRangeCoordinator.PeerAvailable(peer)
 
-    networkPeerManager.expectNoMessage(500.millis)
+    settle(coord).tasksActive shouldBe 0
+    networkPeerManager.expectNoMessage(Now)
 
     // Release: the coordinator wakes up and dispatches against the known peer.
     coord ! AccountRangeCoordinator.StorageQueuePressure(paused = false)
@@ -859,11 +894,13 @@ class AccountRangeCoordinatorSpec
     coord ! AccountRangeCoordinator.ByteCodeQueuePressure(paused = true)
     coord ! AccountRangeCoordinator.PeerAvailable(peer)
 
-    networkPeerManager.expectNoMessage(500.millis)
+    settle(coord).tasksActive shouldBe 0
+    networkPeerManager.expectNoMessage(Now)
 
     // Release storage only — bytecode is still engaged, so dispatch must remain paused.
     coord ! AccountRangeCoordinator.StorageQueuePressure(paused = false)
-    networkPeerManager.expectNoMessage(500.millis)
+    settle(coord).tasksActive shouldBe 0
+    networkPeerManager.expectNoMessage(Now)
 
     // Release bytecode — set is now empty, dispatch resumes.
     coord ! AccountRangeCoordinator.ByteCodeQueuePressure(paused = false)
@@ -924,7 +961,7 @@ class AccountRangeCoordinatorSpec
 
     // The progress reply above is a barrier: all ten ticks were processed. Before the fix the third tick sent
     // PivotStateUnservable here; now nothing may reach the controller.
-    snapSyncController.expectNoMessage(300.millis)
+    snapSyncController.expectNoMessage(Now)
     testKit.stop(coord)
   }
 
