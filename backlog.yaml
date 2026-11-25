@@ -3169,17 +3169,17 @@ items:
     opened: 2026-11-18
     refs: []
     links:
-      prs: [2122]
+      prs: [2122, 2125]
       spec: "016"
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:11:01Z
-      heartbeat: 2026-11-25T07:04:15Z
+      heartbeat: 2026-11-25T11:28:09Z
     notes: |-
-      B-298 follow-up (forge). BlockImporter.resolvingFork falls back to blindRewindOnTheHashLayout, which rewinds without weighing any branch; goal 3 of B-298 covers only the resolver's discard.
       2026-11-25 claimed: wave 4D forge, after 4A lands (BlockImporter overlap)
       2026-11-25 in-progress: wave 4D forge, fix/b347-sync-fork-resolver
+      2026-11-25 review: #2122 superseded by #2125 (rebased)
   - id: B-348
     title: "RecentBlocksSearch zips our block n with the peer's header n (not n+1): the recent window never matches, every resolution binary-searches"
     priority: P3
