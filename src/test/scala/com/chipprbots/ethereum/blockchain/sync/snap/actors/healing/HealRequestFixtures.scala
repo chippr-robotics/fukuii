@@ -178,6 +178,8 @@ object HealRequestFixtures:
     val serveFrom: AtomicReference[Option[Map[Seq[ByteString], ByteString]]] = new AtomicReference(None)
     val coordinator: AtomicReference[ActorRef[TrieNodeHealingCoordinator.Command]] = new AtomicReference()
     private val recorded = new ConcurrentLinkedQueue[(Boolean, Seq[Seq[ByteString]])]()
+    // One message per request, sent after it is recorded: what [[awaitRequested]] waits on instead of polling.
+    private val recordedSignal: TestProbe[Unit] = testKit.createTestProbe[Unit]()
 
     val ref: ActorRef[NetworkPeerManagerActor.Command] =
       testKit.spawn(Behaviors.receiveMessage[NetworkPeerManagerActor.Command] {
@@ -187,9 +189,11 @@ object HealRequestFixtures:
               serveFrom.get() match
                 case Some(served) =>
                   recorded.add((true, req.paths))
+                  recordedSignal.ref ! ()
                   answerFrom(req, served)
                 case None =>
                   recorded.add((false, req.paths))
+                  recordedSignal.ref ! ()
                   manual.ref ! req
             case _ => ()
           Behaviors.same
@@ -207,14 +211,13 @@ object HealRequestFixtures:
     /** Every request so far, in arrival order. */
     def requests: Seq[Seq[Seq[ByteString]]] = recorded.asScala.toSeq.map(_._2)
 
-    /** Wait, up to `within`, until a request for `pathset` is recorded. The coordinator sends and this actor records,
-      * so a settled coordinator does not mean a recorded request: read [[requests]] straight after a settle and a
-      * request already sent can be missing (CI, PR #1701).
+    /** Wait until a request for `pathset` is recorded. The coordinator sends and this actor records, so a settled
+      * coordinator does not mean a recorded request: read [[requests]] straight after a settle and a request already
+      * sent can be missing (CI, PR #1701). Each request is signalled once it is recorded, so this blocks on those
+      * signals (up to `within` for each, a failure bound and not a pause) and re-reads, with no polling.
       */
     def awaitRequested(pathset: Seq[ByteString], within: FiniteDuration = 30.seconds): Unit =
-      val deadline = within.fromNow
-      val pause = testKit.createTestProbe[Any]()
-      while !requests.flatten.contains(pathset) && deadline.hasTimeLeft() do pause.expectNoMessage(20.millis)
+      while !requests.flatten.contains(pathset) do recordedSignal.expectMessage(within, ())
 
     /** The requests answered automatically (those received while `serveFrom` was set). */
     def autoRequests: Seq[Seq[Seq[ByteString]]] = recorded.asScala.toSeq.collect { case (true, r) => r }
