@@ -2900,7 +2900,7 @@ final private class BlockImporterLogic(
 
       // B-347: on the hash layout of a chain that chooses by work, a resolution that ends with no branch weighed takes
       // nothing off this chain, as core-geth's downloader sets no head back when its search for the common block
-      // fails. The resolver itself refuses, and blames the peer, where the peer's chain is the reason
+      // fails (`findAncestor` is read-only). The resolver itself refuses, and blames the peer, where it does
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(failure)) if rewindsOnlyWeighed =>
         goOnFromTheHead(s"the branch resolver failed ($failure): nothing is rewound", state.withoutDeferredBatches())
 
@@ -3073,7 +3073,8 @@ final private class BlockImporterLogic(
   /** Whether a SYNC-FORK on this importer takes this node's blocks off the chain only for a branch weighed the heavier
     * (B-347): the hash layout of a chain that chooses by work, where the resolver weighs the branch (B-298) or refuses
     * it. A resolution that ends with nothing weighed rewinds nothing there, as core-geth's downloader sets no head back
-    * when `findAncestor` fails: the sync with that peer ends, and the peer is dropped where its chain is the reason.
+    * when `findAncestor` fails: `findAncestor` is read-only, `syncWithPeer` returns its error with no rollback, and
+    * `LegacySync` drops the peer for it (`errInvalidAncestor`, `errBadPeer`, `errTimeout` among others).
     *
     * Not on the unified layout, whose fork recovery moves no state (spec 018 C4e part 6), nor on a chain that follows a
     * consensus layer, whose branches the resolver does not weigh: the blind rewind stays there, as before (beacon's).

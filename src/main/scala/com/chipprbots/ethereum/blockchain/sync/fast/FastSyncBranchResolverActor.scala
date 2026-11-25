@@ -46,13 +46,14 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
   * On the hash layout ([[DiscardGuard]], B-298) nothing is discarded unless the common block lies no deeper than the
   * guard allows and the master peer's branch above it, fetched as headers, is the heavier by the import's fork choice;
   * otherwise the peer is blacklisted and the answer is a [[BranchResolutionFailed.BranchNotFollowed]]. core-geth's
-  * downloader likewise refuses an ancestor below its fork-ancestry floor, and never sets its head back for a branch it
-  * has not weighed. A chain that leaves this node's below the floor is searched for its common block there and weighed
-  * from it, with headers only (B-346): the heavier is answered with [[BranchHeavierBeyondReach]] for the caller to
-  * escalate, and nothing below the floor is ever discarded. Where the branch is weighed, no failure of the resolution
-  * is left to the caller's unweighed fallback (B-347): a chain that shares no block above the genesis is weighed from
-  * the genesis, and one whose weighing needs a header this node does not hold is refused
-  * ([[BranchResolutionFailed.HeaderNotStored]]).
+  * downloader likewise refuses an ancestor at or below its fork-ancestry floor (`errInvalidAncestor`, and the peer is
+  * dropped), and its `findAncestor` is read-only: a failed search sets no head back. A chain that leaves this node's
+  * below the floor is searched for its common block there and weighed from it, with headers only (B-346): the heavier
+  * is answered with [[BranchHeavierBeyondReach]] for the caller to escalate, and nothing below the floor is ever
+  * discarded. Where the branch is weighed, no failure of the resolution is left to the caller's unweighed fallback
+  * (B-347): a height this node holds no header at is not common, and the search goes on below it (core-geth's `known`
+  * check); a chain that shares no block above the genesis is weighed from the genesis; and a common block whose header
+  * is gone by the time it is weighed is refused ([[BranchResolutionFailed.HeaderNotStored]]).
   *
   * Pekko Typed migration (Group S2 — narrowed): `Behavior[Command]` with a sealed Command ADT. Three named behavior
   * states: `waitingForPeerWithHighestBlock` / `waitingForRecentBlockHeaders` / `waitingForBinarySearchBlock`. Peer-list
@@ -147,12 +148,13 @@ object FastSyncBranchResolverActor:
       */
     final case class BranchNotHeavier(commonBlock: BigInt) extends BranchNotFollowed
 
-    /** This node holds no header at `blockNumber`, which the search for the common block, or the weighing of the master
-      * peer's branch from it, needs (B-347): the branch cannot be weighed, so it is not followed, as a branch that
-      * cannot be shown the heavier never is (B-298). Nothing is discarded, and the peer is blacklisted so that the next
-      * recovery does not ask it again for the same branch. core-geth's downloader likewise takes a header it does not
-      * hold for one that is not common, and drops the peer when no common block is left within its floor
-      * (`errInvalidAncestor`); it never sets its head back for a branch it has not weighed.
+    /** The common block found with the master peer's chain has no header here (B-347), so the branch cannot be weighed
+      * from it, and is not followed, as a branch that cannot be shown the heavier never is (B-298). Nothing is
+      * discarded, and the peer is blacklisted so that the next recovery does not ask it again for the same branch.
+      *
+      * Only a change of the index during the resolution leads here: while the common block is searched for, a height
+      * this node holds no header at is taken for one that is not common, as core-geth's `findAncestor` takes a header
+      * it does not hold (`known` false), so a hole in the index is searched past, never refused.
       */
     final case class HeaderNotStored(blockNumber: BigInt) extends BranchNotFollowed
 
@@ -491,57 +493,57 @@ object FastSyncBranchResolverActor:
           discardGuard.map(_.deepestCommonBlock).filter(_ > 1) match
             case Some(deepest) =>
               // the hash layout: the search is held above the deepest common block a discard may reach, which is shown
-              // to be common first (B-298); the search assumes its lower bound is
-              blockchainReader.getBlockHeaderByNumber(deepest) match
-                case Some(deepestHeader) =>
-                  val handler = sendGetBlockHeadersRequest(masterPeer, childOf(deepest), 1)
-                  waitingForDeepestCommonBlock(masterPeer, bestBlockNumber, deepestHeader, handler)
-                case None => notStored(masterPeer, deepest)
+              // to be common first (B-298); the search assumes its lower bound is. Where the branch is weighed, a height
+              // this node holds no header at is not common (B-347; core-geth's `known` check), so the block shown is the
+              // lowest at or above the floor that it holds: a hole in the index from the floor up cannot be common, and
+              // the chains part either above it or below the floor
+              val probe =
+                if weighs then
+                  Iterator
+                    .iterate(deepest)(_ + 1)
+                    .takeWhile(_ <= bestBlockNumber)
+                    .flatMap(blockchainReader.getBlockHeaderByNumber)
+                    .nextOption()
+                else blockchainReader.getBlockHeaderByNumber(deepest)
+              probe match
+                case Some(probeHeader) =>
+                  val handler = sendGetBlockHeadersRequest(masterPeer, childOf(probeHeader.number.value), 1)
+                  waitingForDeepestCommonBlock(masterPeer, bestBlockNumber, deepest, probeHeader, handler)
+                case None if weighs => belowTheFloor(masterPeer, deepest)
+                case None           => stopWithFailure(BranchResolutionFailed.blockHeaderNotFound(deepest))
             case None =>
               requestBlockHeaderForBinarySearch(
                 SearchState(minBlockNumber = 1, maxBlockNumber = bestBlockNumber, masterPeer)
               )
 
-    /** The answer for the child of the deepest common block a discard may reach (B-298): it is common, and the search
-      * goes on above it, or the master peer's chain leaves this node's deeper than that and is refused.
+    /** The answer for the child of `probeHeader`, the deepest block a discard may reach (`floor`, B-298), or where this
+      * node holds no header there, the lowest above it that it holds (B-347): that block is common, and the search goes
+      * on above it, or the master peer's chain leaves this node's below it, and so below the floor, since no height in
+      * between is one this node holds.
       */
     private def waitingForDeepestCommonBlock(
         masterPeer: Peer,
         bestBlockNumber: BigInt,
-        deepestHeader: BlockHeader,
+        floor: BigInt,
+        probeHeader: BlockHeader,
         requestHandler: TypedActorRef[PeerRequestHandler.Command]
     ): Behavior[Command] =
-      val deepest = deepestHeader.number.value
+      val probe = probeHeader.number.value
       Behaviors.receiveMessage { message =>
         handleCommon(message).getOrElse {
           message match
             case PeerRequestResult(ResponseReceived(_, peer, ETH68BlockHeaders(_, headers), _)) if peer == masterPeer =>
               context.unwatch(requestHandler)
               headers.toList match
-                case child :: Nil if child.number.value == childOf(deepest) =>
-                  // the peer's child of the floor does not hang off this node's block there: the chains part below it.
-                  // Where such a chain is weighed (B-346), the search goes on below the floor to find where; whatever it
-                  // finds there is weighed, never rewound to
-                  if !deepestHeader.isParentOf(child) then
-                    if discardGuard.exists(_.beyondReach.isDefined) then
-                      log.info(
-                        "[SYNC-FORK] Peer {}'s chain leaves this node's below block {}: searching below it for the " +
-                          "common block, to weigh the peer's branch (nothing below it is rewound)",
-                        masterPeer.id,
-                        deepest
-                      )
-                      requestBlockHeaderForBinarySearch(
-                        SearchState(minBlockNumber = 1, maxBlockNumber = parentOf(deepest), masterPeer),
-                        belowFloor = Some(deepest)
-                      )
-                    else refuseBeyondReach(masterPeer, deepest)
-                  else if deepest >= bestBlockNumber then finalizeBranchResolver(deepest, masterPeer)
+                case child :: Nil if child.number.value == childOf(probe) =>
+                  if !probeHeader.isParentOf(child) then belowTheFloor(masterPeer, floor)
+                  else if probe >= bestBlockNumber then finalizeBranchResolver(probe, masterPeer)
                   else
                     requestBlockHeaderForBinarySearch(
-                      SearchState(minBlockNumber = deepest, maxBlockNumber = bestBlockNumber, masterPeer)
+                      SearchState(minBlockNumber = probe, maxBlockNumber = bestBlockNumber, masterPeer)
                     )
                 case _ =>
-                  log.warn(ReceivedWrongHeaders, childOf(deepest), headers.map(_.number.value))
+                  log.warn(ReceivedWrongHeaders, childOf(probe), headers.map(_.number.value))
                   handleInvalidResponse(peer, requestHandler)
             case PeerRequestResult(RequestFailed(_, peer, reason)) =>
               handleRequestFailure(peer, requestHandler, reason)
@@ -550,6 +552,23 @@ object FastSyncBranchResolverActor:
             case _ => Behaviors.same
         }
       }
+
+    /** The master peer's chain leaves this node's below `floor`. Where such a chain is weighed (B-346), the search goes
+      * on below the floor to find where; whatever it finds there is weighed, never rewound to. Refused otherwise.
+      */
+    private def belowTheFloor(masterPeer: Peer, floor: BigInt): Behavior[Command] =
+      if discardGuard.exists(_.beyondReach.isDefined) then
+        log.info(
+          "[SYNC-FORK] Peer {}'s chain leaves this node's below block {}: searching below it for the common block, to " +
+            "weigh the peer's branch (nothing below it is rewound)",
+          masterPeer.id,
+          floor
+        )
+        requestBlockHeaderForBinarySearch(
+          SearchState(minBlockNumber = 1, maxBlockNumber = parentOf(floor), masterPeer),
+          belowFloor = Some(floor)
+        )
+      else refuseBeyondReach(masterPeer, floor)
 
     private def requestBlockHeaderForBinarySearch(
         searchState: SearchState,
@@ -570,27 +589,39 @@ object FastSyncBranchResolverActor:
       def failed(failure: BranchResolutionFailed): Behavior[Command] =
         belowFloor.fold(stopWithFailure(failure))(refuseBeyondReach(searchState.masterPeer, _))
       val parentNumber = parentOf(childHeader.number.value)
+      def next(result: BinarySearchResult): Behavior[Command] =
+        result match
+          // The search never asks below block 1, so the chains may still share the genesis (B-347). core-geth's
+          // findAncestor takes the genesis for common there, unchecked; here, where the branch is weighed, it is
+          // weighed from the genesis, as from any common block, and the peer's first header must name this node's
+          // genesis as its parent, or the peer is blamed for its headers. Below the floor that weighing is the one
+          // for an escalation
+          case NoCommonBlock if weighs =>
+            log.info(
+              "[SYNC-FORK] Peer {}'s chain shares no block above the genesis with this node's: its branch is " +
+                "weighed from the genesis",
+              searchState.masterPeer.id
+            )
+            finalizeBranchResolver(0, searchState.masterPeer)
+          case NoCommonBlock => failed(BranchResolutionFailed.noCommonBlock)
+          case BinarySearchCompleted(highestCommonBlockNumber) =>
+            finalizeBranchResolver(highestCommonBlockNumber, searchState.masterPeer)
+          case ContinueBinarySearch(newSearchState) =>
+            log.debug(s"Continuing binary search with new search state: $newSearchState")
+            requestBlockHeaderForBinarySearch(newSearchState, belowFloor)
       blockchainReader.getBlockHeaderByNumber(parentNumber) match
-        case Some(parentHeader) =>
-          validateBlockHeaders(parentHeader, childHeader, searchState) match
-            // The search never asks below block 1, so the chains may still share the genesis (B-347): what core-geth's
-            // findAncestor finds for a chain that parts at block 1. Where the branch is weighed, it is weighed from
-            // there, as from any common block; the peer's first header must name this node's genesis as its parent,
-            // or the peer is blamed for its headers. Below the floor that weighing is the one for an escalation
-            case NoCommonBlock if weighs =>
-              log.info(
-                "[SYNC-FORK] Peer {}'s chain shares no block above the genesis with this node's: its branch is " +
-                  "weighed from the genesis",
-                searchState.masterPeer.id
-              )
-              finalizeBranchResolver(0, searchState.masterPeer)
-            case NoCommonBlock => failed(BranchResolutionFailed.noCommonBlock)
-            case BinarySearchCompleted(highestCommonBlockNumber) =>
-              finalizeBranchResolver(highestCommonBlockNumber, searchState.masterPeer)
-            case ContinueBinarySearch(newSearchState) =>
-              log.debug(s"Continuing binary search with new search state: $newSearchState")
-              requestBlockHeaderForBinarySearch(newSearchState, belowFloor)
-        case None if weighs && belowFloor.isEmpty => refuseHeaderNotStored(searchState.masterPeer, parentNumber)
+        case Some(parentHeader) => next(validateBlockHeaders(parentHeader, childHeader, searchState))
+        // B-347: a header this node does not hold is not common, and the search goes on below it, as core-geth's
+        // findAncestorBinarySearch does (`if !known { end = check }`): a hole in this node's index no longer stops the
+        // search, and the common block below it is weighed as any other
+        case None if weighs =>
+          log.info(
+            "[SYNC-FORK] This node holds no header at block {}: taken as not common, the search for where peer {}'s " +
+              "chain leaves this one goes on below it",
+            parentNumber,
+            searchState.masterPeer.id
+          )
+          next(notCommon(parentNumber, searchState))
         case None => failed(BranchResolutionFailed.blockHeaderNotFound(childHeader.number.value))
 
     private def finalizeBranchResolver(firstCommonBlockNumber: BigInt, masterPeer: Peer): Behavior[Command] =
@@ -611,10 +642,45 @@ object FastSyncBranchResolverActor:
               blockchainReader.getBlockHeaderByNumber(firstCommonBlockNumber) match
                 case Some(commonHeader) =>
                   val wanted = (best - firstCommonBlockNumber) + 2 * recentHeadersSize
-                  requestBranchHeaders(masterPeer, commonHeader, Vector.empty, wanted, ToDiscard(guard, heavier))
+                  requestBranchHeaders(
+                    masterPeer,
+                    commonHeader,
+                    Vector.empty,
+                    wanted,
+                    ToDiscard(guard, acrossAHole(guard, firstCommonBlockNumber, best).getOrElse(heavier))
+                  )
                 // nothing to weigh the branch from: refused, never the caller's unweighed rewind (B-347)
                 case None => refuseHeaderNotStored(masterPeer, firstCommonBlockNumber)
             case _ => discardAndReply(firstCommonBlockNumber, masterPeer, guard)
+
+    /** The weighing of the branch where this node's index has a hole between the common block and the head (B-347): the
+      * import's fork choice (`heavier`) reads this node's blocks above the common block by number, and weighs no branch
+      * across a block it cannot read (B-395), so a hole the search went past would leave every branch refused. There
+      * the branch is weighed as one below the floor is (B-346, [[BeyondReach.verdict]]): by the same rule, without a
+      * coin, and MESS, against this node's head by its stored weight, with no block between read; and its headers are
+      * validated as an import validates them. None where there is no hole, or no such weighing is given.
+      */
+    private def acrossAHole(
+        guard: DiscardGuard,
+        common: BigInt,
+        best: BigInt
+    ): Option[NonEmptyList[BlockHeader] => Boolean] =
+      guard.beyondReach
+        .filter(_ =>
+          Iterator
+            .iterate(common + 1)(_ + 1)
+            .takeWhile(_ <= best)
+            .exists(blockchainReader.getBlockHeaderByNumber(_).isEmpty)
+        )
+        .map { beyondReach =>
+          log.info(
+            "[SYNC-FORK] This node's index has a hole between the common block {} and the head {}: the branch is weighed " +
+              "against the head's stored weight",
+            common,
+            best
+          )
+          (branch: NonEmptyList[BlockHeader]) => beyondReach.verdict(branch) == BeyondReachVerdict.Heavier
+        }
 
     /** A common block below the floor (B-346): the master peer's branch above it is weighed from it, with no more than
       * the guard's headers, to be escalated if it is the heavier. Nothing is discarded on any outcome. A fork escalated
@@ -799,18 +865,13 @@ object FastSyncBranchResolverActor:
       )
       stopWithFailure(BranchResolutionFailed(CommonBlockBeyondReach(deepest)))
 
-    /** This node holds no header at `blockNumber`: refused where the branch is weighed (B-347), the failure the caller
-      * falls back on otherwise, as before.
+    /** The common block found has no header here any more (the search read it when it took it for common, so only a
+      * change of the index since leads here): the branch cannot be weighed from it, and is refused (B-347).
       */
-    private def notStored(masterPeer: Peer, blockNumber: BigInt): Behavior[Command] =
-      if weighs then refuseHeaderNotStored(masterPeer, blockNumber)
-      else stopWithFailure(BranchResolutionFailed.blockHeaderNotFound(blockNumber))
-
     private def refuseHeaderNotStored(masterPeer: Peer, blockNumber: BigInt): Behavior[Command] =
       log.error(
-        "[SYNC-FORK] This node holds no header at block {} (best {}), which the search for where peer {}'s chain " +
-          "leaves this one needs: its branch cannot be weighed and is refused. Nothing is discarded and the peer is " +
-          "blacklisted",
+        "[SYNC-FORK] This node holds no header at block {} (best {}), the common block found with peer {}'s chain: " +
+          "its branch cannot be weighed from it and is refused. Nothing is discarded and the peer is blacklisted",
         blockNumber,
         blockchainReader.getBestBlockNumber,
         masterPeer.id
