@@ -5985,3 +5985,13 @@ items:
     refs: ["#1506"]
     links: {}
     notes: SnapIntakeBudget.scala:70-73; fake-clock test
+  - id: B-547
+    title: "SNAP accounts-complete recovery: re-check the saved pivot's staleness once the first snap peer is polled (networkBest 0 at start)"
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-25
+    refs: ["#1503"]
+    links: {}
+    notes: skip at SnapResumePlanner.scala:435-437
