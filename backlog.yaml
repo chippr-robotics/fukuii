@@ -1416,12 +1416,17 @@ items:
   - id: B-144
     title: CHANGELOG fragments (one file per PR, assembled at release) so parallel PRs stop conflicting on [Unreleased]
     priority: P2
-    status: open
+    status: claimed
     area: tooling
     size: S
     opened: 2026-11-08
     refs: []
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-25T19:51:32Z
+      heartbeat: 2026-11-25T19:51:32Z
     notes: Nearly every open PR conflicts only in CHANGELOG [Unreleased]; with no force-push, each conflict costs a replacement PR. towncrier-style changelog.d/ plus an assemble step in release.yml.
   - id: B-146
     title: "Spec: zero-trust TLS and mTLS on every service listener (RPC, WS, Engine API, metrics) plus outbound TLS"
