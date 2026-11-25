@@ -30,6 +30,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.domain.*
+import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
@@ -221,12 +222,52 @@ class RegularSyncPipelineSpec extends WordSpecBase with Matchers with AsyncMockF
 
   "The importer" should {
     // CHASE B: the resolver was not watched, and `resolvingFork` has no timeout, so one that stopped without an answer
-    // left the importer there for good.
-    "fall back to the blind rewind when its branch resolver stops without an answer" taggedAs (
+    // left the importer there for good. B-347: on the hash layout of a proof-of-work chain it goes on from the head and
+    // rewinds nothing, as core-geth sets no head back when its search for the common block fails: a stop weighed no
+    // branch. It used to fall back to the blind rewind, 128 blocks down for a branch no one weighed.
+    "go on from the head and rewind nothing when its branch resolver stops without an answer, on proof of work" taggedAs (
       UnitTest,
       SyncTest
     ) in sync(
       new PipelineFixture:
+        override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
+        (() => blockchainReader.getBestBlockNumber).when().returns(BigInt(20))
+        (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)
+        (blockchainReader.getBlockHeaderByNumber(_: BigInt)).when(BigInt(0)).returns(Some(BlockHelpers.genesis.header))
+        (blockchainReader
+          .getCanonicalHashByNumber(_: BigInt))
+          .when(*)
+          .onCall((n: BigInt) => Option.when(n == 0)(BlockHelpers.genesis.header.hash))
+        override lazy val blockchainWriter: BlockchainWriter = stub[BlockchainWriter]
+
+        val importerFetcher: TestProbe = TestProbe("resolverStoppedPowImporterFetcher")
+        val importer: TypedActorRef[BlockImporter.Command] =
+          spawnImporter(importerFetcher, "resolver-stopped-pow-importer")
+        importerFetcher.expectMsgClass(10.seconds, classOf[BlockFetcher.Start])
+
+        importer ! BlockImporter.StartForkRecovery(BigInt(15))
+        networkPeerManager.fishForMessage(10.seconds) {
+          case _: GetHandshakedPeersCmd => true
+          case _                        => false
+        }
+        system.actorSelection(s"${importer.path}/*") ! PoisonPill
+
+        val invalidate: BlockFetcher.InvalidateBlocksFrom =
+          importerFetcher.fishForSpecificMessage(10.seconds) { case m: BlockFetcher.InvalidateBlocksFrom => m }
+        invalidate.fromBlock shouldBe 21
+        invalidate.toBlacklist shouldBe None
+        (blockchainWriter.setCanonicalChainHead(_: BigInt, _: BlockHash, _: BigInt)).verify(*, *, *).never()
+        testKit.stop(importer)
+    )
+
+    // The same stop where the chain follows a consensus layer, whose branches the resolver does not weigh: the blind
+    // rewind stays there, as before (beacon's; B-347 left it).
+    "fall back to the blind rewind when its branch resolver stops without an answer, on a chain that follows a consensus layer" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in sync(
+      new PipelineFixture:
+        override lazy val branchResolution: BranchResolution = new FollowingAConsensusLayer(blockchainReader)
         override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
         (() => blockchainReader.getBestBlockNumber).when().returns(BigInt(20))
         (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)
@@ -260,11 +301,13 @@ class RegularSyncPipelineSpec extends WordSpecBase with Matchers with AsyncMockF
     // B-511: the rewind reads the index under the head's lock. When a fork choice moved the head to another chain since
     // the importer read it, the index no longer names the block it was to rewind to: nothing is rewound, and the
     // fetcher goes on from above the head as it is, not from above that block, which is no longer this node's chain.
+    // On a chain that follows a consensus layer: the one where a stop still falls back to the blind rewind (B-347).
     "fetch from above the head when the blind rewind finds the index on another chain" taggedAs (
       UnitTest,
       SyncTest
     ) in sync(
       new PipelineFixture:
+        override lazy val branchResolution: BranchResolution = new FollowingAConsensusLayer(blockchainReader)
         override lazy val blockchainReader: BlockchainReader = stub[BlockchainReader]
         (() => blockchainReader.getBestBlockNumber).when().returns(BigInt(20))
         (() => blockchainReader.getSnapSyncPivotBlock).when().returns(None)

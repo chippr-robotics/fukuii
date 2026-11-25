@@ -540,3 +540,46 @@ private[sync] object PivotAnchor:
         .and(appState.putBestBlockInfo(BlockInfo(validated.hash.value, validated.number.value)))
         .commit()
     }
+
+  /** [[clearIndexAbove]] on the stores of the sync that hands off. */
+  def clearIndexAbove(ingest: StateIngest, pivot: BigInt): BigInt =
+    clearIndexAbove(ingest.appState, ingest.chainReader, ingest.chainWriter, pivot)
+
+  /** How many heights of the index of blocks by number [[clearIndexAbove]] deletes in one write. */
+  val IndexClearChunk: Int = 10000
+
+  /** The hash layout's hand-off on a chain that chooses by work (B-351): the entries of the index of blocks by number
+    * above the pivot, deleted, as the unified layout's hand-off deletes them (`SyncHandoff.trimIndexAbove`). Read by
+    * number, they name blocks of no chain this node is on from here: those of the chain it left for a heavier one below
+    * the fork recovery's floor (B-346), which the index kept above a pivot lower than its old head, and the header an
+    * earlier, higher pivot's bootstrap stored. Below the pivot the header download wrote every height again; above it
+    * regular sync writes each as it imports, and a block above the best block is never taken for one imported already.
+    *
+    * Up to the highest of what the records say the index reaches and the last of the entries that follow the pivot
+    * without a gap: the best block is the pivot by now, and the head the node had before the sync is in no record. A
+    * chunk at a time, each its own write: a kill midway leaves entries the next hand-off deletes.
+    *
+    * @return
+    *   the highest height deleted at, or `pivot` when there was nothing above it
+    */
+  def clearIndexAbove(
+      appState: AppStateStorage,
+      reader: BlockchainReader,
+      writer: BlockchainWriter,
+      pivot: BigInt
+  ): BigInt =
+    val following = Iterator
+      .iterate(pivot + 1)(_ + 1)
+      .takeWhile(height => reader.getCanonicalHashByNumber(height).isDefined)
+      .foldLeft(pivot)((_, height) => height)
+    val recorded =
+      appState.highestIndexedHeight(hash => reader.getBlockHeaderByHash(BlockHash(hash)).map(_.number.value))
+    val upper = following.max(recorded)
+    Iterator
+      .iterate(pivot + 1)(_ + IndexClearChunk)
+      .takeWhile(_ <= upper)
+      .foreach { from =>
+        val removals = (from to (from + IndexClearChunk - 1).min(upper)).map(writer.removeBlockNumberMapping)
+        DataSourceBatchUpdate(removals.head.dataSource, removals.iterator.flatMap(_.updates).toArray).commit()
+      }
+    upper.max(pivot)
