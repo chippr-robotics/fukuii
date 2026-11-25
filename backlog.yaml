@@ -366,17 +366,18 @@ items:
   - id: B-031
     title: SNAP pivot roll fires at the serve window's edge with no slack; roll at about 3/4 of the window
     priority: P2
-    status: in-progress
+    status: review
     area: snap
     size: M
     opened: 2026-11-05
     refs: [H9 rest, CHASE C, "task #93"]
-    links: {}
+    links:
+      prs: [2120]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:10:49Z
-      heartbeat: 2026-11-25T04:12:19Z
+      heartbeat: 2026-11-25T05:06:42Z
     notes: |-
       T063: 338 ERROR lines over 4 min, recovered on its own.
       2026-11-25 in-progress: wave 4C beacon, fix/b031-snap-serve-window
