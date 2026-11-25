@@ -264,7 +264,7 @@ items:
   - id: B-021
     title: "scalanetDiscovery tests: v4 DiscoveryNetworkSpec hang, V5DemuxResponderSpec/codec failures; then run the suite in CI"
     priority: P2
-    status: claimed
+    status: in-progress
     area: tests
     size: M
     opened: 2026-11-05
@@ -275,10 +275,11 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T19:51:20Z
-      heartbeat: 2026-11-25T19:51:20Z
+      heartbeat: 2026-11-25T19:54:40Z
     notes: |-
       Nothing in CI runs these; do not add them to CI until the hang is fixed.
       2026-11-24: absorbs B-416 (validation of 2026-11-24)
+      2026-11-25 in-progress: wave 7
   - id: B-022
     title: "Flaky #1679: PeerDiscoveryManagerSpec 'do lookups in the background' times out under coverage"
     priority: P2
