@@ -583,7 +583,9 @@ class EthSimulateService(
 
     // The block's preamble, by block import's own code (BlockExecution.applyBlockPreamble, through
     // SimulatedBlockSystemCalls.preamble; proposer-import-parity.md Rule 2): the DAO fork block's drain, then EIP-4788
-    // and EIP-2935, which are direct storage writes before Amsterdam and system calls from it. Like import, it does
+    // and EIP-2935, which are direct storage writes before Amsterdam and system calls from it; before Amsterdam a state
+    // override that puts other code at either contract gets a system call that runs it (B-517), as import runs
+    // non-canonical code and go-ethereum's ProcessBeaconBlockRoot / ProcessParentBlockHash do. Like import, it does
     // nothing at a system contract with no code: it neither creates the account nor deploys the contract (ETC's Olympia
     // deploys the history contract, as import does).
     //
