@@ -126,7 +126,7 @@ jobs:
           }
         env:
           FUKUII_DEV: true
-        timeout-minutes: 25  # Tier 1 runs ~11–15 min on GitHub runners; 15 left no headroom (spec 016 S0d, #1514)
+        timeout-minutes: 25  # Tier 1 runs ~11–15 min on GitHub runners (incl. ~1.5 min for scalanetDiscovery / test, B-416); 15 left no headroom (spec 016 S0d, #1514)
 
       # Spec 021 T028: GT-2's full differential, UInt256DifferentialFullSpec (tag DifferentialTest, >= 10^7 cases per
       # operation against the BigInt oracle), on PRs that touch UInt256, vm/, or the suite and its oracle. Tiers 1
@@ -322,7 +322,7 @@ jobs:
         continue-on-error: true
         run: |
           rc=0
-          sbt -v "clean; coverage; rlp / test; bytes / test; crypto / test" 2>&1 | tee /tmp/sbt-coverage-submodules.log || rc=1
+          sbt -v "clean; coverage; rlp / test; bytes / test; crypto / test; scalanetDiscovery / test" 2>&1 | tee /tmp/sbt-coverage-submodules.log || rc=1
           sbt -v "coverage; testOnly -- -l BenchmarkTest -l EthereumTest -l SyncTest -l DisabledTest -l SlowTest -l DifferentialTest" 2>&1 | tee /tmp/sbt-coverage-root.log || rc=1
           exit $rc
         env:

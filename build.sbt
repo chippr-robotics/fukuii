@@ -531,6 +531,7 @@ addCommandAlias(
     |; rlp / test
     |; bytes / test
     |; crypto / test
+    |; scalanetDiscovery / test
     |; test
     |; IntegrationTest / test
     |""".stripMargin
@@ -585,6 +586,7 @@ addCommandAlias(
     |; rlp / test
     |; bytes / test
     |; crypto / test
+    |; scalanetDiscovery / test
     |""".stripMargin
 )
 
@@ -607,6 +609,7 @@ addCommandAlias(
     |; rlp / test
     |; bytes / test
     |; crypto / test
+    |; scalanetDiscovery / test
     |; testOnly
     |; IntegrationTest / testOnly
     |""".stripMargin

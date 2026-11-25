@@ -219,10 +219,12 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers:
         nonce ++
         ByteVector.fromInt(peerNodeId.size.toInt, Packet.AuthSizeSize)
     val masked = Packet.aesCtrMask(localNodeId, iv, staticHeader ++ peerNodeId)
-    val aad = iv ++ masked
+    // discv5-wire.md: the AAD is the UNMASKED `masking-iv || static-header || authdata` (what geth passes to
+    // AES-GCM), while the wire carries the masked form.
+    val aad = iv ++ staticHeader ++ peerNodeId
 
     val ct = Session.encrypt(sharedKey, nonce, pingBytes, aad).get
-    val incoming = (aad ++ ct).bits
+    val incoming = (iv ++ masked ++ ct).bits
 
     val replyBits = replyBitsOf(responder(sender, incoming))
 
@@ -232,9 +234,15 @@ class Discv5SyncResponderSpec extends AnyFlatSpec with Matchers:
     val replyMsg = replyPkt.asInstanceOf[Packet.MessagePacket]
 
     // Decrypt the response using the same shared key.
-    val replyMaskedRegionEnd =
-      Packet.MaskingIVSize + Packet.StaticHeaderSize + replyMsg.header.authData.size.toInt
-    val replyAad = replyBits.toByteVector.take(replyMaskedRegionEnd.toLong)
+    // The AAD is the unmasked `iv || static-header || authdata`, rebuilt from the decoded header.
+    val replyAad =
+      replyMsg.header.iv ++
+        Packet.ProtocolId ++
+        ByteVector.fromInt(Packet.Version, Packet.VersionSize) ++
+        ByteVector(Packet.Flag.Message) ++
+        replyMsg.header.nonce ++
+        ByteVector.fromInt(replyMsg.header.authData.size.toInt, Packet.AuthSizeSize) ++
+        replyMsg.header.authData
     val responseBytes =
       Session.decrypt(sharedKey, replyMsg.header.nonce, replyMsg.messageCiphertext, replyAad).get
 

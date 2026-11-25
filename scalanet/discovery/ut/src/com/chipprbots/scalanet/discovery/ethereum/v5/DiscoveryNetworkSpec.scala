@@ -82,8 +82,19 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers:
     */
   final class RecordingSender extends DiscoveryNetwork.PeerGroupSender[InetSocketAddress]:
     private val sent = new ConcurrentLinkedQueue[(InetSocketAddress, ByteVector)]()
+    private val sentSignal = new java.util.concurrent.Semaphore(0)
     override def sendRaw(remoteAddress: InetSocketAddress, bytes: ByteVector): IO[Unit] =
-      IO { val _ = sent.add((remoteAddress, bytes)) }
+      IO {
+        val _ = sent.add((remoteAddress, bytes))
+        sentSignal.release()
+      }
+
+    /** Block until `n` sends in total have been recorded. Event-driven: returns as soon as the n-th send happens; the
+      * generous limit only turns a lost send into a test failure instead of a hang.
+      */
+    def awaitSent(n: Int): Unit =
+      sentSignal.tryAcquire(n, 60, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+      sentSignal.release(n)
     def all: List[(InetSocketAddress, ByteVector)] =
       val out = List.newBuilder[(InetSocketAddress, ByteVector)]
       val it = sent.iterator()
@@ -157,7 +168,7 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers:
 
     // Fire ping; will time out (no responder), but the send happens immediately.
     val pingFiber = network.ping(DiscoveryNetwork.Peer(peerNodeId, peerAddr), localEnrSeq = 1L).start.unsafeRunSync()
-    Thread.sleep(50)
+    sender.awaitSent(1)
     val sent = sender.all
     sent should have size 1
     sent.head._1 shouldBe peerAddr
@@ -180,7 +191,7 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers:
 
     val pingFiber =
       network.ping(DiscoveryNetwork.Peer(peerNodeId, peerAddr), localEnrSeq = 1L).start.unsafeRunSync()
-    Thread.sleep(50)
+    sender.awaitSent(1)
     val sent = sender.all
     sent should have size 1
 
@@ -202,8 +213,6 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers:
 
     val handler = new RecordingHandler
     val cancel = network.startHandling(handler).unsafeRunSync()
-    // Give the consumer fiber a moment to subscribe to the queue.
-    Thread.sleep(50)
 
     val (peerPub, _) = sigalg.newKeyPair
     val peerNodeId = Session.nodeIdFromPublicKey(peerPub.value.bytes)
@@ -222,13 +231,17 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers:
       .ping(DiscoveryNetwork.Peer(peerNodeId, peerAddr), localEnrSeq = 1L)
       .start
       .unsafeRunSync()
-    Thread.sleep(50)
+    sender.awaitSent(1)
 
     // Inspect the sent Ping to extract its requestId from the encrypted body.
     val sentPkt = Packet.decode(sender.all.head._2, peerNodeId).require.asInstanceOf[Packet.MessagePacket]
-    val maskedRegionEnd =
-      Packet.MaskingIVSize + Packet.StaticHeaderSize + sentPkt.header.authData.size.toInt
-    val sentAad = sender.all.head._2.take(maskedRegionEnd.toLong)
+    val sentAad = sentPkt.header.iv ++
+      Packet.ProtocolId ++
+      ByteVector.fromInt(Packet.Version, Packet.VersionSize) ++
+      ByteVector(Packet.Flag.Message) ++
+      sentPkt.header.nonce ++
+      ByteVector.fromInt(sentPkt.header.authData.size.toInt, Packet.AuthSizeSize) ++
+      sentPkt.header.authData
     val sentPlaintext = Session.decrypt(key, sentPkt.header.nonce, sentPkt.messageCiphertext, sentAad).get
     val sentPing = stubCodec.decode(sentPlaintext.bits).require.value.asInstanceOf[Payload.Ping]
 
@@ -250,9 +263,9 @@ class DiscoveryNetworkSpec extends AnyFlatSpec with Matchers:
         nonce ++
         ByteVector.fromInt(peerNodeId.size.toInt, Packet.AuthSizeSize)
     val masked = Packet.aesCtrMask(localNodeId, iv, staticHeader ++ peerNodeId)
-    val aad = iv ++ masked
+    val aad = iv ++ staticHeader ++ peerNodeId // unmasked, per discv5-wire.md
     val ct = Session.encrypt(key, nonce, pongPlaintext, aad).get
-    val pongBytes = aad ++ ct
+    val pongBytes = iv ++ masked ++ ct
 
     queue.tryOffer((peerAddr, pongBytes)).unsafeRunSync()
 
