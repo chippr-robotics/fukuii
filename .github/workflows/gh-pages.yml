@@ -107,7 +107,10 @@ jobs:
             echo "::notice title=Previews::origin has no gh-pages branch; no previews published"
             exit 0
           fi
-          for n in $(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" --paginate --jq '.[].number'); do
+          # A standalone assignment, so a failed or partial PR listing stops the publish (bash -e) instead of
+          # publishing an artifact without previews; the live site then keeps its last good deploy.
+          open_prs=$(gh api "repos/$GITHUB_REPOSITORY/pulls?state=open&per_page=100" --paginate --jq '.[].number')
+          for n in $open_prs; do
             if git cat-file -e "FETCH_HEAD:pr-preview/pr-$n" 2>/dev/null; then
               git archive FETCH_HEAD "pr-preview/pr-$n" | tar -x -C site
               echo "published preview for PR $n"
