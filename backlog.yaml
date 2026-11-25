@@ -5786,3 +5786,13 @@ items:
     refs: []
     links: {}
     notes: "beacon; follow-up of #2121"
+  - id: B-536
+    title: B-248 ref-count undo lost when no rewind follows a resolver discard (index moved, missing header, crashed discard, blocks in an index hole)
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: "pre-existing; flagged by forge in #2121"
