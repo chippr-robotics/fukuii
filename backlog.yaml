@@ -5995,3 +5995,13 @@ items:
     refs: ["#1503"]
     links: {}
     notes: skip at SnapResumePlanner.scala:435-437
+  - id: B-548
+    title: "ETC Olympia precompiles: drop KZG 0x0a from the Olympia set and warm list (EIP-4844 deferred in ECIP-1121); cross-client vectors"
+    priority: P2
+    status: open
+    area: consensus
+    size: M
+    opened: 2026-11-25
+    refs: ["#1444"]
+    links: {}
+    notes: forge. PrecompiledContracts.scala:193-196 gives Olympia osakaContracts incl. 0x0a; ECIP-1121 lists EIP-4844 as deferred. Also floor-vs-refund vector
