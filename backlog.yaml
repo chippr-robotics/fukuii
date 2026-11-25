@@ -5737,3 +5737,13 @@ items:
     refs: []
     links: {}
     notes: "#2118 rolls lastBlock back on an unconfirmed handover; an explicit reply removes the guesswork"
+  - id: B-530
+    title: "BodiesFetcherSpec: pin that a slice worker which reports and then stops is not counted as dead (B-016 follow-up)"
+    priority: P3
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: "#2118's WorkerStoppedConfirmed hop is the guard; no test pins it"
