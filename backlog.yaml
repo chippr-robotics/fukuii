@@ -6042,3 +6042,13 @@ items:
     refs: ["#1483"]
     links: {}
     notes: folded into spec 018 at the user's decision 2026-11-25; for the spec-018 owner (cloud-dc960fdc) to place in its plan
+  - id: B-553
+    title: "Bound heal-walk reader memory: cap in-flight sub-range nodes and parallelism on tight hosts (#1350)"
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-25
+    refs: ["#1350"]
+    links: {}
+    notes: "vault 2026-11-25: spec 022 made the walk rare but not bounded; still runs as the repair pass on every pre-invariant datadir (all existing mainnet nodes, once). Change: flush nextBuf per N entries; memory/cgroup gate in computeEffectiveParallelism; reader pool <= effective parallelism; docs line for <8 GB hosts. Optional measurement first (8g cgroup, -Xmx6g, parallelism 4 vs 1)"
