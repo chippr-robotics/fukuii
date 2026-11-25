@@ -12,6 +12,7 @@ import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
+import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.implicits.*
 
@@ -33,6 +34,7 @@ import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolvedSuccessful
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.StartBranchResolver
 import com.chipprbots.ethereum.blockchain.sync.regular.DeepForkWeight
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportLock
 import com.chipprbots.ethereum.consensus.PowForkChoice
 import com.chipprbots.ethereum.consensus.PowForkChoiceSpec
 import com.chipprbots.ethereum.domain.Block
@@ -111,6 +113,62 @@ class FastSyncBranchResolverActorSpec
         val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout)(expectation)
         stopController(fastSyncBranchResolver)
         assert(getBestPeers.contains(response.masterPeer))
+
+      // B-012: the discard moves the best block and the index down, so it is made under regular sync's import lock, as
+      // every import is. An import that holds the lock is waited for, off the resolver's thread, and nothing is
+      // discarded, nor answered, until it ends.
+      "this node's blocks above the common block are discarded under the import lock, after an import that holds it" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new TestSetup:
+        implicit override lazy val system: ActorSystem = self.system.classicSystem
+        implicit override lazy val ioRuntime: IORuntime = IORuntime.global
+
+        val sender: TestProbe = TestProbe("sender")
+        val commonBlocks: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis, block => block)
+        val blocksSaved: List[Block] = commonBlocks :++ BlockHelpers.generateChain(1, commonBlocks.last, block => block)
+        val blocksSavedInPeer: List[Block] =
+          commonBlocks :++ BlockHelpers.generateChain(2, commonBlocks.last, block => block)
+        val firstBatchBlockHeaders: List[Block] =
+          blocksSavedInPeer.slice(blocksSavedInPeer.size - syncConfig.blockHeadersPerRequest, blocksSavedInPeer.size)
+
+        saveBlocks(blocksSaved)
+        val importLock: ImportLock = ImportLock()
+        val networkPeerManager: ActorRef = createNetworkPeerManager(handshakedPeers, Map(1 -> firstBatchBlockHeaders))
+        val fastSyncBranchResolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          creatFastSyncBranchResolver(
+            sender.ref,
+            networkPeerManager,
+            CacheBasedBlacklist.empty(BlacklistMaxElements),
+            discardGuard =
+              Some(FastSyncBranchResolverActor.DiscardGuard(deepestCommonBlock = 0, heavier = None, importLock))
+          )
+
+        // an import that holds the lock until it is let go
+        val held = new java.util.concurrent.CountDownLatch(1)
+        val release = new java.util.concurrent.CountDownLatch(1)
+        importLock.guard(IO.blocking { held.countDown(); release.await() }).unsafeRunAndForget()
+        held.await(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+
+        try
+          fastSyncBranchResolver ! StartBranchResolver
+          val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+          while importLock.waiting == 0 && System.nanoTime() < deadline do Thread.onSpinWait()
+          withClue("the discard waits for the import lock: ")(importLock.waiting shouldBe 1)
+          // nothing discarded while the import holds the lock
+          blockchainReader.getBestBlockNumber shouldBe blocksSaved.last.number.value
+          blockchainReader.getBlockHeaderByNumber(blocksSaved.last.number.value).map(_.hash) shouldBe
+            Some(blocksSaved.last.hash)
+          sender.msgAvailable shouldBe false
+        finally release.countDown()
+
+        val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout) {
+          case r @ BranchResolvedSuccessful(num, _) if num == BigInt(5) => r
+        }
+        stopController(fastSyncBranchResolver)
+        response.discarded shouldBe List((blocksSaved.last.number.value, blocksSaved.last.hash.value))
+        blockchainReader.getBestBlockNumber shouldBe BigInt(5)
+        importLock.waiting shouldBe 0
 
       // Spec 018 C4e part 6: on the unified state layout the caller asks for the common block only. No block is taken
       // off this node's chain: its head stays, and the peer's branch is judged by weight when it arrives.
@@ -564,7 +622,13 @@ class FastSyncBranchResolverActorSpec
         preserve: BlockHeader => Boolean = _ => false
     ): Option[FastSyncBranchResolverActor.DiscardGuard] =
       val resolution = new BranchResolution(blockchainReader, powForkChoice = new PowForkChoice(preserve, coin))
-      Some(FastSyncBranchResolverActor.DiscardGuard(deepestCommonBlock, heavier = Some(resolution.discardsFor)))
+      Some(
+        FastSyncBranchResolverActor.DiscardGuard(
+          deepestCommonBlock,
+          heavier = Some(resolution.discardsFor),
+          importLock = ImportLock()
+        )
+      )
 
     /** Saved as the best chain with each block's weight the sum of the difficulties up to it, as an import stores it.
       */
@@ -664,7 +728,7 @@ class FastSyncBranchResolverActorSpec
         blacklist: Blacklist,
         // the hash layout's guard, with no floor and no weighing: the search as it always was
         discardGuard: Option[FastSyncBranchResolverActor.DiscardGuard] = Some(
-          FastSyncBranchResolverActor.DiscardGuard(deepestCommonBlock = 0, heavier = None)
+          FastSyncBranchResolverActor.DiscardGuard(deepestCommonBlock = 0, heavier = None, importLock = ImportLock())
         )
     ): TypedActorRef[FastSyncBranchResolverActor.Command] =
       self.testKit.spawn(
