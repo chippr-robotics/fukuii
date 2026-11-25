@@ -31,7 +31,7 @@ its cases. See issues
 
 **Lineage.** Fukuii is a derivative work of IOHK's Mantis client, maintained by Chippr Robotics LLC under Apache-2.0. See NOTICE. Mantis is a trademark of IOHK, used here only to describe this fork's origin.
 
-**`fukuii-project/fukuii-cli`.** An independent, ground-up rewrite with no common ancestor and no shared source with this repository. It is NOT this release train and NOT a fork of this tree. See issue #1399 for the divergence assessment and the clean-room constraint.
+**`fukuii-project/fukuii-cli`.** An independent, ground-up rewrite with no common ancestor and no shared source with this repository. It is NOT this release train and NOT a fork of this tree. See docs/development/fukuii-project.md for the divergence assessment and the clean-room constraint (it replaces issue #1399).
 
 ## Required checks
 
