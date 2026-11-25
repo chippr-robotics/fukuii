@@ -6052,3 +6052,13 @@ items:
     refs: ["#1350"]
     links: {}
     notes: "vault 2026-11-25: spec 022 made the walk rare but not bounded; still runs as the repair pass on every pre-invariant datadir (all existing mainnet nodes, once). Change: flush nextBuf per N entries; memory/cgroup gate in computeEffectiveParallelism; reader pool <= effective parallelism; docs line for <8 GB hosts. Optional measurement first (8g cgroup, -Xmx6g, parallelism 4 vs 1)"
+  - id: B-554
+    title: "Docs previews 404 and render unstyled: #1983's docs fix is on staging only; hotfix to main (#2133)"
+    priority: P2
+    status: open
+    area: docs
+    size: S
+    opened: 2026-11-25
+    refs: [B-422]
+    links: {}
+    notes: "user report 2026-11-25 (screenshots of pr-2132 preview). gh-pages.yml runs on main; main lacked #1983"
