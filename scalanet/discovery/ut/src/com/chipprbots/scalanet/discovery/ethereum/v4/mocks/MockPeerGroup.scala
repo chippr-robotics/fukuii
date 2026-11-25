@@ -74,12 +74,30 @@ class MockChannel[A, M](
     IO(messagesFromSUT.put(MessageReceived(message)))
 
   // Messages consumed by the System Under Test. Blocks until an event arrives.
+  //
+  // Must be `interruptible`, not `blocking`: the SUT wraps this in `timeoutTo(requestTimeout)`, and a `blocking`
+  // effect is uncancelable, so the timeout could never fire while no event was queued and the caller (e.g. `ping`
+  // against a silent peer) hung forever. `interruptible` lets the timeout cancel the thread parked in `take()`.
   override def nextChannelEvent: IO[Option[Channel.ChannelEvent[M]]] =
-    IO.blocking(Some(messagesToSUT.take()))
+    IO.interruptible(Some(messagesToSUT.take()))
 
   // Send a message from the test.
   def sendMessageToSUT(message: M): IO[Unit] =
     IO(messagesToSUT.put(MessageReceived(message)))
 
-  def nextMessageFromSUT(timeout: FiniteDuration = 250.millis): IO[Option[ChannelEvent[M]]] =
-    IO.blocking(Option(messagesFromSUT.poll(timeout.toMillis, TimeUnit.MILLISECONDS)))
+  /** Next message the SUT sent, or None if none arrives within `timeout`.
+    *
+    * The default is an upper bound that only a bug can reach: it returns the moment the message arrives, so a loaded
+    * machine makes the test slower, never wrong. To assert that the SUT stays silent, pass [[MockChannel.AbsenceWait]]
+    * explicitly; there is no event to wait for in that case, so a short window is the only option (a slow machine can
+    * only make such a check pass too easily, never fail it).
+    */
+  def nextMessageFromSUT(timeout: FiniteDuration = MockChannel.PresenceWait): IO[Option[ChannelEvent[M]]] =
+    IO.interruptible(Option(messagesFromSUT.poll(timeout.toMillis, TimeUnit.MILLISECONDS)))
+
+object MockChannel:
+  /** Upper bound when a message is expected; see [[MockChannel.nextMessageFromSUT]]. */
+  val PresenceWait: FiniteDuration = 30.seconds
+
+  /** Window for asserting that no message is sent. */
+  val AbsenceWait: FiniteDuration = 250.millis

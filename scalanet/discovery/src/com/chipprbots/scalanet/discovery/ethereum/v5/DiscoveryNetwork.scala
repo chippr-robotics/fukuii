@@ -174,10 +174,11 @@ object DiscoveryNetwork:
             nonce ++
             ByteVector.fromInt(authData.size.toInt, Packet.AuthSizeSize)
         val masked = Packet.aesCtrMask(peerNodeId, iv, staticHeader ++ authData)
-        val aad = iv ++ masked
+        // discv5-wire.md: the AES-GCM AAD is the UNMASKED `masking-iv || static-header || authdata`; only the wire
+        // form is masked. (Discv5SyncResponder and geth do the same.)
+        val aad = iv ++ staticHeader ++ authData
         val ct = Session.encrypt(session.keys.writeKey, nonce, plaintext, aad).get
-        val full = aad ++ ct
-        full
+        iv ++ masked ++ ct
       }.flatMap(bytes => peerGroup.sendRaw(peerAddr, bytes))
 
       /** Send a random-content message to trigger a WHOAREYOU. We record the nonce we sent so the WHOAREYOU's response
@@ -261,7 +262,7 @@ object DiscoveryNetwork:
       private def processMessage(
           sender: InetSocketAddress,
           msg: Packet.MessagePacket,
-          rawBytes: ByteVector,
+          @annotation.unused rawBytes: ByteVector,
           handler: DiscoveryRPC[Peer[A]]
       ): IO[Unit] =
         sessions.getIO(Session.SessionId(msg.header.srcId, sender)).flatMap {
@@ -269,9 +270,14 @@ object DiscoveryNetwork:
             // No session — sync responder should have sent WHOAREYOU.
             IO.unit
           case Some(session) =>
-            val maskedRegionEnd =
-              Packet.MaskingIVSize + Packet.StaticHeaderSize + msg.header.authData.size.toInt
-            val aad = rawBytes.take(maskedRegionEnd.toLong)
+            // Unmasked `iv || static-header || authdata`, rebuilt from the decoded header (see sendEncrypted).
+            val aad = msg.header.iv ++
+              Packet.ProtocolId ++
+              ByteVector.fromInt(Packet.Version, Packet.VersionSize) ++
+              ByteVector(Packet.Flag.Message) ++
+              msg.header.nonce ++
+              ByteVector.fromInt(msg.header.authData.size.toInt, Packet.AuthSizeSize) ++
+              msg.header.authData
             Session.decrypt(session.keys.readKey, msg.header.nonce, msg.messageCiphertext, aad).toEither match
               case Right(plaintext) =>
                 payloadCodec.decode(plaintext.bits).toEither match
