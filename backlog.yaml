@@ -241,12 +241,17 @@ items:
   - id: B-020
     title: "SNAP actor spec flakes: Gone/ResetCharacterization/StaleVerificationWalk fixed waits; the HealRequestFixtures send/record race"
     priority: P1
-    status: open
+    status: claimed
     area: tests
     size: M
     opened: 2026-11-05
     refs: [H11, CHASE E, "task #80"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-25T19:51:11Z
+      heartbeat: 2026-11-25T19:51:11Z
     notes: |-
       2026-11-20 #1957 merged to main (6ea4ffd): GoneSpec childSelf fix landed. Not on staging yet (cherry-pick 3cb05e4). Cooldown/StaleVerificationWalk/HealRequestFixtures still open.
       2026-11-20 #1958 merged: the #1957 fixture changes are on staging too, so a promotion keeps them.
