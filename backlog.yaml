@@ -6055,15 +6055,16 @@ items:
   - id: B-554
     title: "Docs previews 404 and render unstyled: #1983's docs fix is on staging only; hotfix to main (#2133)"
     priority: P2
-    status: claimed
+    status: review
     area: docs
     size: S
     opened: 2026-11-25
     refs: [B-422]
-    links: {}
+    links:
+      prs: [2133]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T21:05:42Z
-      heartbeat: 2026-11-25T21:05:42Z
+      heartbeat: 2026-11-25T21:05:47Z
     notes: "user report 2026-11-25 (screenshots of pr-2132 preview). gh-pages.yml runs on main; main lacked #1983"
