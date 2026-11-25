@@ -5764,3 +5764,13 @@ items:
     refs: []
     links: {}
     notes: deferred by beacon in wave 4C
+  - id: B-533
+    title: SNAPLazyHealAnchorSpec BUG-BC3 budget test has no slack after the 112 re-peg threshold (10 of 11 steps re-peg = MaxHealRepegNoRootAttempts)
+    priority: P3
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: wave 4C; widen the steps so the test keeps margin
