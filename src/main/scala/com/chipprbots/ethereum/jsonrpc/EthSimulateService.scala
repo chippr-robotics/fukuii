@@ -586,8 +586,8 @@ class EthSimulateService(
     // and EIP-2935, which are direct storage writes before Amsterdam and system calls from it; before Amsterdam a state
     // override that puts other code at either contract gets a system call that runs it (B-517), as import runs
     // non-canonical code and go-ethereum's ProcessBeaconBlockRoot / ProcessParentBlockHash do. Like import, it does
-    // nothing at a system contract with no code: it neither creates the account nor deploys the contract (ETC's Olympia
-    // deploys the history contract, as import does).
+    // nothing at a system contract with no code: it neither creates the account nor deploys the contract, on ETH and on
+    // ETC from Olympia alike (B-528: the client no longer deploys the EIP-2935 contract at Olympia).
     //
     // It runs AFTER the state overrides, on the world they left: go-ethereum's processBlock applies
     // `StateOverrides.Apply` and then runs ProcessBeaconBlockRoot / ProcessParentBlockHash on the EVM it built

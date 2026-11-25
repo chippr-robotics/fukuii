@@ -151,7 +151,7 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 |-----|-------|--------|-------|
 | **Execution Layer EIPs** | | | |
 | EIP-2537 | BLS12-381 precompiles | ⚠️ Stubs | Via ETC Olympia (ECIP-1121) — gas-consuming stubs, full crypto TBD |
-| EIP-2935 | Serve historical block hashes from state | ✅ Implemented | Via ETC Olympia (ECIP-1121) — system contract, 8191 history window |
+| EIP-2935 | Serve historical block hashes from state | ✅ Implemented | Via ETC Olympia (ECIP-1121), unmodified — system contract, 8191 history window; deployed by EIP-2935's deploy transaction before Olympia ([runbook](../runbooks/olympia-eip2935-deployment.md)) |
 | EIP-6110 | Supply validator deposits on chain | ❌ N/A | Validator deposits not applicable to ETC (PoW) |
 | EIP-7002 | Execution layer triggerable exits | ❌ N/A | Validator exits not applicable to ETC (PoW) |
 | EIP-7251 | Increase MAX_EFFECTIVE_BALANCE | ❌ N/A | Validator economics not applicable to ETC (PoW) |
@@ -323,7 +323,7 @@ Registered as gas-consuming stubs via ETC Olympia (ECIP-1121). Full crypto imple
 ### Prague/Pectra (Fusaka) EIPs - Activated May 7, 2025
 
 #### ~~13. EIP-2935: Serve Historical Block Hashes from State~~ ✅ IMPLEMENTED
-Implemented via ETC Olympia (ECIP-1121). System contract at `0x...002935` stores block hashes in a ring buffer (8191 history window). Deployed at fork activation.
+Implemented via ETC Olympia (ECIP-1121), which adopts EIP-2935 unmodified. From Olympia each block stores its parent hash in the system contract at `0x0000F90827F1C53a10cb7A02335B175320002935` (ring buffer, 8191 history window). The client does not deploy the contract (B-528): EIP-2935's own deploy transaction must land on each ETC network before Olympia, or the history stays empty until it does; see [Olympia: deploying the EIP-2935 history contract](../runbooks/olympia-eip2935-deployment.md).
 
 #### 14. EIP-6110: Supply Validator Deposits on Chain
 **Priority**: 🔴 Critical (Execution-Consensus Integration)  

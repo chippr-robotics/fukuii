@@ -141,6 +141,7 @@ nav:
     - Disk Management: runbooks/disk-management.md
     - Backup & Restore: runbooks/backup-restore.md
     - TLS Operations: runbooks/tls-operations.md
+    - Olympia EIP-2935 Deployment: runbooks/olympia-eip2935-deployment.md
     - Troubleshooting: runbooks/known-issues.md
   
   - For Operators/SRE:

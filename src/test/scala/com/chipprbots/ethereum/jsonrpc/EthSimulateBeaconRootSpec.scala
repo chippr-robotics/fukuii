@@ -301,10 +301,23 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
         )
       )
 
-  // ECIP-1112 / ECIP-1121: from Olympia, import deploys the EIP-2935 history contract where it has no code and writes
-  // the parent hash (BlockExecution.applyEip2935, gated by block number). The simulation's copy gated it on Prague,
-  // which ETC never reaches, so a simulated Olympia block had neither.
-  "eth_simulateV1 on ETC" should "deploy the EIP-2935 contract and store the parent hash at Olympia, as import does" taggedAs (
+  // ECIP-1121: from Olympia, import stores the parent hash in the EIP-2935 history contract (BlockExecution.applyEip2935,
+  // gated by block number). The simulation's copy gated it on Prague, which ETC never reaches, so a simulated Olympia
+  // block had none. The contract is deployed by EIP-2935's deploy transaction, not by the client (B-528).
+  "eth_simulateV1 on ETC" should "store the parent hash in the deployed EIP-2935 contract at Olympia, as import does" taggedAs (
+    UnitTest,
+    RPCTest,
+    OlympiaTest
+  ) in {
+    val node = new Node(baseTimestamp = 1000, etcConfig(olympia = 30))
+    val block = node.simulate(time = 1012, None, calls = Seq(readBlockHash(29))).head
+    block.header.number.value shouldBe BigInt(30)
+    block.calls.map(c => (c.status, c.returnData)) shouldBe Seq((BigInt(1), node.baseHash))
+  }
+
+  // B-528: the client used to deploy the contract at Olympia where it had no code; import, and so the simulation, now
+  // leaves the address empty, as go-ethereum's ProcessParentBlockHash does.
+  it should "deploy nothing at Olympia where the history contract has no code" taggedAs (
     UnitTest,
     RPCTest,
     OlympiaTest
@@ -312,7 +325,7 @@ class EthSimulateBeaconRootSpec extends AnyFlatSpec with Matchers with Amsterdam
     val node = new Node(baseTimestamp = 1000, etcConfig(olympia = 30))
     val block = node.simulate(time = 1012, None, systemContracts = false, calls = Seq(readBlockHash(29))).head
     block.header.number.value shouldBe BigInt(30)
-    block.calls.map(c => (c.status, c.returnData)) shouldBe Seq((BigInt(1), node.baseHash))
+    block.calls.map(c => (c.status, c.returnData)) shouldBe Seq((BigInt(1), ByteString.empty))
   }
 
   it should "write nothing before Olympia, where the history contract has no code" taggedAs (

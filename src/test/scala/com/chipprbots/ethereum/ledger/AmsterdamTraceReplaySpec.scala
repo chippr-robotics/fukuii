@@ -372,24 +372,38 @@ class AmsterdamTraceReplaySpec extends AnyFlatSpec with Matchers with AmsterdamF
   private def persistedRoot(world: InMemoryWorldStateProxy): ByteString =
     InMemoryWorldStateProxy.persistState(world).stateRootHash
 
-  // ECIP-1112 / ECIP-1121: from Olympia, import deploys the EIP-2935 history contract where it has no code and writes
-  // the parent hash at (number - 1) % 8191 (BlockExecution.applyEip2935, gated by block number). A trace replay starts
-  // on that state, not on the parent's.
-  "Replaying an ETC Olympia block" should "start on import's EIP-2935 deploy and parent-hash write" taggedAs (
+  // ECIP-1121: from Olympia, import writes the parent hash at (number - 1) % 8191 in the EIP-2935 history contract
+  // (BlockExecution.applyEip2935, gated by block number). A trace replay starts on that state, not on the parent's. The
+  // contract is deployed by EIP-2935's deploy transaction, not by the client (B-528), so the parent holds it here.
+  "Replaying an ETC Olympia block" should "start on import's EIP-2935 parent-hash write" taggedAs (
     UnitTest,
     StateTest,
     OlympiaTest
-  ) in (new Chain(etcOlympia, systemContracts = false):
+  ) in (new Chain(etcOlympia):
     val history = BlockExecution.HistoryStorageAddress
     val olympia: BlockHeader = etcHeader(OlympiaAt)
     val world: InMemoryWorldStateProxy = ledger.advanceWorldToTx(olympia, Nil, 0, parentHeader)
-    parent.getCode(history) shouldBe ByteString.empty
+    parent.getCode(history) shouldBe BlockExecution.HistoryStorageCode
     world.getCode(history) shouldBe BlockExecution.HistoryStorageCode
-    world.getAccount(history).map(_.nonce) shouldBe Some(UInt256(1))
+    world.getAccount(history).map(_.nonce) shouldBe parent.getAccount(history).map(_.nonce)
     world.getStorage(history).load(UInt256((OlympiaAt - 1) % 8191)) shouldBe BigInt(1, olympia.parentHash.value.toArray)
     // the state import executes the block's first transaction on, to the byte
     persistedRoot(world) shouldBe persistedRoot(executed(olympia, Nil).worldState)
     persistedRoot(world) should not be parent.stateRootHash
+  )
+
+  // B-528: where the history contract has no code, import deploys nothing (it used to deploy it at Olympia), so the
+  // replay starts on the parent's state.
+  it should "start on the parent's state at Olympia where the history contract has no code" taggedAs (
+    UnitTest,
+    StateTest,
+    OlympiaTest
+  ) in (new Chain(etcOlympia, systemContracts = false):
+    val olympia: BlockHeader = etcHeader(OlympiaAt)
+    val world: InMemoryWorldStateProxy = ledger.advanceWorldToTx(olympia, Nil, 0, parentHeader)
+    world.getAccount(BlockExecution.HistoryStorageAddress) shouldBe None
+    persistedRoot(world) shouldBe parent.stateRootHash
+    persistedRoot(executed(olympia, Nil).worldState) shouldBe parent.stateRootHash
   )
 
   it should "start on the parent's state at the block before Olympia" taggedAs (

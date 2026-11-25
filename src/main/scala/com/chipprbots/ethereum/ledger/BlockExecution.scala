@@ -1341,8 +1341,8 @@ object BlockExecution:
     * With the canonical contracts the storage is the same as the direct writes: the beacon roots contract stores the
     * timestamp and the root at slots `timestamp % 8191` and `timestamp % 8191 + 8191`, and the history contract stores
     * the parent hash at slot `(number - 1) % 8191` (asserted in AmsterdamSystemCallSpec). Every earlier fork and every
-    * ETC fork keep the direct writes for the canonical contracts; before Amsterdam, other code at either ETH address, and
-    * at the history address on ETC from Olympia (B-528), is run by the same [[uncheckedSystemCall]] (B-517).
+    * ETC fork keep the direct writes for the canonical contracts; before Amsterdam, other code at either ETH address,
+    * and at the history address on ETC from Olympia (B-528), is run by the same [[uncheckedSystemCall]] (B-517).
     *
     * Here in the companion rather than on the class so that block execution and the trace replays of an Amsterdam block
     * (`StxLedger.advanceWorldToTx`) run one and the same preamble.
