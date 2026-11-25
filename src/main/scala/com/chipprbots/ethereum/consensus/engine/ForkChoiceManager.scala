@@ -35,10 +35,11 @@ class ForkChoiceManager(
     // adopts are put back (idempotent). NoOp for callers with no reference-counted state; the node passes its
     // BlockchainImpl.
     reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
-    // B-245: told of each block a fork choice makes canonical, after the move is committed, lowest first. The node
-    // passes the publish to the `eth_subscribe` block topic (newHeads / logs); the Engine API never reaches BlockImporter,
-    // which is the other publisher. A notification only: it takes no part in the move.
-    onNewCanonical: Block => Unit = _ => ()
+    // B-245: told of each block a fork choice makes canonical, after the move is committed, lowest first, with whether
+    // it is the new head. The node passes the publish to the `eth_subscribe` block topic: logs for every block, newHeads
+    // for the head only (go-ethereum's SetCanonical). The Engine API never reaches BlockImporter, which is the other
+    // publisher. A notification only: it takes no part in the move.
+    onNewCanonical: (Block, Boolean) => Unit = (_, _) => ()
 ) extends Logger:
 
   // EXECUTED heads only. Written solely by the head-known branch of `applyForkChoiceState`, never by
@@ -286,16 +287,17 @@ class ForkChoiceManager(
       // `BeyondTheFetch` is said by proof-of-work regular sync only, never by a move of the head: not met here
       case refused: ReorgTooDeep => notMoved(refused.getMessage)
 
-  /** B-245: tells [[onNewCanonical]] of the blocks a fork choice made canonical, lowest first, once each. `adopting` is
-    * read before the move, so a block that was canonical already (imported and published by BlockImporter) is not in
-    * it, and a fork choice to the head already held tells nothing. A listener's failure is logged and never fails the
-    * fork choice, which has been committed.
+  /** B-245: tells [[onNewCanonical]] of the blocks a fork choice made canonical, lowest first, once each, the last as
+    * the head. `adopting` is read before the move, so a block that was canonical already (imported and published by
+    * BlockImporter) is not in it, and a fork choice to the head already held tells nothing. A listener's failure is
+    * logged and never fails the fork choice, which has been committed.
     */
   private def publishCanonical(adopting: Seq[BlockHash]): Unit =
+    val head = adopting.lastOption
     adopting.foreach { hash =>
       blockchainReader.getBlockByHash(hash) match
         case Some(block) =>
-          try onNewCanonical(block)
+          try onNewCanonical(block, head.contains(hash))
           catch
             case scala.util.control.NonFatal(e) =>
               log.warn(s"New-head notification of block ${block.number.value} failed: ${e.getMessage}")

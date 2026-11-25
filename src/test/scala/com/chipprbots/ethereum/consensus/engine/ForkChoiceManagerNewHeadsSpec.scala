@@ -21,8 +21,9 @@ import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.testing.Tags.*
 
-/** B-245: a fork choice tells the block topic's publisher of each block it makes canonical, so that `eth_subscribe
-  * newHeads` sees the heads the Engine API makes (BlockImporter, the other publisher, is never reached by it).
+/** B-245: a fork choice tells the block topic's publisher of each block it makes canonical, the last as the head, so
+  * that `eth_subscribe logs` sees every adopted block and `newHeads` the head the Engine API makes (BlockImporter, the
+  * other publisher, is never reached by it).
   *
   * The publisher is called synchronously on the fork choice's thread, so the recording needs no waiting.
   */
@@ -30,13 +31,15 @@ class ForkChoiceManagerNewHeadsSpec extends AnyFlatSpec with Matchers:
 
   trait Fixture extends EphemBlockchainTestSetup:
     @volatile var told: Vector[Block] = Vector.empty
+    @volatile var toldAsHead: Vector[Boolean] = Vector.empty
     @volatile var toldUnderTheLock: Vector[Boolean] = Vector.empty
 
     lazy val fcm = new ForkChoiceManager(
       blockchainReader,
       blockchainWriter,
-      onNewCanonical = block =>
+      onNewCanonical = (block, head) =>
         told :+= block
+        toldAsHead :+= head
         toldUnderTheLock :+= CanonicalHeadLock.isHeldByCurrentThread
     )
 
@@ -84,13 +87,16 @@ class ForkChoiceManagerNewHeadsSpec extends AnyFlatSpec with Matchers:
     choose(a2) shouldBe Right(())
     toldHashes shouldBe Seq(a2.hash.value)
 
-  it should "tell of every block a jump of several makes canonical, lowest first" taggedAs UnitTest in new Fixture:
+  it should "tell of every block a jump of several makes canonical, lowest first, only the last as the head" taggedAs UnitTest in new Fixture:
     choose(a4) shouldBe Right(())
     toldHashes shouldBe Seq(a2, a3, a4).map(_.hash.value)
+    // logs for each, newHeads for the head only: go-ethereum's SetCanonical sends one ChainEvent, for the head
+    toldAsHead shouldBe Vector(false, false, true)
 
   it should "tell of the new branch's blocks on a reorg, and not of the ones it leaves" taggedAs UnitTest in new Fixture:
     choose(s2) shouldBe Right(())
     toldHashes shouldBe Seq(s1, s2).map(_.hash.value)
+    toldAsHead shouldBe Vector(false, true)
     blockchainReader.getCanonicalHashByNumber(1) shouldBe Some(s1.hash)
 
   it should "not tell again of a block already canonical (imported and published), nor of a repeated fork choice" taggedAs UnitTest in new Fixture:
@@ -109,7 +115,7 @@ class ForkChoiceManagerNewHeadsSpec extends AnyFlatSpec with Matchers:
     val observing = new ForkChoiceManager(
       blockchainReader,
       blockchainWriter,
-      onNewCanonical = _ => bestWhenTold :+= blockchainReader.getBestBlockHeader.map(_.hash.value)
+      onNewCanonical = (_, _) => bestWhenTold :+= blockchainReader.getBestBlockHeader.map(_.hash.value)
     )
     observing.applyForkChoiceState(ForkChoiceState(a3.hash.value, ByteString.empty, ByteString.empty)) shouldBe Right(
       ()
@@ -123,7 +129,7 @@ class ForkChoiceManagerNewHeadsSpec extends AnyFlatSpec with Matchers:
     val failing = new ForkChoiceManager(
       blockchainReader,
       blockchainWriter,
-      onNewCanonical = _ => throw new RuntimeException("topic gone")
+      onNewCanonical = (_, _) => throw new RuntimeException("topic gone")
     )
     failing.applyForkChoiceState(ForkChoiceState(a2.hash.value, ByteString.empty, ByteString.empty)) shouldBe Right(())
     blockchainReader.getBestBlockHeader.map(_.hash) shouldBe Some(a2.hash)

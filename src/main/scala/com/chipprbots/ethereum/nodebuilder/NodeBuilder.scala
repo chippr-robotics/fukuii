@@ -1208,9 +1208,9 @@ trait EngineApiBuilder extends Logger:
     blockchainReader,
     blockchainWriter,
     blockchain,
-    onNewCanonical = block =>
+    onNewCanonical = (block, head) =>
       blockTopic ! org.apache.pekko.actor.typed.pubsub.Topic.Publish(
-        com.chipprbots.ethereum.jsonrpc.NewBlockImported(block)
+        com.chipprbots.ethereum.jsonrpc.NewBlockImported(block, head)
       )
   )
 

@@ -76,7 +76,7 @@ object SubscriptionManager:
   case class Unsubscribe(connId: String, subId: Long, replyTo: ActorRef[UnsubscribeResponse]) extends Command
 
   // private adapters for Topic[T] events
-  private case class BlockImported(block: Block) extends Command
+  private case class BlockImported(block: Block, head: Boolean) extends Command
   private case class PendingTxArrived(stx: SignedTransactionWithSender) extends Command
 
   // ── Responses ────────────────────────────────────────────────────────────
@@ -99,7 +99,7 @@ object SubscriptionManager:
     val counter = new AtomicLong(0L)
 
     // Subscribe to the dedicated Topic[T] channels via message adapters
-    val blockAdapter = ctx.messageAdapter[NewBlockImported](e => BlockImported(e.block))
+    val blockAdapter = ctx.messageAdapter[NewBlockImported](e => BlockImported(e.block, e.head))
     val pendingTxAdapter = ctx.messageAdapter[NewPendingTransaction](e => PendingTxArrived(e.stx))
     blockTopic ! Topic.Subscribe(blockAdapter)
     pendingTxTopic ! Topic.Subscribe(pendingTxAdapter)
@@ -299,8 +299,8 @@ object SubscriptionManager:
           replyTo ! UnsubscribeResponse(found)
           Behaviors.same
 
-        case BlockImported(block) =>
-          notifyNewHeads(block)
+        case BlockImported(block, head) =>
+          if head then notifyNewHeads(block)
           notifyLogs(block)
           Behaviors.same
 
