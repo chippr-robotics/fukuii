@@ -63,6 +63,15 @@ case class Metrics(
       .builder(mkName(name), this, (_: Any) => computeValue()) // Any: Micrometer gauge state — library API
       .register(registry)
 
+  /** Returns a [[io.micrometer.core.instrument.FunctionCounter FunctionCounter]]: a counter whose count is read from
+    * `computeValue` when scraped, for a count kept elsewhere that only goes up. Prometheus exports it as a counter
+    * (with `_total`), so `rate()` and `increase()` may be taken of it; a gauge holding the same count may not (B-200).
+    */
+  def functionCounter(name: String, computeValue: () => Double): FunctionCounter =
+    FunctionCounter
+      .builder(mkName(name), this, (_: Any) => computeValue()) // Any: Micrometer counter state — library API
+      .register(registry)
+
   /** Returns a [[io.micrometer.core.instrument.Counter Counter]].
     */
   def counter(name: String): Counter =
@@ -116,9 +125,17 @@ object Metrics:
     * follow `configure`, which would otherwise leave its registry installed for the rest of the JVM.
     */
   private[ethereum] def usingDefault[T](metrics: Metrics)(body: => T): T =
-    val previous = defaultRef.getAndSet(metrics)
-    try body
-    finally defaultRef.set(previous)
+    TestDefaultLock.synchronized {
+      val previous = defaultRef.getAndSet(metrics)
+      try body
+      finally defaultRef.set(previous)
+    }
+
+  /** Held by the test helpers that swap the default or add to it ([[usingDefault]], [[withDefaultForTest]],
+    * [[withRegistryAddedForTest]]), so that two specs running in parallel in one JVM do not install theirs over each
+    * other's.
+    */
+  final private val TestDefaultLock = new Object
 
   /** Makes `metrics` the default if none was configured before, and has the meters already made on the default registry
     * follow it (B-427, see [[defaultComposite]]). False when another instance is the default.
@@ -134,8 +151,31 @@ object Metrics:
     val _ = defaultComposite.remove(metrics.registry)
     val _ = defaultRef.compareAndSet(metrics, defaultMetrics)
 
-  /** [[becomeDefault]] as a test enters it, in place of `configure`, which starts servers and binds ports. */
-  private[ethereum] def becomeDefaultForTest(metrics: Metrics): Boolean = becomeDefault(metrics)
+  /** Runs `body` with `metrics` as the default as `configure` makes it (the meters already made on the default registry
+    * follow it, B-427), then puts the previous default back, under the lock [[usingDefault]] takes; in place of
+    * `configure`, which starts servers and binds ports. Throws when another instance is the default.
+    */
+  private[ethereum] def withDefaultForTest[T](metrics: Metrics)(body: => T): T =
+    TestDefaultLock.synchronized {
+      if !becomeDefault(metrics) then throw new IllegalStateException("another Metrics instance is the default")
+      try body
+      finally unseatDefault(metrics)
+    }
+
+  /** Runs `body` with `registry` added to the default registry, as `configure` adds the exported one, without making
+    * another instance the default: every meter the holders made or make on the default registry is registered on
+    * `registry` too, and no holder first touched meanwhile is left holding an instance that goes away after (B-200).
+    * Under the lock [[usingDefault]] takes; throws when an instance was configured as the default.
+    */
+  private[ethereum] def withRegistryAddedForTest[T](registry: MeterRegistry)(body: => T): T =
+    TestDefaultLock.synchronized {
+      if !(defaultRef.get() eq defaultMetrics) then
+        throw new IllegalStateException("another Metrics instance is the default")
+      val _ = defaultComposite.add(registry)
+      try body
+      finally
+        val _ = defaultComposite.remove(registry)
+    }
 
   /** Get metrics for a specific instance. Falls back to default if not registered. */
   def forInstance(instanceId: String): Metrics =

@@ -25,13 +25,12 @@ class MetricsContainerRegistrySpec extends AnyFlatSpec with Matchers:
     EarlyHolder.Plain.increment(2.0)
 
     val exported = Metrics("app", new SimpleMeterRegistry())
-    withClue("another default was installed: ")(Metrics.becomeDefaultForTest(exported) shouldBe true)
-    try
+    Metrics.withDefaultForTest(exported) {
       EarlyHolder.Plain.increment(3.0)
       EarlyHolder.Tagged.increment()
       EarlyHolder.Gauged.set(7L)
       exported.registry.get("app.b427.early.plain").counter().count() shouldBe 3.0
       exported.registry.get("b427.early.tagged").tag("kind", "x").counter().count() shouldBe 1.0
       exported.registry.get("b427.early.gauge").gauge().value() shouldBe 7.0
-    finally Metrics.unseatDefault(exported)
+    }
   }

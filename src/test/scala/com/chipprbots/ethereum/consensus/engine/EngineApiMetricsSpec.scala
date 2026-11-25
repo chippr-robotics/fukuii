@@ -1,6 +1,8 @@
 package com.chipprbots.ethereum.consensus.engine
 
+import io.micrometer.core.instrument.FunctionCounter
 import io.micrometer.core.instrument.Gauge
+import io.micrometer.core.instrument.Meter
 import org.scalatest.OptionValues
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -18,10 +20,14 @@ class EngineApiMetricsSpec extends AnyFlatSpec with Matchers with OptionValues:
 
   private val metrics = EngineApiMetrics
 
-  private def read(gauge: Gauge): Long = gauge.value().toLong
+  // The counts are counters since B-200 (so `rate()` may be taken of them); the payload block and timestamp are gauges.
+  private def read(meter: Meter): Long = meter match
+    case c: FunctionCounter => c.count().toLong
+    case g: Gauge           => g.value().toLong
+    case other              => fail(s"unexpected meter $other")
 
-  /** The ten gauges the object registered before slice 5, in their declaration order. */
-  private val existing: Seq[Gauge] = Seq(
+  /** The ten meters the object registered before slice 5, in their declaration order. */
+  private val existing: Seq[Meter] = Seq(
     metrics.newPayloadTotal,
     metrics.newPayloadValid,
     metrics.newPayloadSyncing,
@@ -34,13 +40,13 @@ class EngineApiMetricsSpec extends AnyFlatSpec with Matchers with OptionValues:
     metrics.latestPayloadTimestamp
   )
 
-  /** The gauges slice 5 adds. */
-  private val added: Seq[Gauge] = Seq(metrics.newPayloadAccepted, metrics.authFailures)
+  /** The meters slice 5 adds. */
+  private val added: Seq[Meter] = Seq(metrics.newPayloadAccepted, metrics.authFailures)
 
-  private def names(gauges: Seq[Gauge]): Seq[String] = gauges.map(_.getId.getName)
+  private def names(gauges: Seq[Meter]): Seq[String] = gauges.map(_.getId.getName)
 
   /** How much `body` moved each of `gauges`. */
-  private def deltas(gauges: Gauge*)(body: => Unit): Seq[Long] =
+  private def deltas(gauges: Meter*)(body: => Unit): Seq[Long] =
     val before = gauges.map(read)
     body
     gauges.map(read).zip(before).map((after, was) => after - was)
@@ -97,7 +103,7 @@ class EngineApiMetricsSpec extends AnyFlatSpec with Matchers with OptionValues:
 
   // ---- the existing series keep their names and their values -----------------------------------------------------
 
-  "The existing gauges" should "keep their ten names" taggedAs (UnitTest) in {
+  "The existing meters" should "keep their ten names" taggedAs (UnitTest) in {
     names(existing) shouldBe Seq(
       "app.engine_newpayload_total",
       "app.engine_newpayload_valid",
@@ -110,6 +116,14 @@ class EngineApiMetricsSpec extends AnyFlatSpec with Matchers with OptionValues:
       "app.engine_latest_payload_block",
       "app.engine_latest_payload_timestamp"
     )
+  }
+
+  it should "be counters where they count, and gauges only for the payload's block and timestamp (B-200)" taggedAs (
+    UnitTest
+  ) in {
+    val (gauges, counters) = (existing ++ added).partition(_.isInstanceOf[Gauge])
+    names(gauges) shouldBe Seq("app.engine_latest_payload_block", "app.engine_latest_payload_timestamp")
+    all(counters) shouldBe a[FunctionCounter]
   }
 
   // B-193: ACCEPTED, and any status the match did not name, was counted as INVALID.
@@ -143,7 +157,7 @@ class EngineApiMetricsSpec extends AnyFlatSpec with Matchers with OptionValues:
 
   // ---- the new series --------------------------------------------------------------------------------------------
 
-  "The new gauges" should "have names no existing gauge has, and none a Prometheus exporter would rename" taggedAs (
+  "The new meters" should "have names no existing gauge has, and none a Prometheus exporter would rename" taggedAs (
     UnitTest
   ) in {
     names(added) shouldBe Seq("app.engine_newpayload_accepted", "app.engine_auth_failures")
@@ -157,7 +171,7 @@ class EngineApiMetricsSpec extends AnyFlatSpec with Matchers with OptionValues:
 
   it should "carry no tag: one series each, so request content can never make a new one" taggedAs (UnitTest) in {
     for gauge <- added do
-      val found = metrics.metrics.registry.find(gauge.getId.getName).gauges()
+      val found = metrics.metrics.registry.find(gauge.getId.getName).meters()
       found should have size 1
       found.iterator().next().getId.getTags.isEmpty shouldBe true
   }

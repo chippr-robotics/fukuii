@@ -141,7 +141,7 @@
       "pluginVersion": "7.3.6",
       "targets": [
         {
-          "expr": "rate(app_sync_block_number_gauge[$__rate_interval]) * 60",
+          "expr": "deriv(app_sync_block_number_gauge[$__rate_interval]) * 60",
           "interval": "",
           "legendFormat": "Blocks/min",
           "refId": "A"

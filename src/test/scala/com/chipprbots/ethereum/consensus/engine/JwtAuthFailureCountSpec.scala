@@ -46,9 +46,9 @@ class JwtAuthFailureCountSpec extends AnyFlatSpec with Matchers with ScalatestRo
 
   /** How many failures `request` added to the count, and what the client was told. */
   private def counted(request: HttpRequest): (Long, StatusCode, String) =
-    val before = EngineApiMetrics.authFailures.value().toLong
+    val before = EngineApiMetrics.authFailures.count().toLong
     val (code, body) = request ~> route ~> check((status, responseAs[String]))
-    (EngineApiMetrics.authFailures.value().toLong - before, code, body)
+    (EngineApiMetrics.authFailures.count().toLong - before, code, body)
 
   "The authentication failure count" should "stay put for a valid token" taggedAs (UnitTest) in {
     val (added, code, body) = counted(bearer(signed(s"""{"iat":${Instant.now().getEpochSecond}}""")))
@@ -77,7 +77,7 @@ class JwtAuthFailureCountSpec extends AnyFlatSpec with Matchers with ScalatestRo
   }
 
   it should "count every failed request, not every distinct reason" taggedAs (UnitTest) in {
-    val before = EngineApiMetrics.authFailures.value().toLong
+    val before = EngineApiMetrics.authFailures.count().toLong
     for _ <- 1 to 5 do Post("/") ~> route ~> check(status shouldBe StatusCodes.Unauthorized)
-    EngineApiMetrics.authFailures.value().toLong - before shouldBe 5L
+    EngineApiMetrics.authFailures.count().toLong - before shouldBe 5L
   }
