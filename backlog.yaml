@@ -1253,7 +1253,7 @@ items:
   - id: B-119
     title: Triage the ~50 open GitHub issues into the tracker (add them, or close the done and superseded ones)
     priority: P2
-    status: claimed
+    status: in-progress
     area: triage
     size: M
     opened: 2026-11-08
@@ -1264,7 +1264,8 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T19:51:36Z
-      heartbeat: 2026-11-25T19:51:36Z
+      heartbeat: 2026-11-25T19:54:54Z
+    notes: "2026-11-25 in-progress: wave 7: triage report in progress"
   - id: B-121
     title: ChainWeightReconcile waits forever at a height with no number index entry; surface it or walk parent links
     priority: P3
