@@ -5483,22 +5483,18 @@ items:
   - id: B-517
     title: "eth_simulateV1 pre-Amsterdam: a code override at the 4788/2935 contract runs no code (direct writes); geth's system call runs the override"
     priority: P3
-    status: review
+    status: done
     area: rpc
     size: S
     opened: 2026-11-24
+    closed: 2026-11-25
     refs: [B-180]
     links:
       prs: [2117]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-24T22:36:21Z
-      heartbeat: 2026-11-25T02:56:52Z
     notes: |-
-      2026-11-24 review: consensus path (ETH import); merge held for owner decision
       2026-11-25 review: user: eye runs hive consume-rlp/engine Cancun-Osaka (branch vs staging) before merge
       2026-11-25 review: hive eip4788|eip2935 subset, branch=staging: consume-rlp 345/345 both, consume-engine 155/155 both (runs 45525591342/45525602846, 45525596856/45525607903); awaiting user go-ahead to merge
+      2026-11-25 done: merged c14f75663 with user go-ahead; hive eip4788|eip2935 subset identical to staging (rlp 345/345, engine 155/155)
   - id: B-518
     title: StxLedger estimator ignores maxUsedGas (geth gasestimator.go:155 uses it)
     priority: P3
