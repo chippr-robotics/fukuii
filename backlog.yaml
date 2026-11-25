@@ -5494,11 +5494,11 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-24T22:36:21Z
-      heartbeat: 2026-11-24T23:19:06Z
+      heartbeat: 2026-11-25T01:24:22Z
     notes: |-
-      Found in B-180. Import's pre-Amsterdam preamble writes the slots directly (valid only with the canonical code). geth simulate runs ProcessBeaconBlockRoot/ProcessParentBlockHash as EVM calls after overrides, so overridden code runs there. Needs a decision: a simulate-only system-call preamble would be a second implementation (proposer-import-parity Rule 2).
       2026-11-24 in-progress: beacon: parity-rule decision first
       2026-11-24 review: consensus path (ETH import); merge held for owner decision
+      2026-11-25 review: user: eye runs hive consume-rlp/engine Cancun-Osaka (branch vs staging) before merge
   - id: B-518
     title: StxLedger estimator ignores maxUsedGas (geth gasestimator.go:155 uses it)
     priority: P3
