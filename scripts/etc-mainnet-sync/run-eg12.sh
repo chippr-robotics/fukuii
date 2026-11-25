@@ -245,7 +245,9 @@ alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 # --- The node's [SNAP-PEERS] start lines (T242) ---------------------------------------------------------------------
 # Matched exactly as the code writes them (staging, T242 #1940). PathLiveSync.SnapPeerCount.describe:
 #   s"$snapCapable snap-capable peer(s) on this chain ($declaredSnapCapable of them declared by the operator, " +
-#     s"static-nodes.json or sync.snap-sync.snap-server-peers), of $connected connected"
+#     s"static-nodes.json, sync.snap-sync.snap-server-peers or admin_addPeer), of $connected connected"
+# (the list of ways to declare a peer is matched loosely, [^)]*, so a wording change there, as in B-453 #2031, does not
+# hide the line)
 # SyncController.checkingSnapStart, where SNAP begins (INFO, or WARN with no count):
 #   val against = if c.snapCapable < min then s"${c.snapCapable} < min $min" else s"min-snap-peers = $min"
 #   log.info(s"[SNAP-PEERS] SNAP starts with ${c.describe}; $against")
@@ -264,7 +266,7 @@ alive() { [ -n "${1:-}" ] && kill -0 "$1" 2>/dev/null; }
 # snap_peers_fields: log lines on stdin -> one "KIND SNAP DECLARED CONNECTED MIN" line per start line ("-" where the
 # line has no figure). KIND: begin (at or over min), begin-under-min, begin-unknown (no count), regular-sync (the
 # fallback), waiting (the wait's first line and each "Still waiting" line).
-SNAP_DESC='([0-9]+) snap-capable peer\(s\) on this chain \(([0-9]+) of them declared by the operator, static-nodes\.json or sync\.snap-sync\.snap-server-peers\), of ([0-9]+) connected'
+SNAP_DESC='([0-9]+) snap-capable peer\(s\) on this chain \(([0-9]+) of them declared by the operator, [^)]*\), of ([0-9]+) connected'
 snap_peers_fields() {
   local d=$SNAP_DESC
   sed -nE \
