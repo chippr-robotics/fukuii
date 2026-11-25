@@ -2915,17 +2915,18 @@ items:
   - id: B-324
     title: Confirm against ECIP-1121 that Olympia admits EIP-7702 (type 4) transactions, as TxTypeGate does, before Olympia is scheduled
     priority: P2
-    status: in-progress
+    status: review
     area: consensus
     size: S
     opened: 2026-11-17
     refs: []
-    links: {}
+    links:
+      prs: [2127]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T17:15:00Z
-      heartbeat: 2026-11-25T17:18:57Z
+      heartbeat: 2026-11-25T17:57:42Z
     notes: |-
       forge, review of B-323 (2026-11-17): TxTypeGate admits types 2 and 4 from olympiaBlockNumber; the ECIP-1121 list forge had did not include EIP-7702; the local ECIP clone was not on the host.
       2026-11-25 in-progress: wave 5 forge, fix/b164-etc-consensus
