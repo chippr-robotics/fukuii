@@ -234,6 +234,67 @@ class ForkChoiceManagerSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     ) shouldBe Left(ForkChoiceManager.Refusal.Syncing)
     busy.getHeadBlockHash shouldBe None
 
+  /** A writer on the unified layout whose every move of the head is refused with `refusal`. */
+  private def refusingWriter(refusal: => Throwable): BlockchainWriter =
+    new BlockchainWriter(null, null, null, null, null, null, null, null, pathState = Some(null)):
+      override def stateFailedClosed: Boolean = false
+      override def finalizedOfTheState: Option[com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock] = None
+      override def moveHeadInPlace(
+          target: BlockHeader,
+          reader: com.chipprbots.ethereum.domain.BlockchainReader,
+          refuse: com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan.Chunk => Option[String],
+          finalized: Option[com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock],
+          admit: com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan => Option[String],
+          forkChoice: Boolean
+      ): com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.MoveOutcome = throw refusal
+
+  // B-317: a head refused -38002 (its chain would reverse the finalized block) is an inconsistent fork choice, not a
+  // head to sync to: it is not published to SNAP as a pivot hint. Other refusals on the same layout still publish it.
+  it should "not publish a head refused for the finalized block (-38002) to the listener as a pivot hint (B-317)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Fixture:
+    val probe: TestProbe = TestProbe()
+    val refusing = new ForkChoiceManager(
+      blockchainReader,
+      refusingWriter(
+        new com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep(
+          com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal.Finalized,
+          "the finalized block 12000 is not on the head's chain"
+        )
+      )
+    )
+    refusing.setListener(probe.ref)
+
+    refusing.applyForkChoiceState(
+      ForkChoiceState(knownHeadHash, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash)
+    ) should matchPattern { case Left(ForkChoiceManager.Refusal.FinalizedReversed(_)) => }
+    refusing.getHeadBlockHash shouldBe None
+    probe.expectNoMessage(scala.concurrent.duration.Duration(200, "millis"))
+
+  it should "still publish a known head on the unified layout when it is refused for another reason (SYNCING)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Fixture:
+    val probe: TestProbe = TestProbe()
+    val busy = new ForkChoiceManager(
+      blockchainReader,
+      refusingWriter(
+        new com.chipprbots.ethereum.db.storage.pathstate.StateBusy(
+          "the adoption on thread 'adopter'",
+          "the move of the head was not made"
+        )
+      )
+    )
+    busy.setListener(probe.ref)
+
+    busy.applyForkChoiceState(
+      ForkChoiceState(knownHeadHash, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash)
+    ) shouldBe Left(ForkChoiceManager.Refusal.Syncing)
+    val received: BeaconHead = probe.expectMsgType[ForkChoiceManager.BeaconHead]
+    received.headHash shouldBe knownHeadHash
+    received.knownHeader.map(_.number) shouldBe Some(BigInt(12345))
+
   // B-126 (#1654 follow-up). A payload stored by its hash only keeps the weight newPayload derived from its parent's
   // weight then. ChainWeightReconcile repairs canonical weights only (its finish checks the mapped heights), so a side
   // payload stored while it repairs, and made canonical by a later fork choice, would keep its parent's unrepaired
