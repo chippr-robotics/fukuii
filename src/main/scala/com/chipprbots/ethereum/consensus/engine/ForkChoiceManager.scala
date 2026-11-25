@@ -111,15 +111,23 @@ class ForkChoiceManager(
     // Publish to the listener regardless of head-known status — SNAP needs the
     // unknown-head case as its trigger to start / re-pivot. The listener message
     // is fire-and-forget; the rest of this method's behavior is unchanged.
-    publishBeaconHead(newState.headBlockHash, maybeHeader)
+    // B-317: a known head on the unified layout is published once its move is decided, and not at all when it is
+    // refused for the finalized block (-38002): an inconsistent fork choice is no pivot hint. That is the only branch
+    // that refuses -38002; every other is published first, as before.
+    val decidedFirst = maybeHeader.isDefined && blockchainWriter.holdsStateInPlace
+    if !decidedFirst then publishBeaconHead(newState.headBlockHash, maybeHeader)
 
     if maybeHeader.isEmpty then
       log.info(s"Fork choice head ${newState.headBlockHash} not known yet (SYNCING)")
       Left(ForkChoiceManager.Refusal.Syncing)
     else if blockchainWriter.holdsStateInPlace then
-      maybeHeader.fold[Either[ForkChoiceManager.Refusal, Unit]](Left(ForkChoiceManager.Refusal.Syncing))(
-        confirmHeldHead(newState, _)
-      )
+      maybeHeader.fold[Either[ForkChoiceManager.Refusal, Unit]](Left(ForkChoiceManager.Refusal.Syncing)) { header =>
+        val decided = confirmHeldHead(newState, header)
+        decided match
+          case Left(ForkChoiceManager.Refusal.FinalizedReversed(_)) => ()
+          case _ => publishBeaconHead(newState.headBlockHash, maybeHeader)
+        decided
+      }
     else
       log.info(
         s"Fork choice updated: head=${newState.headBlockHash}, " +

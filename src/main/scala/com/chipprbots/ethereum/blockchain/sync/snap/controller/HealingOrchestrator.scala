@@ -510,34 +510,38 @@ private[snap] trait HealingOrchestrator
             clHeadNumber = clPivotHint.flatMap(_.knownHeader).map(_.number.value),
             networkBest = networkBest
           )
-          // Refresh cadence (U1): a serve root is fetched at `networkBest − margin`, so it STARTS `margin` blocks
-          // behind the head. We refresh only once it has drifted a FULL window further back — i.e. when it is
-          // > 2×margin behind the current head — giving ~margin blocks of runway between the ~1s peer round-trips
-          // (never per-block). An unset lastHealingServeRootBlock means the coordinator is still fetching against
-          // the walk root (coupled), so engage immediately.
-          val stale = lastHealingServeRootBlock match
-            case Some(lastBlock) => (staleClockNow - lastBlock) > (HealingServeRootMarginBlocks * 2)
-            case None            => true
+          // Refresh cadence (HealPolicy.healRootStale). Moving-root heal (B-033): re-peg once the heal root (the
+          // pivot) is more than PivotPolicy.HealRepegAgeBlocks (112, 7/8 of the peers' 128-block serve window)
+          // below the clock, and the clock has moved since the last re-peg this check asked for. The serve-root path
+          // (U1): a serve root is fetched at `networkBest − margin`, so it STARTS `margin` blocks behind the head; it
+          // is refreshed once the head is > 2×margin past the last one pushed, giving ~margin blocks of runway between
+          // the ~1s peer round-trips (never per-block). An unset lastHealingServeRootBlock there means the coordinator
+          // is still fetching against the walk root (coupled), so engage immediately.
+          val rootAge: Option[BigInt] = pivotBlock.map(staleClockNow - _)
+          val stale = SNAPSyncController.healRootStale(
+            movingRootDeltaHeal = snapSyncConfig.movingRootDeltaHeal,
+            staleClockNow = staleClockNow,
+            rootBlock = pivotBlock,
+            lastCheckClock = lastHealingServeRootBlock,
+            margin = HealingServeRootMarginBlocks
+          )
           if stale then
             if snapSyncConfig.movingRootDeltaHeal then
               // #1374 T009/C4: re-peg the single heal root to a fresh served root. refreshPivotInPlace selects a
-              // canonical header (networkBest − margin), fetches it, and emits HealingPivotRefreshed via
-              // completePivotRefreshWithStateRoot — moving completeness AND fetch (one root) while RETAINING every
-              // persisted verified node and resetting verificationPassComplete so a fresh pruned descent gates
-              // completion against the new root. Record the bookkeeping baseline via the SAME rule
-              // staleReferenceHead used to pick the clock (see lastHealingServeRootBlockToRecord's doc — BUG-BC3
-              // follow-up): non-CL-anchored checks (ETC/pre-merge, or PoS before a CL hint arrives) MUST keep
-              // recording `target`, byte-identical to base, or the effective re-trigger threshold silently
-              // doubles (networkBest must then drift > 2×margin instead of > margin, roughly doubling the
-              // interval between re-pegs on ETC mainnet); the actual root lands when the refresh settles.
-              lastHealingServeRootBlock = Some(
-                SNAPSyncController.lastHealingServeRootBlockToRecord(staleClockNow, networkBest, target)
-              )
+              // canonical header (networkBest − margin; on PoS the CL head − pivotBlockOffset), fetches it, and emits
+              // HealingPivotRefreshed via completePivotRefreshWithStateRoot — moving completeness AND fetch (one root)
+              // while RETAINING every persisted verified node and resetting verificationPassComplete so a fresh pruned
+              // descent gates completion against the new root. Record the clock this check was made at (B-033): the
+              // next check needs the root still too old AND the clock moved past this value, so a refresh that finds
+              // no newer root is not asked again on every 1-s tick, and a frozen CL clock asks once (BUG-BC3). The
+              // root's own age, not this value, decides when the root is too old.
+              lastHealingServeRootBlock = Some(staleClockNow)
               ctx.log.info(
                 // clock is CL-anchored iff it differs from networkBest (see staleReferenceHead); both are logged
                 // so an operator can tell which source drove this check without guessing from the numbers alone.
-                s"[HEAL-REPEG] Heal root stale (clock=$staleClockNow, networkBest=$networkBest, target=$target, " +
-                  s"margin=$HealingServeRootMarginBlocks, lastRepegBlock=${lastHealingServeRootBlock.getOrElse("none")}) " +
+                s"[HEAL-REPEG] Heal root stale (clock=$staleClockNow, networkBest=$networkBest, " +
+                  s"root=${pivotBlock.getOrElse("none")} age=${rootAge.getOrElse("unknown")} > " +
+                  s"${PivotPolicy.HealRepegAgeBlocks}, target=$target) " +
                   s"— re-pegging the single heal root via refreshPivotInPlace (#1374, moving-root delta heal)."
               )
               // countsTowardHealBudget=false: this is a proactive "is there a fresher CL pivot" probe, not a

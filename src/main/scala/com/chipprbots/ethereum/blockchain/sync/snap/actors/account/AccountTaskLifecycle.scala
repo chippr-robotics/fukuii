@@ -335,11 +335,6 @@ private[actors] trait AccountTaskLifecycle extends AccountTaskLifecycleApi:
     val newCount = task.requeueCount + 1
     com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.incrementRequestRetry()
     if newCount > AccountRangeCoordinator.MaxRequeuesPerTask then
-      log.error(
-        s"Account task ${task.rangeString} exhausted requeue budget " +
-          s"($newCount > ${AccountRangeCoordinator.MaxRequeuesPerTask}, last reason: $reason). " +
-          s"Escalating PivotStateUnservable to controller; task will be retried on the next root."
-      )
       // Reset the counter so the next pivot has a fresh budget; preserve task position.
       pendingTasks.enqueue(task.copy(requeueCount = 0))
       // Gate the escalation on pivotRefreshRequested so only the FIRST task to exhaust its
@@ -347,7 +342,16 @@ private[actors] trait AccountTaskLifecycle extends AccountTaskLifecycleApi:
       // serve window expires, producing a PivotStateUnservable burst (observed ~50 in one log).
       // pivotRefreshRequested is cleared in the PivotRefreshed handler, so each fresh pivot
       // gets a fresh escalation.
+      // B-031: the exhaustion is logged once per pivot cycle, at WARN, with the escalation: the root aged out of the
+      // peers' serve window and the controller moves it, which is recovered from without operator action. It was an
+      // ERROR per exhaustion, 338 lines in the 4 minutes T063 (2026-11-05) took to move its root.
       if !pivotRefreshRequested then
+        log.warn(
+          s"Account task ${task.rangeString} exhausted requeue budget " +
+            s"($newCount > ${AccountRangeCoordinator.MaxRequeuesPerTask}, last reason: $reason). " +
+            s"Escalating PivotStateUnservable to controller; tasks will be retried on the next root " +
+            s"(further exhaustions on this root are logged at DEBUG)."
+        )
         pivotRefreshRequested = true
         // Requeues come from timeouts (scarcity) as well as empty-without-proof answers (stateless). Count toward
         // restart only when the pool holds actual stateless/snapless evidence.
@@ -360,6 +364,12 @@ private[actors] trait AccountTaskLifecycle extends AccountTaskLifecycleApi:
           reason = s"task ${task.rangeString} hit MaxRequeuesPerTask: $reason",
           consecutiveEmptyResponses = AccountRangeCoordinator.MaxRequeuesPerTask,
           cause = cause
+        )
+      else
+        log.debug(
+          s"Account task ${task.rangeString} exhausted requeue budget " +
+            s"($newCount > ${AccountRangeCoordinator.MaxRequeuesPerTask}, last reason: $reason); " +
+            s"PivotStateUnservable already escalated for this root, task will be retried on the next root."
         )
     else
       log.info(

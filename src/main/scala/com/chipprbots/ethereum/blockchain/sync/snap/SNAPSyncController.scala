@@ -415,7 +415,9 @@ private class SNAPSyncControllerImpl(
   // Proactive pivot rolling: keep pivot within core-geth's 128-block snapshot window.
   // ETC network is predominantly core-geth peers; once the pivot ages beyond 128 blocks,
   // all external peers respond with accounts=[], proof=[] and only local Besu can serve.
-  // Rolling proactively at 100 blocks preserves all downloaded state (unlike go-ethereum).
+  // Rolling proactively at 96 blocks (PivotPolicy.RootRollAgeBlocks, 3/4 of the window; B-031)
+  // preserves all downloaded state (unlike go-ethereum) and leaves the header fetch and the
+  // readiness probe a quarter of the window.
   var lastProactivePivotBlock: Option[BigInt] = None
 
   // Roll target margin: a proactive/reactive roll picks networkBest - max(pivotBlockOffset,
@@ -423,8 +425,8 @@ private class SNAPSyncControllerImpl(
   // Rolling to the live tip (pivot-block-offset=0) probes a root core-geth peers haven't
   // indexed yet (their snapshot lags head by ~128 blocks) → readiness probe returns
   // "not indexed" forever → the pivot freezes (observed 2026-06-01: ETC stalled 70+ min
-  // at 16.8M accounts). Margin ≈ half the serve window keeps the new pivot servable with
-  // ~50 blocks of runway before it ages past the 100-block roll trigger.
+  // at 16.8M accounts). The roll lands max(pivotBlockOffset, margin) = 64 blocks below the
+  // head by default, which leaves 32 blocks of runway before the 96-block roll trigger.
   val SnapServeWindowMargin: BigInt = BigInt(50)
 
   // Pivot readiness probe: before committing a proactive pivot roll, we probe one peer with
@@ -1517,7 +1519,7 @@ object SNAPSyncController:
   export controller.PivotPolicy.{clPivotNotYetAdvanced, MaxPeerTipLead}
   export controller.PivotPolicy.{healPivotAfterExcluded, pivotPassesFreshnessFloor, unservablePivotTarget}
   export controller.HealPolicy.{bytecodeRecoveryComplete, healRepegSuppressedByLocalWalk}
-  export controller.HealPolicy.{lastHealingServeRootBlockToRecord, shouldSkipHealingAfterDownloads, staleReferenceHead}
+  export controller.HealPolicy.{healRootStale, shouldSkipHealingAfterDownloads, staleReferenceHead}
   export controller.ResumePolicy.{checkResumable, fillResumeLayout, taskFilePaths}
   export controller.SnapPeerPolicy.{servesSnapState, snapExclusionReason, SnapExclusionAtGenesis}
   export controller.SnapPeerPolicy.{SnapExclusionLogIntervalMs, SnapExclusionMinLogIntervalMs}

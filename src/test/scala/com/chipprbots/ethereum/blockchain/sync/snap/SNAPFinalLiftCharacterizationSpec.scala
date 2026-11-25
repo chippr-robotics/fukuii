@@ -25,9 +25,9 @@ import com.chipprbots.ethereum.testing.Tags.*
   *     with task files is persisted as the versioned checkpoint at the current root and the tracked pivot, and sweeps
   *     superseded task files once per record; a durable snapshot without task files and a non-durable snapshot are kept
   *     in memory only, and the next launch resumes from them; the tracked pivot follows a pivot refresh;
-  *   - the proactive pivot-roll trigger inside `checkDownloadStagnationArms` (M7b): the age boundary (100 blocks does
-  *     not roll, 101 does), the recently-rolled window (50 blocks past the last roll does not roll, 51 does), the late
-  *     storage stage (80 % of contracts done does not roll in `ByteCodeAndStorageSync`, 79 % does), no roll in
+  *   - the proactive pivot-roll trigger inside `checkDownloadStagnationArms` (M7b): the age boundary (96 blocks does
+  *     not roll, 97 does; B-031), the recently-rolled window (32 blocks past the last roll does not roll, 33 does), the
+  *     late storage stage (80 % of contracts done does not roll in `ByteCodeAndStorageSync`, 79 % does), no roll in
   *     `StateHealing`, and no second roll while the first roll's readiness probe is in flight;
   *   - the stop helpers (M9b) at SNAP finalisation: the state-sync child is stopped, the ChainDownloader is not.
   *
@@ -293,43 +293,44 @@ class SNAPFinalLiftCharacterizationSpec
   // ── The proactive pivot-roll trigger (inside checkDownloadStagnationArms) ────────────────────
 
   "SNAPSyncController's proactive pivot-roll trigger" should
-    "not roll a pivot 100 blocks behind the network best, and roll one 101 blocks behind" taggedAs UnitTest in {
+    "not roll a pivot 96 blocks behind the network best, and roll one 97 blocks behind (B-031)" taggedAs UnitTest in {
       val f = new SnapControllerFixture(testKit)
       val entry = f.enterAccountSync(height = 1_000)
       val snap = entry.snap
       val pivot = entry.header.number.value // 936
       Using.resource(new SnapLogCapture) { log =>
-        f.pollWith(snap, f.peersAt(height = (pivot + 100).toInt))
+        f.pollWith(snap, f.peersAt(height = (pivot + 96).toInt))
         tick(f, snap)
         log.contains(RollLine) shouldBe false
 
-        f.pollWith(snap, f.peersAt(height = (pivot + 101).toInt))
+        f.pollWith(snap, f.peersAt(height = (pivot + 97).toInt))
         tick(f, snap)
-        log.contains(s"$RollLine: pivot=$pivot network=${pivot + 101} age=101") shouldBe true
+        log.contains(s"$RollLine: pivot=$pivot network=${pivot + 97} age=97") shouldBe true
         log.count(RollLine) shouldBe 1
       }
     }
 
-  it should "not roll within 50 blocks of the last committed refresh, and roll 51 blocks past it" taggedAs UnitTest in {
+  // B-031: the spacing was a fixed 50 blocks, which held every roll after the first back to an age of 115
+  it should "not roll within 32 blocks of the last committed refresh, and roll 33 blocks past it" taggedAs UnitTest in {
     val f = new SnapControllerFixture(testKit)
     val entry = f.enterAccountSync(height = 1_000)
     val snap = entry.snap
     val newPivot = refreshPivotTo1200(f, entry, root(0x44)) // 1,136; last roll recorded at 1,136 + 64 = 1,200
     Using.resource(new SnapLogCapture) { log =>
-      f.pollWith(snap, f.peersAt(height = 1_250)) // age 114, 50 past the last roll
+      f.pollWith(snap, f.peersAt(height = 1_232)) // age 96, 32 past the last roll
       tick(f, snap)
       log.contains(RollLine) shouldBe false
 
-      f.pollWith(snap, f.peersAt(height = 1_251)) // age 115, 51 past the last roll
+      f.pollWith(snap, f.peersAt(height = 1_233)) // age 97, 33 past the last roll
       tick(f, snap)
-      log.contains(s"$RollLine: pivot=$newPivot network=1251 age=115") shouldBe true
+      log.contains(s"$RollLine: pivot=$newPivot network=1233 age=97") shouldBe true
     }
   }
 
   it should "not roll in ByteCodeAndStorageSync once 80% of the storage contracts are done, and roll at 79%" taggedAs UnitTest in {
     val f = new SnapControllerFixture(testKit)
     val snap = f.enterStorageResume()
-    val network = Pivot + 101
+    val network = Pivot + 97
     Using.resource(new SnapLogCapture) { log =>
       f.pollWith(snap, f.peersAt(height = network.toInt))
       snap ! SNAPSyncController.ProgressStorageContracts(80, 100)
@@ -338,7 +339,7 @@ class SNAPFinalLiftCharacterizationSpec
 
       snap ! SNAPSyncController.ProgressStorageContracts(79, 100)
       tick(f, snap)
-      log.contains(s"$RollLine: pivot=$Pivot network=$network age=101") shouldBe true
+      log.contains(s"$RollLine: pivot=$Pivot network=$network age=97") shouldBe true
     }
   }
 
