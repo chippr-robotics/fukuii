@@ -5776,3 +5776,13 @@ items:
     refs: []
     links: {}
     notes: deferred by beacon in wave 4C (#2120)
+  - id: B-535
+    title: "PoS hash layout: SYNC-FORK resolver failures still blind-rewind 128 blocks unweighed (B-347 covered PoW only)"
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: "beacon; follow-up of #2121"
