@@ -239,7 +239,7 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T19:51:16Z
-      heartbeat: 2026-11-25T19:51:16Z
+      heartbeat: 2026-11-25T23:09:40Z
     notes: |-
       (A) 13 E2EStateTestSpec inject state with no txs; (B) reorg tests mine before startRegularSync; (C) getMptForBlock starts from EmptyRootHash.
       Also correct docs/troubleshooting/ROOT_CAUSE_STATE_SYNC_TIMEOUTS.md.
