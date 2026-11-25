@@ -5975,3 +5975,13 @@ items:
     refs: ["#1561"]
     links: {}
     notes: broad Try(...).isFailure still in FinalizationPolicy
+  - id: B-546
+    title: "SNAP heap watchdog: write off stale in-transit reservations before the heap-pressure early return, so max-pause escape fires"
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-25
+    refs: ["#1506"]
+    links: {}
+    notes: SnapIntakeBudget.scala:70-73; fake-clock test
