@@ -17,7 +17,8 @@ No `Thread.sleep` anywhere; async code is tested with cats-effect `TestControl` 
 
 **Organization**: Phase 1 setup, Phase 2 foundational (schema, codecs, vectors, GT-2 table — alignment review phase
 A), then one phase per user story (US1 → US2 → US3), then polish. MVP = Phase 2 + Phase 3 (US1 at unit level with
-the file sink and the reference consumer).
+the file sink and the reference consumer). *Amended 2026-11-24*: T092–T114 add the four new record types to Phase 2,
+then US4 (pool records, Phase 5a) and US5 (chain start, safe head, Phase 5b); existing IDs are unchanged.
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -108,7 +109,8 @@ ethereum/`, integration `src/it/scala/com/chipprbots/ethereum/`, resources `src/
 - [ ] T015 Add the `withdrawals` codec to `E/export/record/RecordCodec.scala` (`[ index, validatorIndex, address,
       amount ]` via `WithdrawalEnc`, `E/domain/Withdrawal.scala:27`; `None` encodes as `[]`) and the `BodyRootMismatch`
       check of `contracts/record-schema.md` §3 rule 5 used by `RecordBuilder` (T029); makes T008 and T009 pass
-- [ ] T016 Generate the vector set into `src/test/resources/export/golden/v1/` (13 `.hex` files + `manifest.json` per
+- [ ] T016 Generate the vector set into `src/test/resources/export/golden/v1/` (18 `.hex` files since the amendment, the
+      five for types 4–7 from T095; + `manifest.json` per
       `contracts/golden-vectors.md` §2, including `block-typed-body-withdrawals.hex` and `block-etc-uncle.hex`) with
       `-Dexport.golden.write=true` from hand-constructed records in `T/export/record/GoldenVectorInputs.scala`; commit
       the files; T005 must pass in compare mode
@@ -127,6 +129,23 @@ ethereum/`, integration `src/it/scala/com/chipprbots/ethereum/`, resources `src/
       condition in the table's Status line (no code; the reviewer reads the cited lines on the current tree)
 - [ ] T023 GT-2 sign-off with `beacon`: rows X0, X1, H1–H3, F1; same recording
 - [ ] T024 Open slice-0 PR: contracts, codec, vectors, ADR draft, signed table; reviewers vault, forge, beacon, prism
+
+### Amendment 2026-11-24: record types 4–7 (before T018 freezes GT-1)
+
+- [ ] T092 [P] Write `T/export/record/PoolRecordCodecSpec.scala`: round-trip `poolAdd` and `poolRemove` for every
+      transaction type (legacy, `0x01`–`0x04`), `source` 0–2, `reason` 0–4; `keccak(tx) == txHash`
+      (`contracts/record-schema.md` §6a rule 1); `replacedBy` non-empty iff `reason = 1`; decoding `tx` recovers type,
+      chain ID, fee fields, access list, blob hashes and authorization list unchanged
+- [ ] T093 [P] Extend `T/export/record/RecordCodecPropertySpec.scala` and `RecordSchemaRulesSpec.scala` to types 6
+      (`safe`, empty body) and 7 (`chainStart`: `blockNumber = 0`, zero `parentHash`, `iteration`); a `chainStart`
+      with a non-zero `blockNumber` is rejected
+- [ ] T094 Extend `E/export/record/Record.scala` (`RecordType` `PoolAdd`, `PoolRemove`, `Safe`, `ChainStart`;
+      `PoolStreamPos(nodeId, session, seq)`, `PoolAddBody`, `PoolRemoveBody`, `enum PoolSource`,
+      `enum PoolRemoveReason`, `ChainStartBody(iteration)`) and `E/export/record/RecordCodec.scala` (encode/decode,
+      the `tx` item through T013's codec); makes T092–T093 pass
+- [ ] T095 Add `safe-eth.hex`, `chain-start-ephemery.hex`, `pool-add-dynamic-fee.hex`, `pool-remove-replaced.hex`,
+      `pool-remove-evicted.hex` to the vector set and `manifest.json` (`contracts/golden-vectors.md` §2); T018's review
+      covers them
 
 **Checkpoint**: one format exists in code and bytes; the hook sites are named and confirmed consensus-neutral.
 
@@ -387,6 +406,82 @@ spec owner, not this plan).
 
 ---
 
+## Phase 5a: User Story 4 — Pending transactions are observable (Priority: P2; amendment 2026-11-24)
+
+**Goal**: FR-013 to FR-016, SC-006. Slice 6. Needs the Kafka sink (T072) and the config (T003).
+
+**Independent test**: quickstart US4 (submit, replace, include, reorg, evict on a dev chain; read the pool topic).
+
+### Tests first
+
+- [ ] T096 [P] [US4] Write `T/export/pool/PoolRecorderSpec.scala`: `seq` contiguous per session and assigned at build;
+      reason map wins over the cache cause; SIZE → evicted, EXPIRED → expired, other EXPLICIT → dropped;
+      `RemovalCause.REPLACED` builds nothing; reason entries are cleared by the listener
+- [ ] T097 [P] [US4] Extend `T/transactions/PendingTransactionsManagerSpec.scala` with a recording pool sink: peer
+      admit → `poolAdd(peer)`; `SubmitLocalTransaction`/`AddOrOverrideTransaction` → `poolAdd(local)` and
+      `poolRemove(replaced, replacedBy)` for the obsolete tx; `HeadReset` → `poolRemove(included)` per included tx and
+      `poolAdd(reorg)` per re-admitted tx; pool at `txPoolSize` → `evicted`; a Guava fake ticker past the timeout →
+      `expired`; blob budget → `evicted`; `ClearPendingTransactions` → `dropped`; export off → no recorder calls
+- [ ] T098 [P] [US4] Write `T/export/pool/PoolQueueSpec.scala`: `offer` never blocks (cats-effect `TestControl`);
+      a full queue drops, counts `queue_full`, and leaves a `seq` hole; a fenced or halted exporter drops as `stopped`
+- [ ] T099 [P] [US4] Write `T/export/sink/KafkaPoolSinkSpec.scala` (`MockProducer`): key = 20-byte sender, headers
+      per `contracts/topic.md` §8, a delivery timeout counts `broker` drops and never retries past the timeout
+
+### Implementation
+
+- [ ] T100 [US4] Create `E/export/pool/PoolRecorder.scala`: builds pool records from `SignedTransactionWithSender`,
+      the node's head (`BlockchainReader.getBestBlockHeader`), `session`, `seq`; reason map API for the pool actor
+- [ ] T101 [US4] Hooks P1/P2 in `E/transactions/PendingTransactionsManager.scala`: a `source` parameter on `admit`
+      (peer by default, reorg from `HeadReset`); `poolAdd` beside each `pendingTxTopic ! Publish`; set the reason map
+      in `HeadReset` (included), `addOrOverride` and `replacing` (replaced, with the new hash), `storeSidecar`
+      (evicted) before each invalidate; emit `poolRemove` from the removal listener; all `Option`-guarded, `None` when
+      pool export is off. No change to any admission decision
+- [ ] T102 [US4] Create `E/export/pool/PoolQueue.scala` (bounded, non-blocking `offer`) and the drain fiber in
+      `E/export/pool/PoolExporter.scala`; wire in `NodeBuilder` `ExportBuilder`; stop on fence like the exporter
+- [ ] T103 [US4] Create `E/export/sink/KafkaPoolSink.scala` (separate producer: `acks`, `delivery-timeout`, no
+      idempotence at `acks=1`); topic existence check at start, no partition-count requirement
+- [ ] T104 [P] [US4] Extend `E/export/ExportConfig.scala` and `export.conf` with `node-id` and the `pool` block
+      (`data-model.md` §8); `pool.enabled` requires `sink = "kafka"` (refuse to start otherwise, with a clear message)
+- [ ] T105 [P] [US4] Add `fukuii_export_pool_records_total`, `fukuii_export_pool_dropped_total{why}`,
+      `fukuii_export_pool_queue_depth` to `ExportMetrics`; `exportPoolDropped` health field
+- [ ] T106 [US4] Create `T/export/fixtures/PoolFixtures.scala` and run SC-006 in the 023 harness: expected records,
+      `seq` jump equals the drop counter after a broker outage, import p99 and admission latency within the GT-3 band
+- [ ] T107 [P] [US4] FR-019: `quickstart.md` US4 section and `docs/operations/change-record-export.md` pool topic
+      creation, gap detection and `txpool_content` resync
+- [ ] T108 [US4] Open slice-6 PR; reviewers flow (queue, actor hooks), eye (harness)
+
+**Checkpoint**: the pool is observable from Kafka with every transaction field and every removal reason.
+
+---
+
+## Phase 5b: User Story 5 — A chain reset is a record; the safe head is exported (Priority: P2; amendment)
+
+**Goal**: FR-017, FR-018, SC-007. Slice 7. Needs slice 3 (`Exporter`) and T052 (first start).
+
+### Tests first
+
+- [ ] T109 [P] [US5] Extend `T/export/ExporterSpec.scala`: on a fresh datadir the first log entry is `chainStart`,
+      then the ETC genesis finality (E5); a restart does not emit a second one; a new datadir for the same `chainKey`
+      with another chain ID emits a new one
+- [ ] T110 [P] [US5] Extend `T/consensus/engine/ForkChoiceManagerSpec.scala`: a `safe` entry only when
+      `safeBlockHash` changes and is non-zero; never below `export.finality`; no `safe` entries on the ETC family
+- [ ] T111 [P] [US5] Extend `T/export/ReferenceConsumerSpec.scala` and `ReorgFixtures` with a reset shape: blocks of
+      instance A, `chainStart` B, blocks of B from 0; the consumer closes A, reports no fault; a block number going
+      back without a `chainStart` is still a fault
+
+### Implementation
+
+- [ ] T112 [US5] Row C1 in `E/export/Exporter.scala` (`chainStart` with the iteration from spec 028's
+      `EphemeryRelease` where the chain has one, else 0; `export.chainStart`); `ReferenceConsumer` handles it
+- [ ] T113 [US5] Row S1 in `E/consensus/engine/ForkChoiceManager.scala` beside F1 (`export.safe`); add row S1 to
+      `beacon`'s GT-2 sign-off (T023)
+- [ ] T114 [US5] Row C2: spec 028's `EphemeryResetWatchdog` (`E/ephemery/EphemeryResetWatchdog.scala`) calls the exporter's fence-drain with a bounded wait before
+      `exit(75)`; SC-007 in the 023 harness with a simulated reset; open slice-7 PR (reviewers beacon, 028 owner, eye)
+
+**Checkpoint**: resets and safe heads are explicit records; nothing is inferred from chain IDs or depth.
+
+---
+
 ## Phase 6: Polish and cross-cutting
 
 - [ ] T086 [P] Finalise `docs/adr/infrastructure/INF-010-change-record-export.md` (status Accepted) with the measured
@@ -414,7 +509,11 @@ spec owner, not this plan).
 - **Phase 4 (US2)**: after slice 3 (needs `Exporter` and the seam). T068–T070 in parallel.
 - **Phase 5 (US3)**: after slice 3 for the fixture-based test (T080) and after slice 4 for the Kafka reading path
   of T081; the archive runs (T082, T083) need synced nodes.
-- **Phase 6**: after Phases 3–5.
+- **Phase 5a (US4, amendment)**: after Phase 4 (needs the Kafka producer setup of T072) and T094. Independent of
+  Phase 5.
+- **Phase 5b (US5, amendment)**: after slice 3 (T062) and T052; T113 also after slice 2 (H1). Independent of 4, 5, 5a.
+- **Phase 6**: after Phases 3–5b.
+- **Amendment tasks in Phase 2** (T092–T095): before T018, so GT-1 freezes v1 with types 4–7 in it.
 
 ### Cross-spec dependencies
 
@@ -476,7 +575,10 @@ T068 KafkaRecordSinkSpec | T069 ExporterSpec (bounds) | T070 HealthcheckExportFi
 | 4 US2 | T068–T079 (12) | US2 |
 | 5 US3 | T080–T085 (6) | US3 |
 | 6 Polish | T086–T091 (6) | — |
-| **Total** | **91** | |
+| 2 (amendment) | T092–T095 (4) | — |
+| 5a US4 (amendment) | T096–T108 (13) | US4 |
+| 5b US5 (amendment) | T109–T114 (6) | US5 |
+| **Total** | **114** | |
 
 ## Notes
 
@@ -508,4 +610,13 @@ Every FR and SC of `spec.md` maps to at least one implementing and one test task
 | SC-002 import p99 unchanged with exporter on, off, broker down | T037, T077 | T037, T076, T077 |
 | SC-003 no gap, no out-of-order record after an outage | T073, T076 | T076, T063 |
 | SC-004 folded balances equal archive `eth_getBalance` on Mordor and Platåberget | T081 | T080, T082, T083 |
-| SC-005 one golden-bytes vector set shared with 018 as identical files | T016, T018, T019 | T005, T017, T019 |
+| SC-005 one golden-bytes vector set shared with 018 as identical files | T016, T018, T019, T095 | T005, T017, T019 |
+| FR-013 pool records on the pool topic, off by default | T101, T102, T103, T104 | T097, T099 |
+| FR-014 `poolAdd` carries the block-body tx item, hash, sender, source | T094, T100, T101 | T092, T097 |
+| FR-015 `poolRemove` reasons set where the pool decides | T100, T101 | T096, T097 |
+| FR-016 pool records never block; drops counted and visible as `seq` gaps | T102, T105 | T096, T098, T106 |
+| FR-017 `chainStart` first per datadir; drain before the reset exit | T112, T114 | T109, T111 |
+| FR-018 `safe` watermark on the ETH family | T113 | T110 |
+| FR-019 pool topic and gap recovery documented | T107 | T106 |
+| SC-006 pool fixture, drop counter, p99 within band | T106 | T097, T106 |
+| SC-007 reset across instances in the harness | T114 | T111, T114 |
