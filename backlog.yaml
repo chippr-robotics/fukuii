@@ -6082,8 +6082,14 @@ items:
   - id: B-558
     title: "TUI art reskin: redraw the spec 029 sprites as polished hand-drawn space-RPG pixel art (user, 2026-11-25)"
     priority: P1
-    status: open
+    status: claimed
     area: tui
     opened: 2026-11-25
     refs: [spec-029]
     links: {}
+    claim:
+      by: cloud-claude
+      agent: main
+      since: 2026-11-25T23:43:49Z
+      heartbeat: 2026-11-25T23:43:49Z
+      branch: feat/tui-art-reskin
