@@ -315,3 +315,49 @@ class EthSimulateEtcRewardSpec extends AnyFlatSpec with Matchers:
       )
     node.blocks(request(emptyBlock(MinerA))).head.header.difficulty.value shouldBe BigInt(0)
   }
+
+  // B-169: Sepolia was proof-of-work to block 1,450,408, paid 2 ETH a block (Byzantium and Constantinople at genesis).
+  // The shipped config paid 0, so a simulated pre-merge Sepolia block was paid nothing where go-ethereum pays 2 ETH.
+  it should "pay 2 ETH for a block before the merge, as go-ethereum does" taggedAs (UnitTest, RPCTest) in {
+    val node =
+      new Node(
+        sepolia,
+        1_450_406,
+        PowDifficulty,
+        baseExtraFields = HefPostOlympia(Gwei),
+        baseTimestamp = 1_600_000_000L
+      )
+    val bs = node.blocks(request(emptyBlock(MinerA), emptyBlock(MinerB), readerBlock(MinerA, MinerB)))
+    bs.map(_.header.number.value) shouldBe Seq(BigInt(1_450_407), BigInt(1_450_408), BigInt(1_450_409))
+    bs.map(_.header.difficulty.value).distinct shouldBe Seq(PowDifficulty)
+    balances(bs(2)) shouldBe Seq(E * 2, E * 2)
+  }
+
+  it should "pay nothing for a block from the merge netsplit block on" taggedAs (UnitTest, RPCTest) in {
+    val node =
+      new Node(
+        sepolia,
+        1_735_370,
+        PowDifficulty,
+        baseExtraFields = HefPostOlympia(Gwei),
+        baseTimestamp = 1_600_000_000L
+      )
+    val bs = node.blocks(request(emptyBlock(MinerA), readerBlock(MinerA)))
+    bs.map(_.header.difficulty.value).distinct shouldBe Seq(BigInt(0))
+    balances(bs(1)) shouldBe Seq(BigInt(0))
+  }
+
+  "A simulated Sepolia block's state root" should "be block import's before the merge (block 1,450,408)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    val node =
+      new Node(
+        sepolia,
+        1_450_407,
+        PowDifficulty,
+        baseExtraFields = HefPostOlympia(Gwei),
+        baseTimestamp = 1_600_000_000L
+      )
+    oracle(node, Gwei * 2, sepolia, Some(Gwei))
+  }

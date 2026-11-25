@@ -88,7 +88,8 @@ object NativeBackends:
   /** The backends some configured fork's precompile set needs, decided the way [[PrecompiledContracts.getContracts]]
     * decides that set:
     *   - ETH Prague and Osaka (timestamps): BLS12-381 and KZG;
-    *   - ETC Olympia (ECIP-1121), once the block dispatch reaches it at a scheduled block: the Osaka set, so both;
+    *   - ETC Olympia (ECIP-1121), once the block dispatch reaches it at a scheduled block, on an ETC chain only (an ETH
+    *     chain's olympia-block-number is London): the Osaka set, so both;
     *   - ETH Cancun (timestamp): KZG.
     *
     * Each fork's set contains the previous fork's, so a backend that some fork needs is needed from that fork on.
@@ -96,7 +97,7 @@ object NativeBackends:
   def required(config: BlockchainConfig): Set[Backend] =
     val timestamps = config.forkTimestamps
     val evm = BlockchainConfigForEvm(config)
-    val olympia = config.forkBlockNumbers.all.exists(block =>
+    val olympia = !evm.isEthereum && config.forkBlockNumbers.all.exists(block =>
       block < NotScheduled && evm.etcForkForBlockNumber(block) >= EtcForks.Olympia
     )
     val bls = olympia || timestamps.pragueTimestamp.isDefined || timestamps.osakaTimestamp.isDefined

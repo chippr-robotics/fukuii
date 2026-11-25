@@ -187,10 +187,13 @@ object PrecompiledContracts:
     val isPrague = evmConfig.blockchainConfig.isPragueTimestamp(blockHeader.unixTimestamp)
     // EIP-7951 P256VERIFY activates at Osaka timestamp on ETH chains
     val isOsaka = evmConfig.blockchainConfig.isOsakaTimestamp(blockHeader.unixTimestamp)
+    val isEthereum = evmConfig.blockchainConfig.isEthereum
 
     if isOsaka then osakaContracts
-    else if etcFork >= EtcForks.Olympia then
-      // ETC Olympia activates BLS12-381 + P256VERIFY (ECIP-1121). Same set as ETH Osaka.
+    else if etcFork >= EtcForks.Olympia && !isEthereum then
+      // ETC Olympia activates BLS12-381 + P256VERIFY (ECIP-1121). Same set as ETH Osaka. Never on an ETH chain, whose
+      // olympia-block-number is London (fukuii.sh, the shipped ETH configs): there these arrive at Prague and Osaka
+      // by timestamp, as ModExp's EIP-7823/7883 routing does (B-177).
       osakaContracts
     else if isPrague then
       // ETH Prague activates BLS12-381 (EIP-2537) but NOT P256VERIFY (that is Osaka-only).
