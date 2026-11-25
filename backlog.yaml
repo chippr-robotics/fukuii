@@ -5721,12 +5721,17 @@ items:
   - id: B-528
     title: "ECIP-1112 Olympia: non-canonical code at the EIP-2935 history address still gets the direct write (B-517 follow-up)"
     priority: P3
-    status: open
+    status: claimed
     area: consensus
     size: S
     opened: 2026-11-24
     refs: []
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-25T17:15:12Z
+      heartbeat: 2026-11-25T17:15:12Z
     notes: "forge: decide whether ETC wants a system call there; ETH side done in #2117"
   - id: B-529
     title: BlockImporter drops an announce silently while busy; reply 'dropped' so the fetcher need not roll back (B-139 follow-up)
