@@ -113,6 +113,15 @@ object BinarySearchSupport extends Logger:
         ContinueBinarySearch(searchState.copy(minBlockNumber = childNum.value))
       else ContinueBinarySearch(searchState.copy(minBlockNumber = parentNum.value))
     else // no parent/child -> chains have diverged before parent block
+      notCommon(parentNum.value, searchState)
+
+  /** The step of the search where this node's block at `parentNumber` is not common: the chains part below it. Also the
+    * step where this node holds no header at `parentNumber` (B-347), as core-geth's `findAncestorBinarySearch` takes a
+    * header it does not hold (`known` false) for one that is not common, and searches on below it.
+    */
+  def notCommon(parentNumber: BigInt, searchState: SearchState): BinarySearchResult =
+    val min = searchState.minBlockNumber
+    val max = searchState.maxBlockNumber
     if min == 1 && max <= 2 then NoCommonBlock
-    else if min == max then BinarySearchCompleted(parentOf(parentNum.value))
-    else ContinueBinarySearch(searchState.copy(maxBlockNumber = parentOf(parentNum.value).max(1)))
+    else if min == max then BinarySearchCompleted(parentOf(parentNumber))
+    else ContinueBinarySearch(searchState.copy(maxBlockNumber = parentOf(parentNumber).max(1)))
