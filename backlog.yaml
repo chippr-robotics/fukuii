@@ -5955,3 +5955,13 @@ items:
     refs: ["#1600"]
     links: {}
     notes: ~300 lookups/s skipPresent
+  - id: B-544
+    title: "snap-split verify.py hardening: core-local/wildcard name shadowing, object-level fields as file scope, multi-line binding patterns"
+    priority: P3
+    status: open
+    area: tooling
+    size: S
+    opened: 2026-11-25
+    refs: ["#1584"]
+    links: {}
+    notes: spec 016 Done; won't-fix also reasonable
