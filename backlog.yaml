@@ -754,7 +754,7 @@ items:
   - id: B-068
     title: "Spec 018 Track C C7: soak and exit gate (no code)"
     priority: P2
-    status: claimed
+    status: in-progress
     area: storage
     size: M
     opened: 2026-11-07
@@ -766,8 +766,10 @@ items:
       by: dev-node
       agent: claude-opus
       since: 2026-11-25T19:24:53Z
-      heartbeat: 2026-11-25T19:24:53Z
-    notes: "2026-11-25 in-progress: User 2026-11-25: Platåberget gate DROPPED (chain retired 10-28). EG-15/T267 dropped; Platåberget halves of EG-1 (T251) and EG-10 (T262) dropped; EG-1 ETH = Sepolia only. Sepolia EG-4/5/9/16 to run on a GCP VM (user OK), shut down after."
+      heartbeat: 2026-11-25T19:25:00Z
+    notes: |-
+      2026-11-25 in-progress: User 2026-11-25: Platåberget gate DROPPED (chain retired 10-28). EG-15/T267 dropped; Platåberget halves of EG-1 (T251) and EG-10 (T262) dropped; EG-1 ETH = Sepolia only. Sepolia EG-4/5/9/16 to run on a GCP VM (user OK), shut down after.
+      2026-11-25 in-progress: User 2026-11-25: Sepolia GCP run = first baseline on cloud hardware (no pinned-jar comparison run). Infra: chippr-tf-modules PR #10 (not applied). dev-node stays on ETC (EG-12).
   - id: B-069
     title: "Spec 018 Track C C8a: retirement 1: the copy and the publish plumbing (destructive)"
     priority: P2
