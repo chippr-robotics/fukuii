@@ -261,8 +261,8 @@ the internal miner); it never falls when a miner goes quiet, and a miner that ne
 The hashrate alert starts counting only once the DAG is loaded, as nothing is submitted while it is built. The panel
 has nothing of Olympia, a treasury or a base fee: Olympia is deferred on every chain.
 
-New series, read by the panel and exported on `/metrics` beside the ones that were there: `app_engine_newpayload_accepted`,
-`app_engine_auth_failures`, and `app_pow_dag_epoch` (`-1` before the first build), `app_pow_dag_phase` (0 not yet known,
+New series, read by the panel and exported on `/metrics` beside the ones that were there: `app_engine_newpayload_accepted_total`,
+`app_engine_auth_failures_total` (counters since B-200, as are the other Engine API counts), and `app_pow_dag_epoch` (`-1` before the first build), `app_pow_dag_phase` (0 not yet known,
 1 loading, 2 generating), `app_pow_dag_progress` and `app_pow_dag_loaded`. None of them has a tag.
 
 ### Log tail and Recent strips

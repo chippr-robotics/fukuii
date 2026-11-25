@@ -2104,12 +2104,12 @@
           "legendFormat": "{{instance}} hit rate"
         },
         {
-          "expr": "rate(app_db_rocksdb_block_cache_hit{instance=~\"$instance\"}[5m])",
+          "expr": "rate(app_db_rocksdb_block_cache_hit_total{instance=~\"$instance\"}[5m])",
           "refId": "B",
           "legendFormat": "{{instance}} hits/s"
         },
         {
-          "expr": "rate(app_db_rocksdb_block_cache_miss{instance=~\"$instance\"}[5m])",
+          "expr": "rate(app_db_rocksdb_block_cache_miss_total{instance=~\"$instance\"}[5m])",
           "refId": "C",
           "legendFormat": "{{instance}} misses/s"
         }

@@ -698,14 +698,14 @@ object TuiStatusProbe:
           forkchoiceUpdated = EngineApiMetrics.lastForkchoiceUpdated.map(call),
           newPayload = EngineApiMetrics.lastNewPayload.map(call),
           payloads = PayloadCounts(
-            total = EngineApiMetrics.newPayloadTotal.value().toLong,
-            valid = EngineApiMetrics.newPayloadValid.value().toLong,
-            syncing = EngineApiMetrics.newPayloadSyncing.value().toLong,
-            accepted = EngineApiMetrics.newPayloadAccepted.value().toLong,
+            total = EngineApiMetrics.newPayloadTotal.count().toLong,
+            valid = EngineApiMetrics.newPayloadValid.count().toLong,
+            syncing = EngineApiMetrics.newPayloadSyncing.count().toLong,
+            accepted = EngineApiMetrics.newPayloadAccepted.count().toLong,
             // Each status has its own count since B-193: the invalid count is the INVALID answers alone.
-            invalid = EngineApiMetrics.newPayloadInvalid.value().toLong
+            invalid = EngineApiMetrics.newPayloadInvalid.count().toLong
           ),
-          authFailures = EngineApiMetrics.authFailures.value().toLong,
+          authFailures = EngineApiMetrics.authFailures.count().toLong,
           head = fork.map(f => headHex(f.head)),
           safe = safe.map(_._2),
           finalized = finalized.map(_._2),

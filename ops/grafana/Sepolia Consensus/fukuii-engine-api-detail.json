@@ -34,7 +34,7 @@
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "title": "VALID",
       "type": "stat",
-      "targets": [{ "expr": "app_engine_newpayload_valid{instance=\"fukuii-sepolia\"}", "refId": "A" }]
+      "targets": [{ "expr": "app_engine_newpayload_valid_total{instance=\"fukuii-sepolia\"}", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -45,7 +45,7 @@
       "options": { "colorMode": "value", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "title": "SYNCING",
       "type": "stat",
-      "targets": [{ "expr": "app_engine_newpayload_syncing{instance=\"fukuii-sepolia\"}", "refId": "A" }]
+      "targets": [{ "expr": "app_engine_newpayload_syncing_total{instance=\"fukuii-sepolia\"}", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -62,7 +62,7 @@
       "options": { "colorMode": "background", "graphMode": "area", "reduceOptions": { "calcs": ["lastNotNull"] } },
       "title": "INVALID",
       "type": "stat",
-      "targets": [{ "expr": "app_engine_newpayload_invalid{instance=\"fukuii-sepolia\"}", "refId": "A" }]
+      "targets": [{ "expr": "app_engine_newpayload_invalid_total{instance=\"fukuii-sepolia\"}", "refId": "A" }]
     },
     {
       "datasource": "Prometheus",
@@ -113,9 +113,9 @@
       "title": "newPayload status mix",
       "type": "timeseries",
       "targets": [
-        { "expr": "rate(app_engine_newpayload_valid{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "valid", "refId": "A" },
-        { "expr": "rate(app_engine_newpayload_syncing{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "syncing", "refId": "B" },
-        { "expr": "rate(app_engine_newpayload_invalid{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "invalid", "refId": "C" }
+        { "expr": "rate(app_engine_newpayload_valid_total{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "valid", "refId": "A" },
+        { "expr": "rate(app_engine_newpayload_syncing_total{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "syncing", "refId": "B" },
+        { "expr": "rate(app_engine_newpayload_invalid_total{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "invalid", "refId": "C" }
       ]
     },
     {
@@ -138,8 +138,8 @@
       "title": "forkchoiceUpdated status mix",
       "type": "timeseries",
       "targets": [
-        { "expr": "rate(app_engine_forkchoice_valid{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "valid", "refId": "A" },
-        { "expr": "rate(app_engine_forkchoice_syncing{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "syncing", "refId": "B" }
+        { "expr": "rate(app_engine_forkchoice_valid_total{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "valid", "refId": "A" },
+        { "expr": "rate(app_engine_forkchoice_syncing_total{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "syncing", "refId": "B" }
       ]
     },
     {
