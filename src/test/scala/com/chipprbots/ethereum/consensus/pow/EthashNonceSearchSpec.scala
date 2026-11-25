@@ -22,11 +22,11 @@ class EthashNonceSearchSpec extends AnyFlatSpec with Matchers:
   private lazy val epoch0Cache = EthashUtils.makeCache(epoch0, epoch0Seed)
 
   private val testHeaderHash: Array[Byte] = Array.fill[Byte](32)(0)
-  private lazy val searchResult = searchNonce(testHeaderHash, 0x20000L, maxIterations = 2_000_000)
+  private lazy val searchResult = searchNonce(testHeaderHash, BigInt(0x20000L), maxIterations = 2_000_000)
 
   private def searchNonce(
       headerHash: Array[Byte],
-      difficulty: Long,
+      difficulty: BigInt,
       maxIterations: Int
   ): Option[(ByteString, ByteString)] =
     (0L until maxIterations.toLong).iterator
@@ -52,11 +52,11 @@ class EthashNonceSearchSpec extends AnyFlatSpec with Matchers:
   it should "produce a nonce that re-verifies with checkDifficulty" taggedAs SlowTest in {
     val (_, nonceBytes) = searchResult.get
     val pow = EthashUtils.hashimotoLight(testHeaderHash, nonceBytes.toArray, epoch0FullSize, epoch0Cache)
-    EthashUtils.checkDifficulty(0x20000L, pow) shouldBe true
+    EthashUtils.checkDifficulty(BigInt(0x20000L), pow) shouldBe true
   }
 
   it should "return None for impossibly high difficulty" taggedAs SlowTest in {
-    searchNonce(testHeaderHash, Long.MaxValue, maxIterations = 100) shouldBe None
+    searchNonce(testHeaderHash, BigInt(Long.MaxValue), maxIterations = 100) shouldBe None
   }
 
   it should "cross-verify block 100 test vector with known nonce" taggedAs SlowTest in {

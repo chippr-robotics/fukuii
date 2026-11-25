@@ -11,7 +11,6 @@ import com.chipprbots.ethereum.consensus.pow.EthashUtils
 import com.chipprbots.ethereum.consensus.pow.validators.PoWBlockHeaderValidator
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderDifficultyError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderPoWError
-import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderUnexpectedError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.BlockHash
@@ -108,9 +107,10 @@ class HeaderChainCheckSpec extends AnyFlatSpec with Matchers:
     // The difficulty is not the one the parent implies; that rule runs before the seal.
     validated().check(cheap, parent, checkSeal = false) shouldBe Left(HeaderDifficultyError)
     validated().check(cheap, parent, checkSeal = true) shouldBe Left(HeaderDifficultyError)
-    // Alone, the seal check cannot evaluate difficulty 1 (its target, 2^256, does not fit its 32 bytes): the header is
-    // rejected with the reason rather than thrown into the caller.
-    validated().validateHeaderOnly(cheap).left.toOption.get shouldBe a[HeaderUnexpectedError]
+    // Alone, the seal meets difficulty 1: its target is 2^256, which every result meets (core-geth verifySeal). It used
+    // to throw, because the target did not fit 32 bytes (B-164). The parent rule above is what refuses it, as it
+    // refuses the difficulty-2 header below.
+    validated().validateHeaderOnly(cheap) shouldBe Right(BlockHeaderValid)
   }
 
   it should "reject a cheaply mined low-difficulty header against its real parent, though it passes alone" taggedAs (
