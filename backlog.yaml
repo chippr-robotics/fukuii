@@ -145,17 +145,18 @@ items:
   - id: B-012
     title: BlockImporter's fork-recovery rewinds write the head outside ImportLock
     priority: P2
-    status: in-progress
+    status: review
     area: sync
     size: M
     opened: 2026-11-07
     refs: [10d, "#1705 review N1"]
-    links: {}
+    links:
+      prs: [2119]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:10:30Z
-      heartbeat: 2026-11-25T04:11:57Z
+      heartbeat: 2026-11-25T05:05:58Z
     notes: |-
       forge + vault. Both chains, pre-existing. Pair with B-011.
       2026-11-25 in-progress: wave 4A forge, fix/b011-head-writes-import-lock
