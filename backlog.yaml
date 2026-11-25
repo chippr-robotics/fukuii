@@ -5870,3 +5870,13 @@ items:
     refs: []
     links: {}
     notes: "beacon, #2126; hive as shipped unaffected"
+  - id: B-540
+    title: "Olympia: send the EIP-2935 deploy tx on Mordor then ETC mainnet before activation (docs/runbooks/olympia-eip2935-deployment.md)"
+    priority: P2
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: needs a funded sender and a node with allow-unprotected-txs; first check eth_getCode at 0x0000F908...2935
