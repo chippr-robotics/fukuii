@@ -78,12 +78,12 @@ class EthashMiner(
     val headerHash = crypto.kec256(BlockHeader.getEncodedWithoutNonce(block.header))
     val startTime = System.nanoTime()
     val mineResult =
-      mineEthash(headerHash, block.header.difficulty.toLong, dagSize, dag, blockCreator.miningConfig.mineRounds)
+      mineEthash(headerHash, block.header.difficulty.value, dagSize, dag, blockCreator.miningConfig.mineRounds)
     (startTime, mineResult)
 
   private def mineEthash(
       headerHash: Array[Byte],
-      difficulty: Long,
+      difficulty: BigInt,
       dagSize: Long,
       dag: MappedDag,
       numRounds: Int
