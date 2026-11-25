@@ -195,11 +195,11 @@ class StxLedger(
     *   all transactions in the block with recovered sender addresses Every block, on every fork and both chains, starts
     *   from the parent's state with the block's preamble applied, by the code block import runs
     *   ([[BlockExecution.applyBlockPreamble]]): the DAO fork block's drain, then EIP-4788 and EIP-2935 (direct storage
-    *   writes before Amsterdam for the canonical contracts, system calls otherwise and from Amsterdam; ETC writes
-    *   EIP-2935 from Olympia). Before B-180 only an Amsterdam replay ran it, so a traced transaction of a Cancun,
-    *   Prague or Osaka block, of ETH's DAO fork block or of an ETC Olympia block saw the parent's beacon-root and
-    *   history slots (and balances), not the block's. ETC declares no DAO refund contract, so on ETC the drain moves
-    *   nothing.
+    *   writes before Amsterdam for the canonical contracts, system calls otherwise and from Amsterdam; ETC runs
+    *   EIP-2935 the same way from Olympia, and nothing where the contract has no code, B-528). Before B-180 only an
+    *   Amsterdam replay ran it, so a traced transaction of a Cancun, Prague or Osaka block, of ETH's DAO fork block or
+    *   of an ETC Olympia block saw the parent's beacon-root and history slots (and balances), not the block's. ETC
+    *   declares no DAO refund contract, so on ETC the drain moves nothing.
     *
     * @param txIndex
     *   index of the target transaction (0-based); 0 gives the parent's state with the block's preamble applied

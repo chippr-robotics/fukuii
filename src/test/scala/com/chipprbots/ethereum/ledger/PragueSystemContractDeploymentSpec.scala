@@ -39,7 +39,9 @@ import com.chipprbots.ethereum.utils.NetworkType
   *     EIP-7002/7251: "If there is no code at <PREDEPLOY_ADDRESS>, the corresponding block MUST be marked invalid";
   *     fukuii skipped the system call silently.
   *
-  * ETC Olympia keeps its client-side deployment of the history contract (ECIP-1112); BlockHashHistorySpec pins it.
+  * ETC Olympia takes the same EIP-2935 path (B-528): ECIP-1121 adopts EIP-2935 unmodified, so there too the client
+  * deploys nothing, runs non-canonical code and writes the canonical contract's slot directly. The ETC cases are at the
+  * end; BlockHashHistorySpec pins the Olympia boundary.
   */
 class PragueSystemContractDeploymentSpec extends AnyFlatSpec with Matchers:
 
@@ -208,21 +210,79 @@ class PragueSystemContractDeploymentSpec extends AnyFlatSpec with Matchers:
     storage.load(0) shouldBe UInt256(block.header.parentHash.value).toBigInt
     storage.load((block.header.number.value - 1) % HistoryServeWindow) shouldBe BigInt(0)
 
-  // ETC's history contract is the client's own (ECIP-1112): its direct write does not read the code, so Olympia keeps
-  // it whatever the code is.
-  it should "keep ETC Olympia's direct write whatever the code" taggedAs (
+  // ── B-528: ETC Olympia runs EIP-2935 as written, on the path ETH Prague takes ─────────
+
+  /** ETC mainnet as shipped, with a synthetic Olympia block above Spiral, so its opcodes (PUSH0 among them) run. */
+  private val EtcOlympiaAt: BigInt = 25_000_000
+  private lazy val etcOlympia: BlockchainConfig =
+    Config.blockchains.blockchains("etc").withUpdatedForkBlocks(_.copy(olympiaBlockNumber = EtcOlympiaAt))
+
+  private def rootOf(world: InMemoryWorldStateProxy): ByteString =
+    InMemoryWorldStateProxy.persistState(world).stateRootHash
+
+  "EIP-2935 on ETC Olympia (B-528)" should "give, with the canonical contract, ETH Prague's root and the system call's root" taggedAs (
     UnitTest,
     ConsensusTest,
     OlympiaTest
   ) in new TestSetup:
-    val etc: BlockchainConfig = blockchainConfig
-      .withUpdatedForkBlocks(_.copy(olympiaBlockNumber = 0))
-      .copy(networkType = NetworkType.ETC, forkTimestamps = ForkTimestamps())
-    val world: InMemoryWorldStateProxy = exec
-      .executeBlockTransactions(block, withCode(emptyWorld, HistoryStorageAddress, someCode))(using etc)
+    etcOlympia.networkType shouldBe NetworkType.ETC
+    val ethPrague: BlockchainConfig = blockchainConfig.copy(forkTimestamps =
+      ForkTimestamps(shanghaiTimestamp = Some(0L), cancunTimestamp = Some(0L), pragueTimestamp = Some(0L))
+    )
+    val deployed: InMemoryWorldStateProxy = withCode(emptyWorld, HistoryStorageAddress, HistoryStorageCode)
+    Seq(EtcOlympiaAt, EtcOlympiaAt + 1, EtcOlympiaAt + 8191, EtcOlympiaAt + 3 * 8191 + 17).foreach { number =>
+      val numbered = block.copy(header = block.header.copy(number = BlockNumber(number)))
+      val etc = rootOf(exec.executeBlockTransactions(numbered, deployed)(using etcOlympia).toOption.get.worldState)
+      val eth = rootOf(exec.executeBlockTransactions(numbered, deployed)(using ethPrague).toOption.get.worldState)
+      val called = rootOf(
+        BlockExecution.uncheckedSystemCall(
+          numbered.header,
+          deployed,
+          HistoryStorageAddress,
+          numbered.header.parentHash.value,
+          accessRecorder = None,
+          precompileRelocations = Map.empty
+        )(using etcOlympia)
+      )
+      withClue(s"block $number: ") {
+        etc shouldBe eth
+        etc shouldBe called
+        etc should not be rootOf(deployed)
+      }
+    }
+
+  it should "write nothing and create no account where the history contract has no code" taggedAs (
+    UnitTest,
+    ConsensusTest,
+    OlympiaTest
+  ) in new TestSetup:
+    Seq(EtcOlympiaAt, EtcOlympiaAt + 1).foreach { number =>
+      val numbered = block.copy(header = block.header.copy(number = BlockNumber(number)))
+      val world: InMemoryWorldStateProxy =
+        exec.executeBlockTransactions(numbered, emptyWorld)(using etcOlympia).toOption.get.worldState
+      withClue(s"block $number: ") {
+        world.getAccount(HistoryStorageAddress) shouldBe None
+        rootOf(world) shouldBe rootOf(emptyWorld)
+      }
+    }
+
+  // The client used to keep its direct write whatever the code, giving such an account the canonical contract's slot.
+  it should "run code other than the canonical contract, as on ETH" taggedAs (
+    UnitTest,
+    ConsensusTest,
+    OlympiaTest
+  ) in new TestSetup:
+    // The code stores the calldata (the parent hash) at slot 0 when SYSTEM_ADDRESS calls it.
+    val custom: ByteString = ByteStringUtils.string2hash(
+      "33" + "73" + "ff" * 19 + "fe" + "14" + "6025" + "57" + "600054" + "600052" + "6020" + "6000" + "f3" +
+        "5b" + "600035" + "600055" + "00"
+    )
+    val numbered: Block = block.copy(header = block.header.copy(number = BlockNumber(EtcOlympiaAt + 4)))
+    val storage: InMemoryWorldStateProxyStorage = exec
+      .executeBlockTransactions(numbered, withCode(emptyWorld, HistoryStorageAddress, custom))(using etcOlympia)
       .toOption
       .get
       .worldState
-    val storage: InMemoryWorldStateProxyStorage = world.getStorage(HistoryStorageAddress)
-    storage.load((block.header.number.value - 1) % HistoryServeWindow) shouldBe
-      UInt256(block.header.parentHash.value).toBigInt
+      .getStorage(HistoryStorageAddress)
+    storage.load(0) shouldBe UInt256(numbered.header.parentHash.value).toBigInt
+    storage.load((EtcOlympiaAt + 4 - 1) % HistoryServeWindow) shouldBe BigInt(0)

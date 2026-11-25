@@ -1094,8 +1094,8 @@ object BlockExecution:
     * the 31,566,720 total as execution gas, with no reservoir.
     *
     * Pre-Amsterdam (ETH Cancun to Osaka) the reservoir is 0 and the context is the one the EIP-7002/7251 calls always
-    * had, and the EIP-4788 / EIP-2935 calls to non-canonical code (B-517) share it. ETC never builds one: its only
-    * system-contract write, EIP-2935 at Olympia, is a direct storage write.
+    * had, and the EIP-4788 / EIP-2935 calls to non-canonical code (B-517) share it. On ETC the only system contract is
+    * EIP-2935's from Olympia (B-528): the canonical code gets the direct storage write, other code this context.
     *
     * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); empty, as every real block has it, the
     * context is what it was.
@@ -1256,10 +1256,11 @@ object BlockExecution:
 
       case _ => world
 
-  /** EIP-2935: Deploy history storage contract at fork block and store parent block hash.
+  /** EIP-2935: store the parent block hash in the history contract, from Prague (ETH) or Olympia (ETC).
     *
-    * At the Olympia activation block, deploys the history storage contract (sets nonce=1 and code). At every
-    * post-Olympia block, writes the parent hash to storage slot (blockNumber - 1) % HistoryServeWindow.
+    * The client never deploys the contract: EIP-2935's own deploy transaction does (B-528, and
+    * docs/runbooks/olympia-eip2935-deployment.md). With no code at the address nothing happens; with the canonical code
+    * the parent hash goes to slot (blockNumber - 1) % HistoryServeWindow; other code runs as a system call.
     */
   private def applyEip2935(
       block: Block,
@@ -1272,18 +1273,21 @@ object BlockExecution:
     val etcOlympiaActive = blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
       blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
     if !pragueActive && !etcOlympiaActive then world
-    // ETH (Prague): EIP-2935 "if no code exists at HISTORY_STORAGE_ADDRESS, the call must fail silently".
-    // Exactly as for EIP-4788 (see applyEip4788), the client MUST NOT deploy the contract itself: on ETH it is
-    // deployed by a regular transaction, and go-ethereum's ProcessParentBlockHash is a SYSTEM_ADDRESS call with
-    // value 0, which under EIP-158 returns without creating anything when the account does not exist. Self-deploying
-    // here wrote an account (nonce 1, code) plus a slot the reference does not have, and forked the state root of
-    // the first Prague block on any chain that deploys the contract in-chain rather than in genesis (EEST
-    // test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork / deploy_on_fork_block]).
-    else if !etcOlympiaActive && world.getCode(HistoryStorageAddress).isEmpty then world
-    // ETH: code other than the canonical contract is run, as go-ethereum's ProcessParentBlockHash runs it (B-517; see
-    // applyEip4788). The direct write below is the canonical contract's effect, so public networks keep it. ETC's
-    // client-deployed contract (ECIP-1112) keeps the direct write whatever the code.
-    else if !etcOlympiaActive && world.getCode(HistoryStorageAddress) != HistoryStorageCode then
+    // EIP-2935 "if no code exists at HISTORY_STORAGE_ADDRESS, the call must fail silently", on ETH (Prague) and on
+    // ETC (Olympia) alike. Exactly as for EIP-4788 (see applyEip4788), the client MUST NOT deploy the contract itself:
+    // it is deployed by EIP-2935's own deploy transaction (Nick's method, the same on every chain), and go-ethereum's
+    // ProcessParentBlockHash is a SYSTEM_ADDRESS call with value 0, which under EIP-158 returns without creating
+    // anything when the account does not exist. Self-deploying here wrote an account (nonce 1, code) plus a slot the
+    // reference does not have, and forked the state root of the first Prague block on any chain that deploys the
+    // contract in-chain rather than in genesis (EEST test_system_contract_deployment[CancunToPragueAtTime15k-
+    // deploy_after_fork / deploy_on_fork_block]).
+    // ETC (B-528): ECIP-1121 adopts EIP-2935 unmodified, so Olympia takes this same path. The client deploy at the
+    // Olympia block, which the first Olympia scaffold (a7d2a2e771) copied from the Cancun self-deploy before #1407
+    // removed it from ETH, is gone: the contract must be deployed on each ETC network before Olympia activates.
+    else if world.getCode(HistoryStorageAddress).isEmpty then world
+    // Code other than the canonical contract is run, as go-ethereum's ProcessParentBlockHash runs it (B-517; see
+    // applyEip4788). The direct write below is the canonical contract's effect, so public networks keep it.
+    else if world.getCode(HistoryStorageAddress) != HistoryStorageCode then
       uncheckedSystemCall(
         block.header,
         world,
@@ -1293,26 +1297,12 @@ object BlockExecution:
         precompileRelocations
       )
     else
-      // ETC (Olympia, ECIP-1112): the history contract IS deployed by the client at activation, so deploy it here
-      // if absent (genesis may pre-deploy it). Code presence is the sole guard. Tying deployment to
-      // isActivationBlock caused IllegalStateException when processing a post-activation block on a fresh world:
-      // the account was absent so getStorage threw.
-      val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
-        val account = world
-          .getAccount(HistoryStorageAddress)
-          .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-          .copy(nonce = UInt256(1))
-        world
-          .saveAccount(HistoryStorageAddress, account)
-          .saveCode(HistoryStorageAddress, HistoryStorageCode)
-      else world
-
-      // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
+      // The canonical contract's effect: the parent hash at slot (blockNumber - 1) % HistoryServeWindow.
       val parentHashValue = UInt256(block.header.parentHash.value)
       val slot = (blockNumber - 1) % HistoryServeWindow
-      val storage = w1.getStorage(HistoryStorageAddress)
+      val storage = world.getStorage(HistoryStorageAddress)
       val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
-      w1.saveStorage(HistoryStorageAddress, updatedStorage)
+      world.saveStorage(HistoryStorageAddress, updatedStorage)
 
   /** This function updates worldState transferring balance from drainList accounts to refundContract address
     *
@@ -1352,8 +1342,8 @@ object BlockExecution:
     * With the canonical contracts the storage is the same as the direct writes: the beacon roots contract stores the
     * timestamp and the root at slots `timestamp % 8191` and `timestamp % 8191 + 8191`, and the history contract stores
     * the parent hash at slot `(number - 1) % 8191` (asserted in AmsterdamSystemCallSpec). Every earlier fork and every
-    * ETC fork keep the direct writes for the canonical contracts; before Amsterdam, other code at either ETH address is
-    * run by the same [[uncheckedSystemCall]] (B-517).
+    * ETC fork keep the direct writes for the canonical contracts; before Amsterdam, other code at either ETH address,
+    * and at the history address on ETC from Olympia (B-528), is run by the same [[uncheckedSystemCall]] (B-517).
     *
     * Here in the companion rather than on the class so that block execution and the trace replays of an Amsterdam block
     * (`StxLedger.advanceWorldToTx`) run one and the same preamble.
