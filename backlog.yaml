@@ -1,7 +1,8 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
+# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
+# header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -479,7 +480,7 @@ items:
   - id: B-049
     title: "Spec 021 S1: the limb type behind the same API, with GT-2"
     priority: P2
-    status: review
+    status: blocked
     area: evm
     size: L
     opened: 2026-10-17
@@ -492,11 +493,11 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T18:18:49Z
-      heartbeat: 2026-11-25T18:58:19Z
+      heartbeat: 2026-11-25T19:31:03Z
     notes: |-
-      2026-11-24 open: B-046/B-047 gate S1's merge (GT-3, row 10b), not its code; pre-swap tests T023-T031 can start (plan.md Gates)
       2026-11-25 in-progress: wave 6: pre-swap tasks T023-T031 only (forge, fix/spec021-s1-preswap); swap gated on T008, T022, B-046/B-047
       2026-11-25 review: pre-swap T023-T031 in #2129; swap T032+ still gated (T008, T022, B-046/B-047); RP-2 inputs B-541
+      2026-11-25 blocked: pre-swap T023-T031 merged ed8641b27 (T028 partial: bigint-check step at T037). Swap T032+ blocked on T008 (GT-1 part B, user), T022 (RP-2 sign-off, B-541 inputs), B-046/B-047 datasets
   - id: B-050
     title: "Spec 021 S2: the T-005 hot-path conversions"
     priority: P2
