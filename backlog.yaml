@@ -392,7 +392,7 @@ items:
   - id: B-033
     title: Moving-root heal lets the root age past the serve window (~192 blocks vs geth's 128); re-peg on the root's age
     priority: P2
-    status: claimed
+    status: in-progress
     area: snap
     size: M
     opened: 2026-11-05
@@ -402,8 +402,10 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:10:53Z
-      heartbeat: 2026-11-25T04:10:53Z
-    notes: beacon. Keep BUG-BC3's clock reasoning.
+      heartbeat: 2026-11-25T04:12:23Z
+    notes: |-
+      beacon. Keep BUG-BC3's clock reasoning.
+      2026-11-25 in-progress: wave 4C beacon, fix/b031-snap-serve-window
   - id: B-034
     title: Presence-only readers should use rawNodes + provablyBad (cheaper than before H3)
     priority: P2
