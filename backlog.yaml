@@ -3191,8 +3191,10 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:11:01Z
-      heartbeat: 2026-11-25T04:11:01Z
-    notes: B-298 follow-up (forge). BlockImporter.resolvingFork falls back to blindRewindOnTheHashLayout, which rewinds without weighing any branch; goal 3 of B-298 covers only the resolver's discard.
+      heartbeat: 2026-11-25T04:12:31Z
+    notes: |-
+      B-298 follow-up (forge). BlockImporter.resolvingFork falls back to blindRewindOnTheHashLayout, which rewinds without weighing any branch; goal 3 of B-298 covers only the resolver's discard.
+      2026-11-25 claimed: wave 4D forge, after 4A lands (BlockImporter overlap)
   - id: B-348
     title: "RecentBlocksSearch zips our block n with the peer's header n (not n+1): the recent window never matches, every resolution binary-searches"
     priority: P3
