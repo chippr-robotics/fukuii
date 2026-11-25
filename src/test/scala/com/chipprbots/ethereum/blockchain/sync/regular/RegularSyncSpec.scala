@@ -277,8 +277,15 @@ class RegularSyncSpec
   /** The fork recovery of [[ForkRecoveryOnTheUnifiedLayout]] on the hash layout, where the recovery rewinds the index
     * (B-012): every block of the chain indexed, and the import lock's holder recorded as the rewind writes the head.
     */
-  abstract class SyncForkRewindUnderTheImportLock(name: String)
-      extends ForkRecoveryOnTheUnifiedLayout(name, unified = false):
+  abstract class SyncForkRewindUnderTheImportLock(
+      name: String,
+      // true: a chain that follows a consensus layer, where a failed resolution still rewinds blind (B-347)
+      followsConsensusLayer: Boolean = false,
+      lcaHeaderStored: Boolean = true
+  ) extends ForkRecoveryOnTheUnifiedLayout(name, unified = false, lcaHeaderStored = lcaHeaderStored):
+    override lazy val branchResolution: BranchResolution =
+      if followsConsensusLayer then new FollowingAConsensusLayer(blockchainReader)
+      else new BranchResolution(blockchainReader)
     (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(BigInt(0)).returns(Some(BlockHelpers.genesis.hash))
     testBlocks.filter(b => b.number.value <= lca).foreach { b =>
       (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(b.number.value).returns(Some(b.hash))
@@ -1324,11 +1331,12 @@ class RegularSyncSpec
           testKit.stop(importer)
       )
 
+      // On a chain that follows a consensus layer: where a failed resolution still rewinds blind (B-347)
       "make the blind rewind under the import lock when no common block was found, on the hash layout (B-012)" taggedAs (
         UnitTest,
         SyncTest
       ) in sync(
-        new SyncForkRewindUnderTheImportLock("blind-rewind-lock"):
+        new SyncForkRewindUnderTheImportLock("blind-rewind-lock", followsConsensusLayer = true):
           importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed.noCommonBlock)
           val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
             case m: BlockFetcher.InvalidateBlocksFrom => m
@@ -1336,6 +1344,58 @@ class RegularSyncSpec
           // the floor: 128 blocks below the head of 20, and never below genesis
           invalidate.fromBlock shouldBe BigInt(1)
           heldAtTheWrite() shouldBe List(Some("the SYNC-FORK rewind to block 0"))
+          testKit.stop(importer)
+      )
+
+      // B-347: on the hash layout of a proof-of-work chain, a resolution that ends with no branch weighed takes nothing
+      // off this chain, as core-geth's downloader sets no head back when its search for the common block fails. Each
+      // of these fell back to the blind rewind, here down to the genesis, for a branch no one weighed
+      for ((kind, answer), i) <- Seq(
+          "no common block" -> FastSyncBranchResolverActor.BranchResolutionFailed.noCommonBlock,
+          "a header this node does not hold" ->
+            FastSyncBranchResolverActor.BranchResolutionFailed.blockHeaderNotFound(BigInt(12)),
+          "a refusal for a header this node does not hold" -> FastSyncBranchResolverActor.BranchResolutionFailed(
+            FastSyncBranchResolverActor.BranchResolutionFailed.HeaderNotStored(BigInt(12))
+          )
+        ).zipWithIndex
+      do
+        s"rewind nothing and fetch on from the head when the resolution ends with $kind, on the hash layout (B-347)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in sync(
+          new SyncForkRewindUnderTheImportLock(s"unweighed-$i"):
+            importer ! BlockImporter.BranchResolverMsg(answer)
+            val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+              case m: BlockFetcher.InvalidateBlocksFrom => m
+            }
+            invalidate.fromBlock shouldBe capturedBest + 1
+            invalidate.toBlacklist shouldBe None
+            // no rewind was asked for: nothing waited for the import lock, and nothing was written
+            heldAtTheWrite() shouldBe empty
+            abandoned.isEmpty shouldBe true
+            toTheSupervisor().collect { case stuck: SyncProtocol.RegularSyncStuck => stuck } shouldBe Nil
+            // the importer runs again at once
+            importer ! BlockImporter.PickBlocks
+            importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.PickBlocks => m }
+            testKit.stop(importer)
+        )
+
+      // B-347: the resolver found the common block, weighed the branch and discarded this node's blocks above it, and
+      // the importer finds no header there. The head is at the common block already: nothing below it is taken for a
+      // branch no one weighed. It fell back to the blind rewind
+      "rewind nothing and fetch on from the head when the common block has no header here, on the hash layout (B-347)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new SyncForkRewindUnderTheImportLock("no-lca-header", lcaHeaderStored = false):
+          importer ! BlockImporter.BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
+          )
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          invalidate.fromBlock shouldBe capturedBest + 1
+          heldAtTheWrite() shouldBe empty
           testKit.stop(importer)
       )
 
@@ -1477,10 +1537,18 @@ class RegularSyncSpec
           importerSupervisor.expectMsgClass(3.seconds, classOf[RegularSync.ProgressProtocol.StartingFrom])
 
           val commonHash: ByteString = testBlocks.head.hash.value
+          // the heavier branch's first block, above the common block 1: another chain's block 2
+          val firstOfBranch: BlockHeader = testBlocks(1).header.copy(extraData = ByteString("the heavier chain"))
           def heavierFound(): Unit =
             importer ! BlockImporter.StartForkRecovery(BigInt(15))
             importer ! BlockImporter.BranchResolverMsg(
-              FastSyncBranchResolverActor.BranchHeavierBeyondReach(BigInt(1), commonHash, defaultPeer, weighed = 40)
+              FastSyncBranchResolverActor.BranchHeavierBeyondReach(
+                BigInt(1),
+                commonHash,
+                defaultPeer,
+                weighed = 40,
+                firstOfBranch = Some(firstOfBranch)
+              )
             )
 
           heavierFound()
@@ -1488,6 +1556,10 @@ class RegularSyncSpec
             case m: SyncProtocol.RegularSyncStuck => m
           }
           stuck.blockNumber shouldBe BigInt(1)
+          // B-351: the re-SNAP is held to the heavier branch, by its first block
+          stuck.branch shouldBe Some(
+            com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch(BigInt(2), firstOfBranch.hash.value)
+          )
           val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
             case m: BlockFetcher.InvalidateBlocksFrom => m
           }
@@ -2793,7 +2865,7 @@ class RegularSyncSpec
             regularSync ! SyncProtocol.Start
 
             supervisor.fishForSpecificMessage(max = 15.seconds) {
-              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _))
+              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _, _))
                   if number == failingBlock.number.value =>
                 true
             }
@@ -2903,7 +2975,7 @@ class RegularSyncSpec
             regularSync ! SyncProtocol.Start
 
             supervisor.fishForSpecificMessage(max = 15.seconds) {
-              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _))
+              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _, _))
                   if number == failingBlock.number.value =>
                 true
             }
@@ -2953,10 +3025,10 @@ class RegularSyncSpec
             regularSync ! SyncProtocol.Start
 
             supervisor.fishForSpecificMessage(max = 15.seconds) {
-              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _))
+              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _, _))
                   if number == failingBlock.number.value =>
                 true
-              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _)) =>
+              case SyncController.WrappedSyncProtocol(SyncProtocol.RegularSyncStuck(number, _, _)) =>
                 fail(s"escalated block $number, not the failing block ${failingBlock.number}")
             }
             withClue("neither blacklisted nor evicted: ") {

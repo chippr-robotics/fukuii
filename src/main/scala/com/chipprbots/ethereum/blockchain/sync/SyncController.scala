@@ -54,6 +54,8 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -599,6 +601,10 @@ object SyncController:
 
     // H3: the block a re-SNAP waiting out its backoff starts from, while regular sync keeps running.
     private var pendingResnap: Option[BigInt] = None
+
+    // B-351: the branch the re-SNAP waiting out its backoff is held to, where the stuck that scheduled it named one (a
+    // heavier chain below the fork recovery's floor, B-346). Set with `pendingResnap`, read when it is due.
+    private var pendingResnapBranch: Option[GivenUpBranch] = None
 
     // The codeHash that sent regular sync into a bulk bytecode recovery, until that recovery hands back to regular sync.
     private var bulkCodeRecoveryTrigger: Option[ByteString] = None
@@ -1461,7 +1467,7 @@ object SyncController:
                 StateClearEnded(record, givenUpFor, _)
               )
               clearingState(regularSync, port)
-        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) if onTheGuard =>
+        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash, _) if onTheGuard =>
           // spec 018 C5a part 10 (forge): a re-SNAP would start over the state this node holds. A state it cannot
           // follow the chain with is given up through the escalation, which clears it first.
           log.error(
@@ -1471,8 +1477,10 @@ object SyncController:
             missingHash
           )
           Behaviors.same
-        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) if pendingResnap.isDefined =>
-          // The importer keeps retrying while a re-SNAP waits, and reports each new run of exhausts: nothing new.
+        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash, branch) if pendingResnap.isDefined =>
+          // The importer keeps retrying while a re-SNAP waits, and reports each new run of exhausts: nothing new. A
+          // heavier branch found meanwhile is new (B-351): the re-SNAP, when due, is held to it.
+          branch.foreach(found => pendingResnapBranch = Some(found))
           log.info(
             "Regular sync still stuck on block {} (missing {}); the re-SNAP from block {} is still scheduled",
             blockNumber,
@@ -1480,7 +1488,7 @@ object SyncController:
             pendingResnap.getOrElse(blockNumber)
           )
           Behaviors.same
-        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
+        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash, branch) =>
           // Regular sync can't make progress: state-node recovery has exhausted on the same hash
           // 3+ times. Local parent state is too far behind canonical tip for any peer's snap-serve
           // window, so trie-node fetches keep returning empty. The recovery is to re-run SNAP from a
@@ -1504,11 +1512,12 @@ object SyncController:
             )
             // The baseline goes until the first regular sync after this SNAP sets it: SNAP's pivot is no import.
             appStateStorage.putRegularSyncStuck(resnaps, baseline = None).commit()
-            resnapNow(regularSync, blockNumber)
+            resnapNow(regularSync, blockNumber, branch)
           else
             appStateStorage.putRegularSyncStuck(resnaps, baseline = Some(best)).commit()
             RegularSyncMetrics.incrementResnapBackoffs()
             pendingResnap = Some(blockNumber)
+            pendingResnapBranch = branch
             timers.startSingleTimer(ResnapDueKey, ResnapDue(blockNumber), wait)
             timers.startTimerWithFixedDelay(ResnapCheckKey, ResnapCheck, SyncController.ResnapCheckInterval)
             log.error(
@@ -1539,7 +1548,7 @@ object SyncController:
               blockNumber
             )
             appStateStorage.putRegularSyncStuck(appStateStorage.regularSyncStuckResnaps(), baseline = None).commit()
-            resnapNow(regularSync, blockNumber)
+            resnapNow(regularSync, blockNumber, pendingResnapBranch)
         case ResnapDue(_) =>
           Behaviors.same
         case SyncProtocol.CalibrateChainWeightFromPeer(peerTD, peerMaxBlock) =>
@@ -1829,17 +1838,59 @@ object SyncController:
     /** Re-run SNAP from a recent pivot above `blockNumber`: stop regular sync, clear both SnapSyncDone AND the legacy
       * FastSyncDone (so a restart re-evaluates start() and enters SNAP rather than going straight back to regular
       * sync), then start SNAP.
+      *
+      * With a `branch` (B-351), the re-SNAP is held to it first: see [[holdTheResnapToTheBranch]].
       */
-    private def resnapNow(regularSync: TypedActorRef[RegularSync.Command], blockNumber: BigInt): Behavior[Command] =
+    private def resnapNow(
+        regularSync: TypedActorRef[RegularSync.Command],
+        blockNumber: BigInt,
+        branch: Option[GivenUpBranch]
+    ): Behavior[Command] =
       pendingResnap = None
+      pendingResnapBranch = None
       timers.cancel(ResnapDueKey)
       timers.cancel(ResnapCheckKey)
       ctx.stop(regularSync)
       stopRegularSyncPeersClient()
       stopBackgroundAudit()
+      branch.foreach(holdTheResnapToTheBranch)
       appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
       appStateStorage.clearFastSyncDone().commit()
       startSnapSync(minPivotBlock = Some(blockNumber))
+
+    /** B-351: a SNAP re-sync on the hash layout for a heavier chain that leaves this one below the fork recovery's
+      * floor (B-346) takes the heavier chain's blocks above the common block, not this node's. Without this, nothing
+      * bound it to that chain: the header download went on from the cursor an earlier sync left, on the chain this node
+      * leaves where that cursor is above the common block, and refused every header of the heavier one, which does not
+      * stand on it; the pivot was taken from what the download held; and the index above the common block kept this
+      * node's blocks.
+      *
+      * In one synced write, before the sync starts, it does what the clear of an escalation does for the sync after it
+      * on the unified layout (B-307, B-303), with the same records, read by the same code on either layout:
+      *   - the requirement that the sync take its pivot on the branch ([[snap.PivotAnchor.branchCheck]]): its pivot is
+      *     no lower than the branch's first block, the pivot's header is asked of a peer on it, and the header download
+      *     stores nothing of another chain at its height ([[snap.PivotAnchor.branchGate]]);
+      *   - the header download's cursors set back to the common block, so that every height above it is downloaded, and
+      *     its entry in the index written, again from the branch.
+      *
+      * The index above the pivot is cleared at the hand-off, which also ends the requirement. Nothing is deleted here:
+      * regular sync may still be ending an import, and a kill before the sync starts leaves a node that resumes regular
+      * sync with nothing taken from it, to find the fork again. Proof of work only: the branch comes from the
+      * resolver's weighing (B-346), which is the hash layout's on such a chain.
+      */
+    private def holdTheResnapToTheBranch(branch: GivenUpBranch): Unit =
+      log.warn(
+        s"${snap.PivotAnchor.PivotOnBranchTag} The SNAP re-sync for the heavier chain that leaves this one at block " +
+          s"${branch.number - 1} takes its pivot on that chain (its block ${branch.number}, " +
+          s"${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(branch.hash)}), and downloads the headers above block ${branch.number - 1} " +
+          "again from it"
+      )
+      appStateStorage
+        .holdTheSyncToTheBranch(
+          PivotOnBranch(branch.number, branch.hash),
+          height => blockchainReader.getCanonicalHashByNumber(height).map(_.value)
+        )
+        .commitSync()
 
     /** Internal `Behavior[Command]` self / death-watch markers that must NEVER be forwarded to a Classic child. A
       * watched child can terminate after the parent has already transitioned to a state that does not handle its marker
