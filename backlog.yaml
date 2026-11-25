@@ -6005,3 +6005,13 @@ items:
     refs: ["#1444"]
     links: {}
     notes: forge. PrecompiledContracts.scala:193-196 gives Olympia osakaContracts incl. 0x0a; ECIP-1121 lists EIP-4844 as deferred. Also floor-vs-refund vector
+  - id: B-549
+    title: "Glamsterdam networking: negotiated snap version; EIP-8070 sparse blobpool GetCells; engine_getBlobsV3/V4; retire devp2p waivers"
+    priority: P2
+    status: open
+    area: p2p
+    size: L
+    opened: 2026-11-25
+    refs: ["#1431"]
+    links: {}
+    notes: split when claimed
