@@ -51,6 +51,19 @@ class BodiesFetcher(
   private var currentBatchGen: Long = 0L
   // Monotonic counter for unique worker actor names within this supervisor's child namespace.
   private var sliceIdCounter: Long = 0L
+  // Workers that have not reported yet, with the slice each fetches (B-016). A worker stops itself after it reports, so
+  // a worker that stops while it is here died on its way: its slice is handled as one that failed.
+  private var workers: Map[ActorRef[BodiesSliceFetcher.SliceCommand], WorkerSlice] = Map.empty
+
+  private def spawnWorker(gen: Long, slice: WorkerSlice): Unit =
+    sliceIdCounter += 1
+    val worker = context.spawn(
+      BodiesSliceFetcher(peersClient, syncConfig, context.self, gen),
+      s"bodies-slice-$sliceIdCounter"
+    )
+    workers += worker -> slice
+    context.watchWith(worker, WorkerStopped(worker))
+    worker ! BodiesSliceFetcher.FetchSlice(slice.hashes, slice.triedPeers, slice.retryCount)
 
   override def makeAdaptedMessage[T <: Message](peer: Peer, msg: T): Command = AdaptedMessage(peer, msg)
 
@@ -78,7 +91,8 @@ class BodiesFetcher(
         supervisor ! BlockFetcher.RetryBodiesRequest(failedPeerId, triedPeers, retryCount)
         Behaviors.same
 
-      case SliceComplete(bodies, peer, gen) =>
+      case SliceComplete(bodies, peer, gen, worker) =>
+        workers -= worker
         if gen != currentBatchGen then
           log.debug("Discarding stale SliceComplete gen={} current={}", gen, currentBatchGen)
         else
@@ -104,18 +118,32 @@ class BodiesFetcher(
             sliceRepresentativePeer = None
         Behaviors.same
 
-      case SliceFailed(hashes, failedPeerId, triedPeers, retryCount, gen) =>
+      case WorkerStopped(worker) =>
+        // The termination is a system message and is read before ordinary ones, so a worker that reported and stopped
+        // is seen stopped before its report. One more hop behind the report: by then it is out of `workers` if it did.
+        context.self ! WorkerStoppedConfirmed(worker)
+        Behaviors.same
+
+      case WorkerStoppedConfirmed(worker) =>
+        workers.get(worker).foreach { slice =>
+          workers -= worker
+          log.error(
+            "[RegularSync] bodies slice worker {} stopped before it reported (gen={}): its slice is handled as failed",
+            worker.path.name,
+            slice.gen
+          )
+          context.self ! SliceFailed(slice.hashes, None, slice.triedPeers, slice.retryCount, slice.gen, worker)
+        }
+        Behaviors.same
+
+      case SliceFailed(hashes, failedPeerId, triedPeers, retryCount, gen, worker) =>
+        workers -= worker
         if gen != currentBatchGen then log.debug("Discarding stale SliceFailed gen={} current={}", gen, currentBatchGen)
         else
           pendingSlices -= 1
           if retryCount < syncConfig.maxBodyFetchRetries then
             val updatedTried = triedPeers ++ failedPeerId.toSet
-            sliceIdCounter += 1
-            val worker = context.spawn(
-              BodiesSliceFetcher(peersClient, syncConfig, context.self, gen),
-              s"bodies-slice-$sliceIdCounter"
-            )
-            worker ! BodiesSliceFetcher.FetchSlice(hashes, updatedTried, retryCount + 1)
+            spawnWorker(gen, WorkerSlice(hashes, updatedTried, retryCount + 1, gen))
             pendingSlices += 1
           else
             log.warn(
@@ -125,6 +153,8 @@ class BodiesFetcher(
             )
             // Invalidate the batch so orphan SliceComplete/SliceFailed from remaining workers are ignored.
             currentBatchGen = -1L
+            // the workers of the aborted batch are not waited for: their reports are stale
+            workers = workers.filter(_._2.gen != gen)
             pendingSlices = 0
             collectedBodies = Seq.empty
             sliceRepresentativePeer = None
@@ -170,12 +200,7 @@ class BodiesFetcher(
     val sliceSize = math.ceil(hashes.size.toDouble / concurrency).toInt
     val slices = hashes.grouped(sliceSize).toVector
     slices.foreach { slice =>
-      sliceIdCounter += 1
-      val worker = context.spawn(
-        BodiesSliceFetcher(peersClient, syncConfig, context.self, gen),
-        s"bodies-slice-$sliceIdCounter"
-      )
-      worker ! BodiesSliceFetcher.FetchSlice(slice, triedPeers, retryCount)
+      spawnWorker(gen, WorkerSlice(slice, triedPeers, retryCount, gen))
       pendingSlices += 1
     }
     log.info(
@@ -229,12 +254,26 @@ object BodiesFetcher:
   final private[regular] case class SliceComplete(
       bodies: Seq[BlockBody],
       peer: Peer,
-      batchGen: Long
+      batchGen: Long,
+      worker: ActorRef[BodiesSliceFetcher.SliceCommand]
   ) extends BodiesFetcherCommand
   final private[regular] case class SliceFailed(
       hashes: Seq[ByteString],
       failedPeerId: Option[PeerId],
       triedPeers: Set[PeerId],
       retryCount: Int,
-      batchGen: Long
+      batchGen: Long,
+      worker: ActorRef[BodiesSliceFetcher.SliceCommand]
   ) extends BodiesFetcherCommand
+
+  /** The slice a worker fetches: what is asked again if the worker dies (B-016). */
+  final private[regular] case class WorkerSlice(
+      hashes: Seq[ByteString],
+      triedPeers: Set[PeerId],
+      retryCount: Int,
+      gen: Long
+  )
+  final private[regular] case class WorkerStopped(worker: ActorRef[BodiesSliceFetcher.SliceCommand])
+      extends BodiesFetcherCommand
+  final private[regular] case class WorkerStoppedConfirmed(worker: ActorRef[BodiesSliceFetcher.SliceCommand])
+      extends BodiesFetcherCommand

@@ -63,11 +63,11 @@ class BodiesSliceFetcher(
           peer.id,
           batchGen
         )
-        coordinator ! BodiesFetcher.SliceComplete(blockBodies.bodies, peer, batchGen)
+        coordinator ! BodiesFetcher.SliceComplete(blockBodies.bodies, peer, batchGen, context.self)
         Behaviors.stopped
 
       case RetrySliceRequest(failedPeerId, hashes, triedPeers, retryCount) =>
-        coordinator ! BodiesFetcher.SliceFailed(hashes, failedPeerId, triedPeers, retryCount, batchGen)
+        coordinator ! BodiesFetcher.SliceFailed(hashes, failedPeerId, triedPeers, retryCount, batchGen, context.self)
         Behaviors.stopped
 
       case other =>
