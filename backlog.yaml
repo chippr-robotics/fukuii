@@ -147,7 +147,7 @@ items:
   - id: B-012
     title: BlockImporter's fork-recovery rewinds write the head outside ImportLock
     priority: P2
-    status: claimed
+    status: in-progress
     area: sync
     size: M
     opened: 2026-11-07
@@ -157,8 +157,10 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:10:30Z
-      heartbeat: 2026-11-25T04:10:30Z
-    notes: forge + vault. Both chains, pre-existing. Pair with B-011.
+      heartbeat: 2026-11-25T04:11:57Z
+    notes: |-
+      forge + vault. Both chains, pre-existing. Pair with B-011.
+      2026-11-25 in-progress: wave 4A forge, fix/b011-head-writes-import-lock
   - id: B-013
     title: MESS (ECBP-1100) is missing on the gossip import path; ChainImporter invents ChainWeight.zero for a missing parent
     priority: P3
