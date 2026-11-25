@@ -154,3 +154,10 @@ git worktree list                   # confirm the worktree entry is gone
 git branch -a | grep wt/            # confirm the branch is deleted
 .claude/agent-protocols/worktrees/bin/wt-clean.sh  # catches any stragglers
 ```
+
+## sbt in a linked worktree (B-527)
+
+In a linked worktree `.git` is a file, and sbt-git's default JGit reader cannot open it (project load failed with
+`NoWorkTreeException`). The tracked `git-worktree.sbt` at the repository root switches sbt-git to the git command line
+when `.git` is a file, so sbt loads in a worktree with no extra step. Do not add an untracked `zz-worktree-local.sbt`
+any more.
