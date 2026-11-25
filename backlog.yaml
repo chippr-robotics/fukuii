@@ -2922,10 +2922,11 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T17:15:00Z
-      heartbeat: 2026-11-25T17:15:32Z
+      heartbeat: 2026-11-25T17:18:57Z
     notes: |-
       forge, review of B-323 (2026-11-17): TxTypeGate admits types 2 and 4 from olympiaBlockNumber; the ECIP-1121 list forge had did not include EIP-7702; the local ECIP clone was not on the host.
       2026-11-25 in-progress: wave 5 forge, fix/b164-etc-consensus
+      2026-11-25 in-progress: ECIP-1121 lists EIP-7702 -> TxTypeGate type 4 at Olympia is correct; pin with a test
   - id: B-326
     title: "ETC on path-live: after a hand-off held for accounts left out, healing resumes at the same stale pivot (no PoW route to a newer one)"
     priority: P2
