@@ -5945,3 +5945,13 @@ items:
     refs: ["#1677"]
     links: {}
     notes: "item 3 of #1677; scan at PendingTransactionsManager.scala:297"
+  - id: B-543
+    title: "SNAP resume: batch the carried code-hash presence check off the coordinator thread so replay stops holding account dispatch"
+    priority: P2
+    status: open
+    area: snap
+    size: M
+    opened: 2026-11-25
+    refs: ["#1600"]
+    links: {}
+    notes: ~300 lookups/s skipPresent
