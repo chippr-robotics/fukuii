@@ -1700,17 +1700,18 @@ items:
   - id: B-177
     title: "Hive ETH chains: BLS12-381 and P256VERIFY precompiles are active from London (getContracts lacks the !isEthereum guard on the Olympia branch)"
     priority: P2
-    status: in-progress
+    status: review
     area: consensus
     size: S
     opened: 2026-11-09
     refs: [B-133]
-    links: {}
+    links:
+      prs: [2126]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T17:14:55Z
-      heartbeat: 2026-11-25T17:15:44Z
+      heartbeat: 2026-11-25T17:44:03Z
     notes: |-
       beacon review of #1778: PrecompiledContracts.getContracts (~:192) has no isEthereum guard on the Olympia branch (ModExp has one); hive/fukuii/fukuii.sh:141 maps London to olympiaBlockNumber, so on hive ETH configs 0x0b-0x11 and 0x100 are active London..Prague. Pre-existing. beacon then forge.
       2026-11-25 in-progress: wave 5 beacon, fix/b169-eth-consensus-config
