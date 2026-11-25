@@ -5744,3 +5744,13 @@ items:
     refs: []
     links: {}
     notes: "#2118's WorkerStoppedConfirmed hop is the guard; no test pins it"
+  - id: B-531
+    title: "Importer stopped while a queued SYNC-FORK discard/rewind still runs: the discard lands, its reference counts are never undone (B-248)"
+    priority: P3
+    status: open
+    area: sync
+    size: S
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: "found by forge in #2119; pre-existing (stop between discard and reply)"
