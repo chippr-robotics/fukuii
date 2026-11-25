@@ -3217,18 +3217,19 @@ items:
   - id: B-351
     title: "Hash layout: check a re-SNAP for a heavier fork below the SYNC-FORK floor lands on the peer's branch (canonical index from the common block to the pivot)"
     priority: P1
-    status: in-progress
+    status: review
     area: sync
     opened: 2026-11-18
     refs: []
     links:
+      prs: [2122]
       spec: specs/016-snap-controller-split
       branch: fix/b298-sync-fork-hash-layout
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T04:11:04Z
-      heartbeat: 2026-11-25T05:38:12Z
+      heartbeat: 2026-11-25T07:04:19Z
     notes: |-
       B-346 escalates via RegularSyncStuck -> resnapNow. The branch anchoring after an escalation (B-307 PivotAnchor.branchCheck / PivotOffTheBranch) acts only with stateEscalation (unified layout). Check on Mordor that the hash-layout SNAP after B-346 adopts the heavier branch's headers between the common block and the pivot, and does not keep this node's old canonical entries. Found by forge-b298.
       2026-11-25 claimed: wave 4D forge, after 4A lands (BlockImporter overlap)
