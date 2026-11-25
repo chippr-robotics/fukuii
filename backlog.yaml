@@ -5742,12 +5742,17 @@ items:
   - id: B-527
     title: sbt-git JGit fails to load in a linked git worktree (NoWorkTreeException); note workaround in worktree-protocol.md or fix build
     priority: P3
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-24
     refs: []
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-25T19:51:28Z
+      heartbeat: 2026-11-25T19:51:28Z
     notes: "Every worktree subagent hit this; workaround: untracked .sbt with SbtGit.useReadableConsoleGit / useConsoleForROGit := true"
   - id: B-528
     title: "ECIP-1112 Olympia: non-canonical code at the EIP-2935 history address still gets the direct write (B-517 follow-up)"
