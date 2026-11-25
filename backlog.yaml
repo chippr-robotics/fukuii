@@ -5965,3 +5965,13 @@ items:
     refs: ["#1584"]
     links: {}
     notes: spec 016 Done; won't-fix also reasonable
+  - id: B-545
+    title: "Heal follow-ups: narrow pathPivotRootAbsent to MissingNodeException; stuck-heal gauge; pivotUnservable in both replays; test"
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-25
+    refs: ["#1561"]
+    links: {}
+    notes: broad Try(...).isFailure still in FinalizationPolicy
