@@ -5809,15 +5809,16 @@ items:
   - id: B-538
     title: StopThenExitSpec interrupt test raced since B-520 (exit runs on the stop's thread); assert the caller's flag on return
     priority: P2
-    status: claimed
+    status: review
     area: tests
     size: S
     opened: 2026-11-25
     refs: []
-    links: {}
+    links:
+      prs: [2124]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T10:30:04Z
-      heartbeat: 2026-11-25T10:30:04Z
+      heartbeat: 2026-11-25T10:30:08Z
     notes: "failed CI on #2122; fix in #2124"
