@@ -5722,7 +5722,7 @@ items:
   - id: B-530
     title: "BodiesFetcherSpec: pin that a slice worker which reports and then stops is not counted as dead (B-016 follow-up)"
     priority: P3
-    status: claimed
+    status: in-progress
     area: tests
     size: S
     opened: 2026-11-25
@@ -5732,8 +5732,10 @@ items:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T06:43:12Z
-      heartbeat: 2026-11-25T06:43:12Z
-    notes: "#2118's WorkerStoppedConfirmed hop is the guard; no test pins it"
+      heartbeat: 2026-11-25T06:43:20Z
+    notes: |-
+      #2118's WorkerStoppedConfirmed hop is the guard; no test pins it
+      2026-11-25 in-progress: with the BodiesFetcherSpec flake from #2118 (B-016 tests time out under load); herald, fix/b016-bodiesfetcher-flake
   - id: B-531
     title: "Importer stopped while a queued SYNC-FORK discard/rewind still runs: the discard lands, its reference counts are never undone (B-248)"
     priority: P3
