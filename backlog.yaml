@@ -1592,17 +1592,18 @@ items:
   - id: B-169
     title: "Sepolia pre-merge block reward: sepolia-chain.conf sets every reward to 0 (since 404de9937); geth pays 2 ETH before block 1450409"
     priority: P2
-    status: in-progress
+    status: review
     area: consensus
     size: S
     opened: 2026-11-09
     refs: [B-132]
-    links: {}
+    links:
+      prs: [2126]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T17:14:50Z
-      heartbeat: 2026-11-25T17:15:40Z
+      heartbeat: 2026-11-25T17:43:58Z
     notes: |-
       beacon review of #1776, 2026-11-09: sepolia-chain.conf:103-105. Import and simulate both diverge from geth for pre-merge Sepolia blocks; a full sync from genesis would mismatch state roots (SNAP hides it). Chesterton first: why 404de9937 set 0. beacon.
       2026-11-25 in-progress: wave 5 beacon, fix/b169-eth-consensus-config
