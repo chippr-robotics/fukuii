@@ -12,6 +12,8 @@ EG-1 to EG-16. Until then, a gate with no row here has not been reported. Rows a
 | Kill -9 recovery: SIGKILL after the hand-off | spec 018 kill-safety | dev-node, 2026-11-22 | the same build | **PASS.** Reopened cleanly at the head held at the kill, audit resumed with no faults, followed to the live head with the root equal to core-geth's. See [Unclean-stop reopens](#unclean-stop-reopens) |
 | Unclean stop: OOM exit during the follow | spec 018 kill-safety | dev-node, 2026-11-22 | the same build | **PASS.** As above |
 | EG-6, the private ETC-config PoW net with Olympia | T258 | — | — | **NOT-RUN.** dev-node has no core-geth with Olympia (white-b0x/core-geth `main`), no Olympia genesis JSON and no Go toolchain to build one. The user skipped this step on 2026-11-20 |
+| EG-15, Platåberget live head-follow | T267 | — | — | **DROPPED.** The user, 2026-11-25: Platåberget was retired on 2026-10-28, so its gate is dropped (B-068). EG-4 and EG-14 carry the ETH tombstone guard and the `forkchoiceUpdated` latency |
+| EG-1 (ETH) and EG-10, their Platåberget halves | T251, T262 | — | — | **DROPPED,** for the same reason. EG-1's ETH half and EG-10's ETH run are Sepolia only |
 | EG-12, the first ETC mainnet sync | T264 | — | — | **NOT-RUN.** User decision, 2026-11-20 (decision 1, the machines): deferred until the NVMe the user is procuring arrives. dev-node's root SSD has 162 GB free, and its raidz1 HDD is too slow for a sync plus a reference core-geth. C8a still waits for this gate |
 
 ## Step 0 on dev-node, before the gates (2026-11-20, staging `44413fd95`)

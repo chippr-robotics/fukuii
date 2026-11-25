@@ -4,9 +4,9 @@
 
 **Created**: 2026-10-17
 
-**Status**: Active (2026-11-21). Track C slices C1 to C6 are merged behind the `fukuii.state.path-live` guard, and C7, the live exit gate, is in progress: the T248 Mordor rehearsal passed, EG-6 runs on dev-node, and EG-12 waits for the NVMe; C0's pinned-jar comparisons and the destructive slices C8a and C8b remain, and Tracks E, F, H and R are planned only. Per-slice state and PRs: [tasks.md](./tasks.md).
+**Status**: Active (2026-11-25). Track C slices C1 to C6 are merged behind the `fukuii.state.path-live` guard, and C7, the live exit gate, is in progress: the T248 Mordor rehearsal and EG-6's Mordor half passed, EG-12's ETC mainnet sync passed and is in its 24 h follow on dev-node, the Sepolia gates wait for a GCP VM, and the Platåberget gate is dropped (2026-11-25); C0's pinned-jar comparisons and the destructive slices C8a and C8b remain, and Tracks E, F, H and R are planned only. Per-slice state and PRs: [tasks.md](./tasks.md).
 
-**In flight**: `dev-node` (B-393): the C7 live gates (EG-6 running; EG-12 deferred until the NVMe arrives)
+**In flight**: `dev-node` (B-393): the C7 live gates (EG-12 in its 24 h follow; the Sepolia gates on a GCP VM next)
 
 **Plan**: [plan.md](./plan.md) (design), [data-model.md](./data-model.md), [tasks.md](./tasks.md) (Track C),
 [research.md](./research.md) (the Phase 0 evaluation), [implementation-log.md](./implementation-log.md) (the dated
@@ -962,3 +962,4 @@ item that carries the decision; "Source" is where it was recorded. The design no
 | 2026-11-21 | State RPCs resolve the block by its header, for geth parity. | B-411 | #1976 |
 | 2026-11-21 | The Ethash DAG is memory-mapped off-heap (not linked to spec 018). | B-413 | #1977 |
 | 2026-11-24 | Regular sync from genesis is taken on the guard on every chain, a chain with a TTD included (ends the 2026-11-17 refusal); a node with no state at all is still refused. | B-314 | plan "Decision log" |
+| 2026-11-25 | The Platåberget gate is dropped: the chain was retired on 2026-10-28. EG-15 (T267) and the Platåberget halves of EG-1 (T251) and EG-10 (T262) go; EG-1's ETH half is Sepolia only. The Sepolia gates run on a GCP VM that is shut down after each test. | B-068 | plan "Exit gate" |
