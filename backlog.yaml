@@ -6032,3 +6032,13 @@ items:
     refs: ["#1402"]
     links: {}
     notes: gates.yml dates 2026-11-30 and 2026-12-31; also fix stale consume-rlp status_note gates.yml:206
+  - id: B-552
+    title: "Spec 018 follow-on: history expiry and tiered storage (hot state on SSD, move/expire old bodies and receipts)"
+    priority: P3
+    status: open
+    area: storage
+    size: L
+    opened: 2026-11-25
+    refs: ["#1483"]
+    links: {}
+    notes: folded into spec 018 at the user's decision 2026-11-25; for the spec-018 owner (cloud-dc960fdc) to place in its plan
