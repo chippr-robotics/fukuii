@@ -2486,13 +2486,17 @@ items:
   - id: B-273
     title: "Bundled gorgoroth.conf sets mining.protocol = \"ethash\", which MiningConfig rejects: fukuii gorgoroth cannot start"
     priority: P2
-    status: open
+    status: done
     area: config
     size: S
     opened: 2026-11-14
+    closed: 2026-11-25
     refs: []
-    links: {}
-    notes: "Valid values: pow, mocked, restricted-pow, engine-api. Found 2026-11-14 while testing the TUI mining monitor; -Dfukuii.mining.protocol=pow works."
+    links:
+      prs: [2113]
+    notes: |-
+      Valid values: pow, mocked, restricted-pow, engine-api. Found 2026-11-14 while testing the TUI mining monitor; -Dfukuii.mining.protocol=pow works.
+      2026-11-25 done: duplicate of B-398; gorgoroth.conf now says protocol=pow, ChainConfigMatrixSpec pins every shipped conf
   - id: B-274
     title: A startup exception in StdNode leaves the JVM running half-started (P2P up, no APIs); under --tui the error is never shown
     priority: P1
