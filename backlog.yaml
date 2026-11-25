@@ -5774,3 +5774,13 @@ items:
     refs: []
     links: {}
     notes: wave 4C; widen the steps so the test keeps margin
+  - id: B-534
+    title: "B-031 rest: past-window root still dispatched; no roll at >=80% storage lets root age out; PoS no-target roll leaves probe flag set"
+    priority: P3
+    status: open
+    area: snap
+    size: M
+    opened: 2026-11-25
+    refs: []
+    links: {}
+    notes: deferred by beacon in wave 4C (#2120)
