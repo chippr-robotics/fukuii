@@ -6015,3 +6015,12 @@ items:
     refs: ["#1431"]
     links: {}
     notes: split when claimed
+  - id: B-550
+    title: "Promote the eest-amsterdam gate to required (promote_by 2026-11-30); decide #1419 remainder (hive consume on Amsterdam, replay)"
+    priority: P2
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-25
+    refs: ["#1419"]
+    links: {}
