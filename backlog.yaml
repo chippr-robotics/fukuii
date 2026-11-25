@@ -2374,12 +2374,17 @@ items:
   - id: B-245
     title: "eth_subscribe newHeads: blocks made canonical through the Engine API are not published to the block topic (only BlockImporter and TestingService publish)"
     priority: P2
-    status: open
+    status: claimed
     area: rpc
     size: S
     opened: 2026-11-13
     refs: [spec 029 research §11]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-25T19:51:44Z
+      heartbeat: 2026-11-25T19:51:44Z
     notes: |-
       Found by reading the code while writing spec 029; not checked on a running node. NodeBuilder.scala:134 blockTopic; no publisher under consensus/engine/.
       Raise to P1 if newHeads is silent on a post-merge node; first check whether engine imports reach BlockImporter.
