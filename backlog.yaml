@@ -480,23 +480,24 @@ items:
   - id: B-049
     title: "Spec 021 S1: the limb type behind the same API, with GT-2"
     priority: P2
-    status: in-progress
+    status: review
     area: evm
     size: L
     opened: 2026-10-17
     refs: []
     links:
+      prs: [2129]
       spec: specs/021-fixed-width-uint256
     depends_on: [B-046, B-047]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T18:18:49Z
-      heartbeat: 2026-11-25T18:18:52Z
+      heartbeat: 2026-11-25T18:58:19Z
     notes: |-
-      2026-11-17 blocked: waits for B-046, B-047
       2026-11-24 open: B-046/B-047 gate S1's merge (GT-3, row 10b), not its code; pre-swap tests T023-T031 can start (plan.md Gates)
       2026-11-25 in-progress: wave 6: pre-swap tasks T023-T031 only (forge, fix/spec021-s1-preswap); swap gated on T008, T022, B-046/B-047
+      2026-11-25 review: pre-swap T023-T031 in #2129; swap T032+ still gated (T008, T022, B-046/B-047); RP-2 inputs B-541
   - id: B-050
     title: "Spec 021 S2: the T-005 hot-path conversions"
     priority: P2
