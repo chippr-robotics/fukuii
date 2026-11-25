@@ -274,6 +274,44 @@ class RegularSyncSpec
       import scala.jdk.CollectionConverters.*
       outOfReach.asScala.toList
 
+  /** The fork recovery of [[ForkRecoveryOnTheUnifiedLayout]] on the hash layout, where the recovery rewinds the index
+    * (B-012): every block of the chain indexed, and the import lock's holder recorded as the rewind writes the head.
+    */
+  abstract class SyncForkRewindUnderTheImportLock(name: String)
+      extends ForkRecoveryOnTheUnifiedLayout(name, unified = false):
+    (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(BigInt(0)).returns(Some(BlockHelpers.genesis.hash))
+    testBlocks.filter(b => b.number.value <= lca).foreach { b =>
+      (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(b.number.value).returns(Some(b.hash))
+    }
+    (blockchainReader.getCanonicalHashByNumber(_: BigInt)).when(capturedBest + 1).returns(None)
+
+    private val holders = new java.util.concurrent.ConcurrentLinkedQueue[Option[String]]()
+    (blockchainWriter
+      .setCanonicalChainHead(_: BigInt, _: com.chipprbots.ethereum.domain.BlockHash, _: BigInt))
+      .when(*, *, *)
+      .onCall((_: BigInt, _: com.chipprbots.ethereum.domain.BlockHash, _: BigInt) =>
+        holders.add(importLock.heldBy): Unit
+      )
+
+    /** Who held the import lock as each rewind wrote the head. */
+    def heldAtTheWrite(): List[Option[String]] =
+      import scala.jdk.CollectionConverters.*
+      holders.asScala.toList
+
+    /** The import lock, held as an import holds it until `release` is counted down; returns once it is held. */
+    def holdTheImportLock(release: java.util.concurrent.CountDownLatch): Unit =
+      val held = new java.util.concurrent.CountDownLatch(1)
+      importLock
+        .guard(IO.blocking { held.countDown(); release.await() })
+        .unsafeRunAndForget()(using IORuntime.global)
+      held.await(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+
+    /** Whether something waits for the import lock, within ten seconds. */
+    def waitsForTheImportLock(): Boolean =
+      val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
+      while importLock.waiting == 0 && System.nanoTime() < deadline do Thread.onSpinWait()
+      importLock.waiting > 0
+
   /** An importer on the unified state layout whose every import of block 15 fails as an invalid block: the importer
     * starts the fork recovery itself (B-300).
     */
@@ -1241,6 +1279,63 @@ class RegularSyncSpec
           abandonedByRewind.asScala.toList shouldBe
             testBlocks.filter(_.number.value > lca).map(b => (b.number.value, b.hash.value))
 
+          testKit.stop(importer)
+      )
+
+      // B-012: the hash layout's SYNC-FORK rewind moves the best block and the index down. It is made under the import
+      // lock, as every import is, so it never lands between an import's weighing of its batch against the head and
+      // that import's commits. An import that holds the lock as the resolver answers is waited for, off the actor's
+      // thread: the importer picks nothing and sends the fetcher nowhere until the rewind has landed.
+      "make the rewind to the resolver's common block under the import lock, after an import that holds it (B-012)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new SyncForkRewindUnderTheImportLock("rewind-lock"):
+          val release = new java.util.concurrent.CountDownLatch(1)
+          holdTheImportLock(release)
+          try
+            importer ! BlockImporter.BranchResolverMsg(
+              FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, defaultPeer)()
+            )
+            withClue("the rewind waits for the import lock: ")(waitsForTheImportLock() shouldBe true)
+            // the end of the import that started the recovery, and a pick, while the rewind waits: neither starts
+            // anything before it has landed
+            importer ! BlockImporter.ImportDone(BlockImporter.Running, BlockImporter.DefaultBlockImport)
+            importer ! BlockImporter.PickBlocks
+            // nothing written yet: no head moved, no reference count undone. Read as recorded: a stub's `verify` is
+            // checked at the end of the test
+            heldAtTheWrite() shouldBe empty
+            abandoned.isEmpty shouldBe true
+            toTheFetcher().collect {
+              case m: BlockFetcher.InvalidateBlocksFrom => m
+              case m: BlockFetcher.PickBlocks           => m
+            } shouldBe empty
+          finally release.countDown()
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          invalidate.fromBlock shouldBe lca + 1
+          invalidate.toBlacklist shouldBe None
+          heldAtTheWrite() shouldBe List(Some(s"the SYNC-FORK rewind to block $lca"))
+          abandoned.isEmpty shouldBe false
+          // the importer runs again once the rewind has landed
+          importer ! BlockImporter.PickBlocks
+          importerFetcher.fishForSpecificMessage(5.seconds) { case m: BlockFetcher.PickBlocks => m }
+          testKit.stop(importer)
+      )
+
+      "make the blind rewind under the import lock when no common block was found, on the hash layout (B-012)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in sync(
+        new SyncForkRewindUnderTheImportLock("blind-rewind-lock"):
+          importer ! BlockImporter.BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed.noCommonBlock)
+          val invalidate: InvalidateBlocksFrom = importerFetcher.fishForSpecificMessage(5.seconds) {
+            case m: BlockFetcher.InvalidateBlocksFrom => m
+          }
+          // the floor: 128 blocks below the head of 20, and never below genesis
+          invalidate.fromBlock shouldBe BigInt(1)
+          heldAtTheWrite() shouldBe List(Some("the SYNC-FORK rewind to block 0"))
           testKit.stop(importer)
       )
 

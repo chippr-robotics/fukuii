@@ -8,8 +8,13 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
 
 import cats.data.NonEmptyList
+import cats.effect.IO
+import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.*
+import scala.util.Failure
+import scala.util.Success
+import scala.util.Try
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
@@ -18,6 +23,7 @@ import com.chipprbots.ethereum.blockchain.sync.PeerListSupportNg.PeerWithInfo
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.RequestFailed
 import com.chipprbots.ethereum.blockchain.sync.PeerRequestHandler.ResponseReceived
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportLock
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -93,6 +99,13 @@ object FastSyncBranchResolverActor:
 
   /** Wraps a `PeerRequestHandler.Result` reply from the PRH result adapter. */
   final private case class PeerRequestResult(result: PeerRequestHandler.Result) extends Command
+
+  /** The discard above the common block, made under the import lock (B-012): the blocks it removed, or its failure. */
+  final private case class Discarded(
+      firstCommonBlockNumber: BigInt,
+      masterPeer: Peer,
+      discarded: Try[Seq[(BigInt, org.apache.pekko.util.ByteString)]]
+  ) extends Command
 
   // ----- Replies to the caller (`replyTo`) -----
 
@@ -191,18 +204,25 @@ object FastSyncBranchResolverActor:
     *   how a chain that leaves this node's below `deepestCommonBlock` is weighed (B-346): the search goes on below the
     *   floor to find the common block, and a heavier branch is answered with [[BranchHeavierBeyondReach]]. `None`: such
     *   a chain is refused unweighed ([[BranchResolutionFailed.CommonBlockBeyondReach]])
+    * @param importLock
+    *   regular sync's import lock, which the discard is made under (B-012): it moves the best block and the index down,
+    *   and an import must never run beside it, nor resolve a batch against the head it is taking away. Taken off the
+    *   resolver's thread ([[ImportLock.guardAs]] run by `pipeToSelf`): the import that started the recovery may still
+    *   hold it, and nothing that holds it waits for this actor
     */
   final case class DiscardGuard(
       deepestCommonBlock: BigInt,
       heavier: Option[NonEmptyList[BlockHeader] => Boolean],
+      importLock: ImportLock,
       beyondReach: Option[BeyondReach] = None
   )
 
   /** What the master peer's headers above a common block are fetched for. */
   sealed private trait Weighing
 
-  /** Within the floor: discarded down to if the branch is the heavier (B-298). */
-  final private case class ToDiscard(heavier: NonEmptyList[BlockHeader] => Boolean) extends Weighing
+  /** Within the floor: discarded down to if the branch is the heavier (B-298), under `guard`'s import lock. */
+  final private case class ToDiscard(guard: DiscardGuard, heavier: NonEmptyList[BlockHeader] => Boolean)
+      extends Weighing
 
   /** Below the floor: escalated if the branch is the heavier, never discarded down to (B-346). */
   final private case class ToEscalate(beyondReach: BeyondReach, deepestCommonBlock: BigInt) extends Weighing
@@ -320,6 +340,9 @@ object FastSyncBranchResolverActor:
       discardGuard: Option[DiscardGuard]
   ):
     import BinarySearchSupport.*
+
+    // the runtime the discard under the import lock runs on (B-012), as BlockImporter's imports do
+    private given runtime: IORuntime = IORuntime.global
 
     private val prhResultAdapter: TypedActorRef[PeerRequestHandler.Result] =
       context.messageAdapter[PeerRequestHandler.Result](PeerRequestResult(_))
@@ -552,9 +575,9 @@ object FastSyncBranchResolverActor:
               blockchainReader.getBlockHeaderByNumber(firstCommonBlockNumber) match
                 case Some(commonHeader) =>
                   val wanted = (best - firstCommonBlockNumber) + 2 * recentHeadersSize
-                  requestBranchHeaders(masterPeer, commonHeader, Vector.empty, wanted, ToDiscard(heavier))
+                  requestBranchHeaders(masterPeer, commonHeader, Vector.empty, wanted, ToDiscard(guard, heavier))
                 case None => stopWithFailure(BranchResolutionFailed.blockHeaderNotFound(firstCommonBlockNumber))
-            case _ => discardAndReply(firstCommonBlockNumber, masterPeer)
+            case _ => discardAndReply(firstCommonBlockNumber, masterPeer, guard)
 
     /** A common block below the floor (B-346): the master peer's branch above it is weighed from it, with no more than
       * the guard's headers, to be escalated if it is the heavier. Nothing is discarded on any outcome. A fork escalated
@@ -587,8 +610,35 @@ object FastSyncBranchResolverActor:
             ToEscalate(beyondReach, guard.deepestCommonBlock)
           )
 
-    private def discardAndReply(firstCommonBlockNumber: BigInt, masterPeer: Peer): Behavior[Command] =
-      reply(firstCommonBlockNumber, masterPeer, branchLogic.discardBlocksAfter(firstCommonBlockNumber))
+    /** Removes this node's blocks above the common block, then answers with them. Under the import lock (B-012), which
+      * is taken off this actor's thread: the answer waits for an import that holds it, the one that started this
+      * recovery among them, and nothing that holds the lock waits for this actor. A discard that fails stops this
+      * resolver without an answer, as a failure in it always has: the importer watches it, and falls back.
+      */
+    private def discardAndReply(
+        firstCommonBlockNumber: BigInt,
+        masterPeer: Peer,
+        guard: DiscardGuard
+    ): Behavior[Command] =
+      context.pipeToSelf(
+        guard.importLock
+          .guardAs(s"the discard of the blocks above block $firstCommonBlockNumber")(
+            IO.blocking(branchLogic.discardBlocksAfter(firstCommonBlockNumber))
+          )
+          .unsafeToFuture()
+      )(Discarded(firstCommonBlockNumber, masterPeer, _))
+      discarding()
+
+    /** Waiting for the discard: nothing else is acted on, the peers' answers and the scan of peers included. */
+    private def discarding(): Behavior[Command] =
+      Behaviors.receiveMessage {
+        case Discarded(firstCommonBlockNumber, masterPeer, Success(discarded)) =>
+          reply(firstCommonBlockNumber, masterPeer, discarded)
+        case Discarded(firstCommonBlockNumber, _, Failure(error)) =>
+          log.error(s"[SYNC-FORK] The discard of the blocks above block $firstCommonBlockNumber failed", error)
+          throw error
+        case _ => Behaviors.same
+      }
 
     private def reply(
         firstCommonBlockNumber: BigInt,
@@ -644,7 +694,7 @@ object FastSyncBranchResolverActor:
                 def ended: Boolean = headers.isEmpty || all.size >= wanted
                 def more: Behavior[Command] = requestBranchHeaders(masterPeer, commonHeader, all, wanted, weighing)
                 (weighing, NonEmptyList.fromList(all.toList)) match
-                  case (ToDiscard(heavier), Some(branch)) if heavier(branch) =>
+                  case (ToDiscard(guard, heavier), Some(branch)) if heavier(branch) =>
                     log.info(
                       "[SYNC-FORK] Peer {}'s branch above block {} is the heavier with {} header(s): this node's " +
                         "blocks above it are discarded",
@@ -652,8 +702,8 @@ object FastSyncBranchResolverActor:
                       common,
                       all.size
                     )
-                    discardAndReply(common, masterPeer)
-                  case (ToDiscard(_), _) => if ended then refuseNotHeavier(masterPeer, common, all.size) else more
+                    discardAndReply(common, masterPeer, guard)
+                  case (ToDiscard(_, _), _) => if ended then refuseNotHeavier(masterPeer, common, all.size) else more
                   case (ToEscalate(beyondReach, deepest), branch) =>
                     branch.map(beyondReach.verdict).getOrElse(BeyondReachVerdict.NotHeavier) match
                       case BeyondReachVerdict.Heavier =>

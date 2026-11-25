@@ -498,6 +498,12 @@ object BlockImporter:
       extends Command
   final private[regular] case class BranchResolverStopped(resolver: TypedActorRef[FastSyncBranchResolverActor.Command])
       extends Command
+
+  /** A SYNC-FORK rewind of the hash layout, made under the import lock (B-012): the block the fetcher goes on from, and
+    * why; or the failure of the rewind.
+    */
+  final private[regular] case class Rewound(from: BigInt, reason: String) extends Command
+  final private[regular] case class RewindFailed(error: Throwable) extends Command
   // The best block, read under the import lock as the importer starts; or the failure to read it.
   final private[regular] case class StartFrom(bestBlock: BigInt) extends Command
   final private[regular] case class StartFailed(error: Throwable) extends Command
@@ -2725,6 +2731,8 @@ final private class BlockImporterLogic(
       // by the rule alone: a tie a coin would decide takes none of this node's blocks off the chain, and no coin is
       // tossed for headers the resolver has not validated (forge B1, W1)
       heavier = Option.when(weighsByWork)(branchResolution.discardsFor),
+      // the discard is made under the import lock, as the rewind that follows it is (B-012)
+      importLock = importLock,
       // below the floor (B-346; the user's decision of 2026-11-18): weighed from the common block, and escalated to a
       // SNAP re-sync if it is the heavier. Proof of work only, as the weighing above
       beyondReach = Option.when(weighsByWork)(
@@ -2818,8 +2826,7 @@ final private class BlockImporterLogic(
       case Some((lca, masterPeer)) =>
         fetchFromTheCommonBlock(lca, masterPeer, failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, state)
       case None =>
-        blindRewind(capturedBest, snapPivot)
-        running(state.withoutDeferredBatches())
+        blindRewind(capturedBest, snapPivot, state.withoutDeferredBatches())
     Behaviors.receiveMessage {
       // an answer is held already: the resolver's stop after it says nothing more
       case BranchResolverStopped(stopped) if stopped == resolver && held.isDefined => Behaviors.same
@@ -2852,19 +2859,18 @@ final private class BlockImporterLogic(
               lca,
               capturedBest
             )
-            val from =
-              fetchFromAfterTheRewind(rewindCanonicalChain(lca, lcaHeader.hash, capturedBest, resolved.discarded), lca)
-            unknownParentStrikes = Map.empty
-            fetcher ! BlockFetcher.InvalidateBlocksFrom(
-              from,
+            // Every exit rewinds the fetcher (or escalates to SNAP), so a batch deferred before recovery is stale.
+            rewindUnderTheImportLock(
+              lca,
+              lcaHeader.hash,
+              capturedBest,
+              resolved.discarded,
               "SYNC-FORK branch-resolver rollback",
-              shouldBlacklist = false
+              state.withoutDeferredBatches()
             )
           case None =>
             log.warning("SYNC-FORK: no header at resolver LCA {} — falling back to blind rewind", lca)
-            blindRewind(capturedBest, snapPivot)
-        // Every exit rewinds the fetcher (or escalates to SNAP), so a batch deferred before recovery is stale.
-        running(state.withoutDeferredBatches())
+            blindRewind(capturedBest, snapPivot, state.withoutDeferredBatches())
 
       // the hash layout (B-346): a heavier chain leaves this one below the floor. Nothing was taken off this chain and
       // nothing is rewound: the state is given up for a SNAP re-sync, once per fork
@@ -2897,14 +2903,12 @@ final private class BlockImporterLogic(
 
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(_)) =>
         log.warning("SYNC-FORK: branch resolver failed — falling back to 128-block blind rewind")
-        blindRewind(capturedBest, snapPivot)
-        running(state.withoutDeferredBatches())
+        blindRewind(capturedBest, snapPivot, state.withoutDeferredBatches())
 
       case BranchResolverStopped(stopped) if stopped == resolver =>
         // Stopped without an answer (a failure inside it): what a failed resolution does.
         log.warning("SYNC-FORK: branch resolver stopped without an answer — falling back to 128-block blind rewind")
-        blindRewind(capturedBest, snapPivot)
-        running(state.withoutDeferredBatches())
+        blindRewind(capturedBest, snapPivot, state.withoutDeferredBatches())
 
       case ImportDone(_, _) =>
         // The import that raised StartForkRecovery sent it from inside its own IO (tryImportBlocks, FORK-DETECT), so
@@ -3055,7 +3059,10 @@ final private class BlockImporterLogic(
         BranchHeadersFetchName
       ): Unit
 
-  private def blindRewind(capturedBest: BigInt, snapPivot: BigInt): Unit =
+  /** The fork recovery's rewind when no common block was found, then `state`: in `running`, or in [[rewinding]] until
+    * the hash layout's rewind, made under the import lock, has landed.
+    */
+  private def blindRewind(capturedBest: BigInt, snapPivot: BigInt, state: ImporterState): Behavior[Command] =
     val floor = (capturedBest - MaxForkAncestryDepth).max(snapPivot)
     if blockchainWriter.holdsStateInPlace then
       // No common block was found: the fetcher goes back as far as the rewind would have, and nothing is written
@@ -3080,9 +3087,15 @@ final private class BlockImporterLogic(
             "and nothing moved",
           floor
         )
-    else blindRewindOnTheHashLayout(capturedBest, snapPivot, floor)
+      running(state)
+    else blindRewindOnTheHashLayout(capturedBest, snapPivot, floor, state)
 
-  private def blindRewindOnTheHashLayout(capturedBest: BigInt, snapPivot: BigInt, floor: BigInt): Unit =
+  private def blindRewindOnTheHashLayout(
+      capturedBest: BigInt,
+      snapPivot: BigInt,
+      floor: BigInt,
+      state: ImporterState
+  ): Behavior[Command] =
     blockchainReader.getBlockHeaderByNumber(floor) match
       case Some(floorHeader) =>
         log.warning(
@@ -3091,15 +3104,88 @@ final private class BlockImporterLogic(
           floor,
           snapPivot
         )
-        val from = fetchFromAfterTheRewind(rewindCanonicalChain(floor, floorHeader.hash, capturedBest), floor)
-        unknownParentStrikes = Map.empty
-        fetcher ! BlockFetcher.InvalidateBlocksFrom(from, "SYNC-FORK rollback", shouldBlacklist = false)
+        rewindUnderTheImportLock(floor, floorHeader.hash, capturedBest, Nil, "SYNC-FORK rollback", state)
       case None =>
         log.warning(
           "SYNC-FORK: no header at fork recovery floor bno={} — escalating to SNAP re-sync",
           floor
         )
         supervisor ! SyncProtocol.RegularSyncStuck(floor, s"no header at fork recovery floor $floor")
+        running(state)
+
+  /** The hash layout's SYNC-FORK rewind to `target`, made under the import lock (B-012), then `state` once it has
+    * landed ([[rewinding]]).
+    *
+    * The rewind moves the best block and the index down. Under [[CanonicalHeadLock]] alone (B-511) it was serialised
+    * with the fork choice and with each commit of an import, but not with the import as a whole: an import weighs its
+    * batch against the head under the import lock and commits after, so a rewind between the two took the head from
+    * under a batch weighed against it. Every import holds the import lock, and so does the branch resolver's discard
+    * that comes before this rewind; so does this. It is taken off the actor's thread, as an import takes it: the import
+    * that started the recovery may still hold it, and its end is told to this actor.
+    *
+    * Lock order: the import lock, then the head's lock (in [[BlockImporter.rewindCanonicalChain]]), as every import
+    * takes them. Nothing that holds the head's lock asks for the import lock: the Engine API never takes it.
+    *
+    * The fetcher is sent back once the rewind has landed, from where the rewind left the head; until then no import
+    * starts and no batch is picked, so nothing the fetcher served before the rewind is imported over it.
+    */
+  private def rewindUnderTheImportLock(
+      target: BigInt,
+      targetHash: BlockHash,
+      currentBest: BigInt,
+      discarded: Seq[(BigInt, ByteString)],
+      reason: String,
+      state: ImporterState
+  ): Behavior[Command] =
+    ctx.pipeToSelf(
+      importLock
+        .guardAs(s"the SYNC-FORK rewind to block $target")(
+          IO.blocking(fetchFromAfterTheRewind(rewindCanonicalChain(target, targetHash, currentBest, discarded), target))
+        )
+        .unsafeToFuture()
+    ) {
+      case Success(from)  => Rewound(from, reason)
+      case Failure(error) => RewindFailed(error)
+    }
+    rewinding(state)
+
+  /** Waiting for a SYNC-FORK rewind made under the import lock (B-012). Acts as [[resolvingFork]] does on everything
+    * but the rewind's end: no import starts, and no batch is picked.
+    */
+  private def rewinding(state: ImporterState): Behavior[Command] =
+    Behaviors.receiveMessage {
+      case Rewound(from, reason) =>
+        unknownParentStrikes = Map.empty
+        fetcher ! BlockFetcher.InvalidateBlocksFrom(from, reason, shouldBlacklist = false)
+        running(state)
+
+      case RewindFailed(error) =>
+        // Fail loudly, as a rewind that failed on this actor's thread did: RegularSync replaces the pipeline.
+        log.error(error, "SYNC-FORK: the rewind failed: {}", error.getMessage)
+        throw error
+
+      case ImportDone(_, _) =>
+        // The import that started the recovery ended before the rewind took the lock: as in `resolvingFork`, its
+        // NewBehavior is moot (the fetcher is rewound once the rewind lands), and only its state change is made.
+        exhaustedDuringImport = false
+        nodesDuringImport.foreach(saveLateNode)
+        nodesDuringImport = Vector.empty
+        rewinding(state.notImportingBlocks().branchResolved().withoutDeferredBatches())
+
+      case wanted: AncestorBodiesWanted =>
+        fetchAncestorBodies(wanted)
+        Behaviors.same
+
+      case FetcherResponse(BlockFetcher.FetchedAncestorBodies(requested, bodies)) =>
+        ancestorBodiesFetched(requested, bodies)
+        Behaviors.same
+
+      case stored: AncestorBodiesStored =>
+        ancestorBodiesWritten(stored).foreach(blockHash => ancestorBodiesStoredFor = Some(blockHash))
+        Behaviors.same
+
+      case _ => Behaviors.same
+    }
 
   /** Where the fetcher goes on from after a rewind to `target`: above it when the index was rewound there, and above
     * the head as it is when it was not (B-511): a fork choice moved the head to another chain meanwhile, and the blocks
@@ -3112,7 +3198,7 @@ final private class BlockImporterLogic(
       target: BigInt,
       targetHash: BlockHash,
       currentBest: BigInt,
-      discarded: Seq[(BigInt, ByteString)] = Nil
+      discarded: Seq[(BigInt, ByteString)]
   ): Boolean =
     BlockImporter.rewindCanonicalChain(
       blockchainReader,
