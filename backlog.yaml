@@ -6044,19 +6044,17 @@ items:
   - id: B-554
     title: "Docs previews 404 and render unstyled: #1983's docs fix is on staging only; hotfix to main (#2133)"
     priority: P2
-    status: review
+    status: done
     area: docs
     size: S
     opened: 2026-11-25
+    closed: 2026-11-25
     refs: [B-422]
     links:
-      prs: [2133]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-25T21:05:42Z
-      heartbeat: 2026-11-25T21:05:47Z
-    notes: "user report 2026-11-25 (screenshots of pr-2132 preview). gh-pages.yml runs on main; main lacked #1983"
+      prs: [2133, 2134]
+    notes: |-
+      user report 2026-11-25 (screenshots of pr-2132 preview). gh-pages.yml runs on main; main lacked #1983
+      2026-11-25 done: Staging carries #1983 + #2134; main gets them on the next staging promotion. Main-only hotfix #2133 closed: main's ruleset requires hive checks that skip on docs-only changes.
   - id: B-555
     title: TuiRenderBenchmarkSpec asserts wall-clock render medians (<3 ms) in testEssential; flakes on slow CI runners; Tier 1 at ~24 of 25 min
     priority: P2
