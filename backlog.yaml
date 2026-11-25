@@ -282,13 +282,18 @@ items:
   - id: B-022
     title: "Flaky #1679: PeerDiscoveryManagerSpec 'do lookups in the background' times out under coverage"
     priority: P2
-    status: open
+    status: claimed
     area: tests
     size: S
     opened: 2026-11-07
     refs: [H11]
     links:
       issues: [1679]
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-25T19:51:24Z
+      heartbeat: 2026-11-25T19:51:24Z
   - id: B-023
     title: "Close #1571 (fixed key in AmsterdamFixtureVectors) and #1660 (superseded by #1727)"
     priority: P2
