@@ -5736,17 +5736,18 @@ items:
   - id: B-528
     title: "ECIP-1112 Olympia: non-canonical code at the EIP-2935 history address still gets the direct write (B-517 follow-up)"
     priority: P3
-    status: in-progress
+    status: review
     area: consensus
     size: S
     opened: 2026-11-24
     refs: []
-    links: {}
+    links:
+      prs: [2128]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-25T17:15:12Z
-      heartbeat: 2026-11-25T18:00:41Z
+      heartbeat: 2026-11-25T18:11:19Z
     notes: |-
       2026-11-25 in-progress: user decision 2026-11-25: EIP-2935 as written on Olympia (no client deploy; system call + canonical fast path). core-geth master has no Olympia code
       2026-11-25 blocked: plan ready (forge): drop ETC client deploy in applyEip2935, Olympia uses ETH path (#2117 dispatch); needs user go-ahead to edit BlockExecution (classifier denied the subagent edit)
