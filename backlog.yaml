@@ -5672,18 +5672,13 @@ items:
   - id: B-522
     title: "SNAP on ETC: the header download from genesis is the critical path (state ready at 63 min, finalisation then held 47 min on mainnet)"
     priority: P3
-    status: claimed
+    status: open
     area: snap
     size: M
     opened: 2026-11-24
     refs: ["sync reports v0.12.117, 2026-11-23/24"]
     links: {}
     depends_on: [B-521]
-    claim:
-      by: dev-node
-      agent: claude-opus
-      since: 2026-11-26T15:12:39Z
-      heartbeat: 2026-11-26T15:12:44Z
     notes: |-
       Once ChainDownloader logs (B-521): look at the SNAP-era header budget (boostHeaderDownload), chain-download-timeout (10 s) and how many peers serve headers during the state download.
       2026-11-24 blocked: needs ChainDownloader INFO logs from a live ETC run on a build with #2112
