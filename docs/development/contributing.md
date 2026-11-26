@@ -481,6 +481,11 @@ task
 - **Testing**: Describe how you tested your changes
 - **Documentation**: Update relevant documentation if needed
 - **Breaking Changes**: Clearly mark any breaking changes
+- **Changelog**: Do not edit `CHANGELOG.md`. Add a fragment, `changelog.d/<id>.<section>.md` (`<id>` the
+  backlog id, PR number or a slug; `<section>` `security`, `breaking`, `changed`, `added`, `deprecated`,
+  `removed`, `fixed` or `known-issues`), holding the bullet as it would appear under `[Unreleased]`; see
+  `changelog.d/README.md`. Check it with `python3 -I scripts/changelog/assemble.py --check`. Fragments are
+  merged into `CHANGELOG.md` at release prep, so parallel PRs no longer conflict there.
 
 ### Continuous Integration
 
@@ -500,7 +505,7 @@ Fukuii uses an automated one-click release process with full traceability.
 
 When a release is created (via git tag `vX.Y.Z`), the release workflow automatically:
 - ✅ Builds distribution package (ZIP) and assembly JAR
-- ✅ Generates CHANGELOG from commits since last release
+- ✅ Writes the release notes from the commits since the last tag
 - ✅ Creates Software Bill of Materials (SBOM) in CycloneDX format
 - ✅ Attaches all artifacts to GitHub release
 - ✅ Builds and publishes container images to `ghcr.io/chippr-robotics/fukuii`
@@ -513,7 +518,7 @@ When a release is created (via git tag `vX.Y.Z`), the release workflow automatic
 Each release includes:
 - Distribution ZIP with scripts and configs
 - Standalone assembly JAR
-- CHANGELOG.md with categorized changes
+- Release notes from the commits since the last tag
 - SBOM (Software Bill of Materials)
 - Signed Docker images with provenance
 

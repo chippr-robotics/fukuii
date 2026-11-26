@@ -32,15 +32,24 @@ Versions follow semantic versioning: `MAJOR.MINOR.PATCH`
     auto-version.yml --ref main` re-runs the same check, which is the retry path when a tag or
     dispatch failed.
 - **release.yml**: builds the release from the tag (`ref: v<version>`): distribution ZIP and assembly
-  JAR, changelog, SBOM, and on the full tier signed Docker images with SLSA provenance.
+  JAR, release notes (not `CHANGELOG.md`), SBOM, and on the full tier signed Docker images with SLSA provenance.
 - **release-drafter.yml**: keeps a draft release updated with categorized changes as PRs merge.
 
 ## Releasing a minor version (checklist)
 
 1. Dispatch the minor bump on staging (rule 2 above) and wait for the bump commit.
-2. Open the promotion PR `staging` → `main` (label `hive-full` for the full hive pass) and merge it
+2. In the release-prep PR to staging (with the release notes, `docs/releases/X.Y.0.md`), assemble the changelog.
+   PRs add their entries as fragments under `changelog.d/` (`changelog.d/README.md`), not to `CHANGELOG.md`:
+   ```bash
+   python3 -I scripts/changelog/assemble.py --dry-run                  # review the merge
+   python3 -I scripts/changelog/assemble.py --version X.Y.0 --date YYYY-MM-DD
+   ```
+   This merges every fragment into `[Unreleased]`, turns it into `## [X.Y.0] - <date>` under a new, empty
+   `[Unreleased]`, and deletes the fragments; commit `CHANGELOG.md` and the deletions. `release.yml` does not touch
+   `CHANGELOG.md` (it builds from the tag, and main takes no bot commits), so this step is by hand.
+3. Open the promotion PR `staging` → `main` (label `hive-full` for the full hive pass) and merge it
    with **"Create a merge commit"** once the required checks pass.
-3. `tag-release` tags `vX.Y.0` on the merge commit and dispatches the full release. Verify the
+4. `tag-release` tags `vX.Y.0` on the merge commit and dispatches the full release. Verify the
    release assets.
 
 ## Manual Version Updates

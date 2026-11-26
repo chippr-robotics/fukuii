@@ -33,6 +33,11 @@ This directory contains the GitHub Actions workflows for continuous integration,
 - The `tracker` branch carries its own `tracker-publish.yml`: on each push it checks `backlog.yaml` and dispatches
   `gh-pages.yml` on main.
 
+### 📝 Changelog Fragments (`changelog-fragments.yml`)
+
+- On PRs that touch `changelog.d/`, `CHANGELOG.md` or `scripts/changelog/`: runs the self-test of
+  `scripts/changelog/assemble.py` and `assemble.py --check` on the fragments. Not a required check (B-144).
+
 ---
 
 ### 🧪 CI Workflow (`ci.yml`)
@@ -130,14 +135,14 @@ gh workflow run fast-distro.yml
 
 **Triggers:** Git tags starting with `v` (e.g., `v1.0.0`), Manual dispatch
 
-**Purpose:** Creates GitHub releases with full traceability, builds artifacts, generates CHANGELOG, and publishes signed container images
+**Purpose:** Creates GitHub releases with full traceability, builds artifacts, writes the release notes, and publishes signed container images
 
 **Steps:**
 1. Builds optimized production distribution (ZIP)
 2. Builds assembly JAR (standalone executable)
 3. Extracts version from tag
 4. Generates SBOM (Software Bill of Materials) in CycloneDX format
-5. Generates CHANGELOG.md from commits since last release
+5. Writes the release notes from the commits since the last tag (it does not touch `CHANGELOG.md`)
 6. Creates GitHub release with all artifacts
 7. Builds and publishes Docker image to `ghcr.io/chippr-robotics/fukuii`
 8. Signs image with Cosign (keyless, using GitHub OIDC)
@@ -149,7 +154,7 @@ gh workflow run fast-distro.yml
 - ✅ **Distribution ZIP:** Complete package with scripts, configs, and dependencies
 - ✅ **Assembly JAR:** Standalone executable JAR file
 - ✅ **SBOM:** Software Bill of Materials in CycloneDX JSON format
-- ✅ **CHANGELOG:** Automatically generated from commit history
+- ✅ **Release notes:** generated from the commits since the last tag
 - ✅ **Docker Image:** Signed container image with SBOM and provenance
 
 **Container Security Features:**
@@ -367,7 +372,7 @@ Fukuii uses an automated release process with full traceability:
    ```
 5. **Automatic Build:** Release workflow automatically:
    - Builds distribution ZIP and assembly JAR
-   - Generates CHANGELOG from commits since last release
+   - Writes the release notes from the commits since the last tag
    - Creates SBOM (Software Bill of Materials)
    - Publishes GitHub release with all artifacts
    - Builds and signs Docker images
@@ -378,7 +383,7 @@ Fukuii uses an automated release process with full traceability:
 Each release automatically includes:
 - ✅ **Distribution ZIP** - Full package with scripts and configs
 - ✅ **Assembly JAR** - Standalone executable JAR
-- ✅ **CHANGELOG.md** - Auto-generated from commit history
+- ✅ **Release notes** - generated from the commits since the last tag
 - ✅ **SBOM** - Software Bill of Materials (CycloneDX JSON)
 - ✅ **Docker Image** - Signed with Cosign, includes provenance
 - ✅ **Ubuntu Package** - Published to Launchpad PPA (see [Launchpad PPA Setup](#launchpad-ppa-setup))
@@ -393,7 +398,7 @@ Each release automatically includes:
 
 ### Release Notes and Changelog
 
-**Automatic Generation:** Release notes and CHANGELOG are automatically generated from commit messages. Follow these best practices:
+**Automatic Generation:** Release notes are generated from commit messages. `CHANGELOG.md` is not generated: each PR adds a fragment under `changelog.d/` (see `changelog.d/README.md`), merged at release prep by `python3 -I scripts/changelog/assemble.py --version X.Y.Z`. Follow these best practices:
 
 **Good commit message format:**
 - `feat: Add support for EIP-1559 transactions`
@@ -420,7 +425,7 @@ Each release automatically includes:
 
 1. Ensure all milestone issues/PRs are closed
 2. Review the draft release created by Release Drafter
-3. Update version in `version.sbt` if needed
+3. Update version in `version.sbt` if needed, and assemble `CHANGELOG.md`: `python3 -I scripts/changelog/assemble.py --version X.Y.Z`
 4. Commit and push changes
 5. Create and push a version tag:
    ```bash
@@ -430,7 +435,7 @@ Each release automatically includes:
 6. The release workflow will automatically:
    - Build the distribution ZIP
    - Build the assembly JAR
-   - Generate CHANGELOG from commits
+   - Write the release notes from the commits since the last tag
    - Generate SBOM (Software Bill of Materials)
    - Create a GitHub release with all artifacts
    - Build and sign Docker images
