@@ -8,12 +8,37 @@ import com.chipprbots.ethereum.testing.Tags.*
 /** SC-003's render budget: a 160×48 frame renders in under 1 ms, median of 100 renders (spec 027 T057). The CPU share
   * of the TUI's threads is the manual half of T057 (`pidstat` on a live node).
   *
-  * The assertion is looser than the target (3 ms), so a loaded `sbt pp` cannot flake it; the report line says how the
-  * median compares with the 1 ms target.
+  * The assertion is looser than the target (3 ms); the report line says how the median compares with the 1 ms target. A
+  * wall clock is not deterministic, so the timed cases are tagged `BenchmarkTest`: Tier 3 (`testComprehensive`), and
+  * `sbt pp` or `testOnly *TuiRender*` locally, never `testEssential`, where slow CI runners failed them (B-555). The
+  * first case is the untimed half, and runs in every tier: every fixture timed here renders a whole 160×48 frame, and
+  * the idle one does not move.
   */
 class TuiRenderBenchmarkSpec extends AnyFlatSpec with Matchers:
 
   private val renderer = TuiRenderer(TuiConfig.default)
+
+  // eye, slice 6 review: the System and Storage views and the health screen are timed too.
+  private val viewFixtures: Seq[(String, TuiState)] = Seq(
+    "System" -> TuiFixtures.pressureEtc().withView(TuiView.System),
+    "Storage" -> TuiFixtures.resourcesSepolia().withView(TuiView.Storage),
+    "health screen" -> TuiFixtures
+      .pressureEtc()
+      .withView(TuiView.System)
+      .copy(screens = List(Screen.HealthDetail(Subsystem.Memory))),
+    "Overview with its health strip" -> TuiFixtures.pressureEtc()
+  )
+
+  "Every frame timed here" should "render all 48 rows at 160×48, and the idle one at the head not move" taggedAs (
+    UnitTest
+  ) in {
+    val snap = (0L until 12L).map(t => TuiFixtures.snapStorageMordor().copy(tick = t))
+    val full = snap.map(_.copy(motion = Motion.Full))
+    val views = viewFixtures.flatMap((_, s) => (0 until 3).map(i => s.copy(tick = i.toLong, motion = Motion.Reduced)))
+    (snap ++ views).foreach(s => renderer.render(s, 160, 48) should have size 48)
+    full.foreach(s => renderer.frame(s, 160, 48).lines should have size 48)
+    renderer.frame(TuiFixtures.syncedEtc().copy(motion = Motion.Full), 160, 48).animated shouldBe false
+  }
 
   /** SC-003's target, reported. */
   private val TargetMs = 1.0
@@ -65,19 +90,9 @@ class TuiRenderBenchmarkSpec extends AnyFlatSpec with Matchers:
     medianMs should be < AssertedMs
   }
 
-  // eye, slice 6 review: the System and Storage views and the health screen are timed too. Each render is of a state
-  // of its own, as each frame's is on a live node, so the health checks (worked out once a state) are worked out in
-  // every render, walking the System view's ten minutes of history.
-  for (name, fixture) <- Seq[(String, TuiState)](
-      "System" -> TuiFixtures.pressureEtc().withView(TuiView.System),
-      "Storage" -> TuiFixtures.resourcesSepolia().withView(TuiView.Storage),
-      "health screen" -> TuiFixtures
-        .pressureEtc()
-        .withView(TuiView.System)
-        .copy(screens = List(Screen.HealthDetail(Subsystem.Memory))),
-      "Overview with its health strip" -> TuiFixtures.pressureEtc()
-    )
-  do
+  // Each render is of a state of its own, as each frame's is on a live node, so the health checks (worked out once a
+  // state) are worked out in every render, walking the System view's ten minutes of history.
+  for (name, fixture) <- viewFixtures do
     s"A 160×48 frame of the $name" should "stay inside the render budget, median of 100" taggedAs (BenchmarkTest) in {
       def fresh(i: Int): TuiState = fixture.copy(tick = i.toLong, motion = Motion.Reduced)
       (1 to 500).foreach(i => renderer.render(fresh(i), 160, 48))
