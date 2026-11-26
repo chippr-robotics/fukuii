@@ -30,7 +30,8 @@ SPRITES = {
     "splash-scene": (80, 24, 1, 1, True),
 }
 POSES = ("starting", "syncing", "watching", "warning", "error", "asleep", "celebrating")
-MAX_BYTES = 4 * 1024 * 1024
+MAX_BYTES = 8 * 1024 * 1024
+DENSITIES = (1, 2)  # a `hi` sheet's pixels a VGA pixel: 8 × 16 or 16 × 32 a cell
 CUBE = (0, 95, 135, 175, 215, 255)
 
 
@@ -68,7 +69,7 @@ def check(directory: Path) -> list[str]:
                     problems.append(f"art.conf: {sprite} {pose} has {n} frames, not 1 to {most}")
         else:
             counts = [1]
-        for res, (fw, fh), across in (("lo", (cols, rows * 2), 1), ("hi", (cols * 8, rows * 16), max(counts))):
+        for res, across in (("lo", 1), ("hi", max(counts))):
             name = f"{sprite}.{res}.png"
             path = directory / name
             if not path.exists():
@@ -76,26 +77,31 @@ def check(directory: Path) -> list[str]:
                     problems.append(f"{name}: missing")
                 continue
             if path.stat().st_size > MAX_BYTES:
-                problems.append(f"{name}: larger than 4 MiB")
+                problems.append(f"{name}: larger than 8 MiB")
             im = Image.open(path)
+            im.load()
             if im.format != "PNG" or im.mode not in ("P", "RGBA") or im.info.get("interlace"):
                 problems.append(f"{name}: must be a non-interlaced PNG, indexed or RGBA, 8 bits a channel")
                 continue
-            want = (fw * across, fh * len(counts))
-            if im.size != want:
-                problems.append(f"{name}: is {im.size[0]}x{im.size[1]}, must be {want[0]}x{want[1]}")
+            sizes = [(cols, rows * 2)] if res == "lo" else [(cols * 8 * d, rows * 16 * d) for d in DENSITIES]
+            wants = [(fw * across, fh * len(counts)) for fw, fh in sizes]
+            if im.size not in wants:
+                must = " or ".join(f"{w}x{h}" for w, h in wants)
+                problems.append(f"{name}: is {im.size[0]}x{im.size[1]}, must be {must}")
                 continue
+            fw, fh = sizes[wants.index(im.size)]
             px = np.asarray(im.convert("RGBA"))
             alpha = px[..., 3]
-            if np.any((alpha != 0) & (alpha != 255)):
-                problems.append(f"{name}: has half-transparent pixels")
-            opaque = px[alpha == 255][:, :3]
-            off = {tuple(int(v) for v in c) for c in np.unique(opaque, axis=0)} - allowed
-            if off:
-                shown = ", ".join("#%02x%02x%02x" % c for c in sorted(off)[:4])
-                problems.append(f"{name}: {len(off)} colours outside xterm-240.gpl ({shown})")
+            if res == "lo":  # pixel art in the 240: any pixel shows fully or not at all
+                if np.any((alpha != 0) & (alpha != 255)):
+                    problems.append(f"{name}: has half-transparent pixels")
+                opaque = px[alpha == 255][:, :3]
+                off = {tuple(int(v) for v in c) for c in np.unique(opaque, axis=0)} - allowed
+                if off:
+                    shown = ", ".join("#%02x%02x%02x" % c for c in sorted(off)[:4])
+                    problems.append(f"{name}: {len(off)} colours outside xterm-240.gpl ({shown})")
             for r in range(len(counts)):
-                if not np.any(alpha[r * fh : (r + 1) * fh, 0:fw] == 255):
+                if not np.any(alpha[r * fh : (r + 1) * fh, 0:fw] != 0):
                     problems.append(f"{name}: the first frame of pose {r} is empty")
     return problems
 
