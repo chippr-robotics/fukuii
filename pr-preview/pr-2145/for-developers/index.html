@@ -6,13 +6,13 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Comprehensive documentation for the Fukuii Ethereum Classic client">
+        <meta name="description" content="Documentation for Fukuii, the EVM execution client for Ethereum Classic and Ethereum">
       
       
         <meta name="author" content="Chippr Robotics LLC">
       
       
-        <link rel="canonical" href="https://chippr-robotics.github.io/fukuii/for-developers/">
+        <link rel="canonical" href="https://docs.fukuii.com/for-developers/">
       
       
         <link rel="prev" href="../operations/LOGGING/">
@@ -5948,7 +5948,7 @@
 
 
   
-    <a href="https://github.com/chippr-robotics/fukuii/edit/develop/docs/for-developers/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/chippr-robotics/fukuii/edit/main/docs/for-developers/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -5962,8 +5962,8 @@
 <div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/chippr-robotics/fukuii.git
 </span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nb">cd</span><span class="w"> </span>fukuii
 </span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>git<span class="w"> </span>submodule<span class="w"> </span>update<span class="w"> </span>--init<span class="w"> </span>--recursive
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>sbt<span class="w"> </span>compile
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>sbt<span class="w"> </span><span class="nb">test</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>sbt<span class="w"> </span>compile-all
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>sbt<span class="w"> </span><span class="s2">"testOnly *Foo*"</span>
 </span></code></pre></div>
 <h2 id="key-resources">Key Resources<a class="headerlink" href="#key-resources" title="Permanent link">&para;</a></h2>
 <table>
@@ -6020,12 +6020,13 @@
 </tbody>
 </table>
 <h2 id="development-commands">Development Commands<a class="headerlink" href="#development-commands" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>sbt<span class="w"> </span>compile<span class="w">           </span><span class="c1"># Compile all modules</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>sbt<span class="w"> </span><span class="nb">test</span><span class="w">              </span><span class="c1"># Unit tests (~5 min)</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>sbt<span class="w"> </span>it:test<span class="w">           </span><span class="c1"># Integration tests</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>sbt<span class="w"> </span>formatAll<span class="w">         </span><span class="c1"># Format all code (every module)</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>sbt<span class="w"> </span>pp<span class="w">                </span><span class="c1"># Pre-PR: scalafmt + tests (run formatCheck too)</span>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>sbt<span class="w"> </span>assembly<span class="w">          </span><span class="c1"># Build fat JAR</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>sbt<span class="w"> </span>compile-all<span class="w">       </span><span class="c1"># Compile every module and its test sources (after every change)</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>sbt<span class="w"> </span><span class="s2">"testOnly *Foo*"</span><span class="w">  </span><span class="c1"># One test class, in seconds</span>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>sbt<span class="w"> </span>formatAll<span class="w">         </span><span class="c1"># scalafix + scalafmt on every module (rewrites files)</span>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>sbt<span class="w"> </span>formatCheck<span class="w">       </span><span class="c1"># The read-only check CI runs</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>sbt<span class="w"> </span>pp<span class="w">                </span><span class="c1"># Pre-PR gate: compile-all, scalafmt, rlp tests, testQuick, IntegrationTest</span>
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>sbt<span class="w"> </span>dist<span class="w">              </span><span class="c1"># Build the distribution zip under target/universal/</span>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>sbt<span class="w"> </span>assembly<span class="w">          </span><span class="c1"># Build the standalone JAR</span>
 </span></code></pre></div>
 <h2 id="test-tiers">Test Tiers<a class="headerlink" href="#test-tiers" title="Permanent link">&para;</a></h2>
 <table>
@@ -6040,24 +6041,31 @@
 <tbody>
 <tr>
 <td>Essential</td>
-<td><code>sbt test</code></td>
-<td>&lt; 5 min</td>
-<td>Every change</td>
+<td><code>sbt testEssential</code></td>
+<td>about 25 min</td>
+<td>Once at the end of a change; gates every merge in CI</td>
 </tr>
 <tr>
 <td>Standard</td>
-<td><code>sbt it:test</code></td>
+<td><code>sbt testStandard</code></td>
 <td>&lt; 30 min</td>
-<td>Before PR</td>
+<td>Before opening a PR; runs in CI with coverage</td>
 </tr>
 <tr>
 <td>Comprehensive</td>
-<td><code>sbt pp</code></td>
+<td><code>sbt testComprehensive</code></td>
 <td>&lt; 3 hr</td>
-<td>Pre-merge</td>
+<td>Release gate</td>
+</tr>
+<tr>
+<td>Integration</td>
+<td><code>sbt "IntegrationTest / test"</code></td>
+<td>varies</td>
+<td>After protocol-level changes</td>
 </tr>
 </tbody>
 </table>
+<p>What CI enforces, and what only reports, is published in <a href="../STATUS/">Verification Status</a>.</p>
 <h2 id="adr-categories">ADR Categories<a class="headerlink" href="#adr-categories" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -6113,18 +6121,21 @@
 </tr>
 <tr>
 <td><code>scalanet</code></td>
-<td>P2P networking</td>
+<td>P2P networking (RLPx)</td>
 </tr>
 <tr>
-<td><code>src</code></td>
-<td>Main Fukuii application</td>
+<td><code>scalanetDiscovery</code></td>
+<td>Peer discovery (discv4, discv5, ENR)</td>
+</tr>
+<tr>
+<td>root (<code>src/</code>)</td>
+<td>Main Fukuii application; <code>IntegrationTest</code>, <code>Evm</code>, <code>RpcTest</code> and <code>Benchmark</code> are configurations of it</td>
 </tr>
 </tbody>
 </table>
 <h2 id="before-submitting-a-pr">Before Submitting a PR<a class="headerlink" href="#before-submitting-a-pr" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>sbt<span class="w"> </span>formatCheck<span class="w">         </span><span class="c1"># Format and scalafix check (what CI runs)</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>sbt<span class="w"> </span>compile-all<span class="w">        </span><span class="c1"># Compilation</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>sbt<span class="w"> </span><span class="nb">test</span><span class="w">               </span><span class="c1"># All tests pass</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>sbt<span class="w"> </span>formatCheck<span class="w">        </span><span class="c1"># scalafmt and scalafix check (what CI runs)</span>
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>sbt<span class="w"> </span>pp<span class="w">                 </span><span class="c1"># compile-all, formatting, rlp tests, testQuick, IntegrationTest</span>
 </span></code></pre></div>
 <p>See <a href="../development/contributing/">Contributing Guide</a> for full details.</p>
 

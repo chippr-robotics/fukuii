@@ -6,13 +6,13 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Comprehensive documentation for the Fukuii Ethereum Classic client">
+        <meta name="description" content="Documentation for Fukuii, the EVM execution client for Ethereum Classic and Ethereum">
       
       
         <meta name="author" content="Chippr Robotics LLC">
       
       
-        <link rel="canonical" href="https://chippr-robotics.github.io/fukuii/for-node-operators/">
+        <link rel="canonical" href="https://docs.fukuii.com/for-node-operators/">
       
       
         <link rel="prev" href="../getting-started/build-from-source/">
@@ -5917,7 +5917,7 @@
 
 
   
-    <a href="https://github.com/chippr-robotics/fukuii/edit/develop/docs/for-node-operators/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/chippr-robotics/fukuii/edit/main/docs/for-node-operators/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -5927,22 +5927,16 @@
 
 <h1 id="for-node-operators">For Node Operators<a class="headerlink" href="#for-node-operators" title="Permanent link">&para;</a></h1>
 <h2 id="quick-start">Quick Start<a class="headerlink" href="#quick-start" title="Permanent link">&para;</a></h2>
-<p><strong>Important:</strong> Always use the assembly JAR, not <code>sbt run</code>.</p>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Build the assembly JAR</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>sbt<span class="w"> </span>assembly
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Run on Mordor testnet</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>java<span class="w"> </span>-Xmx4g<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span>-Dfukuii.datadir<span class="o">=</span>~/.fukuii/mordor<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span>-Dfukuii.network<span class="o">=</span>mordor<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span>-jar<span class="w"> </span>target/scala-3.3.7/fukuii-assembly-0.7.0.jar<span class="w"> </span>mordor
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="c1"># Run on ETC mainnet</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>java<span class="w"> </span>-Xmx4g<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span>-Dfukuii.datadir<span class="o">=</span>~/.fukuii/etc<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span>-Dfukuii.network<span class="o">=</span>etc<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span>-jar<span class="w"> </span>target/scala-3.3.7/fukuii-assembly-0.7.0.jar<span class="w"> </span>etc
+<p>Install Fukuii from the Ubuntu PPA, Chocolatey, a release archive or a signed container (see
+<a href="../getting-started/">Getting Started</a>), then start a network by name:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>fukuii<span class="w"> </span>mordor<span class="w">            </span><span class="c1"># ETC testnet</span>
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>fukuii<span class="w"> </span>etc<span class="w">               </span><span class="c1"># ETC mainnet</span>
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>fukuii<span class="w"> </span>sepolia<span class="w">           </span><span class="c1"># Ethereum testnet; needs a consensus client</span>
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>fukuii<span class="w"> </span>etc<span class="w"> </span>--tui<span class="w">         </span><span class="c1"># any network, with the terminal dashboard</span>
 </span></code></pre></div>
+<p>From a release archive the launcher is <code>./bin/fukuii</code>. The launcher applies the JVM settings in
+<code>conf/application.ini</code> (heap, direct-memory cap, GC and the JDK workaround flags), so run it rather than
+<code>java -jar</code> where you can. The datadir defaults to <code>~/.fukuii/&lt;network&gt;</code>; set <code>fukuii.datadir</code> to move it.</p>
 <h2 id="runbooks">Runbooks<a class="headerlink" href="#runbooks" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -5962,7 +5956,7 @@
 </tr>
 <tr>
 <td><a href="../runbooks/operating-modes/">Operating Modes</a></td>
-<td>Full node, archive node, light client</td>
+<td>Full node, archive node, bootstrap node</td>
 </tr>
 <tr>
 <td><a href="../for-operators/static-nodes-configuration/">Static Nodes</a></td>
@@ -5993,8 +5987,20 @@
 <td>Understanding and analyzing logs</td>
 </tr>
 <tr>
+<td><a href="../runbooks/mining-operations/">Mining Operations</a></td>
+<td>ETC Ethash mining</td>
+</tr>
+<tr>
+<td><a href="../runbooks/checkpoint-service/">Checkpoint Service</a></td>
+<td>Fast ETC/Mordor bootstrap from a trusted checkpoint</td>
+</tr>
+<tr>
+<td><a href="../runbooks/hoodi/">Hoodi</a> and <a href="../runbooks/ephemery/">Ephemery</a></td>
+<td>The built-in Ethereum testnets</td>
+</tr>
+<tr>
 <td><a href="../runbooks/known-issues/">Known Issues</a></td>
-<td>Common problems and solutions</td>
+<td>Current problems and workarounds</td>
 </tr>
 </tbody>
 </table>
@@ -6003,26 +6009,66 @@
 <thead>
 <tr>
 <th>Network</th>
+<th>Launcher argument</th>
 <th>Chain ID</th>
 <th>Network ID</th>
-<th>Default Data Dir</th>
+<th>Consensus client</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>ETC Mainnet</td>
+<td><code>etc</code></td>
 <td>61 (0x3d)</td>
 <td>1</td>
-<td><code>~/.fukuii/etc/</code></td>
+<td>Not needed (PoW)</td>
 </tr>
 <tr>
-<td>Mordor Testnet</td>
+<td>Mordor</td>
+<td><code>mordor</code></td>
 <td>63 (0x3f)</td>
 <td>7</td>
-<td><code>~/.fukuii/mordor/</code></td>
+<td>Not needed (PoW)</td>
+</tr>
+<tr>
+<td>Ethereum Mainnet</td>
+<td><code>eth</code></td>
+<td>1</td>
+<td>1</td>
+<td>Required</td>
+</tr>
+<tr>
+<td>Sepolia</td>
+<td><code>sepolia</code></td>
+<td>11155111</td>
+<td>11155111</td>
+<td>Required</td>
+</tr>
+<tr>
+<td>Hoodi</td>
+<td><code>hoodi</code></td>
+<td>560048</td>
+<td>560048</td>
+<td>Required</td>
+</tr>
+<tr>
+<td>Ephemery</td>
+<td><code>ephemery</code></td>
+<td>39438000 + iteration</td>
+<td>same as chain ID</td>
+<td>Required</td>
+</tr>
+<tr>
+<td>Platåberget</td>
+<td><code>plataberget</code></td>
+<td>7091047534</td>
+<td>7091047534</td>
+<td>Required</td>
 </tr>
 </tbody>
 </table>
+<p>On the networks that need a consensus client the Engine API listens on <code>localhost:8551</code>, and the JWT secret is
+<code>&lt;datadir&gt;/jwt.hex</code>, created at first start. Pass that file to the consensus client's <code>--execution-jwt</code>.</p>
 <h2 id="essential-ports">Essential Ports<a class="headerlink" href="#essential-ports" title="Permanent link">&para;</a></h2>
 <table>
 <thead>
@@ -6043,21 +6089,39 @@
 <tr>
 <td>8546</td>
 <td>TCP</td>
-<td>JSON-RPC</td>
+<td>JSON-RPC over HTTP, health endpoints</td>
+<td><strong>Private</strong></td>
+</tr>
+<tr>
+<td>8552</td>
+<td>TCP</td>
+<td>JSON-RPC over WebSocket (off by default)</td>
+<td><strong>Private</strong></td>
+</tr>
+<tr>
+<td>8551</td>
+<td>TCP</td>
+<td>Engine API (Ethereum networks)</td>
 <td><strong>Private</strong></td>
 </tr>
 </tbody>
 </table>
 <h2 id="health-checks">Health Checks<a class="headerlink" href="#health-checks" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Sync status</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8546<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}'</span>
-</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>
-</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="c1"># Peer count</span>
-</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8546<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}'</span>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Liveness: 200 while the RPC server is up</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8546/health
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
+</span><span id="__span-1-4"><a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Readiness: 503 until the node is ready to serve</span>
+</span><span id="__span-1-5"><a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8546/readiness
+</span><span id="__span-1-6"><a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
+</span><span id="__span-1-7"><a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Sync status</span>
+</span><span id="__span-1-8"><a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8546<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-9"><a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-10"><a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}'</span>
+</span><span id="__span-1-11"><a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>
+</span><span id="__span-1-12"><a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="c1"># Peer count</span>
+</span><span id="__span-1-13"><a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8546<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-14"><a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-1-15"><a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="w">  </span>-d<span class="w"> </span><span class="s1">'{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}'</span>
 </span></code></pre></div>
 <h2 id="deployment">Deployment<a class="headerlink" href="#deployment" title="Permanent link">&para;</a></h2>
 <table>
@@ -6074,7 +6138,7 @@
 </tr>
 <tr>
 <td><a href="../deployment/kong/">Kong API Gateway</a></td>
-<td>Barad-dur API gateway integration</td>
+<td>Barad-dûr API gateway integration</td>
 </tr>
 <tr>
 <td><a href="../operations/metrics-and-monitoring/">Monitoring</a></td>

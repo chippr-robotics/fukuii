@@ -6,13 +6,13 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Comprehensive documentation for the Fukuii Ethereum Classic client">
+        <meta name="description" content="Documentation for Fukuii, the EVM execution client for Ethereum Classic and Ethereum">
       
       
         <meta name="author" content="Chippr Robotics LLC">
       
       
-        <link rel="canonical" href="https://chippr-robotics.github.io/fukuii/">
+        <link rel="canonical" href="https://docs.fukuii.com/">
       
       
       
@@ -5963,7 +5963,7 @@
 
 
   
-    <a href="https://github.com/chippr-robotics/fukuii/edit/develop/docs/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/chippr-robotics/fukuii/edit/main/docs/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -6002,15 +6002,34 @@
 </ul>
 </div>
 <h2 id="what-is-fukuii">What is Fukuii?<a class="headerlink" href="#what-is-fukuii" title="Permanent link">&para;</a></h2>
-<p>Fukuii is an EVM-compliant execution layer client built with Scala 3. Originating as a fork of Mantis for Ethereum Classic, it has evolved into a general-purpose EVM engine that participates in any consensus model via a pluggable three-layer architecture (<code>fukuii-core</code> / <code>fukuii-env</code> / consensus module — see <a href="architecture/pluggable-consensus-vision/">Pluggable Consensus Vision</a>). It provides:</p>
+<p>Fukuii is an EVM execution layer client written in Scala 3, maintained by Chippr Robotics LLC. It began as a fork of
+IOHK's Mantis client for Ethereum Classic and now runs two chain families from one binary:</p>
 <ul>
-<li><strong>Dual PoW/PoS operation</strong> — Native Ethash mining for Ethereum Classic and Mordor, plus Engine API V1–V4 (through Prague/Electra) for post-Merge Ethereum networks paired with any CL client (Lighthouse, Prysm, Teku, Lodestar, Nimbus)</li>
-<li><strong>Full EVM through Prague/Electra</strong> — All mainstream EIPs supported, including EIP-1559, EIP-3855 (PUSH0), EIP-4844 (blob transactions), EIP-4895 (withdrawals), EIP-4788 (beacon root), EIP-7685 (execution requests), plus ETC's ECIP-1066 hard-fork schedule through Olympia (ECIP-1111/1112/1121)</li>
-<li><strong>Multi-mode sync</strong> — SNAP, fast, and regular sync for PoW chains; optimistic block import via Engine API for PoS chains</li>
-<li><strong>JSON-RPC API</strong> — <code>eth_*</code>, <code>net_*</code>, <code>web3_*</code>, <code>debug_*</code>, <code>trace_*</code>, <code>admin_*</code>, <code>txpool_*</code>, <code>personal_*</code>, <code>engine_*</code> (authrpc), plus MCP 2025-11-25 for agentic AI control. Over HTTP and WebSocket only <code>eth_*</code>, <code>net_*</code>, <code>web3_*</code> and the <code>fukuii_*</code> method are on by default; the other namespaces are opt-in per transport (<code>network.rpc.http.apis</code>, <code>ws.apis</code>, <code>ipc.apis</code>), and IPC serves them all</li>
-<li><strong>Hive simulator coverage</strong> — the Ethereum Foundation Hive suite (<code>smoke</code>, <code>rpc</code>, <code>graphql</code>, <code>devp2p</code>, <code>sync</code>, <code>consensus</code>, <code>pyspec</code>, <code>engine</code>, <code>consume-engine</code>, <code>consume-rlp</code>) runs per-simulator in CI. <strong>Which of these are enforced gates and which merely report is published in <a href="STATUS/">Verification Status</a></strong> — we do not claim a suite is verified unless a check can fail on it</li>
-<li><strong>Docker support</strong> — Production-ready container images with signed releases and SLSA provenance</li>
-<li><strong>Comprehensive monitoring</strong> — Prometheus metrics, Grafana dashboards, health/readiness endpoints</li>
+<li><strong>Ethereum Classic and Mordor, natively</strong> — proof of work with Ethash, block-number forks, a built-in miner, SNAP
+  sync and checkpoint bootstrap.</li>
+<li><strong>Ethereum mainnet, Sepolia, Hoodi, Ephemery and Platåberget</strong> — proof of stake behind any consensus client
+  (Lighthouse, Prysm, Teku, Lodestar, Nimbus) over the Engine API, with timestamp forks.</li>
+</ul>
+<p>What it provides:</p>
+<ul>
+<li><strong>EVM-compatible through Amsterdam</strong> — mainnet's schedule through Osaka and the BPO2 blob fork, and the Amsterdam
+  (Glamsterdam, EIP-7773) execution rules, live on Sepolia and Platåberget. See <a href="specifications/GLAMSTERDAM/">Glamsterdam</a>.</li>
+<li><strong>Engine API</strong> — <code>engine_newPayloadV1..V5</code>, <code>engine_forkchoiceUpdatedV1..V4</code>, <code>engine_getPayloadV1..V6</code>,
+  <code>engine_getPayloadBodiesByHash/ByRange</code> V1 and V2, <code>engine_getBlobsV1/V2</code>, <code>engine_getClientVersionV1</code>. It is on by
+  default for the chains that need a consensus client, on <code>localhost:8551</code>, with a persistent secret at
+  <code>&lt;datadir&gt;/jwt.hex</code>.</li>
+<li><strong>Sync</strong> — SNAP (with checkpoint bootstrap) on ETC and Mordor; block import under the consensus client on the
+  Ethereum networks. Fast sync was removed.</li>
+<li><strong>JSON-RPC, GraphQL and IPC</strong> — HTTP on 8546 and WebSocket on 8552, both on localhost. Like go-ethereum, HTTP and
+  WebSocket serve <code>eth</code>, <code>net</code>, <code>web3</code> and <code>fukuii</code> until you opt in to more per transport (<code>network.rpc.http.apis</code>,
+  <code>ws.apis</code>); IPC serves every production namespace. <code>debug</code>, <code>trace</code>, <code>txpool</code>, <code>admin</code>, <code>miner</code>, <code>personal</code>, and an
+  <a href="MCP/">MCP server</a> are available. Health endpoints: <code>/health</code>, <code>/readiness</code>, <code>/healthcheck</code>, <code>/buildinfo</code>.</li>
+<li><strong>Operations</strong> — a <code>--tui</code> command center, Prometheus metrics, Grafana dashboards in <code>ops/</code>, and runbooks for every
+  day-to-day task.</li>
+<li><strong>Packages and images</strong> — the <code>ppa:chipprbots/fukuii</code> Ubuntu PPA, the <code>fukuii</code> Chocolatey package, release archives
+  with <code>SHA256SUMS.txt</code>, and Cosign-signed images on GHCR with provenance and SBOM attestations.</li>
+<li><strong>Verification</strong> — what CI enforces, and what only reports, is published in <a href="STATUS/">Verification Status</a>. We do
+  not claim a suite is verified unless a check can fail on it.</li>
 </ul>
 <h2 id="quick-links">Quick Links<a class="headerlink" href="#quick-links" title="Permanent link">&para;</a></h2>
 <table>
@@ -6022,7 +6041,7 @@
 </thead>
 <tbody>
 <tr>
-<td>Run a node quickly</td>
+<td>Install and run a node</td>
 <td><a href="getting-started/quickstart/">Quick Start</a></td>
 </tr>
 <tr>
@@ -6054,6 +6073,10 @@
 <td><a href="api/">API Reference — Engine API section</a></td>
 </tr>
 <tr>
+<td>See what CI enforces</td>
+<td><a href="STATUS/">Verification Status</a></td>
+</tr>
+<tr>
 <td>Contribute code</td>
 <td><a href="development/contributing/">Contributing Guide</a></td>
 </tr>
@@ -6064,6 +6087,7 @@
 </tbody>
 </table>
 <h2 id="supported-networks">Supported Networks<a class="headerlink" href="#supported-networks" title="Permanent link">&para;</a></h2>
+<p>Each network is one argument to the launcher, for example <code>fukuii etc</code> or <code>fukuii sepolia</code>.</p>
 <table>
 <thead>
 <tr>
@@ -6078,19 +6102,25 @@
 <td>Ethereum Classic</td>
 <td>61</td>
 <td>PoW (Ethash)</td>
-<td>Full sync (SNAP / regular)</td>
+<td>Built in (<code>fukuii etc</code>); SNAP sync with checkpoint bootstrap</td>
 </tr>
 <tr>
 <td>Mordor</td>
 <td>63</td>
 <td>PoW (Ethash)</td>
-<td>Full sync (SNAP / regular)</td>
+<td>Built in (<code>fukuii mordor</code>); SNAP sync with checkpoint bootstrap</td>
+</tr>
+<tr>
+<td>Ethereum Mainnet</td>
+<td>1</td>
+<td>PoS (Engine API)</td>
+<td>Built in (<code>fukuii eth</code>); schedule through Osaka and BPO2, Amsterdam not yet scheduled on mainnet</td>
 </tr>
 <tr>
 <td>Sepolia</td>
 <td>11155111</td>
 <td>PoS (Engine API)</td>
-<td>Validated — 21+ EL peers, Lighthouse CL. Glamsterdam (Amsterdam) from v0.9.0; activates 2026-10-06 13:53:36 UTC (<a href="specifications/GLAMSTERDAM/">details</a>)</td>
+<td>Built in (<code>fukuii sepolia</code>); Amsterdam active since 2026-10-06 (<a href="specifications/GLAMSTERDAM/">details</a>)</td>
 </tr>
 <tr>
 <td>Hoodi</td>
@@ -6108,13 +6138,13 @@
 <td>Platåberget</td>
 <td>7091047534</td>
 <td>PoS (Engine API)</td>
-<td>Glamsterdam testnet, Amsterdam active since 2026-08-20. The full Amsterdam rule set ships in v0.9.0; the live soak is tracked in <a href="https://github.com/chippr-robotics/fukuii/issues/1432">#1432</a> (<a href="specifications/GLAMSTERDAM/">details</a>)</td>
+<td>Built in (<code>fukuii plataberget</code>); the public Glamsterdam testnet, Amsterdam active since 2026-08-20 (<a href="specifications/GLAMSTERDAM/">details</a>)</td>
 </tr>
 <tr>
-<td>Ethereum Mainnet</td>
-<td>1</td>
-<td>PoS (Engine API)</td>
-<td>Configuration available</td>
+<td>Gorgoroth and custom chains</td>
+<td>your genesis</td>
+<td>PoW or PoS</td>
+<td>Private test network, or a custom genesis with no source changes (<a href="runbooks/custom-networks/">runbook</a>)</td>
 </tr>
 </tbody>
 </table>
@@ -6128,6 +6158,7 @@
 <li><strong><a href="operations/state-healing-operations/">State Healing Guide</a></strong> — Operating the post-SNAP healing phase</li>
 <li><strong><a href="operations/metrics-reference/">Metrics Reference</a></strong> — Prometheus metric catalog</li>
 <li><strong><a href="for-developers/">For Developers</a></strong> — Architecture, contributing, and API docs</li>
+<li><strong><a href="blog/">Blog</a></strong> — Release notes and spec write-ups</li>
 <li><strong><a href="specifications/">Reference</a></strong> — Specifications, ADRs, and technical details</li>
 <li><strong><a href="troubleshooting/">Troubleshooting</a></strong> — Common issues and solutions</li>
 </ul>

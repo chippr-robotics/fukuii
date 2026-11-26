@@ -6,13 +6,13 @@
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width,initial-scale=1">
       
-        <meta name="description" content="Comprehensive documentation for the Fukuii Ethereum Classic client">
+        <meta name="description" content="Documentation for Fukuii, the EVM execution client for Ethereum Classic and Ethereum">
       
       
         <meta name="author" content="Chippr Robotics LLC">
       
       
-        <link rel="canonical" href="https://chippr-robotics.github.io/fukuii/getting-started/">
+        <link rel="canonical" href="https://docs.fukuii.com/getting-started/">
       
       
         <link rel="prev" href="../blog/archive/2026/">
@@ -5810,10 +5810,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#minimum-requirements" class="md-nav__link">
+  <a href="#hardware" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Minimum Requirements
+        Hardware
       
     </span>
   </a>
@@ -5821,10 +5821,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#software-requirements" class="md-nav__link">
+  <a href="#software" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Software Requirements
+        Software
       
     </span>
   </a>
@@ -5832,10 +5832,10 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#required-ports" class="md-nav__link">
+  <a href="#ports" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Required Ports
+        Ports
       
     </span>
   </a>
@@ -5848,10 +5848,10 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#quick-docker-start" class="md-nav__link">
+  <a href="#quick-install" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Quick Docker Start
+        Quick Install
       
     </span>
   </a>
@@ -5863,6 +5863,17 @@
     <span class="md-ellipsis">
       
         Verify Installation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#ethereum-networks-need-a-consensus-client" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ethereum networks need a consensus client
       
     </span>
   </a>
@@ -5945,7 +5956,7 @@
 
 
   
-    <a href="https://github.com/chippr-robotics/fukuii/edit/develop/docs/getting-started/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+    <a href="https://github.com/chippr-robotics/fukuii/edit/main/docs/getting-started/index.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
       
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
     </a>
@@ -5954,21 +5965,21 @@
 
 
 <h1 id="getting-started">Getting Started<a class="headerlink" href="#getting-started" title="Permanent link">&para;</a></h1>
-<p>Get up and running with Fukuii quickly. Choose the installation method that best fits your needs.</p>
+<p>Install Fukuii from a package manager, a release archive or a signed container image, or build it from source.</p>
 <h2 id="choose-your-path">Choose Your Path<a class="headerlink" href="#choose-your-path" title="Permanent link">&para;</a></h2>
 <div class="grid cards">
 <ul>
 <li>
-<p><img alt="🐳" class="twemoji" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f433.svg" title=":whale:" /> <strong>Docker (Recommended)</strong></p>
+<p><img alt="📦" class="twemoji" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f4e6.svg" title=":package:" /> <strong>Packages</strong></p>
 <hr />
-<p>The fastest way to run Fukuii in production with signed container images.</p>
-<p><a href="../deployment/docker/"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13.22 19.03a.75.75 0 0 1 0-1.06L18.19 13H3.75a.75.75 0 0 1 0-1.5h14.44l-4.97-4.97a.749.749 0 0 1 .326-1.275.75.75 0 0 1 .734.215l6.25 6.25a.75.75 0 0 1 0 1.06l-6.25 6.25a.75.75 0 0 1-1.06 0"/></svg></span> Docker Quick Start</a></p>
+<p><code>ppa:chipprbots/fukuii</code> for Ubuntu (noble, jammy) and the <code>fukuii</code> package on Chocolatey for Windows.</p>
+<p><a href="quickstart/"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13.22 19.03a.75.75 0 0 1 0-1.06L18.19 13H3.75a.75.75 0 0 1 0-1.5h14.44l-4.97-4.97a.749.749 0 0 1 .326-1.275.75.75 0 0 1 .734.215l6.25 6.25a.75.75 0 0 1 0 1.06l-6.25 6.25a.75.75 0 0 1-1.06 0"/></svg></span> Quick Start</a></p>
 </li>
 <li>
-<p><img alt="☁" class="twemoji" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/2601.svg" title=":cloud:" /> <strong>GitHub Codespaces</strong></p>
+<p><img alt="🐳" class="twemoji" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f433.svg" title=":whale:" /> <strong>Signed container</strong></p>
 <hr />
-<p>Perfect for development. Get a complete environment in your browser.</p>
-<p><a href="codespaces/"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13.22 19.03a.75.75 0 0 1 0-1.06L18.19 13H3.75a.75.75 0 0 1 0-1.5h14.44l-4.97-4.97a.749.749 0 0 1 .326-1.275.75.75 0 0 1 .734.215l6.25 6.25a.75.75 0 0 1 0 1.06l-6.25 6.25a.75.75 0 0 1-1.06 0"/></svg></span> Codespaces Setup</a></p>
+<p>Cosign-signed images on GHCR, with provenance and SBOM attestations.</p>
+<p><a href="../deployment/docker/"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13.22 19.03a.75.75 0 0 1 0-1.06L18.19 13H3.75a.75.75 0 0 1 0-1.5h14.44l-4.97-4.97a.749.749 0 0 1 .326-1.275.75.75 0 0 1 .734.215l6.25 6.25a.75.75 0 0 1 0 1.06l-6.25 6.25a.75.75 0 0 1-1.06 0"/></svg></span> Docker Guide</a></p>
 </li>
 <li>
 <p><img alt="🛠" class="twemoji" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/1f6e0.svg" title=":hammer_and_wrench:" /> <strong>Build from Source</strong></p>
@@ -5976,10 +5987,16 @@
 <p>Build Fukuii yourself for development or customization.</p>
 <p><a href="build-from-source/"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13.22 19.03a.75.75 0 0 1 0-1.06L18.19 13H3.75a.75.75 0 0 1 0-1.5h14.44l-4.97-4.97a.749.749 0 0 1 .326-1.275.75.75 0 0 1 .734.215l6.25 6.25a.75.75 0 0 1 0 1.06l-6.25 6.25a.75.75 0 0 1-1.06 0"/></svg></span> Build Guide</a></p>
 </li>
+<li>
+<p><img alt="☁" class="twemoji" src="https://cdn.jsdelivr.net/gh/jdecked/twemoji@16.0.1/assets/svg/2601.svg" title=":cloud:" /> <strong>GitHub Codespaces</strong></p>
+<hr />
+<p>A complete development environment in your browser.</p>
+<p><a href="codespaces/"><span class="twemoji"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13.22 19.03a.75.75 0 0 1 0-1.06L18.19 13H3.75a.75.75 0 0 1 0-1.5h14.44l-4.97-4.97a.749.749 0 0 1 .326-1.275.75.75 0 0 1 .734.215l6.25 6.25a.75.75 0 0 1 0 1.06l-6.25 6.25a.75.75 0 0 1-1.06 0"/></svg></span> Codespaces Setup</a></p>
+</li>
 </ul>
 </div>
 <h2 id="system-requirements">System Requirements<a class="headerlink" href="#system-requirements" title="Permanent link">&para;</a></h2>
-<h3 id="minimum-requirements">Minimum Requirements<a class="headerlink" href="#minimum-requirements" title="Permanent link">&para;</a></h3>
+<h3 id="hardware">Hardware<a class="headerlink" href="#hardware" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
@@ -6011,92 +6028,166 @@
 </tr>
 </tbody>
 </table>
-<h3 id="software-requirements">Software Requirements<a class="headerlink" href="#software-requirements" title="Permanent link">&para;</a></h3>
-<div class="tabbed-set tabbed-alternate" data-tabs="1:2"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Docker</label><label for="__tabbed_1_2">Source Build</label></div>
+<p>These figures are for an ETC full node. A Sepolia or mainnet node that keeps full block history needs much more disk;
+see <a href="../runbooks/known-issues/">Known Issues</a> and <a href="../runbooks/disk-management/">Disk Management</a> before you sync.</p>
+<h3 id="software">Software<a class="headerlink" href="#software" title="Permanent link">&para;</a></h3>
+<div class="tabbed-set tabbed-alternate" data-tabs="1:4"><input checked="checked" id="__tabbed_1_1" name="__tabbed_1" type="radio" /><input id="__tabbed_1_2" name="__tabbed_1" type="radio" /><input id="__tabbed_1_3" name="__tabbed_1" type="radio" /><input id="__tabbed_1_4" name="__tabbed_1" type="radio" /><div class="tabbed-labels"><label for="__tabbed_1_1">Packages</label><label for="__tabbed_1_2">Release archive</label><label for="__tabbed_1_3">Docker</label><label for="__tabbed_1_4">Source build</label></div>
 <div class="tabbed-content">
 <div class="tabbed-block">
 <ul>
-<li>Docker 20.10 or later</li>
-<li>docker-compose (optional)</li>
+<li>Ubuntu PPA: Ubuntu 24.04 (noble) or 22.04 (jammy). The package depends on an OpenJDK 25 runtime.</li>
+<li>Chocolatey: Windows with Chocolatey. The package installs the Temurin 25 JRE.</li>
 </ul>
 </div>
 <div class="tabbed-block">
 <ul>
-<li>JDK 25 (OpenJDK or Oracle JDK)</li>
+<li>JDK 25 or later</li>
+</ul>
+</div>
+<div class="tabbed-block">
+<ul>
+<li>Docker 20.10 or later</li>
+<li><code>cosign</code>, to verify image signatures</li>
+</ul>
+</div>
+<div class="tabbed-block">
+<ul>
+<li>JDK 25</li>
 <li>sbt 1.13.0 or later</li>
 <li>Git</li>
 </ul>
 </div>
 </div>
 </div>
-<h3 id="required-ports">Required Ports<a class="headerlink" href="#required-ports" title="Permanent link">&para;</a></h3>
+<h3 id="ports">Ports<a class="headerlink" href="#ports" title="Permanent link">&para;</a></h3>
 <table>
 <thead>
 <tr>
 <th>Port</th>
 <th>Protocol</th>
 <th>Purpose</th>
+<th>Exposure</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td>30303</td>
-<td>UDP</td>
-<td>Discovery protocol</td>
+<td>TCP</td>
+<td>P2P (RLPx)</td>
+<td>Public</td>
 </tr>
 <tr>
 <td>30303</td>
-<td>TCP</td>
-<td>Ethereum P2P</td>
+<td>UDP</td>
+<td>Discovery</td>
+<td>Public</td>
 </tr>
 <tr>
 <td>8546</td>
 <td>TCP</td>
-<td>JSON-RPC (internal only!)</td>
+<td>JSON-RPC over HTTP, plus <code>/health</code>, <code>/readiness</code>, <code>/buildinfo</code></td>
+<td>Localhost only</td>
+</tr>
+<tr>
+<td>8552</td>
+<td>TCP</td>
+<td>JSON-RPC over WebSocket (off unless enabled)</td>
+<td>Localhost only</td>
+</tr>
+<tr>
+<td>8551</td>
+<td>TCP</td>
+<td>Engine API, for the consensus client (Ethereum networks)</td>
+<td>Localhost or a private network</td>
 </tr>
 </tbody>
 </table>
 <div class="admonition warning">
 <p class="admonition-title">Security Notice</p>
-<p>Never expose port 8546 to the public internet. See the <a href="../runbooks/security/">Security Runbook</a> for details.</p>
+<p>Never expose the JSON-RPC or Engine API ports to the public internet. They bind to <code>localhost</code> by default. See the
+<a href="../runbooks/security/">Security Runbook</a> for details.</p>
 </div>
-<h2 id="quick-docker-start">Quick Docker Start<a class="headerlink" href="#quick-docker-start" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="c1"># Pull the latest signed release</span>
-</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/chippr-robotics/fukuii:latest
-</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>
-</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="c1"># Create data volumes</span>
-</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>docker<span class="w"> </span>volume<span class="w"> </span>create<span class="w"> </span>fukuii-data
-</span><span id="__span-0-6"><a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>docker<span class="w"> </span>volume<span class="w"> </span>create<span class="w"> </span>fukuii-conf
-</span><span id="__span-0-7"><a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>
-</span><span id="__span-0-8"><a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="c1"># Run the node</span>
-</span><span id="__span-0-9"><a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-10"><a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">  </span>--name<span class="w"> </span>fukuii<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-11"><a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span>--restart<span class="w"> </span>unless-stopped<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-12"><a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">  </span>-p<span class="w"> </span><span class="m">30303</span>:30303<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-13"><a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">  </span>-p<span class="w"> </span><span class="m">30303</span>:30303/udp<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-14"><a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span>-v<span class="w"> </span>fukuii-data:/app/data<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-15"><a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">  </span>-v<span class="w"> </span>fukuii-conf:/app/conf<span class="w"> </span><span class="se">\</span>
-</span><span id="__span-0-16"><a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">  </span>ghcr.io/chippr-robotics/fukuii:latest
+<h2 id="quick-install">Quick Install<a class="headerlink" href="#quick-install" title="Permanent link">&para;</a></h2>
+<div class="tabbed-set tabbed-alternate" data-tabs="2:4"><input checked="checked" id="__tabbed_2_1" name="__tabbed_2" type="radio" /><input id="__tabbed_2_2" name="__tabbed_2" type="radio" /><input id="__tabbed_2_3" name="__tabbed_2" type="radio" /><input id="__tabbed_2_4" name="__tabbed_2" type="radio" /><div class="tabbed-labels"><label for="__tabbed_2_1">Ubuntu (PPA)</label><label for="__tabbed_2_2">Windows (Chocolatey)</label><label for="__tabbed_2_3">Release archive</label><label for="__tabbed_2_4">Docker</label></div>
+<div class="tabbed-content">
+<div class="tabbed-block">
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-0-1"><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>sudo<span class="w"> </span>add-apt-repository<span class="w"> </span>ppa:chipprbots/fukuii
+</span><span id="__span-0-2"><a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>sudo<span class="w"> </span>apt<span class="w"> </span>update
+</span><span id="__span-0-3"><a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>sudo<span class="w"> </span>apt<span class="w"> </span>install<span class="w"> </span>fukuii
+</span><span id="__span-0-4"><a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>
+</span><span id="__span-0-5"><a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>fukuii<span class="w"> </span>etc<span class="w">      </span><span class="c1"># or mordor, eth, sepolia, hoodi, ephemery</span>
 </span></code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="language-powershell highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="n">choco</span> <span class="n">install</span> <span class="n">fukuii</span>
+</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>
+</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">fukuii</span> <span class="n">etc</span>      <span class="c"># or mordor, eth, sepolia, hoodi, ephemery</span>
+</span></code></pre></div>
+</div>
+<div class="tabbed-block">
+<p>Download <code>fukuii-&lt;version&gt;.zip</code> (or <code>.tgz</code>) and <code>SHA256SUMS.txt</code> from the
+<a href="https://github.com/chippr-robotics/fukuii/releases/latest">latest release</a>, then:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>sha256sum<span class="w"> </span>-c<span class="w"> </span>SHA256SUMS.txt<span class="w"> </span>--ignore-missing
+</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>unzip<span class="w"> </span>fukuii-&lt;version&gt;.zip<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">cd</span><span class="w"> </span>fukuii-&lt;version&gt;
+</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>./bin/fukuii<span class="w"> </span>etc
+</span></code></pre></div>
+</div>
+<div class="tabbed-block">
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-3-1"><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>docker<span class="w"> </span>pull<span class="w"> </span>ghcr.io/chippr-robotics/fukuii:&lt;version&gt;
+</span><span id="__span-3-2"><a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>
+</span><span id="__span-3-3"><a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>cosign<span class="w"> </span>verify<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-4"><a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span>--certificate-identity-regexp<span class="o">=</span>https://github.com/chippr-robotics/fukuii<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-5"><a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span>--certificate-oidc-issuer<span class="o">=</span>https://token.actions.githubusercontent.com<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-6"><a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span>ghcr.io/chippr-robotics/fukuii:&lt;version&gt;
+</span><span id="__span-3-7"><a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>
+</span><span id="__span-3-8"><a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>fukuii<span class="w"> </span>--restart<span class="w"> </span>unless-stopped<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-9"><a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">  </span>-p<span class="w"> </span><span class="m">30303</span>:30303/tcp<span class="w"> </span>-p<span class="w"> </span><span class="m">30303</span>:30303/udp<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-10"><a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">  </span>-p<span class="w"> </span><span class="m">127</span>.0.0.1:8546:8546<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-11"><a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">  </span>-v<span class="w"> </span>fukuii-data:/app/data<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-3-12"><a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">  </span>ghcr.io/chippr-robotics/fukuii:&lt;version&gt;
+</span></code></pre></div>
+<p>The image keeps its data in <code>/app/data</code> and binds JSON-RPC to the container's interfaces so Docker can forward the
+published port. Publishing it on <code>127.0.0.1</code> keeps it on the host's loopback.
+Release images up to v0.12.79 need <code>-Dfukuii.datadir=/app/data
+-Dfukuii.network.rpc.http.interface=0.0.0.0</code> appended after the image name; see the <a href="quickstart/">Quick Start</a>.</p>
+</div>
+</div>
+</div>
+<p>The datadir defaults to <code>~/.fukuii/&lt;network&gt;</code>. Add <code>--tui</code> to any launch for the terminal dashboard.</p>
 <h2 id="verify-installation">Verify Installation<a class="headerlink" href="#verify-installation" title="Permanent link">&para;</a></h2>
-<div class="language-bash highlight"><pre><span></span><code><span id="__span-1-1"><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Check if node is responding</span>
-</span><span id="__span-1-2"><a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>--data<span class="w"> </span><span class="s1">'{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}'</span><span class="w"> </span><span class="se">\</span>
-</span><span id="__span-1-3"><a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="w">  </span>http://localhost:8546
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-4-1"><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># Liveness</span>
+</span><span id="__span-4-2"><a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>curl<span class="w"> </span>-s<span class="w"> </span>http://localhost:8546/health
+</span><span id="__span-4-3"><a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
+</span><span id="__span-4-4"><a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># Client version</span>
+</span><span id="__span-4-5"><a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>curl<span class="w"> </span>-s<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-6"><a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>--data<span class="w"> </span><span class="s1">'{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}'</span><span class="w"> </span><span class="se">\</span>
+</span><span id="__span-4-7"><a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span>http://localhost:8546
 </span></code></pre></div>
-<p>Expected response:
-<div class="language-json highlight"><pre><span></span><code><span id="__span-2-1"><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="p">{</span>
-</span><span id="__span-2-2"><a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="w">  </span><span class="nt">"jsonrpc"</span><span class="p">:</span><span class="s2">"2.0"</span><span class="p">,</span>
-</span><span id="__span-2-3"><a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">  </span><span class="nt">"id"</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>
-</span><span id="__span-2-4"><a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">"result"</span><span class="p">:</span><span class="s2">"Fukuii/v&lt;version&gt;/..."</span>
-</span><span id="__span-2-5"><a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="p">}</span>
-</span></code></pre></div></p>
+<p>Expected response:</p>
+<div class="language-json highlight"><pre><span></span><code><span id="__span-5-1"><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="p">{</span>
+</span><span id="__span-5-2"><a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="w">  </span><span class="nt">"jsonrpc"</span><span class="p">:</span><span class="s2">"2.0"</span><span class="p">,</span>
+</span><span id="__span-5-3"><a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="w">  </span><span class="nt">"id"</span><span class="p">:</span><span class="mi">1</span><span class="p">,</span>
+</span><span id="__span-5-4"><a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="w">  </span><span class="nt">"result"</span><span class="p">:</span><span class="s2">"Fukuii/v&lt;version&gt;/..."</span>
+</span><span id="__span-5-5"><a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="p">}</span>
+</span></code></pre></div>
+<h2 id="ethereum-networks-need-a-consensus-client">Ethereum networks need a consensus client<a class="headerlink" href="#ethereum-networks-need-a-consensus-client" title="Permanent link">&para;</a></h2>
+<p>On <code>eth</code>, <code>sepolia</code>, <code>hoodi</code>, <code>ephemery</code> and <code>plataberget</code> the Engine API is on by default on <code>localhost:8551</code>. At first
+start Fukuii writes a secret to <code>&lt;datadir&gt;/jwt.hex</code>. Point your consensus client at it:</p>
+<div class="language-bash highlight"><pre><span></span><code><span id="__span-6-1"><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>fukuii<span class="w"> </span>sepolia
+</span><span id="__span-6-2"><a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>
+</span><span id="__span-6-3"><a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>lighthouse<span class="w"> </span>bn<span class="w"> </span>--network<span class="w"> </span>sepolia<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-4"><a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span>--execution-endpoint<span class="w"> </span>http://localhost:8551<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-5"><a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span>--execution-jwt<span class="w"> </span>~/.fukuii/sepolia/jwt.hex<span class="w"> </span><span class="se">\</span>
+</span><span id="__span-6-6"><a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="w">  </span>--checkpoint-sync-url<span class="w"> </span>&lt;provider&gt;
+</span></code></pre></div>
+<p>ETC and Mordor need no consensus client.</p>
 <h2 id="next-steps">Next Steps<a class="headerlink" href="#next-steps" title="Permanent link">&para;</a></h2>
-<p>After installation, explore these guides:</p>
 <ol>
 <li><strong><a href="../runbooks/first-start/">First Start Runbook</a></strong> — Complete initial setup</li>
 <li><strong><a href="../runbooks/node-configuration/">Node Configuration</a></strong> — Customize your node</li>
 <li><strong><a href="../runbooks/security/">Security Runbook</a></strong> — Secure your installation</li>
 <li><strong><a href="../operations/metrics-and-monitoring/">Monitoring Guide</a></strong> — Set up Prometheus and Grafana</li>
+<li><strong><a href="../runbooks/known-issues/">Known Issues</a></strong> — Read before your first long sync</li>
 </ol>
 
 
