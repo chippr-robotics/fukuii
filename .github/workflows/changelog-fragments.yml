@@ -1,0 +1,41 @@
+# Changelog fragments
+#
+# A PR records its CHANGELOG entry as changelog.d/<id>.<section>.md instead of editing CHANGELOG.md's [Unreleased]
+# section, where parallel PRs conflicted (B-144). scripts/changelog/assemble.py merges the fragments at release prep.
+# This job runs the script's self-test and validates the fragments: a malformed name, an unknown section, an empty
+# fragment or one that is not a Markdown bullet fails it. Not a required check.
+# Run locally: `python3 -I -m unittest discover -s scripts/changelog -v` and
+# `python3 -I scripts/changelog/assemble.py --check`.
+
+name: Changelog Fragments
+
+on:
+  pull_request:
+    paths:
+      - 'changelog.d/**'
+      - 'CHANGELOG.md'
+      - 'scripts/changelog/**'
+      - '.github/workflows/changelog-fragments.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  changelog-fragments:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Self-test
+        run: python3 -I -m unittest discover -s scripts/changelog -v
+
+      - name: Check fragments
+        run: python3 -I scripts/changelog/assemble.py --check
