@@ -6030,17 +6030,18 @@ items:
   - id: B-551
     title: "Gate promotions (#1402): first required Hive slice by its promote_by dates; migrate or delete hive-prague/hive-osaka"
     priority: P2
-    status: claimed
+    status: review
     area: ci
     size: M
     opened: 2026-11-25
     refs: ["#1402"]
-    links: {}
+    links:
+      prs: [2151]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-26T22:13:30Z
-      heartbeat: 2026-11-26T22:13:30Z
+      heartbeat: 2026-11-26T23:21:02Z
     notes: gates.yml dates 2026-11-30 and 2026-12-31; also fix stale consume-rlp status_note gates.yml:206
   - id: B-552
     title: "Spec 018 follow-on: history expiry and tiered storage (hot state on SSD, move/expire old bodies and receipts)"
