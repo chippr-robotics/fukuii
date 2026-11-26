@@ -6183,3 +6183,13 @@ items:
     refs: ["PR #2151"]
     links: {}
     notes: Fix the key and add a self-test so the check inspects the slice.
+  - id: B-565
+    title: "Promote the windows-bls gate to required before ETC/Mordor schedule Olympia with Windows supported (forge N2 on #2150)"
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-26
+    refs: ["PR #2150"]
+    links: {}
+    notes: Linux differential covers libblst.so; Windows blst.dll is checked only by the informational windows-bls job (BlstEip2537Spec digests).
