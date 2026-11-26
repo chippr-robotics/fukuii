@@ -6080,12 +6080,17 @@ items:
   - id: B-557
     title: "Main ruleset requires hive run/engine + run/consume-engine, which skip on docs/workflow-only PRs: such hotfixes can't merge"
     priority: P3
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-25
     refs: ["PR #2133"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-26T22:13:35Z
+      heartbeat: 2026-11-26T22:13:35Z
     notes: "Required names never report when changes/detect skips the hive jobs (they report as 'run / inputs.label' skipped). Fix: have the skip path report the required names as success, or scope the rule. Ruleset edit needs repo admin."
   - id: B-558
     title: "TUI art reskin: redraw the spec 029 sprites as polished hand-drawn space-RPG pixel art (user, 2026-11-25)"
