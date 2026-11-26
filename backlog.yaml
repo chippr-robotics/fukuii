@@ -1175,17 +1175,14 @@ items:
   - id: B-108
     title: A structured fork registry for the EVM config instead of 16+ fork block numbers
     priority: P3
-    status: claimed
+    status: open
     area: evm
     opened: 2026-09-27
     refs: [A-002]
     links: {}
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-26T22:25:48Z
-      heartbeat: 2026-11-26T22:25:48Z
-    notes: EvmConfig.scala:33, BlockchainConfigForEvm.scala:23. Consensus-adjacent.
+    notes: |-
+      EvmConfig.scala:33, BlockchainConfigForEvm.scala:23. Consensus-adjacent.
+      2026-11-26 released by cloud-719c6644: Parked by user 2026-11-26: large consensus-adjacent refactor with no current driver.
   - id: B-112
     title: "Message decoder: switch on the negotiated p2p protocol version"
     priority: P3
