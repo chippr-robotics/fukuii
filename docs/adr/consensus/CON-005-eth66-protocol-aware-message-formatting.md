@@ -384,7 +384,7 @@ implicit def eth62ToEth66(msg: ETH62.GetBlockHeaders): ETH66.GetBlockHeaders = ?
    - `eth/protocols/eth/peer.go` - Message creation
    - `eth/protocols/eth/handlers.go` - Message handling
 2. [Go Ethereum (Geth)](https://github.com/ethereum/go-ethereum) - Upstream reference
-3. [Besu](https://github.com/hyperledger/besu) - Java-based Ethereum client
+3. [Besu](https://github.com/besu-eth/besu) - Java-based Ethereum client
 
 ### Related ADRs
 1. [CON-001: RLPx Protocol Deviations](CON-001-rlpx-protocol-deviations-and-peer-bootstrap.md) - Defensive protocol handling precedent
@@ -392,7 +392,7 @@ implicit def eth62ToEth66(msg: ETH62.GetBlockHeaders): ETH66.GetBlockHeaders = ?
 
 ### Related Issues
 1. [chippr-robotics/fukuii#441](https://github.com/chippr-robotics/fukuii/issues/441) - Peer connection errors
-2. [chippr-robotics/fukuii#437](https://github.com/chippr-robotics/fukuii/pull/437) - Previous investigation logs
+2. [chippr-robotics/fukuii#437](https://github.com/chippr-robotics/fukuii/issues/437) - Previous investigation logs
 
 ## Future Work
 

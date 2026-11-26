@@ -134,7 +134,7 @@ Added test case for ETC64.Status with values >= 128 to verify proper handling of
 - Related ADR: CON-005 (ETH66+ protocol-aware message formatting)
 
 ## References
-- [RLP Specification](https://ethereum.org/en/developers/docs/data-structures-and-encoding/rlp/)
+- [RLP Specification](https://ethereum.org/developers/docs/data-structures-and-encoding/rlp/)
 - [Core-Geth ETC64 Implementation](https://github.com/etclabscore/core-geth)
 - [ETH64 Protocol](https://github.com/ethereum/devp2p/blob/master/caps/eth.md)
 - Issue #707: Capability list change causing malformed signature errors

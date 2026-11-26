@@ -543,8 +543,8 @@ See the [README.md](README.md#troubleshooting) for detailed troubleshooting step
 
 ## References
 
-- [Kong Documentation](https://docs.konghq.com/)
+- [Kong Documentation](https://developer.konghq.com/)
 - [Cassandra Documentation](https://cassandra.apache.org/doc/)
-- [Prometheus Documentation](https://prometheus.io/docs/)
+- [Prometheus Documentation](https://prometheus.io/docs/introduction/overview/)
 - [Grafana Documentation](https://grafana.com/docs/)
 - [Fukuii Documentation](../index.md)

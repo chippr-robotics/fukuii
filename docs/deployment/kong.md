@@ -677,9 +677,9 @@ For multi-region HADR:
 ## Support and Resources
 
 - **Fukuii Documentation**: [Documentation Home](../index.md)
-- **Kong Documentation**: https://docs.konghq.com/
+- **Kong Documentation**: https://developer.konghq.com/
 - **Kong Plugins**: https://docs.konghq.com/hub/
-- **Prometheus**: https://prometheus.io/docs/
+- **Prometheus**: https://prometheus.io/docs/introduction/overview/
 - **Grafana**: https://grafana.com/docs/
 
 ## License

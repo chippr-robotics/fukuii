@@ -468,6 +468,6 @@ When modifying workflows:
 ## Resources
 
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
-- [Workflow Syntax Reference](https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions)
+- [Workflow Syntax Reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
 - [SBT Documentation](https://www.scala-sbt.org/1.x/docs/)
-- [Docker Build Reference](https://docs.docker.com/engine/reference/builder/)
+- [Docker Build Reference](https://docs.docker.com/reference/dockerfile)

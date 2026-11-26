@@ -292,13 +292,13 @@ grep -E "Handshaked" /tmp/fukuii_test.log
 1. [RLPx Protocol v5](https://github.com/ethereum/devp2p/blob/master/rlpx.md)
 2. [Ethereum devp2p Specifications](https://github.com/ethereum/devp2p)
 3. [Ethereum Wire Protocol (ETH)](https://github.com/ethereum/devp2p/blob/master/caps/eth.md)
-4. [Snappy Compression Format](https://github.com/google/snappy/blob/master/format_description.txt)
+4. [Snappy Compression Format](https://github.com/google/snappy/blob/main/format_description.txt)
 
 ### Implementation References
 1. Go Ethereum (Geth) - devp2p implementation
 2. CoreGeth - ETC-focused fork with observed protocol deviations
 3. Besu - Java-based Ethereum client
-4. [RLP Encoding Specification](https://ethereum.org/en/developers/docs/data-structures-and-encoding/rlp/)
+4. [RLP Encoding Specification](https://ethereum.org/developers/docs/data-structures-and-encoding/rlp/)
 
 ### Related Documentation
 1. [Known Issues Runbook](../../runbooks/known-issues.md#issue-14-eth68-peer-connections)
