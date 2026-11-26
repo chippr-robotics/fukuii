@@ -5737,11 +5737,6 @@ items:
     opened: 2026-11-24
     refs: ["sync reports v0.12.117, 2026-11-23/24"]
     links: {}
-    claim:
-      by: dev-node
-      agent: claude-opus
-      since: 2026-11-26T15:11:21Z
-      heartbeat: 2026-11-26T15:11:21Z
     notes: |-
       Mainnet account download ran at 23,000 accounts/s against 36,600/s on Mordor; not caused by the contract classification, which only feeds the storage file.
       Check per-peer timeout counts (AccountRangeWorker:200) and whether the 512 KB starting response size is too large for mainnet peers within the 30 s timeout.
