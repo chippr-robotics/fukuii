@@ -160,12 +160,17 @@ items:
   - id: B-013
     title: MESS (ECBP-1100) is missing on the gossip import path; ChainImporter invents ChainWeight.zero for a missing parent
     priority: P3
-    status: open
+    status: claimed
     area: consensus
     size: M
     opened: 2026-11-07
     refs: [10f, "#1654 analysis"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-26T22:25:40Z
+      heartbeat: 2026-11-26T22:25:40Z
     notes: |-
       forge. Must land before Olympia reactivates MESS (Olympia is delayed indefinitely).
       2026-11-17 priority P3: MESS inactive until Olympia, delayed indefinitely
