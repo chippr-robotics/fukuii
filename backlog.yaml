@@ -6181,3 +6181,13 @@ items:
     refs: []
     links: {}
     notes: "2026-11-26 EG-12: 26 of 34 admin_peers entries were named fukuii-peer/<ip:port> with only id/remoteAddress/inbound, so they read as fukuii nodes when they are unidentified (etcnodes lists 0 fukuii of 570). geth's admin_peers returns the Hello client id, enode, caps and protocols; return those, or null name, and never a fukuii-looking placeholder."
+  - id: B-564
+    title: "Gate Integrity C14 is dead: check_blocked_by reads first_required_slice.gates, the YAML key is members"
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-26
+    refs: ["PR #2151"]
+    links: {}
+    notes: Fix the key and add a self-test so the check inspects the slice.
