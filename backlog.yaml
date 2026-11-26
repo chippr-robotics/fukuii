@@ -1,8 +1,7 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
-# header are not kept when the tool rewrites the file.
+# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -5738,6 +5737,11 @@ items:
     opened: 2026-11-24
     refs: ["sync reports v0.12.117, 2026-11-23/24"]
     links: {}
+    claim:
+      by: dev-node
+      agent: claude-opus
+      since: 2026-11-26T15:11:21Z
+      heartbeat: 2026-11-26T15:11:21Z
     notes: |-
       Mainnet account download ran at 23,000 accounts/s against 36,600/s on Mordor; not caused by the contract classification, which only feeds the storage file.
       Check per-peer timeout counts (AccountRangeWorker:200) and whether the 512 KB starting response size is too large for mainnet peers within the 30 s timeout.
