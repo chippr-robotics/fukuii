@@ -6,7 +6,7 @@ Fukuii includes a preconfigured GitHub Codespaces environment for development.
 
 1. Navigate to the [Fukuii repository](https://github.com/chippr-robotics/fukuii)
 2. Click the green **Code** button
-3. Select **Codespaces** → **Create codespace on develop**
+3. Select **Codespaces** → **Create codespace on main**
 4. Wait for the environment to initialize (first time takes a few minutes)
 
 ## What's Included

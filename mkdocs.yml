@@ -2,13 +2,13 @@
 # Using MkDocs Material for enhanced features including Mermaid diagrams, search, and audience tabs
 
 site_name: Fukuii Documentation
-site_description: Comprehensive documentation for the Fukuii Ethereum Classic client
-site_url: https://chippr-robotics.github.io/fukuii/
+site_description: Documentation for Fukuii, the EVM execution client for Ethereum Classic and Ethereum
+site_url: https://docs.fukuii.com/
 site_author: Chippr Robotics LLC
 
 repo_name: chippr-robotics/fukuii
 repo_url: https://github.com/chippr-robotics/fukuii
-edit_uri: edit/develop/docs/
+edit_uri: edit/main/docs/
 
 # Theme configuration
 theme:

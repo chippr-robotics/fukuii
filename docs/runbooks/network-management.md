@@ -394,4 +394,4 @@ curl -s http://localhost:8546 -X POST -H "Content-Type: application/json" \
 
 For issues or questions:
 - GitHub Issues: https://github.com/chippr-robotics/fukuii/issues
-- Documentation: https://chippr-robotics.github.io/fukuii/
+- Documentation: https://docs.fukuii.com/

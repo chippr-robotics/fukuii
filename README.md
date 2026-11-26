@@ -407,7 +407,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for environmen
 For contributors: run `sbt pp` before submitting a PR to check formatting, style, and tests locally.
 
 **Quick links:**
-- [Documentation Site](https://chippr-robotics.github.io/fukuii/)
+- [Documentation Site](https://docs.fukuii.com/)
 - [Documentation Index](docs/index.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 
