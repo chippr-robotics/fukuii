@@ -153,8 +153,9 @@ schedules.
 
 > **Read the badges with [`docs/STATUS.md`](docs/STATUS.md) open.** A badge tells you whether
 > a workflow run succeeded; it does not tell you whether that workflow is allowed to block a
-> merge. As of v0.9.0 **no Hive suite is a required gate** — every one of them is
-> *informational*, and the tier of each is published, with its promotion deadline, in
+> merge. Five Hive suites are **required gates** — `smoke-genesis`, `smoke-network`, `sync`,
+> `engine` and `consume-rlp`, each promoted on a green run on `main` — and the rest are
+> *informational*. The tier of each, with the evidence or the promotion deadline, is published in
 > [Verification Status](docs/STATUS.md), generated from
 > [`.github/gates.yml`](.github/gates.yml). We say this plainly because the previous wording
 > here claimed a failing suite was "immediately visible in the badge wall", which was not
