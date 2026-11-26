@@ -116,14 +116,26 @@ VOLUME ["/app/data", "/app/conf"]
 # Health checks should be performed externally (e.g., by orchestration platform)
 # For Kubernetes, use liveness/readiness probes with exec command checking process
 
-# Set environment variables for Java
-ENV JAVA_OPTS="-Xms2g -Xmx4g"
-
 # Set entrypoint to Java with the main class
 # Distroless images don't have bash, so we must invoke Java directly
 # The classpath includes all jars from the lib directory and the main application jar
 # Uses etc.conf for Ethereum Classic mainnet by default
+#
+# JVM flags: `java` reads neither JAVA_OPTS nor the launcher's conf/application.ini, so the heap and memory
+# envelope of src/universal/conf/application.ini (the other images' bin/fukuii applies it) is repeated here.
+# Keep the two in step. The ReduceAllocationMerges and Base64 flags come from JDK_JAVA_OPTIONS above. These
+# arguments follow JDK_JAVA_OPTIONS and JAVA_TOOL_OPTIONS, so they take precedence over both; to change the
+# heap, override the entrypoint.
 ENTRYPOINT ["java", \
+    "-Xmx3g", \
+    "-Xms1g", \
+    "-Xss1M", \
+    "-XX:MaxDirectMemorySize=512M", \
+    "-XX:+UseG1GC", \
+    "-XX:MaxGCPauseMillis=200", \
+    "-XX:+HeapDumpOnOutOfMemoryError", \
+    "-XX:HeapDumpPath=/app/data/logs/heapdump.hprof", \
+    "-XX:+ExitOnOutOfMemoryError", \
     "-Dconfig.file=/app/fukuii/conf/etc.conf", \
     "-Dlogback.configurationFile=/app/fukuii/conf/logback.xml", \
     "-cp", "/app/fukuii/lib/*", \

@@ -227,6 +227,11 @@ Maximum security image using Google's distroless base.
 
 **Note:** Distroless images don't support shell-based healthchecks or bash scripts. The entrypoint invokes Java directly with the main class `com.chipprbots.ethereum.App`. Use external health monitoring (e.g., Kubernetes liveness/readiness probes).
 
+**JVM flags:** because `java` runs directly, `JAVA_OPTS` and the launcher's `conf/application.ini` do not apply. The
+entrypoint carries the same heap and memory envelope as `src/universal/conf/application.ini` (`-Xmx3g -Xms1g -Xss1M`,
+`MaxDirectMemorySize=512M`, G1, heap dump and exit on `OutOfMemoryError`), and those arguments take precedence over
+`JDK_JAVA_OPTIONS` and `JAVA_TOOL_OPTIONS`. To change the heap, override the entrypoint.
+
 **Build:**
 ```bash
 docker build -f docker/Dockerfile.distroless -t fukuii:distroless .
@@ -625,7 +630,7 @@ grype ghcr.io/chippr-robotics/fukuii:v1.0.0
   mounted conf takes precedence.
 - `FUKUII_CONF_DIR` - Where the launcher looks for `<network>.conf` (default: `/app/conf`)
 - `FUKUII_DATA_DIR` - Set to `/app/data` but not read by fukuii; use `FUKUII_DATADIR`
-- `JAVA_OPTS` - Additional JVM options
+- `JAVA_OPTS` - Additional JVM options, read by the `bin/fukuii` launcher (every image but distroless)
 
 ## Volumes
 
