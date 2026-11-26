@@ -34,7 +34,8 @@ Fukuii maintains images in multiple container registries:
 **Quick Start:**
 ```bash
 docker pull chipprbots/fukuii:latest
-docker run -d --name fukuii -p 8545:8545 chipprbots/fukuii:latest
+docker run -d --name fukuii -p 127.0.0.1:8546:8546 -p 30303:30303/tcp -p 30303:30303/udp \
+  -v fukuii-data:/app/data chipprbots/fukuii:latest
 ```
 
 ### GitHub Container Registry - Official Release (Recommended for Production)
@@ -42,7 +43,7 @@ docker run -d --name fukuii -p 8545:8545 chipprbots/fukuii:latest
 - **Publishing:** Automated via `.github/workflows/release.yml` on version tags
 - **Security Features:**
   - ✅ Images are signed with [Cosign](https://github.com/sigstore/cosign) (keyless signing using GitHub OIDC)
-  - ✅ SLSA Level 3 provenance attestations attached
+  - ✅ BuildKit provenance attestation (SLSA provenance format) attached
   - ✅ Software Bill of Materials (SBOM) included
   - ✅ Immutable digest references
 - **Tags:** Semantic versions (e.g., `v1.0.0`, `1.0`, `1`, `latest`)
@@ -108,22 +109,20 @@ cosign verify \
 - The image has not been tampered with since it was signed
 - The signature is valid and trusted
 
-### Verify SLSA Provenance
+### Inspect Build Provenance and SBOM
+
+Release images are built by `docker/build-push-action` with `provenance: true` and `sbom: true`, so BuildKit attaches
+a provenance attestation (SLSA provenance format) and an SPDX SBOM to the image index. The separate SLSA Level 3
+generator was removed from the release workflow on 2026-04-27, so `slsa-verifier` has nothing to verify.
 
 ```bash
-# Install slsa-verifier
-go install github.com/slsa-framework/slsa-verifier/v2/cli/slsa-verifier@latest
-
-# Verify SLSA provenance
-slsa-verifier verify-image \
-  ghcr.io/chippr-robotics/fukuii:v1.0.0 \
-  --source-uri github.com/chippr-robotics/fukuii
+docker buildx imagetools inspect ghcr.io/chippr-robotics/fukuii:<version> --format '{{ json .Provenance }}'
+docker buildx imagetools inspect ghcr.io/chippr-robotics/fukuii:<version> --format '{{ json .SBOM }}'
 ```
 
-**What this verifies:**
-- Build provenance meets SLSA Level 3 requirements
-- The image was built from the expected source repository
-- Build process integrity is maintained
+**What this shows:**
+- The source repository, commit and workflow the image was built from
+- The packages in the image
 
 ## Available Images
 
@@ -135,7 +134,9 @@ The main production-ready image for running Fukuii.
 - Based on `eclipse-temurin:25-jre-noble` (slim JRE)
 - Runs as non-root user (`fukuii:fukuii`, UID/GID 1000)
 - Includes built-in healthcheck script
-- Exposes standard Ethereum ports (8545, 8546, 30303)
+- Exposes 8546 (JSON-RPC HTTP), 8552 (JSON-RPC WebSocket) and 30303 (P2P TCP, discovery UDP)
+- Sets `FUKUII_DATADIR=/app/data` and `FUKUII_RPC_INTERFACE=0.0.0.0`, so data lands on the `/app/data` volume and a
+  published RPC port is reachable; a `datadir` or `interface` in a conf mounted at `/app/conf` takes precedence
 - Minimal attack surface with only required dependencies
 
 **Build:**
@@ -154,9 +155,9 @@ docker build -f docker/Dockerfile -t fukuii:latest .
 # Start with default configuration (ETC network)
 docker run -d \
   --name fukuii \
-  -p 8545:8545 \
-  -p 8546:8546 \
-  -p 30303:30303 \
+  -p 127.0.0.1:8546:8546 \
+  -p 30303:30303/tcp \
+  -p 30303:30303/udp \
   -v fukuii-data:/app/data \
   -v fukuii-conf:/app/conf \
   fukuii:latest
@@ -164,7 +165,7 @@ docker run -d \
 # Start with custom configuration
 docker run -d \
   --name fukuii \
-  -p 8545:8545 \
+  -p 127.0.0.1:8546:8546 \
   -v fukuii-data:/app/data \
   -v /path/to/your/conf:/app/conf \
   fukuii:latest etc
@@ -256,18 +257,18 @@ Pre-configured for Ethereum Classic mainnet synchronization.
 # From Docker Hub
 docker run -d \
   --name fukuii-mainnet \
-  -p 8545:8545 \
-  -p 8546:8546 \
-  -p 30303:30303 \
+  -p 127.0.0.1:8546:8546 \
+  -p 30303:30303/tcp \
+  -p 30303:30303/udp \
   -v fukuii-mainnet-data:/app/data \
   chipprbots/fukuii-mainnet:latest
 
 # From GitHub Container Registry
 docker run -d \
   --name fukuii-mainnet \
-  -p 8545:8545 \
-  -p 8546:8546 \
-  -p 30303:30303 \
+  -p 127.0.0.1:8546:8546 \
+  -p 30303:30303/tcp \
+  -p 30303:30303/udp \
   -v fukuii-mainnet-data:/app/data \
   ghcr.io/chippr-robotics/fukuii-mainnet:latest
 ```
@@ -294,18 +295,18 @@ Pre-configured for Ethereum Classic Mordor testnet synchronization.
 # From Docker Hub
 docker run -d \
   --name fukuii-mordor \
-  -p 8545:8545 \
-  -p 8546:8546 \
-  -p 30303:30303 \
+  -p 127.0.0.1:8546:8546 \
+  -p 30303:30303/tcp \
+  -p 30303:30303/udp \
   -v fukuii-mordor-data:/app/data \
   chipprbots/fukuii-mordor:latest
 
 # From GitHub Container Registry
 docker run -d \
   --name fukuii-mordor \
-  -p 8545:8545 \
-  -p 8546:8546 \
-  -p 30303:30303 \
+  -p 127.0.0.1:8546:8546 \
+  -p 30303:30303/tcp \
+  -p 30303:30303/udp \
   -v fukuii-mordor-data:/app/data \
   ghcr.io/chippr-robotics/fukuii-mordor:latest
 ```
@@ -457,9 +458,9 @@ While we recommend running bootnodes to improve network health, you can also ena
 ```bash
 docker run -d \
   --name fukuii-mordor-miner \
-  -p 8545:8545 \
-  -p 8546:8546 \
-  -p 30303:30303 \
+  -p 127.0.0.1:8546:8546 \
+  -p 30303:30303/tcp \
+  -p 30303:30303/udp \
   -v fukuii-mordor-data:/app/data \
   chipprbots/fukuii-mordor:latest \
   -Dfukuii.mining.mining-enabled=true \
@@ -529,15 +530,15 @@ For distroless images, use HTTP-based probes:
 ```yaml
 livenessProbe:
   httpGet:
-    path: /
-    port: 8545
+    path: /health
+    port: 8546
   initialDelaySeconds: 60
   periodSeconds: 30
 
 readinessProbe:
   httpGet:
-    path: /
-    port: 8545
+    path: /readiness
+    port: 8546
   initialDelaySeconds: 30
   periodSeconds: 10
 ```
@@ -554,8 +555,9 @@ Release images published to `ghcr.io/chippr-robotics/fukuii` follow supply chain
 - Signatures are stored in the Sigstore transparency log (Rekor)
 - Verifiable proof that images were built by our official GitHub Actions workflows
 
-#### 2. SLSA Provenance
-- [SLSA Level 3](https://slsa.dev/spec/v1.0/levels) provenance attestations are generated
+#### 2. Build Provenance
+- BuildKit provenance attestations (SLSA provenance format) are generated; the SLSA Level 3 generator was removed
+  from the release workflow on 2026-04-27
 - Provides verifiable metadata about how the image was built
 - Includes source repository, commit SHA, build parameters, and builder identity
 - Helps prevent supply chain attacks by ensuring build integrity
@@ -582,10 +584,8 @@ cosign verify \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
   ghcr.io/chippr-robotics/fukuii:v1.0.0
 
-# 3. Verify SLSA provenance (optional)
-slsa-verifier verify-image \
-  ghcr.io/chippr-robotics/fukuii:v1.0.0 \
-  --source-uri github.com/chippr-robotics/fukuii
+# 3. Inspect the build provenance (optional)
+docker buildx imagetools inspect ghcr.io/chippr-robotics/fukuii:v1.0.0 --format '{{ json .Provenance }}'
 
 # 4. Use the verified image with immutable digest
 docker pull ghcr.io/chippr-robotics/fukuii@sha256:abc123...
@@ -620,8 +620,11 @@ grype ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 ## Environment Variables
 
-- `FUKUII_DATA_DIR` - Data directory path (default: `/app/data`)
-- `FUKUII_CONF_DIR` - Configuration directory path (default: `/app/conf`)
+- `FUKUII_DATADIR` - The node's `datadir` (default: `/app/data`). A `datadir` in a mounted conf takes precedence.
+- `FUKUII_RPC_INTERFACE` - The JSON-RPC HTTP and WebSocket bind address (default: `0.0.0.0`). An `interface` in a
+  mounted conf takes precedence.
+- `FUKUII_CONF_DIR` - Where the launcher looks for `<network>.conf` (default: `/app/conf`)
+- `FUKUII_DATA_DIR` - Set to `/app/data` but not read by fukuii; use `FUKUII_DATADIR`
 - `JAVA_OPTS` - Additional JVM options
 
 ## Volumes
@@ -631,9 +634,13 @@ grype ghcr.io/chippr-robotics/fukuii:v1.0.0
 
 ## Ports
 
-- `8545` - HTTP JSON-RPC API
-- `8546` - WebSocket JSON-RPC API
-- `30303` - P2P networking (TCP and UDP)
+- `8546` - HTTP JSON-RPC API (also `/health`, `/readiness`, `/buildinfo`)
+- `8552` - WebSocket JSON-RPC API (off unless `fukuii.network.rpc.ws.enabled = true`)
+- `30303` - P2P networking (TCP) and discovery (UDP)
+
+Inside the container JSON-RPC binds `0.0.0.0` (`FUKUII_RPC_INTERFACE`) so Docker can forward it. Publish it as
+`127.0.0.1:8546:8546` to keep it on the host's loopback; reach it from elsewhere through an SSH tunnel or an
+authenticating TLS proxy.
 
 ## Docker Compose Example
 
@@ -646,9 +653,9 @@ services:
     container_name: fukuii
     restart: unless-stopped
     ports:
-      - "8545:8545"
-      - "8546:8546"
-      - "30303:30303"
+      - "127.0.0.1:8546:8546"
+      - "30303:30303/tcp"
+      - "30303:30303/udp"
     volumes:
       - fukuii-data:/app/data
       - ./conf:/app/conf:ro
@@ -679,7 +686,7 @@ Fukuii uses automated workflows for container image publishing to both Docker Hu
 
 **Security Features (GHCR only):**
 - ✅ Images signed with Cosign (keyless, GitHub OIDC)
-- ✅ SLSA Level 3 provenance attestations
+- ✅ BuildKit provenance and SBOM attestations
 - ✅ SBOM (Software Bill of Materials) included
 - ✅ Immutable digest references logged
 
@@ -701,7 +708,7 @@ git push origin v1.0.0
 # 2. Creates GitHub release with artifacts
 # 3. Builds and pushes Docker images to both registries
 # 4. Signs GHCR image with Cosign
-# 5. Generates SLSA provenance
+# 5. Attaches BuildKit provenance and SBOM attestations
 # 6. Logs immutable digest
 ```
 
