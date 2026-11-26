@@ -13,6 +13,7 @@ import com.chipprbots.ethereum.FreeSpecBase
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
+import com.chipprbots.ethereum.sync.util.RegularSyncItSpecUtils.ExecutedChain.*
 import com.chipprbots.ethereum.sync.util.RegularSyncItSpecUtils.FakePeer
 import com.chipprbots.ethereum.sync.util.SyncCommonItSpec.*
 import com.chipprbots.ethereum.testing.Tags.*
@@ -240,6 +241,7 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll:
         FakePeer.start2FakePeersRes()
       ) { case (peer1, peer2) =>
         val commonBlocks = 100
+        val peer2ForkBlocks = 5
         val peer1ExtraBlocks = 10
 
         for
@@ -247,21 +249,26 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll:
           _ <- peer1.importBlocksUntil(commonBlocks)(IdentityUpdate)
           _ <- peer2.importBlocksUntil(commonBlocks)(IdentityUpdate)
 
-          // Peer1 mines additional blocks
-          _ <- peer1.mineNewBlocks(100.milliseconds, peer1ExtraBlocks)(IdentityUpdate)
+          // Peer2 forks off it with blocks of its own
+          _ <- peer2.importExecutedBlocksUntil(commonBlocks + peer2ForkBlocks, OtherMiner)(NoTransactions)
+          peer2ForkTip = peer2.blockchainReader.getBestBlock.get
 
-          // Start sync
+          // Peer1 mines on through its running regular sync, until its chain is the heavier one
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
-          _ <- peer2.connectToPeers(Set(peer1.node))
+          _ <- peer1.mineExecutedBlocks(peer1ExtraBlocks)(NoTransactions)
 
-          // Peer2 should sync to peer1's chain
+          // Peer2 should reorganize onto peer1's chain
+          _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(commonBlocks + peer1ExtraBlocks)
         yield
-          // Verify reorganization completed successfully
           val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
           val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
           peer1BestBlock.hash shouldBe peer2BestBlock.hash
+          // Peer2's own blocks are no longer canonical
+          peer2.blockchainReader
+            .getBlockByNumber(peer2.blockchainReader.getBestBranch, commonBlocks + peer2ForkBlocks)
+            .map(_.hash) should not be Some(peer2ForkTip.hash)
       }
 
       "should verify block data integrity during sync" taggedAs (

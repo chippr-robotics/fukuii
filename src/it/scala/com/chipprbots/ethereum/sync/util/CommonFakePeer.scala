@@ -37,6 +37,8 @@ import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
+import com.chipprbots.ethereum.domain.Account
+import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.Blockchain
@@ -306,7 +308,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       "fake-peer-block-broadcaster"
     )
 
-  private def getMptForBlock(block: Block) =
+  protected def getMptForBlock(block: Block): InMemoryWorldStateProxy =
     InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,
       bl.getBackingMptStorage(block.number.value),
@@ -319,6 +321,16 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
 
   private def broadcastBlock(block: Block, weight: ChainWeight) =
     broadcasterActor ! BroadcastBlock(BlockToBroadcast(block, weight))
+
+  /** The account at `address` in this peer's best block's state. Reads the state trie under the best header's own
+    * `stateRoot`, so it throws a missing-node error if this peer never held that state.
+    */
+  def accountAtBest(address: Address): Option[Account] =
+    getMptForBlock(blockchainReader.getBestBlock.get).getAccount(address)
+
+  /** Storage slot `key` of `address` in this peer's best block's state (zero when absent). */
+  def storageAtBest(address: Address, key: BigInt): BigInt =
+    getMptForBlock(blockchainReader.getBestBlock.get).getStorage(address).load(key)
 
   def getCurrentState(): BlockchainState =
     val bestBlock = blockchainReader.getBestBlock.get
