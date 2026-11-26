@@ -28,9 +28,14 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
   private val clock = Clock.fixed(now, ZoneOffset.UTC)
 
   private var root: Path = scala.compiletime.uninitialized
+  private var scratch: Path = scala.compiletime.uninitialized
 
-  override def beforeEach(): Unit = root = Files.createTempDirectory("eph-store-test")
-  override def afterEach(): Unit = delete(root)
+  override def beforeEach(): Unit =
+    root = Files.createTempDirectory("eph-store-test")
+    scratch = Files.createTempDirectory("eph-store-scratch")
+  override def afterEach(): Unit =
+    delete(root)
+    delete(scratch)
 
   private def delete(p: Path): Unit =
     if Files.exists(p, LinkOption.NOFOLLOW_LINKS) then
@@ -153,7 +158,7 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
 
   "addTestnet" should "stage a testnet/ and rename it into an existing entry, once" taggedAs UnitTest in {
     store().place(entry165) shouldBe Right(Placed)
-    val cl = completeClDir()
+    val cl = completeClDir(scratch)
     store().addTestnet(165, cl) shouldBe Right(true)
     val dir = root.resolve("releases/ephemery-165")
     names(dir) shouldBe List("chains", "release.json", "testnet")
@@ -177,7 +182,7 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
     write(dir.resolve("testnet/config.yaml"), "PRESET_BASE: mainnet\n")
     write(dir.resolve("testnet/genesis.ssz"), "") // empty: torn
     store().list().entries.head.testnetDir shouldBe None
-    store().addTestnet(165, completeClDir()) shouldBe Right(true)
+    store().addTestnet(165, completeClDir(scratch)) shouldBe Right(true)
     read(dir.resolve("testnet/genesis.ssz")) shouldBe "content of genesis.ssz"
     store().list().entries.head.testnetDir shouldBe Some(dir.resolve("testnet"))
     // the torn one is kept, never deleted
@@ -213,7 +218,7 @@ class ReleaseStoreSpec extends AnyFlatSpec with Matchers with BeforeAndAfterEach
   it should "report where an entry's testnet/ is when it has one" taggedAs UnitTest in {
     store().place(entry165) shouldBe Right(Placed)
     store().list().entries.head.testnetDir shouldBe None
-    store().addTestnet(165, completeClDir()) shouldBe Right(true)
+    store().addTestnet(165, completeClDir(scratch)) shouldBe Right(true)
     store().list().entries.head.testnetDir shouldBe Some(root.resolve("releases/ephemery-165/testnet"))
   }
 

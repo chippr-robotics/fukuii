@@ -43,6 +43,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.testing.TempDirs
 
 /** When SNAP cannot proceed it goes dormant — keeping its downloaded state and sending nothing to the SyncController —
   * and the dormant wake-up restarts it on a fresh pivot once a snap-capable peer is connected. This is SNAP's own
@@ -55,6 +56,13 @@ import com.chipprbots.ethereum.testing.Tags.*
   * `DormantWakeUp`, so that request also proves the controller was dormant.
   */
 class SNAPDormantRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers with Eventually:
+
+  // B-368: a controller that reaches the account phase makes the coordinator's task files; they go in a directory the
+  // suite removes, not java.io.tmpdir
+  private val tempDirs = new TempDirs
+  override protected def afterAll(): Unit =
+    try super.afterAll() // the test kit first: no actor is left writing to a directory
+    finally tempDirs.deleteAll()
 
   private val PivotOffset = SNAPSyncConfig().pivotBlockOffset
   private val MaxBootstrapRetries = 10 // SNAPSyncController.MaxBootstrapRetries (private)
@@ -179,7 +187,7 @@ class SNAPDormantRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
           networkPeerManager.ref.toTyped[NetworkPeerManagerActor.Command],
           testKit.spawn(PeerEventBusActor.behavior()),
           syncConfig,
-          SNAPSyncConfig(),
+          SNAPSyncConfig(taskFileDir = Some(tempDirs.create("snap-dormant"))),
           system.classicSystem.scheduler,
           CacheBasedBlacklist.empty(100),
           parent.ref

@@ -63,6 +63,7 @@ import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.testing.TempDirs
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.MockClock
 
@@ -77,6 +78,12 @@ class PeerManagerSpec
     with ScalaCheckDrivenPropertyChecks:
 
   implicit private val classicSystem: org.apache.pekko.actor.ActorSystem = system.classicSystem
+
+  // B-368: the good-peers files of the SnapGoodSetup cases go once the suite is done
+  private val tempDirs = new TempDirs
+  override protected def afterAll(): Unit =
+    try super.afterAll() // the test kit first: no actor is left writing to a directory
+    finally tempDirs.deleteAll()
 
   behavior.of("PeerManagerActor")
 
@@ -1726,7 +1733,7 @@ class PeerManagerSpec
     lazy val goodHex: String = "ee" * 64
     lazy val goodNodeId: ByteString = ByteString(Hex.decode(goodHex))
     lazy val goodFile: java.nio.file.Path =
-      java.nio.file.Files.createTempDirectory("pma-snap-good").resolve("snap-good-peers.v1")
+      tempDirs.create("pma-snap-good").resolve("snap-good-peers.v1")
     override lazy val snapGoodPeersStore: Option[SnapGoodPeers] =
       val seed = new SnapGoodPeers(
         SnapGoodPeersConfig(true, 16, 12.hours, 10, 7.days, 5.minutes, goodFile)

@@ -60,11 +60,12 @@ class AccountRangeCoordinatorSpec
     with Matchers
     with org.scalatest.BeforeAndAfterAll:
 
-  // B-305: the task-file directories of the restart and resume cases go once the suite is done
+  // B-305, B-368: the task-file directories of every coordinator go once the suite is done, after the test kit has
+  // stopped the coordinators (so none is still writing to one)
   private val tempDirs = new com.chipprbots.ethereum.testing.TempDirs
   override protected def afterAll(): Unit =
-    try tempDirs.deleteAll()
-    finally super.afterAll()
+    try super.afterAll()
+    finally tempDirs.deleteAll()
 
   implicit private val classicSystem: org.apache.pekko.actor.ActorSystem = system.classicSystem
   private val statusProbe = testKit.createTestProbe[AccountRangeStats]()
@@ -92,7 +93,10 @@ class AccountRangeCoordinatorSpec
         initialMaxInFlightPerPeer = initialMaxInFlightPerPeer,
         accountTrieEcOverride = Some(classicSystem.dispatcher),
         stateIngest = hashSchemeIngest,
-        intakeBudget = intakeBudget
+        intakeBudget = intakeBudget,
+        // B-368: the task files go in a directory the suite removes, not java.io.tmpdir (the controller, which owns
+        // the storage and code-hash files in production, is a probe here, so nothing else deletes them)
+        taskFileDir = Some(tempDirs.create("arc-task-files"))
       )
     )
 
@@ -156,7 +160,8 @@ class AccountRangeCoordinatorSpec
             carriedTaskFiles = carried,
             accountTrieEcOverride = Some(classicSystem.dispatcher),
             storageScheme = StorageScheme.Path,
-            stateIngest = pathSchemeIngest(app, nodes)
+            stateIngest = pathSchemeIngest(app, nodes),
+            taskFileDir = Some(tempDirs.create("arc-task-files"))
           )
         )
         .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)

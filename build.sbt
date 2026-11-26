@@ -579,10 +579,14 @@ addCommandAlias(
 //   them out of the gate; see the silenced-test inventory before un-silencing.
 // DifferentialTest: spec 021's full GT-2 suites (>= 10^7 cases per operation, minutes of CPU). Their fast siblings
 //   stay in this tier; the full ones run in CI's own step (nightly, and on PRs touching domain/UInt256* or vm/).
+// BenchmarkTest: wall-clock assertions (TuiRenderBenchmarkSpec's render medians), which a slow or shared CI runner
+//   fails without any change to the code (B-555: 3.09, 6.16 and 3.92 ms against a 3 ms bound). Tier 3 per ADR TEST-002;
+//   testComprehensive runs them, and so do `sbt pp` and `testOnly *TuiRender*` locally. Their deterministic parts stay
+//   here, untagged.
 addCommandAlias(
   "testEssential",
   """; compile-all
-    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest -l DifferentialTest
+    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest -l DifferentialTest -l BenchmarkTest
     |; rlp / test
     |; bytes / test
     |; crypto / test

@@ -52,6 +52,7 @@ import com.chipprbots.ethereum.mpt.PositionTestKit.RawTrieWalk
 import com.chipprbots.ethereum.network.BlockedIPRegistry
 import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.testing.TempDirs
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** Chain export and import round-trip in go-ethereum's chain format (CQ-020-01).
@@ -82,7 +83,13 @@ class ChainExportImportSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
       .map(_.fold(err => fail(err.describe), _.get))
       .toVector
 
-  private def tempDir(): Path = Files.createTempDirectory("chain-io")
+  // B-368: every export file and directory the cases make goes once the suite is done
+  private val tempDirs = new TempDirs
+  override protected def afterAll(): Unit =
+    try super.afterAll() // the test kit first: no actor is left writing to a directory
+    finally tempDirs.deleteAll()
+
+  private def tempDir(): Path = tempDirs.create("chain-io")
 
   private def write(bytes: Array[Byte]): Path =
     val file = tempDir().resolve("chain.rlp")
