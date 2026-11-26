@@ -19,7 +19,7 @@ object Png:
   /** A decoded image: `width × height` pixels as `0xAARRGGBB`, row by row. */
   final case class Image(width: Int, height: Int, argb: Array[Int])
 
-  /** The largest side read: a sheet is at most 1,024 by 1,792. */
+  /** The largest side read: a sheet is at most 2,048 by 3,584. */
   val MaxSide: Int = 4096
 
   private val Signature: Array[Byte] = Array(0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n').map(_.toByte)
@@ -30,11 +30,16 @@ object Png:
     *   the width and height it must have, if they are known: one of any other size is refused at its header, before a
     *   pixel of it is decoded or a buffer for it allocated
     */
-  def read(bytes: Array[Byte], size: Option[(Int, Int)] = None): Either[String, Image] =
-    try decode(bytes, size)
+  def read(bytes: Array[Byte], size: Option[(Int, Int)] = None): Either[String, Image] = read(bytes, size.toSeq)
+
+  /** The image in `bytes`, which must have one of `sizes` (any size when there are none): a `hi` sheet may come at
+    * either of two densities.
+    */
+  def read(bytes: Array[Byte], sizes: Seq[(Int, Int)]): Either[String, Image] =
+    try decode(bytes, sizes)
     catch case NonFatal(e) => Left(s"not a readable PNG: ${e.getClass.getSimpleName}: ${e.getMessage}")
 
-  private def decode(bytes: Array[Byte], size: Option[(Int, Int)]): Either[String, Image] =
+  private def decode(bytes: Array[Byte], sizes: Seq[(Int, Int)]): Either[String, Image] =
     if bytes.length < 8 || !bytes.take(8).sameElements(Signature) then Left("not a PNG")
     else
       val in = ByteBuffer.wrap(bytes, 8, bytes.length - 8)
@@ -65,8 +70,9 @@ object Png:
                 val (depth, colour, _, _, interlace) = (b.get, b.get, b.get, b.get, b.get)
                 if w <= 0 || h <= 0 || w > MaxSide || h > MaxSide then
                   problem = Some(s"is ${w}x$h: a side is over $MaxSide")
-                else if size.exists(_ != (w, h)) then
-                  problem = size.map((mustW, mustH) => s"is ${w}x$h, must be ${mustW}x$mustH")
+                else if sizes.nonEmpty && !sizes.contains((w, h)) then
+                  val must = sizes.map((mustW, mustH) => s"${mustW}x$mustH").mkString(" or ")
+                  problem = Some(s"is ${w}x$h, must be $must")
                 else if depth != 8 then problem = Some(s"has $depth bits a channel, not 8")
                 else if colour != 3 && colour != 6 then
                   problem = Some(s"is colour type $colour, not indexed (3) or RGBA (6)")
