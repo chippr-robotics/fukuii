@@ -249,11 +249,10 @@ def m_undeclared_exclusion_in_second_job(root: Path) -> None:
 
 def m_overdue_promotion(root: Path) -> None:
     """C5 — an informational gate past its promote_by date."""
+    # hive-consume-engine: smoke-genesis, the former subject, was promoted to required (B-550)
     edit(root, ".github/gates.yml",
-         "    promote_by: 2026-11-30\n    min_tests: 1\n"
-         "    covers: Client starts from a hive-supplied genesis and reports a chain head.",
-         "    promote_by: 2020-01-01\n    min_tests: 1\n"
-         "    covers: Client starts from a hive-supplied genesis and reports a chain head.")
+         "    promote_by: 2027-03-31\n    min_tests: 874\n",
+         "    promote_by: 2020-01-01\n    min_tests: 874\n")
 
 
 _ROMAN = [(10, "X"), (9, "IX"), (5, "V"), (4, "IV"), (1, "I")]
