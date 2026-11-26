@@ -1483,12 +1483,17 @@ items:
   - id: B-150
     title: Security hardening follow-ups from the B-145 audit (details held privately, Principle VI)
     priority: P1
-    status: open
+    status: claimed
     area: ops
     size: M
     opened: 2026-11-08
     refs: [B-145]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-26T22:25:55Z
+      heartbeat: 2026-11-26T22:25:55Z
   - id: B-151
     title: Windows-capable BLS12-381 backend (EIP-2537) so ETH nodes run on Windows; Besu bls12-381 1.0.0 ships no Windows build
     priority: P1
