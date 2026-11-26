@@ -59,6 +59,7 @@ required_contexts:
   - Test and Build (JDK 25, Scala 3.9.0)
   - Docker Build
   - Gate Integrity
+  - EEST Amsterdam
 
 # ---------------------------------------------------------------------------
 # RECONCILIATION NOTE — discovered 2026-09-20 while attempting to merge #1406.
@@ -321,10 +322,13 @@ gates:
   - id: eest-amsterdam
     workflow: eest-amsterdam.yml
     context: EEST Amsterdam
-    tier: informational
+    tier: required
     owner: realcodywburns
     issue: 1419
-    promote_by: 2026-11-30
+    # A green push run on `main` (002ee9ba9, 2026-11-26): import replay 26,503 / 26,503,
+    # builder rebuild 27,352 blocks, position-mirror replay 26,503 / 26,503.
+    evidence: https://github.com/chippr-robotics/fukuii/actions/runs/45816167881
+    min_tests: 26503
     covers: >-
       execution-specs tests@v21.0.0 Amsterdam and BPO2->Amsterdam blockchain_tests
       (26,503) replayed from the release's own block RLP through the import path
@@ -337,10 +341,14 @@ gates:
       fixture's storage (EEST_POSITIONS=1, spec 018 Track C T026) and fails on a
       read or an update a position-keyed trie store would have refused.
     status_note: >-
-      26,503 / 26,503 on the import replay (run 36294294338, 2026-09-27), up from a
-      baseline of 18,081 on 2026-09-26 before the Glamsterdam work items (#1415).
-      The builder rebuild (#1427) reproduced all 27,352 blocks when run locally on
-      2026-09-27. Promote once 0.9.0 ships.
+      Required since 2026-11-26 (B-550). All six push runs on main are green
+      (2026-10-07 to 2026-11-26); the one red push run on staging since (44560962111,
+      2026-11-19) failed to download scala3-library 3.9.0, before any test ran. The
+      import replay first reached 26,503 / 26,503 on 2026-09-27 (run 36294294338), from
+      a baseline of 18,081 (#1415). The workflow starts on every PR and skips its
+      job by `if:` when the PR changes nothing it depends on (_hive-changes.yml), so the
+      required check always reports. Hive consume-rlp / consume-engine against an
+      Amsterdam-capable fixture release is #1419's open remainder, outside this gate.
 
 # ---------------------------------------------------------------------------
 # #1402: the first required slice — declared with dates, not asserted as done.
