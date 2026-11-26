@@ -58,6 +58,11 @@ RUN cd target/universal && \
     DIST_DIR=$(ls -d fukuii-*/ | head -1) && \
     mv "$DIST_DIR" /fukuii-dist
 
+# Mount points for the runtime image. Distroless has no shell to mkdir them there, and a fresh volume at a path the
+# image does not contain is created root-owned, which the nonroot user cannot write (the node creates <datadir>/tmp
+# at startup). Copying them in with --chown gives fresh volumes nonroot ownership.
+RUN mkdir -p /fukuii-volumes/data /fukuii-volumes/conf
+
 # Stage 2: Runtime stage using distroless
 FROM gcr.io/distroless/java25-debian13:nonroot
 
@@ -71,14 +76,17 @@ LABEL org.opencontainers.image.documentation="https://github.com/chippr-robotics
 
 # Copy application from builder (distroless already has nonroot user)
 COPY --from=builder --chown=nonroot:nonroot /fukuii-dist /app/fukuii
+COPY --from=builder --chown=nonroot:nonroot /fukuii-volumes/ /app/
 
 # Set working directory
 WORKDIR /app
 
 # Set up environment
-# Read by conf/base/fukuii.conf (datadir) and network.conf (JSON-RPC interface). A datadir or interface
-# set in a mounted conf still wins. RPC binds every container interface so Docker can forward a
-# published port; publish it as 127.0.0.1:8546:8546 to keep it on the host's loopback.
+# Read by conf/base/fukuii.conf (datadir) and network.conf (JSON-RPC interface). A datadir or interface in
+# the conf the node runs still wins. With no arguments that is the bundled /app/fukuii/conf/etc.conf (see
+# ENTRYPOINT), not /app/conf; pass a network argument (e.g. `etc`) to load a /app/conf/<network>.conf mounted
+# in FUKUII_CONF_DIR (without one, the bundled conf is used). RPC binds every container interface so Docker
+# can forward a published port; publish it as 127.0.0.1:8546:8546 to keep it on the host's loopback.
 ENV FUKUII_DATADIR=/app/data
 ENV FUKUII_RPC_INTERFACE=0.0.0.0
 # Not read by fukuii; kept for scripts that may reference it.
