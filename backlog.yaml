@@ -3511,17 +3511,13 @@ items:
   - id: B-368
     title: "Remaining test temp-dir leaks: chain-io, fukuii-* task files, snap-recovery-test, snap-good-peers, testdb (use TempDirs)"
     priority: P3
-    status: review
+    status: done
     area: ci
     opened: 2026-11-18
+    closed: 2026-11-26
     refs: []
     links:
       prs: [2149]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-26T22:13:44Z
-      heartbeat: 2026-11-26T22:53:33Z
     notes: "B-305 added testing/TempDirs and converted the two C4e RocksDB specs, RocksDbDataSourceSpec and AccountRangeCoordinatorSpec. Still leaking per run in /tmp: chain-io, fukuii-unique-codehashes-/fukuii-contract-storage- (coordinator specs that leave taskFileDir None), snap-recovery-test, snap-good-peers, hole-tool, pma-snap-goo, eph-cl, testdb."
   - id: B-369
     title: "Spec 018 C5b: enable the converted audit on the path-live guard (SyncController gate, owed flags, hand-off anchor)"
