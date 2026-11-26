@@ -6115,3 +6115,13 @@ items:
     refs: [B-018 follow-up]
     links: {}
     notes: Test only compares headers of identical chains. Needs the IT harness to run the real block validator (main-code seam) to test rejection; also 'persist across restarts' and 'peer disconnection' neither restart nor disconnect.
+  - id: B-561
+    title: Open spec tasks still say to write CHANGELOG [Unreleased] entries; switch them to changelog.d fragments
+    priority: P3
+    status: open
+    area: docs
+    size: S
+    opened: 2026-11-26
+    refs: [B-144 follow-up]
+    links: {}
+    notes: e.g. specs/023-fleet-topology/tasks.md T082 and ~line 234. Set In flight before editing a held spec.
