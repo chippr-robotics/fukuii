@@ -5679,6 +5679,11 @@ items:
     refs: ["sync reports v0.12.117, 2026-11-23/24"]
     links: {}
     depends_on: [B-521]
+    claim:
+      by: dev-node
+      agent: claude-opus
+      since: 2026-11-26T15:11:31Z
+      heartbeat: 2026-11-26T15:11:31Z
     notes: |-
       v0.12.117: mainnet 25.8M headers in 110 min, 2,870/s while the state downloaded and 5,330/s after; Mordor 4,430/s and 6,980/s, held 41 min. Both runs are header-bound.
       Once ChainDownloader logs (B-521): look at the SNAP-era header budget (boostHeaderDownload), chain-download-timeout (10 s) and how many peers serve headers during the state download.
