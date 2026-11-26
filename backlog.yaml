@@ -5904,18 +5904,15 @@ items:
   - id: B-540
     title: "Olympia: send the EIP-2935 deploy tx on Mordor then ETC mainnet before activation (docs/runbooks/olympia-eip2935-deployment.md)"
     priority: P2
-    status: claimed
+    status: open
     area: ops
     size: S
     opened: 2026-11-25
     refs: []
     links: {}
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-26T22:26:03Z
-      heartbeat: 2026-11-26T22:26:03Z
-    notes: needs a funded sender and a node with allow-unprotected-txs; first check eth_getCode at 0x0000F908...2935
+    notes: |-
+      needs a funded sender and a node with allow-unprotected-txs; first check eth_getCode at 0x0000F908...2935
+      2026-11-26 released by cloud-719c6644: User 2026-11-26: the dev-node session sends it from its synced Mordor/ETC node with a key provided there, after its gates.
   - id: B-541
     title: "Spec 021 RP-2 inputs from the pre-swap work: require/Array.fill closures, toSign vs R-15, E10 order, scratch size, Coverage after T035"
     priority: P2
