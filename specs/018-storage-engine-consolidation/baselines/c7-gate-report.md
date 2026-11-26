@@ -14,7 +14,7 @@ EG-1 to EG-16. Until then, a gate with no row here has not been reported. Rows a
 | EG-6, the private ETC-config PoW net with Olympia | T258 | — | — | **NOT-RUN.** dev-node has no core-geth with Olympia (white-b0x/core-geth `main`), no Olympia genesis JSON and no Go toolchain to build one. The user skipped this step on 2026-11-20 |
 | EG-15, Platåberget live head-follow | T267 | — | — | **DROPPED.** The user, 2026-11-25: Platåberget was retired on 2026-10-28, so its gate is dropped (B-068). EG-4 and EG-14 carry the ETH tombstone guard and the `forkchoiceUpdated` latency |
 | EG-1 (ETH) and EG-10, their Platåberget halves | T251, T262 | — | — | **DROPPED,** for the same reason. EG-1's ETH half and EG-10's ETH run are Sepolia only |
-| EG-12, the first ETC mainnet sync | T264 | — | — | **NOT-RUN.** User decision, 2026-11-20 (decision 1, the machines): deferred until the NVMe the user is procuring arrives. dev-node's root SSD has 162 GB free, and its raidz1 HDD is too slow for a sync plus a reference core-geth. C8a still waits for this gate |
+| EG-12, the first ETC mainnet sync | T264 | dev-node, 2026-11-25 to 26 | staging `c2ae9d555` (0.12.175), jar SHA-256 `46ff8b62…f34fe20d` | **Every node-side criterion passed.** The first fukuii SNAP sync of ETC mainnet: pivot 25,801,564 in 206 min, 24 h at the head, the v2 export at 25,808,558 re-imported with its root equal, and 1 h of following after it. One row reads FAIL: a canonical-chain comparison scored one unanswered public-RPC read as a difference, and that block re-read equals ours (harness fix #2146). That row's verdict is the user's. See [EG-12](#eg-12-the-first-etc-mainnet-sync) |
 
 ## Step 0 on dev-node, before the gates (2026-11-20, staging `44413fd95`)
 
@@ -213,6 +213,87 @@ These were stopped or failed before the counted run, and their datadirs are kept
     `Metrics.get()`'s default registry, the pattern fixed for the node allowlist in #1959.
 - **Heap for a miner.** An ETC or Mordor miner needs about DAG × 1.25 + 3 GB of heap, which the operations docs do not
   say. #1977 (the DAG in an mmap'd file) removes the need. Re-measure RSS on a run with it.
+
+## EG-12: the first ETC mainnet sync
+
+`scripts/etc-mainnet-sync/run-eg12.sh --network etc`, the harness pinned at #2121 (`141120f63`), against the staging
+jar below. It was the first SNAP sync fukuii has completed on ETC mainnet. The run had five stages:
+
+1. a fresh SNAP sync on path-live, with public ETC peers;
+2. 24 h of head following;
+3. a v2 export;
+4. a re-import into a fresh datadir;
+5. 1 h of following on the re-imported node.
+
+No core-geth reference fitted on dev-node (decision 1), so the reference was a public RPC, as the user chose. The
+raw `results.tsv`, `summary.txt` and `run-info.txt`, and every fork move (`reorg-settle.tsv`, node A then node B), are
+in [`c7/eg12-etc/`](c7/eg12-etc/).
+
+| | |
+| --- | --- |
+| Jar | `fukuii-assembly-0.12.175.jar`, staging `c2ae9d555`, SHA-256 `46ff8b62516e9b7e0fdd0ef90bfd3e21e1bb0a07b0f6ea1035477db3f34fe20d` |
+| JVM | OpenJDK 25.0.5.1, `-Xmx6g` |
+| Reference | `https://etc.drpc.org` (Geth/v10.0.0/drpc), a public RPC |
+| Host | dev-node: 4 CPUs, 16 GB, a DRAM-less SATA SSD on LUKS |
+| Wall time | 31.2 h. Max RSS 11.8 GiB, max heap used 4.7 GiB. Node A's datadir was 50 GiB at the end of the follow; node B's was 11 GiB after the re-import and 1 h of following |
+| Run | 2026-11-25 05:30Z to 2026-11-26 12:42Z |
+
+Results:
+
+- **Snap-capable peers.** PASS: 16 of 17 handshaked over RPC. The node's `[SNAP-PEERS]` line, written earlier, counted 2
+  of 2.
+- **Sync reaches the head.** PASS: pivot 25,801,564, 206 min after launch. State sync ended at 133 min. The remaining
+  72 min were the header download from genesis (B-522, below).
+- **No copy at the hand-off.** PASS: no `[PATH-PUBLISH]` line.
+- **Root equals the head's stateRoot.** PASS: at block 25,801,991, the hash and stateRoot equal the reference's.
+- **Ancestor window: BLOCKHASH below the pivot.** PASS: 14 probes, all equal to the reference.
+- **Ancestor window: blocks pivot+1 to +256 canonical.** PASS: 256 compared.
+- **Ancestor window: an ommer whose parent is below the pivot.** NOT-EXERCISED: none in pivot+1 to +6.
+- **Follows the head for 24 h.** PASS: head 25,808,409, equal to the reference.
+- **Node A canonical chain equals the reference.** The harness wrote **FAIL** ("1 of 6833 block(s) differ").
+  - The block was 25,808,199, and the harness's own line reads `ours 0xde16f763…4610, reference unreadable`: the public
+    RPC did not answer one request, and the harness read each block once and scored a failed read as a difference.
+  - Re-read at 2026-11-26 09:38Z, the reference's hash for 25,808,199 equals ours, and so does 0xrpc.io/etc's. So all
+    6,833 compared blocks equal the reference.
+  - The harness fix is #2146: retry reference reads, and count a block the reference cannot serve apart from a
+    difference. **This row's verdict is the user's.** On the evidence it is a harness fault, not a node one.
+- **Node A REORG-EXEC-FAIL.** PASS: 0.
+- **Node A rejected canonical blocks.** PASS: 0.
+- **Node A local state faults.** RECORDED: 0.
+- **Node A fork moves.** RECORDED: 159, of which 156 at depth 1 and 3 at depth 2.
+- **v2 archive export.** PASS: block 25,808,558 in 4,157 s, 17,708,025,821 bytes, SHA-256
+  `39a5dc64326ced884f32bb6c6119ccccd02a8d4e338490e6254f6088fc11fe95`. Block hash
+  `0x7b3be997e45d25215ab47131b8595516cc0b7cde746f461c82abe8d42e399422`, stateRoot
+  `0x67021a0e0e014cca4c9aaddfb506b31897ec351561993270d7433ca40c494d84`.
+- **Archive import: root equal.** PASS.
+  - The import took 2,949 s: 171,966,918 nodes (15,939 MiB) and 37,220 bytecodes.
+  - `tdExact=true`, so the archive carried the exact total difficulty and decision 3 did not arise.
+  - Block 25,808,559, executed on the imported state, equals the reference's.
+- **Archive block served over RPC.** RECORDED: `null`. The archive carries no body for its own block (B-411).
+- **Re-imported node follows for 1 h.** PASS: head 25,809,353, equal to the reference.
+- **Node B canonical chain equals the reference.** PASS: 783 blocks above the archive.
+- **Node B REORG-EXEC-FAIL, rejected canonical blocks.** PASS: 0 and 0.
+- **Node B local state faults.** RECORDED: 0.
+- **Node B fork moves.** RECORDED: 5, all at depth 1.
+
+Findings carried to the backlog:
+
+- **B-522: the header download is the critical path.**
+  - State sync finished at 07:43Z, 133 min in. Finalisation was then held 72 min, until the header download from
+    genesis reached the pivot.
+  - During state sync the chain download ran at concurrency 2: headers reached 10.56 M at 07:43Z, about 1,320 a second.
+  - After state sync, at concurrency 16, it covered the remaining 15.2 M in 72 min, about 3,500 a second.
+- **B-526: account-range timeouts.**
+  - There were 353 `GetAccountRange` timeouts, from 20 peers, over 3,801 completed account tasks. That compares with 421
+    in the tester-findings run.
+  - They were concentrated: three peers gave 207 of them (76, 74 and 57), and the rest gave 26 or fewer each. That
+    points at the peers, not the response size.
+  - The node does not log peers' client ids, so the timing-out peers are not identified by client (B-563).
+- **B-562: the node advertised loopback.**
+  - External-IP detection failed at start, even though UPnP port forwarding had been set up 3 s earlier. The enode
+    therefore carried `127.0.0.1:30351`.
+  - The node had outbound peers only, and crawlers such as etcnodes did not list it.
+  - It followed the head on outbound peers throughout.
 
 ## Unclean-stop reopens
 
