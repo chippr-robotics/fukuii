@@ -91,8 +91,8 @@ object PixelLayer:
     */
   val ImageBudgetBytes: Long = 64L * 1024 * 1024
 
-  /** The whole factor a `hi` frame, drawn for [[ArtStore.CellWidth]] × [[ArtStore.CellHeight]] cells, is enlarged by at
-    * `cell`: the largest that still fits, at least 1 and at most [[MaxScale]] (spec 029 FR-015).
+  /** How many times the VGA cell, [[ArtStore.CellWidth]] × [[ArtStore.CellHeight]], a `hi` frame is drawn at for
+    * `cell`: the largest whole factor that still fits, at least 1 and at most [[MaxScale]] (spec 029 FR-015).
     */
   def scale(cell: CellSize): Int =
     (cell.width / ArtStore.CellWidth).min(cell.height / ArtStore.CellHeight).max(1).min(MaxScale)
@@ -187,11 +187,12 @@ object PixelLayer:
       width: Int,
       height: Int,
       source: Option[PixelBuffer],
-      pixels: () => PixelBuffer
+      pixels: () => Bitmap
   )
 
-  /** What a region shows at `cell`, enlarged by a whole factor: a sprite's frame by [[scale]]; a chart by as much as
-    * still fits its region, and no more than [[MaxScale]]. None for a sprite the art does not have.
+  /** What a region shows at `cell`: a sprite's frame at [[scale]] times the VGA cell, enlarged by whole squares if it
+    * is pixel art and fitted smoothly if it is drawn art; a chart enlarged by as much as still fits its region, and no
+    * more than [[MaxScale]]. None for a sprite the art does not have.
     */
   private def image(region: GraphicRegion, cell: CellSize, art: ArtStore): Option[Wanted] = region.graphic match
     case Graphic.SpriteFrame(name, pose, frame) =>
@@ -202,7 +203,7 @@ object PixelLayer:
           sprite.cols * ArtStore.CellWidth * k,
           sprite.rows * ArtStore.CellHeight * k,
           None,
-          () => sprite.hiFrame(pose, frame).enlarge(k)
+          () => sprite.hiFrame(pose, frame, k)
         )
       }
     case Graphic.Chart(id, buffer) =>
@@ -211,5 +212,11 @@ object PixelLayer:
         val fits = ((region.cols * cell.width) / buffer.width).min((region.rows * cell.height) / buffer.height)
         val k = fits.max(1).min(MaxScale)
         Some(
-          Wanted(ImageKey.ChartImage(id), buffer.width * k, buffer.height * k, Some(buffer), () => buffer.enlarge(k))
+          Wanted(
+            ImageKey.ChartImage(id),
+            buffer.width * k,
+            buffer.height * k,
+            Some(buffer),
+            () => Bitmap.of(buffer.enlarge(k))
+          )
         )

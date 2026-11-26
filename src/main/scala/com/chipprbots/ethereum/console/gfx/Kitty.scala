@@ -28,7 +28,10 @@ object Kitty:
   val DeviceAttributesQuery: String = "\u001b[c"
 
   /** Sends `image` to the terminal under `id`, without showing it: RGBA, deflated, in chunks. */
-  def upload(id: Int, image: PixelBuffer): String =
+  def upload(id: Int, image: PixelBuffer): String = upload(id, Bitmap.of(image))
+
+  /** Sends `image` to the terminal under `id`, without showing it: RGBA with its alpha, deflated, in chunks. */
+  def upload(id: Int, image: Bitmap): String =
     val payload = Base64.getEncoder.encodeToString(deflate(image.rgba))
     val chunks = payload.grouped(ChunkSize).toSeq
     val sb = new StringBuilder
