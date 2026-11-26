@@ -1,7 +1,8 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
+# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
+# header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -5994,12 +5995,17 @@ items:
   - id: B-550
     title: "Promote the eest-amsterdam gate to required (promote_by 2026-11-30); decide #1419 remainder (hive consume on Amsterdam, replay)"
     priority: P2
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-25
     refs: ["#1419"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-26T22:13:26Z
+      heartbeat: 2026-11-26T22:13:26Z
   - id: B-551
     title: "Gate promotions (#1402): first required Hive slice by its promote_by dates; migrate or delete hive-prague/hive-osaka"
     priority: P2
