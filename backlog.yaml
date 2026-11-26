@@ -6127,3 +6127,13 @@ items:
     refs: []
     links: {}
     notes: "2026-11-26 found during EG-12 (0.12.175) and the Sepolia gate VM (0.12.184): 'External IP detection failed or timed out (UPnP/STUN/HTTP/interface all unavailable...); advertising loopback'. On dev-node UPnP port forwarding initialized successfully 3 s earlier, yet detection still fell back. Effect: the enode/ENR carries 127.0.0.1, so crawlers (etcnodes) and peers cannot dial in; only outbound peers. Questions: why do UPnP-external-IP/STUN/HTTP all fail on a host with internet; should a node that cannot find its address advertise loopback at all (fail loudly / omit IP) rather than poison its ENR. Workaround: network.server-address.advertised-address (used on the GCE gate VM)."
+  - id: B-563
+    title: admin_peers names unknown peers 'fukuii-peer/<addr>' and omits client id/enode/caps
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-26
+    refs: []
+    links: {}
+    notes: "2026-11-26 EG-12: 26 of 34 admin_peers entries were named fukuii-peer/<ip:port> with only id/remoteAddress/inbound, so they read as fukuii nodes when they are unidentified (etcnodes lists 0 fukuii of 570). geth's admin_peers returns the Hello client id, enode, caps and protocols; return those, or null name, and never a fukuii-looking placeholder."
