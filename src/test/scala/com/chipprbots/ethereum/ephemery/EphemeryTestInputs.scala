@@ -21,9 +21,11 @@ object EphemeryTestInputs:
       StandardCharsets.UTF_8
     )
 
-  /** A new temporary directory holding the release's members and the three CL files a complete `testnet/` needs. */
-  def completeClDir(iteration: Int = 165): Path =
-    val dir = Files.createTempDirectory("eph-cl")
+  /** A new directory under `parent` holding the release's members and the three CL files a complete `testnet/` needs.
+    * The caller owns `parent` and removes it (B-368: it was a directory of its own in java.io.tmpdir, never removed).
+    */
+  def completeClDir(parent: Path, iteration: Int = 165): Path =
+    val dir = Files.createTempDirectory(parent, "eph-cl")
     val src = releaseDir(iteration)
     val list = Files.list(src)
     try list.forEach(f => Files.copy(f, dir.resolve(f.getFileName.toString)))

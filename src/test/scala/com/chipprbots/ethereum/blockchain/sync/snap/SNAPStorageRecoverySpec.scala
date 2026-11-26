@@ -33,6 +33,7 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializab
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.testing.TempDirs
 
 /** SNAP storage-phase recovery when the persisted storage-task file is gone.
   *
@@ -44,8 +45,14 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
 
   private val Pivot = BigInt(5)
 
+  // B-368: the task directories, and the task files the fixtures' controllers create in them, go once the suite is done
+  private val tempDirs = new TempDirs
+  override protected def afterAll(): Unit =
+    try super.afterAll() // the test kit first: no actor is left writing to a directory
+    finally tempDirs.deleteAll()
+
   "StorageTaskFile" should "treat a missing file or a partial entry as unusable" taggedAs UnitTest in {
-    val dir = Files.createTempDirectory("snap-task-test")
+    val dir = tempDirs.create("snap-task-test")
     val whole = dir.resolve("whole.bin")
     Files.write(whole, new Array[Byte](128))
     val partial = dir.resolve("partial.bin")
@@ -57,14 +64,14 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
   }
 
   it should "create task files under the given directory, not java.io.tmpdir" taggedAs UnitTest in {
-    val dir = Files.createTempDirectory("snap-task-test").resolve("snap")
+    val dir = tempDirs.create("snap-task-test").resolve("snap")
     val file = StorageTaskFile.createFile(Some(dir), "fukuii-contract-storage-", ".bin")
     file.getParent shouldBe dir
     Files.exists(file) shouldBe true
   }
 
   it should "treat an empty file as unusable" taggedAs UnitTest in {
-    val empty = Files.createTempFile("empty", ".bin")
+    val empty = Files.createTempFile(tempDirs.create("snap-task-test"), "empty", ".bin")
     StorageTaskFile.isUsable(empty) shouldBe false
   }
 
@@ -157,7 +164,7 @@ class SNAPStorageRecoverySpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     implicit override lazy val classicSystem: ActorSystem = SNAPStorageRecoverySpec.this.system.classicSystem
 
     val appState = storagesInstance.storages.appStateStorage
-    val taskDir: Path = Files.createTempDirectory("snap-recovery-test").resolve("snap")
+    val taskDir: Path = tempDirs.create("snap-recovery-test").resolve("snap")
     private val networkPeerManager = TestProbe()
     val parent: TypedTestProbe[SyncProtocol.SyncControllerReply] =
       testKit.createTestProbe[SyncProtocol.SyncControllerReply]()
