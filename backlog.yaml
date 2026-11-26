@@ -1,8 +1,7 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
-# header are not kept when the tool rewrites the file.
+# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -6118,3 +6117,13 @@ items:
     refs: [B-144 follow-up]
     links: {}
     notes: e.g. specs/023-fleet-topology/tasks.md T082 and ~line 234. Set In flight before editing a held spec.
+  - id: B-562
+    title: External IP detection fails on dev-node and GCE; node then advertises loopback (127.0.0.1) to the network
+    priority: P2
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-26
+    refs: []
+    links: {}
+    notes: "2026-11-26 found during EG-12 (0.12.175) and the Sepolia gate VM (0.12.184): 'External IP detection failed or timed out (UPnP/STUN/HTTP/interface all unavailable...); advertising loopback'. On dev-node UPnP port forwarding initialized successfully 3 s earlier, yet detection still fell back. Effect: the enode/ENR carries 127.0.0.1, so crawlers (etcnodes) and peers cannot dial in; only outbound peers. Questions: why do UPnP-external-IP/STUN/HTTP all fail on a host with internet; should a node that cannot find its address advertise loopback at all (fail loudly / omit IP) rather than poison its ENR. Workaround: network.server-address.advertised-address (used on the GCE gate VM)."
