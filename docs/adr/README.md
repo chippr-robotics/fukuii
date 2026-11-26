@@ -48,6 +48,7 @@ EVM implementations, EIPs, and VM-specific features.
 - [VM-005: EIP-3860 Implementation](vm/VM-005-eip-3860-implementation.md) - Accepted
 - [VM-006: EIP-6049 Implementation](vm/VM-006-eip-6049-implementation.md) - Accepted
 - [VM-007: EIP-161 noEmptyAccounts Configuration Fix](vm/VM-007-eip-161-noemptyaccounts-fix.md) - Accepted
+- [VM-008: A Windows-capable BLS12-381 backend for the EIP-2537 precompiles](vm/VM-008-windows-bls12-381-backend.md) - Proposed
 
 **Related Specifications:**
 - [Ethereum Mainnet EVM Compatibility](../specifications/ETHEREUM_MAINNET_EVM_COMPATIBILITY.md) - Comprehensive analysis of EIPs and opcodes for Ethereum mainnet compatibility
@@ -84,7 +85,7 @@ Operational features, administration, monitoring, user interfaces, and deploymen
 When creating a new ADR:
 
 1. Choose the appropriate category (infrastructure, vm, consensus, testing, operations)
-2. Use the next sequential number for that category (e.g., `VM-008-title.md`, `CON-006-title.md`)
+2. Use the next sequential number for that category (e.g., `VM-009-title.md`, `CON-006-title.md`)
 3. Follow the template structure
 4. Link it in both the category README and this main index
 5. Keep it concise but comprehensive
