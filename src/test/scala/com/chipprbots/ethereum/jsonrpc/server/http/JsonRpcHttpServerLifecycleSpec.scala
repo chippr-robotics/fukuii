@@ -18,6 +18,7 @@ import cats.effect.IO
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContext
 import scala.concurrent.Future
+import scala.concurrent.Promise
 import scala.concurrent.duration.*
 
 import org.scalatest.BeforeAndAfterAll
@@ -151,21 +152,31 @@ class JsonRpcHttpServerLifecycleSpec extends AnyFlatSpec with Matchers with Befo
   "Two starts at once" should "be one bind, and both get the binding" taggedAs (UnitTest, RPCTest) in {
     val binds = new AtomicInteger(0)
     val stats = new RpcCallStats
+    // The bind is held until both starts are made: a loopback bind on port 0 can complete before the second `start`,
+    // which then finds the server `Bound` and answers with a new future, so "at once" would depend on timing.
+    val release = Promise[Unit]()
     def countedBind(): Future[Http.ServerBinding] =
       binds.incrementAndGet()
-      Http(system)
-        .newServerAt("127.0.0.1", 0)
-        .bind(org.apache.pekko.http.scaladsl.server.Route.toFunction(complete("ok"))(using system))
+      release.future.flatMap { _ =>
+        Http(system)
+          .newServerAt("127.0.0.1", 0)
+          .bind(org.apache.pekko.http.scaladsl.server.Route.toFunction(complete("ok"))(using system))
+      }
     val lifecycle = new ServerLifecycle(RpcCallStats.Http, () => countedBind(), stats, 1.second)
     try
       val first = lifecycle.start()
       val second = lifecycle.start()
       (second should be).theSameInstanceAs(first)
+      release.success(())
       val binding = Await.result(first, Wait)
       Await.result(second, Wait).localAddress shouldBe binding.localAddress
       Await.result(lifecycle.start(), Wait).localAddress shouldBe binding.localAddress
       binds.get shouldBe 1
-    finally Await.result(lifecycle.stop(), Wait)
+    finally
+      // Settle the bind first, so a failed assertion above is reported instead of `stop` refusing a server starting.
+      release.trySuccess(())
+      Await.ready(lifecycle.start(), Wait)
+      Await.result(lifecycle.stop(), Wait)
   }
 
   "A bind that fails" should "leave the server stopped, not listening, and able to stop and start again" taggedAs (
