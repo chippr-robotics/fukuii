@@ -44,21 +44,39 @@ final case class PoseArt(name: String, frames: Int, timeline: Seq[(Int, Int)]):
   * @param lo
   *   for block mode: one frame a pose, `cols × 2·rows` pixels each, poses down the sheet
   * @param hi
-  *   for pixel mode: `8·cols × 16·rows` pixels a frame, frames across, poses down
+  *   for pixel mode: [[density]] times `8·cols × 16·rows` pixels a frame, frames across, poses down
+  * @param drawn
+  *   whether the `hi` art is drawn art, with colours outside the 240 or soft edges, rather than pixel art: drawn art is
+  *   fitted to a cell smoothly, pixel art is enlarged by whole squares (FR-015)
   */
-final case class Sprite(name: String, cols: Int, rows: Int, poses: Seq[PoseArt], lo: PixelBuffer, hi: PixelBuffer):
+final case class Sprite(
+    name: String,
+    cols: Int,
+    rows: Int,
+    poses: Seq[PoseArt],
+    lo: PixelBuffer,
+    hi: Bitmap,
+    drawn: Boolean = false
+):
+
+  /** How many times the VGA cell's 8 × 16 pixels a cell of the `hi` sheet has on each side: one of
+    * [[ArtStore.Densities]].
+    */
+  val density: Int = (hi.height / (rows * ArtStore.CellHeight * poses.size).max(1)).max(1)
 
   /** A pose's frame for block mode. */
   def loFrame(pose: Int): PixelBuffer = lo.crop(0, pose * rows * 2, cols, rows * 2)
 
-  /** A pose's frame for pixel mode. */
-  def hiFrame(pose: Int, frame: Int): PixelBuffer =
-    hi.crop(
-      frame * cols * ArtStore.CellWidth,
-      pose * rows * ArtStore.CellHeight,
-      cols * ArtStore.CellWidth,
-      rows * ArtStore.CellHeight
-    )
+  /** A pose's frame for pixel mode, as the sheet has it. */
+  def hiFrame(pose: Int, frame: Int): Bitmap =
+    val (w, h) = (cols * ArtStore.CellWidth * density, rows * ArtStore.CellHeight * density)
+    hi.crop(frame * w, pose * h, w, h)
+
+  /** A pose's frame for pixel mode at `scale` times the VGA cell: `8·cols·scale × 16·rows·scale` pixels. */
+  def hiFrame(pose: Int, frame: Int, scale: Int): Bitmap =
+    val sheet = hiFrame(pose, frame)
+    if !drawn && scale % density == 0 then sheet.enlarge(scale / density)
+    else sheet.resize(cols * ArtStore.CellWidth * scale, rows * ArtStore.CellHeight * scale)
 
 /** The art the TUI draws (spec 029 FR-060): the sprite sheets that kept contracts/art.md, and what was wrong with the
   * ones that did not. A sprite that breaks a rule is left out, so its region shows the text the frame carries anyway; a
@@ -69,12 +87,17 @@ final class ArtStore(val sprites: Map[String, Sprite], val problems: Seq[String]
 
 object ArtStore:
 
-  /** The canvas of a `hi` sheet: 8 × 16 pixels a cell, the VGA text cell. */
+  /** The VGA text cell, 8 × 16 pixels: a `hi` sheet's cell at density 1, and the unit pixel mode scales by. */
   val CellWidth: Int = 8
   val CellHeight: Int = 16
 
+  /** The densities a `hi` sheet may be drawn at: the VGA cell, or twice it on each side, which looks sharp on a
+    * high-density display.
+    */
+  val Densities: Seq[Int] = Seq(1, 2)
+
   /** The largest sheet file read. */
-  val MaxBytes: Int = 4 * 1024 * 1024
+  val MaxBytes: Int = 8 * 1024 * 1024
 
   /** The poses of a character sprite, in the order of the sheet's rows. */
   val Poses: Seq[String] = Seq("starting", "syncing", "watching", "warning", "error", "asleep", "celebrating")
@@ -161,9 +184,9 @@ object ArtStore:
         for
           poses <- poses(e, conf.getConfig(path))
           across = poses.map(_.frames).max
-          loSheet <- sheet(s"${e.name}.lo.png", lo.get, e.cols, e.rows * 2 * e.poses)
-          hiSheet <- sheet(s"${e.name}.hi.png", hi.get, e.cols * CellWidth * across, e.rows * CellHeight * e.poses)
-          made = Sprite(e.name, e.cols, e.rows, poses, loSheet, hiSheet)
+          loPixels <- loSheet(s"${e.name}.lo.png", lo.get, e.cols, e.rows * 2 * e.poses)
+          hiArt <- hiSheet(s"${e.name}.hi.png", hi.get, e.cols * CellWidth * across, e.rows * CellHeight * e.poses)
+          made = Sprite(e.name, e.cols, e.rows, poses, loPixels, hiArt._1, hiArt._2)
           _ <- poses.indices
             .find(i => !made.loFrame(i).nonEmpty || !made.hiFrame(i, 0).nonEmpty)
             .fold(Right(()): Either[String, Unit])(i => Left(s"${e.name}: the first frame of pose $i is empty"))
@@ -193,9 +216,9 @@ object ArtStore:
           }
           .toLeft(listed)
 
-  /** A sheet file as pixels, held to the contract: its size, hard edges, the 240 colours. */
-  private def sheet(name: String, bytes: Array[Byte], width: Int, height: Int): Either[String, PixelBuffer] =
-    if bytes.length > MaxBytes then Left(s"$name: larger than 4 MiB")
+  /** A `lo` sheet as pixels, held to the contract: its size, hard edges, the 240 colours. */
+  private def loSheet(name: String, bytes: Array[Byte], width: Int, height: Int): Either[String, PixelBuffer] =
+    if bytes.length > MaxBytes then Left(s"$name: larger than 8 MiB")
     else
       Png.read(bytes, Some((width, height))).left.map(reason => s"$name: $reason").flatMap { image =>
         if image.width != width || image.height != height then
@@ -215,4 +238,18 @@ object ArtStore:
               case _ => problem = Some(s"$name: has half-transparent pixels")
             i += 1
           problem.toLeft(PixelBuffer(width, height, out))
+      }
+
+  /** A `hi` sheet as pixels, held to the contract: `width × height` at one of the [[Densities]], in any colour. With it,
+    * whether it is drawn art: a colour outside the 240 or a soft edge.
+    */
+  private def hiSheet(name: String, bytes: Array[Byte], width: Int, height: Int): Either[String, (Bitmap, Boolean)] =
+    if bytes.length > MaxBytes then Left(s"$name: larger than 8 MiB")
+    else
+      Png.read(bytes, Densities.map(d => (width * d, height * d))).left.map(reason => s"$name: $reason").map { image =>
+        val drawn = image.argb.exists { pixel =>
+          val alpha = pixel >>> 24
+          (alpha != 0 && alpha != 0xff) || (alpha == 0xff && Palette.indexOf(pixel).isEmpty)
+        }
+        (Bitmap(image.width, image.height, image.argb), drawn)
       }
