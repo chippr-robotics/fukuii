@@ -5946,13 +5946,16 @@ items:
   - id: B-544
     title: "snap-split verify.py hardening: core-local/wildcard name shadowing, object-level fields as file scope, multi-line binding patterns"
     priority: P3
-    status: open
+    status: dropped
     area: tooling
     size: S
     opened: 2026-11-25
+    closed: 2026-11-26
     refs: ["#1584"]
     links: {}
-    notes: spec 016 Done; won't-fix also reasonable
+    notes: |-
+      spec 016 Done; won't-fix also reasonable
+      2026-11-26 dropped: User 2026-11-26: won't fix; spec 016 is Done.
   - id: B-545
     title: "Heal follow-ups: narrow pathPivotRootAbsent to MissingNodeException; stuck-heal gauge; pivotUnservable in both replays; test"
     priority: P3
