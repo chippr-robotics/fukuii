@@ -399,19 +399,57 @@ fork_depths() {
   sed -nE 's/.*REORG-SETTLE: fork=([0-9]+) oldHead=([0-9]+) .*/\2 \1/p' "$1" |
     awk '{ c[$1 - $2]++ } END { for (d in c) printf "%d:%d ", d, c[d] }'
 }
-# canonical_compare FROM TO: compares every STRIDE-th block hash with the reference. Prints "compared mismatched".
+# ref_hash_at N: the reference's hash of block N, retried. A public reference RPC drops single requests under load
+# (EG-12 2026-11-26: one unanswered read at block 25808199 was scored as a divergence, and the hash it would have
+# returned matched ours). Four tries over about 25 s; still unreadable after that prints nothing and fails.
+ref_hash_at() {
+  local n=$1 h try
+  for try in 1 2 3 4; do
+    h=$(hash_at "$REF_RPC" "$n") && [ -n "$h" ] && { echo "$h"; return 0; }
+    [ "$try" -lt 4 ] && sleep $((try * try + 1))
+  done
+  return 1
+}
+# canonical_compare FROM TO: compares every STRIDE-th block hash with the reference. Prints "compared mismatched
+# unread": a block our node cannot serve, or whose hash differs, is a mismatch; a block the REFERENCE cannot serve
+# after retries is unread, counted apart and never as a divergence.
 canonical_compare() {
-  local from=$1 to=$2 n ours theirs compared=0 mism=0
+  local from=$1 to=$2 n ours theirs compared=0 mism=0 unread=0
   for ((n = from; n <= to; n += STRIDE)); do
     ours=$(hash_at "$LOCAL_RPC" "$n" || echo unreadable)
-    theirs=$(hash_at "$REF_RPC" "$n" || echo unreadable)
     compared=$((compared + 1))
-    if [ "$ours" != "$theirs" ] || [ "$ours" = unreadable ]; then
+    if ! theirs=$(ref_hash_at "$n"); then
+      if [ "$ours" = unreadable ]; then
+        mism=$((mism + 1))
+        log "block $n: ours unreadable, reference unreadable"
+      else
+        unread=$((unread + 1))
+        [ "$unread" -le 20 ] && log "block $n: ours $ours, reference unreadable after retries (not counted as a difference)"
+      fi
+      continue
+    fi
+    if [ "$ours" != "$theirs" ]; then
       mism=$((mism + 1))
       [ "$mism" -le 20 ] && log "block $n: ours $ours, reference $theirs"
     fi
   done
-  echo "$compared $mism"
+  echo "$compared $mism $unread"
+}
+# canonical_result NAME FROM TO WHAT: runs canonical_compare and records the verdict. Any difference fails. Blocks the
+# reference could not serve are reported; more than 1% of those compared (or all of them) fails, because then the
+# check did not cover the range it claims.
+canonical_result() {
+  local name=$1 what=$4 compared mism unread
+  read -r compared mism unread < <(canonical_compare "$2" "$3")
+  if [ "$mism" -gt 0 ]; then
+    result "$name" FAIL "$mism of $compared block(s) differ ($unread unreadable at the reference)"
+  elif [ "$compared" -eq 0 ] || [ $((unread * 100)) -gt "$compared" ]; then
+    result "$name" FAIL "$unread of $compared block(s) unreadable at the reference: the comparison did not cover the range"
+  elif [ "$unread" -gt 0 ]; then
+    result "$name" PASS "$((compared - unread)) $what equal; $unread unreadable at the reference after retries, not compared"
+  else
+    result "$name" PASS "$compared $what"
+  fi
 }
 log_checks() { # log_checks LOGFILE NAME
   local lf=$1 name=$2 ef rc depths short=0 long=0 d c
@@ -674,9 +712,7 @@ if [ "$FROM" = sync ]; then
   else
     result "ancestor window: BLOCKHASH below the pivot" FAIL "no probe was served ($BH_MISSED missed): the check did not run, so it cannot pass"
   fi
-  read -r compared mism < <(canonical_compare $((PIVOT + 1)) $((PIVOT + 256)))
-  if [ "$mism" = 0 ]; then result "ancestor window: blocks pivot+1..+256 canonical" PASS "$compared compared"
-  else result "ancestor window: blocks pivot+1..+256 canonical" FAIL "$mism of $compared differ from the reference"; fi
+  canonical_result "ancestor window: blocks pivot+1..+256 canonical" $((PIVOT + 1)) $((PIVOT + 256)) "compared"
   ommer_window
   FROM=follow
 fi
@@ -700,9 +736,8 @@ if [ "$FROM" = follow ]; then
   else
     result "follows the head for ${FOLLOW_H} h" FAIL "head $head is $((ref_head - head)) behind the reference $ref_head"
   fi
-  read -r compared mism < <(canonical_compare $((PIVOT + 1)) $((head - CONFIRMATIONS)))
-  if [ "$mism" = 0 ]; then result "node A: canonical chain equals the reference" PASS "$compared block(s) from the pivot up (stride $STRIDE)"
-  else result "node A: canonical chain equals the reference" FAIL "$mism of $compared block(s) differ"; fi
+  canonical_result "node A: canonical chain equals the reference" $((PIVOT + 1)) $((head - CONFIRMATIONS)) \
+    "block(s) from the pivot up (stride $STRIDE)"
   log_checks "$OUT/node-a.log" "node A"
   FROM="export"
 fi
@@ -810,9 +845,8 @@ if [ "$FROM" = reimport ]; then
   else
     result "re-imported node follows ${REFOLLOW_H} h" FAIL "head $head (archive at $EXPORT_N), reference $ref_head"
   fi
-  read -r compared mism < <(canonical_compare $((EXPORT_N + 1)) $((head - CONFIRMATIONS)))
-  if [ "$mism" = 0 ]; then result "node B: canonical chain equals the reference" PASS "$compared block(s) above the archive"
-  else result "node B: canonical chain equals the reference" FAIL "$mism of $compared block(s) differ"; fi
+  canonical_result "node B: canonical chain equals the reference" $((EXPORT_N + 1)) $((head - CONFIRMATIONS)) \
+    "block(s) above the archive"
   log_checks "$OUT/node-b.log" "node B"
   stop_sampler
   stop_node "$PID_B" "node B" || true
