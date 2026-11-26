@@ -20,9 +20,9 @@ on:
       skip:
         description: |
           Skip the simulator job. A caller sets it from .github/workflows/_hive-changes.yml when the PR
-          changes nothing the suite depends on. The job is skipped by `if:` rather than not called, so
-          its check (`<caller job> / <label>`, e.g. `run / engine`) still reports, and a required check
-          that is skipped counts as passed.
+          changes nothing the suite depends on. The simulator job is then skipped, and the `skipped` job
+          runs in its place under the same name, so the check (`<caller job> / <label>`, e.g.
+          `run / engine`) still reports as passed and a required check does not wait for ever.
         required: false
         type: boolean
         default: false
@@ -171,6 +171,23 @@ permissions:
   contents: read
 
 jobs:
+  # When `skip` is true the `hive` job below is skipped by `if:`, and GitHub does not evaluate the
+  # name of a job skipped that way: it reports the literal `<caller job> / inputs.label`, so the
+  # required check `run / engine` (or `run / consume-engine`) never reports and a docs-only PR waits
+  # on it for ever. This job runs in its place under the same name, so the check reports as passed.
+  # When `skip` is false it is the one skipped, and the stray `inputs.label` check it leaves is not
+  # a required one.
+  skipped:
+    name: ${{ inputs.label }}
+    if: ${{ inputs.skip }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Nothing to test
+        run: |
+          echo "None of the files this PR changes is one the ${{ inputs.label }} suite depends on (see the" \
+            "changes job), so the suite is skipped." >> "$GITHUB_STEP_SUMMARY"
+
   hive:
     name: ${{ inputs.label }}
     if: ${{ !inputs.skip }}

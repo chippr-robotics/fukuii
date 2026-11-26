@@ -1067,10 +1067,10 @@ Document emergency contacts:
 
 ## Further Reading
 
-- [OWASP Top 10](https://owasp.org/www-project-top-ten/)
-- [CIS Benchmarks](https://www.cisecurity.org/cis-benchmarks/)
+- [OWASP Top 10](https://owasp.org/projects/top-ten)
+- [CIS Benchmarks](https://www.cisecurity.org/cis-benchmarks)
 - [Linux Security Hardening Guide](https://www.cisecurity.org/benchmark/ubuntu_linux)
-- [Ethereum Node Security](https://ethereum.org/en/developers/docs/nodes-and-clients/run-a-node/#security)
+- [Ethereum Node Security](https://ethereum.org/developers/docs/nodes-and-clients/run-a-node/#security)
 
 ---
 

@@ -584,7 +584,7 @@ docker-compose up -d kong
 ## Additional Resources
 
 - [Kong Security Documentation](https://developer.konghq.com/gateway/security/)
-- [OWASP API Security Top 10](https://owasp.org/API-Security/editions/2023/en/0x11-t10/)
+- [OWASP API Security Top 10](https://api-security.owasp.org/editions/2023/en/0x11-t10/)
 - [CIS Docker Benchmark](https://www.cisecurity.org/benchmark/docker)
 - [NIST Cybersecurity Framework](https://www.nist.gov/cyberframework)
 

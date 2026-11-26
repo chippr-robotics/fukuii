@@ -48,7 +48,8 @@ jobs:
     needs: changes
     uses: ./.github/workflows/_hive-sim.yml
     with:
-      # Skipped inside _hive-sim.yml, so the required check `run / engine` still reports.
+      # Skipped inside _hive-sim.yml, which runs a stand-in job under the same name, so the required
+      # check `run / engine` still reports.
       skip: ${{ needs.changes.outputs.run != 'true' }}
       sim: ethereum/engine
       label: engine

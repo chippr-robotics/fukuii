@@ -858,7 +858,7 @@ curl -X POST --data '{"jsonrpc":"2.0","method":"net_version","params":[],"id":1}
 
 - [EIP-155: Simple replay attack protection](https://eips.ethereum.org/EIPS/eip-155)
 - [EIP-170: Contract code size limit](https://eips.ethereum.org/EIPS/eip-170)
-- [Ethereum Fork History](https://ethereum.org/en/history/)
+- [Ethereum Fork History](https://ethereum.org/ethereum-forks/)
 - [Private Networks Guide](https://geth.ethereum.org/docs/fundamentals/private-network)
 
 ---

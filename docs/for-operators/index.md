@@ -47,10 +47,12 @@ This section contains guides for deploying, monitoring, and managing Fukuii in p
 
 | Image | Purpose |
 |-------|---------|
-| `ghcr.io/chippr-robotics/fukuii:latest` | Production (signed) |
-| `ghcr.io/chippr-robotics/fukuii:v1.0.0` | Specific version |
-| `ghcr.io/chippr-robotics/fukuii:main` | Development (unsigned) |
-| `ghcr.io/chippr-robotics/fukuii-dev:latest` | Development environment |
+| `ghcr.io/chippr-robotics/fukuii:<version>` | Release image, Cosign-signed, with provenance and SBOM attestations. Pin this in production |
+| `ghcr.io/chippr-robotics/fukuii:main` | Built from `main` on every push; not signed |
+| `ghcr.io/chippr-robotics/fukuii-dev:latest` | Development environment (JDK and sbt) |
+| `docker.io/chipprbots/fukuii` | Unsigned mirror for environments where GHCR is restricted |
+
+Release tags are the bare version, for example `0.12.79` (no `v`).
 
 ### Verify Image Signatures
 
@@ -58,34 +60,38 @@ This section contains guides for deploying, monitoring, and managing Fukuii in p
 cosign verify \
   --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
-  ghcr.io/chippr-robotics/fukuii:latest
+  ghcr.io/chippr-robotics/fukuii:<version>
 ```
 
 ## Monitoring Stack
 
 ### Prometheus Metrics
 
-Enable metrics in your Fukuii configuration:
+Metrics are off by default. Turn them on in your configuration:
 
 ```hocon
 fukuii {
   metrics {
     enabled = true
-    port = 9095
+    port = 13798
   }
 }
 ```
 
-Access metrics at: `http://localhost:9095/metrics`
+Metrics are served at `http://localhost:13798/metrics`. The `ops/` reference stacks set the port to 9095.
 
 ### Key Metrics
 
 | Metric | Description |
 |--------|-------------|
-| `ethereum_peer_count` | Current number of connected peers |
-| `ethereum_block_height` | Current synchronized block number |
-| `ethereum_sync_status` | Synchronization state |
+| `app_network_peers_outgoing_handshaked_gauge` | Peers this node dialled that completed the handshake |
+| `app_network_peers_incoming_handshaked_gauge` | Peers that dialled in and completed the handshake |
+| `app_regularsync_block_current_number_gauge` | The node's current block |
+| `app_regularsync_block_bestKnown_number_gauge` | The best block the node knows of from its peers |
+| `app_snapsync_pivot_block_number_gauge` | The SNAP sync pivot block |
 | `jvm_memory_used_bytes` | JVM memory usage |
+
+The full catalog is in the [Metrics Reference](../operations/metrics-reference.md).
 
 ### Sample Prometheus Alerts
 
@@ -94,69 +100,73 @@ groups:
   - name: fukuii
     rules:
       - alert: LowPeerCount
-        expr: ethereum_peer_count < 10
+        expr: app_network_peers_outgoing_handshaked_gauge + app_network_peers_incoming_handshaked_gauge < 5
         for: 5m
         labels:
           severity: warning
         annotations:
           summary: "Low peer count on {{ $labels.instance }}"
-          
-      - alert: NodeNotSyncing
-        expr: rate(ethereum_block_height[5m]) == 0
+
+      - alert: NodeNotImporting
+        expr: increase(app_regularsync_block_current_number_gauge[15m]) == 0
         for: 15m
         labels:
           severity: critical
         annotations:
-          summary: "Node stopped syncing on {{ $labels.instance }}"
+          summary: "No new blocks imported on {{ $labels.instance }}"
 ```
+
+The `NodeNotImporting` alert applies once the node follows the head; during SNAP sync watch the SNAP metrics instead
+(see [Sync Lifecycle](../operations/sync-lifecycle.md)).
 
 ## Health Endpoints
 
-### RPC Health Check
+The JSON-RPC HTTP server (port 8546) serves:
+
+| Endpoint | Meaning |
+|----------|---------|
+| `GET /health` | 200 while the RPC server is up. Use it for liveness |
+| `GET /readiness` | 200 when the node is ready, 503 otherwise. Use it for readiness |
+| `GET /healthcheck` | The detailed health report |
+| `GET /buildinfo` | Version and build information |
 
 ```bash
-curl -X POST --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}' \
-  http://localhost:8546
+curl -s http://localhost:8546/readiness
 ```
 
 ### Kubernetes Probes
 
 ```yaml
 livenessProbe:
-  exec:
-    command:
-      - /bin/sh
-      - -c
-      - |
-        curl -sf -X POST \
-          --data '{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}' \
-          http://localhost:8546 || exit 1
+  httpGet:
+    path: /health
+    port: 8546
   initialDelaySeconds: 60
   periodSeconds: 30
 
 readinessProbe:
-  exec:
-    command:
-      - /bin/sh
-      - -c
-      - |
-        PEERS=$(curl -sf -X POST \
-          --data '{"jsonrpc":"2.0","method":"net_peerCount","params":[],"id":1}' \
-          http://localhost:8546 | jq -r '.result' | xargs printf '%d')
-        [ "$PEERS" -gt 5 ] || exit 1
+  httpGet:
+    path: /readiness
+    port: 8546
   initialDelaySeconds: 120
   periodSeconds: 60
 ```
+
+The RPC server must listen on the pod's interface for the kubelet to reach it: the container images do this by default
+(`FUKUII_RPC_INTERFACE=0.0.0.0`); otherwise set `fukuii.network.rpc.http.interface`.
 
 ## Logging
 
 ### Log Levels
 
-Configure log levels in `logback.xml` or via environment:
+Set the level with `logging.logs-level` (the default is `ERROR`); `logging.json-output = true` switches to JSON lines
+for a log pipeline. Logs are written to `<datadir>/logs`.
 
-```bash
-export FUKUII_LOG_LEVEL=INFO
+```hocon
+logging.logs-level = "INFO"
 ```
+
+Or pass `-Dlogging.logs-level=INFO` on the command line.
 
 | Level | Use Case |
 |-------|----------|
@@ -182,7 +192,7 @@ See the [Log Triage Runbook](../runbooks/log-triage.md) for:
 |---------|--------------|------------|
 | Zero peers | Firewall blocking | [Peering Guide](../runbooks/peering.md) |
 | Sync stalled | Disk full or slow | [Disk Management](../runbooks/disk-management.md) |
-| High memory | JVM settings | Check `.jvmopts` |
+| High memory | JVM settings | Check the heap flags in `conf/application.ini` (`/etc/fukuii/application.ini` for the deb) |
 | RPC timeout | Too many requests | Enable rate limiting |
 
 ### Emergency Procedures

@@ -403,7 +403,7 @@ setup.template.pattern: "fukuii-logs-*"
 
 ## References
 
-- [Prometheus Documentation](https://prometheus.io/docs/)
+- [Prometheus Documentation](https://prometheus.io/docs/introduction/overview/)
 - [Grafana Documentation](https://grafana.com/docs/)
 - [Logback Documentation](https://logback.qos.ch/)
 - [Logstash Encoder](https://github.com/logfellow/logstash-logback-encoder)

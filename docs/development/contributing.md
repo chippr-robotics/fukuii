@@ -670,7 +670,7 @@ Before submitting a PR, verify:
 
 ## Additional Resources
 
-- [📖 Hosted Documentation](https://chippr-robotics.github.io/fukuii/) - Browsable documentation site
+- [📖 Hosted Documentation](https://docs.fukuii.com/) - Browsable documentation site
 - [CI/CD Documentation](ci-cd.md)
 - [Getting Started](../getting-started/index.md)
 - [Branch Protection](branch-protection.md)

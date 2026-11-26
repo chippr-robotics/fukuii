@@ -10,7 +10,7 @@ This directory contains the GitHub Actions workflows for continuous integration,
 
 **Purpose:** Deploys documentation from the `docs/` folder to GitHub Pages
 
-**URL:** [https://chippr-robotics.github.io/fukuii/](https://chippr-robotics.github.io/fukuii/)
+**URL:** [https://docs.fukuii.com/](https://docs.fukuii.com/)
 
 **Steps:**
 1. Checks out code
@@ -468,6 +468,6 @@ When modifying workflows:
 ## Resources
 
 - [GitHub Actions Documentation](https://docs.github.com/en/actions)
-- [Workflow Syntax Reference](https://docs.github.com/en/actions/reference/workflow-syntax-for-github-actions)
+- [Workflow Syntax Reference](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax)
 - [SBT Documentation](https://www.scala-sbt.org/1.x/docs/)
-- [Docker Build Reference](https://docs.docker.com/engine/reference/builder/)
+- [Docker Build Reference](https://docs.docker.com/reference/dockerfile)

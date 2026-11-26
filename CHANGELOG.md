@@ -21,6 +21,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - DNS discovery checks a tree root's `sig=` is exactly 87 characters, and an ENR at most 400, before decoding them.
 
 ### Changed
+- **The distroless image runs with the launcher's heap and memory envelope.** It set `JAVA_OPTS="-Xms2g -Xmx4g"`,
+  which its `java` entrypoint never read, so it ran with the JVM's defaults (a heap of a quarter of the container's
+  memory, no direct-memory cap, no heap dump or exit on `OutOfMemoryError`). The entrypoint now passes the flags of
+  `src/universal/conf/application.ini`: `-Xmx3g -Xms1g -Xss1M -XX:MaxDirectMemorySize=512M -XX:+UseG1GC
+  -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/data/logs/heapdump.hprof
+  -XX:+ExitOnOutOfMemoryError`. They follow `JDK_JAVA_OPTIONS` and `JAVA_TOOL_OPTIONS` on the command line, so they win
+  over both; override the entrypoint to change them. A distroless container with more than 12 GiB of memory gets a
+  smaller heap than before. The other images are unchanged.
 - **Container images: data lands on the `/app/data` volume and a published JSON-RPC port is reachable.** The images
   set `FUKUII_DATA_DIR=/app/data`, which nothing read, so the node wrote to `/home/fukuii/.fukuii/<network>` in the
   container layer, and RPC bound `localhost` inside the container, so a published port reached nothing.

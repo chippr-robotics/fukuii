@@ -305,7 +305,8 @@ Download the latest release from the [Releases page](https://github.com/chippr-r
 
 ## Getting Started
 
-> **ALPHA SOFTWARE — DO NOT USE IN PRODUCTION**
+Read [Known Issues](docs/runbooks/known-issues.md) before you sync, and see
+[Verification Status](docs/STATUS.md) for what CI enforces.
 
 ### Option 1: Docker (Recommended)
 
@@ -406,7 +407,7 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for environmen
 For contributors: run `sbt pp` before submitting a PR to check formatting, style, and tests locally.
 
 **Quick links:**
-- [Documentation Site](https://chippr-robotics.github.io/fukuii/)
+- [Documentation Site](https://docs.fukuii.com/)
 - [Documentation Index](docs/index.md)
 - [Quick Start Guide](.github/QUICKSTART.md)
 

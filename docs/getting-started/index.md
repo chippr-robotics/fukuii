@@ -1,26 +1,26 @@
 # Getting Started
 
-Get up and running with Fukuii quickly. Choose the installation method that best fits your needs.
+Install Fukuii from a package manager, a release archive or a signed container image, or build it from source.
 
 ## Choose Your Path
 
 <div class="grid cards" markdown>
 
--   :whale: **Docker (Recommended)**
+-   :package: **Packages**
 
     ---
 
-    The fastest way to run Fukuii in production with signed container images.
+    `ppa:chipprbots/fukuii` for Ubuntu (noble, jammy) and the `fukuii` package on Chocolatey for Windows.
 
-    [:octicons-arrow-right-24: Docker Quick Start](../deployment/docker.md)
+    [:octicons-arrow-right-24: Quick Start](quickstart.md)
 
--   :cloud: **GitHub Codespaces**
+-   :whale: **Signed container**
 
     ---
 
-    Perfect for development. Get a complete environment in your browser.
+    Cosign-signed images on GHCR, with provenance and SBOM attestations.
 
-    [:octicons-arrow-right-24: Codespaces Setup](codespaces.md)
+    [:octicons-arrow-right-24: Docker Guide](../deployment/docker.md)
 
 -   :hammer_and_wrench: **Build from Source**
 
@@ -30,11 +30,19 @@ Get up and running with Fukuii quickly. Choose the installation method that best
 
     [:octicons-arrow-right-24: Build Guide](build-from-source.md)
 
+-   :cloud: **GitHub Codespaces**
+
+    ---
+
+    A complete development environment in your browser.
+
+    [:octicons-arrow-right-24: Codespaces Setup](codespaces.md)
+
 </div>
 
 ## System Requirements
 
-### Minimum Requirements
+### Hardware
 
 | Resource | Minimum | Recommended |
 |----------|---------|-------------|
@@ -43,60 +51,114 @@ Get up and running with Fukuii quickly. Choose the installation method that best
 | **Disk** | 500 GB SSD | 1 TB NVMe SSD |
 | **Network** | 10 Mbps | 100 Mbps |
 
-### Software Requirements
+These figures are for an ETC full node. A Sepolia or mainnet node that keeps full block history needs much more disk;
+see [Known Issues](../runbooks/known-issues.md) and [Disk Management](../runbooks/disk-management.md) before you sync.
+
+### Software
+
+=== "Packages"
+
+    - Ubuntu PPA: Ubuntu 24.04 (noble) or 22.04 (jammy). The package depends on an OpenJDK 25 runtime.
+    - Chocolatey: Windows with Chocolatey. The package installs the Temurin 25 JRE.
+
+=== "Release archive"
+
+    - JDK 25 or later
 
 === "Docker"
 
     - Docker 20.10 or later
-    - docker-compose (optional)
+    - `cosign`, to verify image signatures
 
-=== "Source Build"
+=== "Source build"
 
-    - JDK 25 (OpenJDK or Oracle JDK)
+    - JDK 25
     - sbt 1.13.0 or later
     - Git
 
-### Required Ports
+### Ports
 
-| Port | Protocol | Purpose |
-|------|----------|---------|
-| 30303 | UDP | Discovery protocol |
-| 30303 | TCP | Ethereum P2P |
-| 8546 | TCP | JSON-RPC (internal only!) |
+| Port | Protocol | Purpose | Exposure |
+|------|----------|---------|----------|
+| 30303 | TCP | P2P (RLPx) | Public |
+| 30303 | UDP | Discovery | Public |
+| 8546 | TCP | JSON-RPC over HTTP, plus `/health`, `/readiness`, `/buildinfo` | Localhost only |
+| 8552 | TCP | JSON-RPC over WebSocket (off unless enabled) | Localhost only |
+| 8551 | TCP | Engine API, for the consensus client (Ethereum networks) | Localhost or a private network |
 
 !!! warning "Security Notice"
-    Never expose port 8546 to the public internet. See the [Security Runbook](../runbooks/security.md) for details.
+    Never expose the JSON-RPC or Engine API ports to the public internet. They bind to `localhost` by default. See the
+    [Security Runbook](../runbooks/security.md) for details.
 
-## Quick Docker Start
+## Quick Install
 
-```bash
-# Pull the latest signed release
-docker pull ghcr.io/chippr-robotics/fukuii:latest
+=== "Ubuntu (PPA)"
 
-# Create data volumes
-docker volume create fukuii-data
-docker volume create fukuii-conf
+    ```bash
+    sudo add-apt-repository ppa:chipprbots/fukuii
+    sudo apt update
+    sudo apt install fukuii
 
-# Run the node
-docker run -d \
-  --name fukuii \
-  --restart unless-stopped \
-  -p 30303:30303 \
-  -p 30303:30303/udp \
-  -v fukuii-data:/app/data \
-  -v fukuii-conf:/app/conf \
-  ghcr.io/chippr-robotics/fukuii:latest
-```
+    fukuii etc      # or mordor, eth, sepolia, hoodi, ephemery
+    ```
+
+=== "Windows (Chocolatey)"
+
+    ```powershell
+    choco install fukuii
+
+    fukuii etc      # or mordor, eth, sepolia, hoodi, ephemery
+    ```
+
+=== "Release archive"
+
+    Download `fukuii-<version>.zip` (or `.tgz`) and `SHA256SUMS.txt` from the
+    [latest release](https://github.com/chippr-robotics/fukuii/releases/latest), then:
+
+    ```bash
+    sha256sum -c SHA256SUMS.txt --ignore-missing
+    unzip fukuii-<version>.zip && cd fukuii-<version>
+    ./bin/fukuii etc
+    ```
+
+=== "Docker"
+
+    ```bash
+    docker pull ghcr.io/chippr-robotics/fukuii:<version>
+
+    cosign verify \
+      --certificate-identity-regexp=https://github.com/chippr-robotics/fukuii \
+      --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
+      ghcr.io/chippr-robotics/fukuii:<version>
+
+    docker run -d --name fukuii --restart unless-stopped \
+      -p 30303:30303/tcp -p 30303:30303/udp \
+      -p 127.0.0.1:8546:8546 \
+      -v fukuii-data:/app/data \
+      ghcr.io/chippr-robotics/fukuii:<version>
+    ```
+
+    The image keeps its data in `/app/data` and binds JSON-RPC to the container's interfaces so Docker can forward the
+    published port. Publishing it on `127.0.0.1` keeps it on the host's loopback.
+    Release images up to v0.12.79 need `-Dfukuii.datadir=/app/data
+    -Dfukuii.network.rpc.http.interface=0.0.0.0` appended after the image name; see the [Quick Start](quickstart.md).
+
+The datadir defaults to `~/.fukuii/<network>`. Add `--tui` to any launch for the terminal dashboard.
 
 ## Verify Installation
 
 ```bash
-# Check if node is responding
-curl -X POST --data '{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}' \
+# Liveness
+curl -s http://localhost:8546/health
+
+# Client version
+curl -s -X POST -H "Content-Type: application/json" \
+  --data '{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}' \
   http://localhost:8546
 ```
 
 Expected response:
+
 ```json
 {
   "jsonrpc":"2.0",
@@ -105,11 +167,26 @@ Expected response:
 }
 ```
 
-## Next Steps
+## Ethereum networks need a consensus client
 
-After installation, explore these guides:
+On `eth`, `sepolia`, `hoodi`, `ephemery` and `plataberget` the Engine API is on by default on `localhost:8551`. At first
+start Fukuii writes a secret to `<datadir>/jwt.hex`. Point your consensus client at it:
+
+```bash
+fukuii sepolia
+
+lighthouse bn --network sepolia \
+  --execution-endpoint http://localhost:8551 \
+  --execution-jwt ~/.fukuii/sepolia/jwt.hex \
+  --checkpoint-sync-url <provider>
+```
+
+ETC and Mordor need no consensus client.
+
+## Next Steps
 
 1. **[First Start Runbook](../runbooks/first-start.md)** — Complete initial setup
 2. **[Node Configuration](../runbooks/node-configuration.md)** — Customize your node
 3. **[Security Runbook](../runbooks/security.md)** — Secure your installation
 4. **[Monitoring Guide](../operations/metrics-and-monitoring.md)** — Set up Prometheus and Grafana
+5. **[Known Issues](../runbooks/known-issues.md)** — Read before your first long sync
