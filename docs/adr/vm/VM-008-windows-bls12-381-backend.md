@@ -106,7 +106,13 @@ A second `BlsNative`, `BlstNative`, built on jblst 0.3.18:
 - **Dependency**: jblst brings Guava 18 as a runtime dependency, which the build's newer Guava evicts. Teku maintains
   jblst, on supranational blst, which is audited.
 - **ETC**: an ETC node on Windows past Olympia uses the same backend. The precompiles are the same EIP on both
-  chains, so no ETC-specific rule changes.
+  chains, so no ETC-specific rule changes. Until Olympia is scheduled, `NativeBackends.required` is empty on ETC and
+  Mordor, so the selected backend is never loaded or probed and an ETC node starts with no BLS library at all.
+- **An invalid backend value** (`fukuii.vm.bls12-381-backend` / `FUKUII_BLS12381_BACKEND` other than `auto`,
+  `eth-pairings` or `blst`) stops the start on every chain, including chains that do not need the precompiles: an
+  operator's typo fails loudly rather than waiting for the fork that would read it.
+- **Before ETC or Mordor schedules Olympia** with Windows supported, the `windows-bls` gate must be promoted to
+  required: the Linux differential runs `libblst.so`, and the Windows `blst.dll` is checked only by that job.
 
 ## Alternatives rejected
 
