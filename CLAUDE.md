@@ -231,6 +231,7 @@ For comprehensive changes, cycle through:
 ## Conventions
 
 - Add files to git individually; know what you're committing (avoid `git add .`).
+- Changelog: add a fragment, `changelog.d/<id>.<section>.md` (see `changelog.d/README.md`); never edit `CHANGELOG.md`, which `scripts/changelog/assemble.py` writes at release prep.
 - Run `sbt formatAll` before committing (`scalafmtAll` alone only covers the root project). Run `sbt pp` and `sbt formatCheck` before a PR.
 - Refer to the human as **user**; be authentic, surface disagreement rather than
   burying it.
