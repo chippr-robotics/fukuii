@@ -6080,18 +6080,14 @@ items:
   - id: B-555
     title: TuiRenderBenchmarkSpec asserts wall-clock render medians (<3 ms) in testEssential; flakes on slow CI runners; Tier 1 at ~24 of 25 min
     priority: P2
-    status: review
+    status: done
     area: tests
     size: S
     opened: 2026-11-25
+    closed: 2026-11-26
     refs: ["#2131"]
     links:
       prs: [2149]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-26T22:13:39Z
-      heartbeat: 2026-11-26T22:53:29Z
     notes: "seen on #2131 2026-11-25: 3.09/6.16/3.92 ms vs 3.0 and the 25-min step timeout. Move the benchmark out of the essential tier (tag) or assert allocation/work counts instead of time; review Tier 1 headroom"
   - id: B-556
     title: "TestServiceOnPositionsSpec pool-head test races: resetsTold.clear() before earlier HeadResets arrive"
