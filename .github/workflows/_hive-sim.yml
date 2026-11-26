@@ -5,7 +5,7 @@ name: _hive-sim (reusable)
 # hive-rpc.yml, …) invoke this with `uses: ./.github/workflows/_hive-sim.yml`
 # so each has its own workflow name, run history, and badge in the README.
 #
-# Build steps mirror hive-prague.yml so the two pipelines stay in sync:
+# Build steps:
 #   * sbt assembly -> thin JRE overlay tagged chipprbots/fukuii:latest
 #   * git clone ethereum/hive into external/hive (NOT ./hive — that would
 #     shadow the fukuii adapter dir) with retries + blob:none

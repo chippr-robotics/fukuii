@@ -1,8 +1,8 @@
 name: Hive · consume-engine
 
-# consume-engine gate: one fixed shard (consume-engine-13) of the release shard plan.
-# hive-prague.yml and hive-osaka.yml run narrower per-fork sweeps with their
-# own pass thresholds; this workflow is the broad cross-fork companion.
+# consume-engine gate: one fixed shard (consume-engine-13) of the release shard plan, Cancun and
+# Prague tests run to completion. The per-fork hive-prague.yml / hive-osaka.yml sweeps were removed
+# in its favour on 2026-11-26 (see REMOVED GATES in .github/gates.yml).
 # Long-running (~60min); restricted to main-bound PRs + manual dispatch only.
 
 on:

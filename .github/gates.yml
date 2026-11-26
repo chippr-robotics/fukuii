@@ -205,7 +205,12 @@ gates:
       EELS consume-rlp — block import from RLP across the fork schedule,
       including the ETC forks. #1402's third required-slice item.
     status_note: >-
-      ~67% failing at v0.8.0. Not claimed as verified anywhere until promoted.
+      Green on every completed run since 2026-11-20: run 45763364499 (PR #2145,
+      2026-11-26) passed 1665/1665, with 4 tests cut off by --sim.timelimit and
+      counted in neither column. The red runs from 2026-09-23 to 2026-11-19 were
+      those 4 cut-off tests scored as failures, which _hive-sim.yml now counts as
+      cut_off (#1957). The 80m limit reaches ~1,700 of the 47,589 tests, so this
+      gate samples; `Hive · full pass` runs the suite to completion.
 
   - id: hive-engine
     workflow: hive-engine.yml
@@ -337,31 +342,6 @@ gates:
       The builder rebuild (#1427) reproduced all 27,352 blocks when run locally on
       2026-09-27. Promote once 0.9.0 ships.
 
-  # --- Quarantined: parallel unchecked paths, excluded from all claims -------
-
-  - id: hive-prague
-    workflow: hive-prague.yml
-    context: Hive Prague Suite
-    tier: quarantined
-    owner: realcodywburns
-    issue: 1402
-    promote_by: 2026-12-31
-    covers: Legacy standalone Prague caller — does NOT use _hive-sim.yml.
-    status_note: >-
-      A parallel, unchecked code path with its own inline `exit 0`. Migrate to
-      _hive-sim.yml (inheriting its gates) or delete. Excluded from public
-      claims until then.
-
-  - id: hive-osaka
-    workflow: hive-osaka.yml
-    context: Hive Osaka Suite
-    tier: quarantined
-    owner: realcodywburns
-    issue: 1402
-    promote_by: 2026-12-31
-    covers: Legacy standalone Osaka caller — does NOT use _hive-sim.yml.
-    status_note: Same as hive-prague. Migrate to _hive-sim.yml or delete.
-
 # ---------------------------------------------------------------------------
 # #1402: the first required slice — declared with dates, not asserted as done.
 #
@@ -410,6 +390,33 @@ first_required_slice:
 #   This is supersession, not suppression. Constitution V forbids deleting a
 #   failing test to get green; it does not require keeping a reference to a
 #   simulator that upstream removed. Nothing that could pass was switched off.
+#
+# hive-prague, hive-osaka (removed 2026-11-26, B-551, #1402, #1419)
+#   Both were standalone callers of ethereum/eels/consume-engine that bypassed
+#   _hive-sim.yml, so none of its gates applied: no min_tests, no hive_exit, no
+#   cut-off accounting. Both pinned execution-spec-tests fixtures stable@v5.4.0.
+#
+#   hive-osaka could not fail. stable@v5.4.0 holds no fork_Osaka test, so
+#   `--sim.limit '.*fork_Osaka.*'` selected nothing, and its threshold was 0:
+#   run 45763364501 (2026-11-26) ended `suites=0 tests=0 failed=0` and passed.
+#   It was nonetheless a required check in the live `main` ruleset
+#   (`Consume-engine Osaka sweep`) — the v0.8.0 defect, live.
+#
+#   hive-prague ran `.*fork_Prague.*` with a pass threshold of 400 and a 40m
+#   time limit that always ended the run part-way: run 45763364571 passed 831
+#   tests, whichever pytest collected first, then `simulation timed out`.
+#
+#   Coverage is not lost. Every fork_Prague and fork_Cancun test in
+#   stable@v5.4.0 belongs to exactly one shard of .github/hive-shards.json
+#   (consume-engine-01..13, an exact partition proven by
+#   scripts/hive/gen-shards.py). `Hive · consume-engine` (hive-consume-engine.yml)
+#   runs shard consume-engine-13 to completion on every PR into main, 874 tests
+#   of both forks with min_tests = 874, and `Hive · full pass` (hive-full.yml)
+#   runs all 13 shards to completion at release; both go through _hive-sim.yml.
+#   Osaka had no coverage to lose: it needs a fixture release with Osaka in it,
+#   which is #1419's remaining Hive item for consume-engine and consume-rlp.
+#   Until then no CI job runs fork_Osaka fixtures; `eest-amsterdam` (outside
+#   Hive) covers the Amsterdam and BPO2->Amsterdam ones.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------

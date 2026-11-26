@@ -174,7 +174,6 @@ schedules.
 [![Hive · engine](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-engine.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-engine.yml)
 [![Hive · consume-engine](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-engine.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-engine.yml)
 [![Hive · consume-rlp](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-rlp.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-consume-rlp.yml)
-[![Hive Prague Suite](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-prague.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/hive-prague.yml)
 [![Ethereum Tests](https://github.com/chippr-robotics/fukuii/actions/workflows/ethereum-tests-nightly.yml/badge.svg)](https://github.com/chippr-robotics/fukuii/actions/workflows/ethereum-tests-nightly.yml)
 
 | Suite | What it verifies |
@@ -189,7 +188,6 @@ schedules.
 | `engine` | Engine API request/response |
 | `consume-engine` | Engine payload consumption |
 | `consume-rlp` | RLP encoding correctness |
-| `prague` | Prague/Electra hard fork suite |
 
 ### JSON-RPC and API Surface
 
