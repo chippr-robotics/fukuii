@@ -5,20 +5,21 @@ sheet that breaks a rule is reported at start, by file and rule, and that sprite
 frame already carries. A bad sheet never stops the node.
 
 **The sheets exist**, and so does the loader (`console/gfx/ArtStore.scala`). The sheets are in
-`src/main/resources/tui/art/`, drawn by `scripts/tui/make_art.py` (spec D-3: the art is made in this spec's own work).
-The art is code: to change a sprite, change the script and run it. Enlarged views are in
-[`../art-preview/`](../art-preview/): `mascot.png` (every pose and frame), `block-mode.png` (the small sizes),
-`badge-and-splash.png`, `network-icons.png`, and two mock screens that show the art at the scale a terminal draws it,
+`src/main/resources/tui/art/`, drawn by `scripts/tui/make_art.py` (spec D-3: the art is made in this spec's own work)
+with `hi_art.py` (the smooth pixel-mode art) and `lo_art.py` (the block-mode pixel art). The art is code: to change a
+sprite, change the script and run it. Views are in [`../art-preview/`](../art-preview/): `mascot.png` (every pose and
+frame), `block-mode.png` (the `lo` sheets), `badge-and-splash.png` (the badges, network marks and scene), and two mock
+screens that show the art at the scale a terminal draws it,
 `overview-pixel.png` and `overview-block.png`. Anyone replacing the art, by editing the script or by drawing sheets by
 hand, keeps to the rules below.
 
 ## The short version
 
 - PNG, 8 bits per channel, not interlaced. Indexed colour or RGBA.
-- Every visible pixel is one of the 240 colours in [`xterm-240.gpl`](./xterm-240.gpl). Load it as the palette in
-  Aseprite, LibreSprite, GIMP or Krita.
-- A pixel is fully transparent or fully opaque. No soft edges, no anti-aliasing.
 - Each sprite comes at two sizes: `lo` for block mode, `hi` for pixel mode.
+- `lo` is pixel art: every visible pixel is one of the 240 colours in [`xterm-240.gpl`](./xterm-240.gpl) (load it as
+  the palette in Aseprite, LibreSprite, GIMP or Krita), and a pixel is fully transparent or fully opaque.
+- `hi` is any art: any colour, soft edges allowed, at 8 × 16 or 16 × 32 pixels a cell.
 - Poses run down the sheet in a fixed order. In a `hi` sheet the frames of a pose run left to right; a `lo` sheet has
   one frame a pose, because block mode does not cycle frames (spec FR-017).
 - A manifest, `art.conf`, says how many frames each pose has and how long each stays up.
@@ -31,24 +32,28 @@ hand, keeps to the rules below.
 
 **Two sizes.** In block mode one character cell is two pixels, one above the other, so a region of *C* columns and *R*
 rows is *C* × 2*R* pixels. That is a small canvas, and scaling a large drawing down to it looks bad, so it is drawn
-at that size, not scaled down. In pixel mode the canvas is 8 × 16 pixels per cell, the VGA text cell. The TUI enlarges
-a `hi` frame by a whole factor (×1 on most terminals, ×2 or more on high-density displays) and centres it, so every
-pixel stays a sharp square. The shipped `hi` sheets are drawn at a quarter of that resolution and enlarged four
-times, which gives the chunky look of the period: the large mascot is 64 × 64 art pixels.
+at that size, not scaled down. In pixel mode the unit is 8 × 16 pixels per cell, the VGA text cell, and the TUI
+draws a frame at a whole multiple of it, *k* (×1 on most terminals, ×2 or more on high-density displays), centred. A
+`hi` sheet comes at density 1 (8 × 16 pixels a cell) or density 2 (16 × 32). The loader tells pixel art from drawn
+art: a sheet whose pixels are all hard-edged and all in the 240 is pixel art, and is enlarged by whole squares when
+*k* is a multiple of its density, so every pixel stays sharp; any other sheet is drawn art, and is fitted to the
+cells smoothly, shrunk by averaging or grown by interpolating, on premultiplied colour. The shipped `hi` sheets are
+drawn art at density 2: the large mascot is 512 × 512, shown at 256 × 256 on most terminals and at full size on a
+high-density one.
 
-**Hard edges.** A half-transparent pixel has no meaning in block mode, and in pixel mode it would be blended against
-a background you do not control.
+**Hard edges in block mode.** A half-transparent pixel has no meaning in block mode, so a `lo` sheet has none. A `hi`
+sheet's soft edges are blended by the terminal against what lies behind them, so give drawn art its own outline.
 
 ## Sprites
 
 | Sprite | Region in cells | `lo` frame | `hi` frame | Poses | Where it shows |
 | --- | --- | --- | --- | --- | --- |
-| `mascot` | 32 × 16 | 32 × 32 px | 256 × 256 px | 7, up to 4 frames each | The corner of the Overview's Recent strip from 140 × 45, where the strip has 17 rows and keeps 80 columns; the splash |
-| `mascot-small` | 16 × 8 | 16 × 16 px | 128 × 128 px | 7, up to 2 frames each | The same corner from 100 × 32, where the strip has 9 rows |
-| `network-etc`, `network-eth` | 16 × 8 | 16 × 16 px | 128 × 128 px | 1 | The top of the sidebar: the chain family the node is on (spec FR-061) |
-| `badge` | 16 × 8 | 16 × 16 px | 128 × 128 px | 1 | The splash where the large one does not fit (80 × 24) |
-| `badge-large` | 32 × 16 | 32 × 32 px | 256 × 256 px | 1 | The splash from 27 rows; carries the FUKUII wordmark |
-| `splash-scene` *(optional)* | 80 × 24 | 80 × 48 px | 640 × 384 px | 1 | Nowhere yet: a backdrop lies under text, which block mode cannot draw (spec FR-012). `:art` shows it |
+| `mascot` | 32 × 16 | 32 × 32 px | 256 × 256 or 512 × 512 px | 7, up to 4 frames each | The corner of the Overview's Recent strip from 140 × 45, where the strip has 17 rows and keeps 80 columns; the splash |
+| `mascot-small` | 16 × 8 | 16 × 16 px | 128 × 128 or 256 × 256 px | 7, up to 2 frames each | The same corner from 100 × 32, where the strip has 9 rows |
+| `network-etc`, `network-eth` | 16 × 8 | 16 × 16 px | 128 × 128 or 256 × 256 px | 1 | The top of the sidebar: the chain family the node is on (spec FR-061) |
+| `badge` | 16 × 8 | 16 × 16 px | 128 × 128 or 256 × 256 px | 1 | The splash where the large one does not fit (80 × 24) |
+| `badge-large` | 32 × 16 | 32 × 32 px | 256 × 256 or 512 × 512 px | 1 | The splash from 27 rows; carries the FUKUII wordmark |
+| `splash-scene` *(optional)* | 80 × 24 | 80 × 48 px | 640 × 384 or 1280 × 768 px | 1 | Nowhere yet: a backdrop lies under text, which block mode cannot draw (spec FR-012). `:art` shows it |
 
 Below 100 columns or 32 rows no sprite is drawn; charts still are. A sprite's cells are the same in every graphics
 mode: in text mode they hold the words that stand for it (`ETC`, a face for the mascot's pose).
@@ -79,8 +84,8 @@ A sheet is a grid with no gaps and no margins. A `hi` sheet's width is the frame
 count; a `lo` sheet is one frame wide. The height is the frame height times the number of poses. Cells beyond a
 pose's frame count are left fully transparent.
 
-Example: `mascot.hi.png` with up to 4 frames is 1024 × 1792; `mascot.lo.png` is 32 × 224. A one-pose sprite is just
-its frame: `badge.hi.png` is 128 × 128.
+Example: `mascot.hi.png` with up to 4 frames is 1024 × 1792 at density 1 and 2048 × 3584 at density 2 (the shipped
+one); `mascot.lo.png` is 32 × 224. A one-pose sprite is just its frame: `badge.hi.png` is 128 × 128 or 256 × 256.
 
 ## Files
 
@@ -121,11 +126,11 @@ equivalent the frame carries in every mode (spec FR-001).
 | Rule | Limit |
 | --- | --- |
 | Format | PNG, bit depth 8, colour type 3 (indexed, with `tRNS` for transparency) or 6 (RGBA), no interlace |
-| Dimensions | exactly frame size × grid, as above: `hi` is as many frames wide as the pose with the most; `lo` is one frame wide |
-| Colours | every pixel with alpha 255 has an RGB value from `xterm-240.gpl` |
-| Alpha | 0 or 255 only |
+| Dimensions | exactly frame size × grid, as above: `hi` is as many frames wide as the pose with the most, at density 1 or 2; `lo` is one frame wide |
+| Colours | in a `lo` sheet, every pixel with alpha 255 has an RGB value from `xterm-240.gpl`; a `hi` sheet may use any |
+| Alpha | in a `lo` sheet, 0 or 255 only; a `hi` sheet may use any |
 | Frames | each count in `art.conf` between 1 and 4 (2 for `mascot-small`); every timeline entry names a frame that exists and a duration of 1 to 240; the first frame of every pose has at least one opaque pixel |
-| File size | at most 4 MiB a file |
+| File size | at most 8 MiB a file |
 
 ## Background
 
@@ -145,14 +150,16 @@ Colours the interface itself uses, for sprites that should sit well beside it:
 | Warning | 214, 220 | `#ffaf00`, `#ffd700` |
 | Error | 196 | `#ff0000` |
 | Accent | 199 | `#ff00af` |
-| Mantis greens | 22, 28, 34, 40, 46, 118 | `#005f00`, `#008700`, `#00af00`, `#00d700`, `#00ff00`, `#87ff00` |
-| Worm pinks | 205, 211, 218 | `#ff5faf`, `#ff87af`, `#ffafd7` |
+| Operator greens (block mode) | 22, 70, 112, 155, 193 | `#005f00`, `#5faf00`, `#87d700`, `#afff5f`, `#d7ffaf` |
+| Worm pinks (block mode) | 125, 168, 211, 218 | `#af005f`, `#d75f87`, `#ff87af`, `#ffafd7` |
 | Greys | 233, 238, 244, 250 | `#121212`, `#444444`, `#808080`, `#bcbcbc` |
 
 ## Making and checking the art
 
-- `python3 -I scripts/tui/make_art.py` redraws every sheet and `art.conf`; `--check` fails when the committed files
-  are not what it draws; `--preview DIR` writes the enlarged views.
+- `python3 -I scripts/tui/make_art.py` redraws every sheet, `art.conf` and the pixel hashes the node's reader is
+  tested against; `--check` fails when the committed files are not what it draws (a `hi` sheet may differ by a step or
+  two in a few edge pixels, as another build of the filters rounds them); `--preview DIR` writes the views. The
+  `TUI Art` workflow pins the Pillow and NumPy it draws with.
 - `python3 -I scripts/tui/check_art.py [DIRECTORY]` checks every rule in the table above. It shares no code with
   the drawing script.
 - `python3 -I scripts/tui/mock_screen.py DIR` draws the two mock screens from the real sheets.
