@@ -6076,16 +6076,17 @@ items:
   - id: B-558
     title: "TUI art reskin: redraw the spec 029 sprites as polished hand-drawn space-RPG pixel art (user, 2026-11-25)"
     priority: P1
-    status: in-progress
+    status: review
     area: tui
     opened: 2026-11-25
     refs: [spec-029]
-    links: {}
+    links:
+      prs: [2143]
     claim:
       by: cloud-claude
       agent: main
       since: 2026-11-25T23:43:49Z
-      heartbeat: 2026-11-25T23:43:53Z
+      heartbeat: 2026-11-26T01:14:19Z
       branch: feat/tui-art-reskin
   - id: B-559
     title: "E2ESyncSpec P2P handshake tests use IO.sleep(2s/3s) waits (constitution: no sleeps)"
