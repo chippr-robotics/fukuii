@@ -39,9 +39,11 @@ class GfxSpec extends AnyFlatSpec with Matchers:
         .putInt(crc.getValue.toInt)
         .array()
     val header = ByteBuffer.allocate(13).putInt(width).putInt(height).put(Array[Byte](8, 6, 0, 0, 0)).array()
-    val row = Array[Byte](0) ++ Array.fill(width)(
-      Array((argb >> 16).toByte, (argb >> 8).toByte, argb.toByte, (argb >>> 24).toByte)
-    ).flatten
+    val row = Array[Byte](0) ++ Array
+      .fill(width)(
+        Array((argb >> 16).toByte, (argb >> 8).toByte, argb.toByte, (argb >>> 24).toByte)
+      )
+      .flatten
     val raw = Array.fill(height)(row).flatten
     val deflater = new java.util.zip.Deflater()
     deflater.setInput(raw)

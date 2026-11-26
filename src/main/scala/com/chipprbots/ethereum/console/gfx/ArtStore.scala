@@ -240,8 +240,8 @@ object ArtStore:
           problem.toLeft(PixelBuffer(width, height, out))
       }
 
-  /** A `hi` sheet as pixels, held to the contract: `width × height` at one of the [[Densities]], in any colour. With it,
-    * whether it is drawn art: a colour outside the 240 or a soft edge.
+  /** A `hi` sheet as pixels, held to the contract: `width × height` at one of the [[Densities]], in any colour. With
+    * it, whether it is drawn art: a colour outside the 240 or a soft edge.
     */
   private def hiSheet(name: String, bytes: Array[Byte], width: Int, height: Int): Either[String, (Bitmap, Boolean)] =
     if bytes.length > MaxBytes then Left(s"$name: larger than 8 MiB")
