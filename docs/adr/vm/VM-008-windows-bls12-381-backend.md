@@ -1,6 +1,7 @@
 # VM-008: A Windows-capable BLS12-381 backend for the EIP-2537 precompiles (B-151)
 
-**Status**: Proposed (2026-11-26). Impact analysis written before any code, per the consensus-change protocol.
+**Status**: Proposed (2026-11-26). The impact analysis was written before any code, per the consensus-change
+protocol. The measurements and the G1 decoder finding were added after the implementation.
 
 **Backlog**: B-151. **Related**: B-135 (#1767, the missing-library refusal), B-153 (#1764, the EIP-2537 differential).
 
@@ -73,6 +74,10 @@ A second `BlsNative`, `BlstNative`, built on jblst 0.3.18:
 - blst's point at infinity is the uncompressed encoding with flag `0x40`; EIP-2537's is all zeros. blst *rejects*
   (0, 0) as not on the curve, so the codec maps zeros to the flag before decoding and the flag to zeros after.
 - `mult(BigInteger)` mutates the receiver and rejects a negative value; `add`, `neg` and `final_exp` also mutate.
+- blst's G1 decoder refuses x = 0 with `BLST_POINT_NOT_IN_GROUP`. That rejects (0, 2) and (0, -2), which are on the
+  curve, have order 3, and are valid G1ADD operands, since EIP-2537 does no subgroup check there. Found by the
+  differential during implementation. `BlstNative.g1Point` builds such a point as ((0, y) + G) - G instead. Without
+  that, the B-135 guard halts the node on the input; it never returns a wrong result. The G2 decoder has no such rule.
 
 ## Consequences and risks
 
@@ -80,8 +85,22 @@ A second `BlsNative`, `BlstNative`, built on jblst 0.3.18:
   vector of the B-153 corpus. That corpus holds the published EIP-2537 and go-ethereum vectors, the generated edge
   cases (field bounds, infinity encodings, off-curve and off-subgroup points, MSM and pairing edge cases) and the
   seeded fuzz, including every invalid-input rejection. The differential runs blst as a third backend on Linux CI.
-- **Speed**: MSM without Pippenger, and the map in `BigInteger` arithmetic, are slower than eth_pairings. Gas is fixed
-  by the EIP, so this costs block-import time on Windows only. It is measured, and the numbers are in the PR.
+- **Speed**: MSM without Pippenger, and the map in `BigInteger` arithmetic, could be slower than eth_pairings. Gas is
+  fixed by the EIP, so this would cost block-import time on Windows only. Measured on Linux x86_64 (JDK 21, warm JIT,
+  one container, so the figures are indicative), as the time to run a 60M-gas block of nothing but one operation:
+
+  | Operation | eth_pairings | blst |
+  |---|---|---|
+  | G1ADD | 1.2 s | 2.2 s |
+  | G2ADD | 1.0 s | 2.3 s |
+  | G1MSM k=1 / k=128 | 2.1 s / 1.6 s | 0.9 s / 1.6 s |
+  | G2MSM k=1 / k=128 | 4.0 s / 3.0 s | 0.7 s / 1.7 s |
+  | PAIRING k=1 / k=8 | 2.0 s / 1.8 s | 0.6 s / 0.7 s |
+  | MAP_FP_TO_G1 | 1.0 s | 1.8 s |
+  | MAP_FP2_TO_G2 | 3.6 s | 2.7 s |
+
+  blst's worst case (2.7 s) is below eth_pairings' (4.0 s), so no block costs more than it does on Linux today. The
+  G1 map takes one exponentiation, not three: when g(x1) is not a square, the root of g(x2) follows from the same power.
 - **Windows evidence**: Linux CI cannot load the Windows DLL. A `windows-latest` job runs the BLS specs with
   `FUKUII_BLS12381_BACKEND=blst`; it is informational until it has a green history.
 - **Dependency**: jblst brings Guava 18 as a runtime dependency, which the build's newer Guava evicts. Teku maintains
