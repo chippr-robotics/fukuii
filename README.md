@@ -305,7 +305,8 @@ Download the latest release from the [Releases page](https://github.com/chippr-r
 
 ## Getting Started
 
-> **ALPHA SOFTWARE — DO NOT USE IN PRODUCTION**
+> **BETA SOFTWARE** — read [Known Issues](docs/runbooks/known-issues.md) before you sync, and check
+> [Verification Status](docs/STATUS.md) for what CI enforces.
 
 ### Option 1: Docker (Recommended)
 
