@@ -6103,3 +6103,13 @@ items:
     refs: [B-018 follow-up]
     links: {}
     notes: Three handshake tests in src/it E2ESyncSpec; replace with a condition wait on the handshake/peer state.
+  - id: B-560
+    title: "E2EStateTestSpec 'detect and reject invalid state roots' rejects nothing: harness validators accept any root"
+    priority: P3
+    status: open
+    area: tests
+    size: M
+    opened: 2026-11-26
+    refs: [B-018 follow-up]
+    links: {}
+    notes: Test only compares headers of identical chains. Needs the IT harness to run the real block validator (main-code seam) to test rejection; also 'persist across restarts' and 'peer disconnection' neither restart nor disconnect.
