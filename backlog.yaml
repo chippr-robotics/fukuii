@@ -6093,3 +6093,13 @@ items:
       since: 2026-11-25T23:43:49Z
       heartbeat: 2026-11-25T23:43:53Z
       branch: feat/tui-art-reskin
+  - id: B-559
+    title: "E2ESyncSpec P2P handshake tests use IO.sleep(2s/3s) waits (constitution: no sleeps)"
+    priority: P3
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-26
+    refs: [B-018 follow-up]
+    links: {}
+    notes: Three handshake tests in src/it E2ESyncSpec; replace with a condition wait on the handshake/peer state.
