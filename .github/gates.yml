@@ -337,6 +337,29 @@ gates:
       The builder rebuild (#1427) reproduced all 27,352 blocks when run locally on
       2026-09-27. Promote once 0.9.0 ships.
 
+  # B-151 has no GitHub issue of its own: `issue` is #1767, the B-135 refusal
+  # that keeps ETH chains off Windows without this backend. Repoint it once an
+  # issue is opened.
+  - id: windows-bls
+    workflow: windows-bls.yml
+    context: Windows BLS12-381 (blst)
+    tier: informational
+    owner: realcodywburns
+    issue: 1767
+    promote_by: 2027-01-31
+    covers: >-
+      The EIP-2537 BLS12-381 precompiles on Windows (B-151, ADR VM-008), where
+      eth_pairings has no build and blst (tech.pegasys:jblst) runs them. On
+      windows-latest with FUKUII_BLS12381_BACKEND=blst: BlstEip2537Spec (blst
+      loads; its outcomes on the 3,636-input EIP-2537 corpus hash to the committed
+      digests of eth_pairings' and gnark's outcomes; the precompiles run on blst),
+      BLS12381PrecompileSpec, BlsMsmGasSpec and NativeBackendsSpec. Runs on
+      workflow_dispatch and on PRs that touch the BLS files.
+    status_note: >-
+      New with B-151. The case-by-case differential of blst against both oracles
+      runs on Linux in Eip2537DifferentialSpec (ci-test-build). Promote after a
+      green run on windows-latest and a green history on BLS-touching PRs.
+
   # --- Quarantined: parallel unchecked paths, excluded from all claims -------
 
   - id: hive-prague
