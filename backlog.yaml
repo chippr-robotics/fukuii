@@ -5737,15 +5737,10 @@ items:
     opened: 2026-11-24
     refs: ["sync reports v0.12.117, 2026-11-23/24"]
     links: {}
-    claim:
-      by: dev-node
-      agent: claude-opus
-      since: 2026-11-26T15:11:59Z
-      heartbeat: 2026-11-26T15:11:59Z
     notes: |-
-      Mainnet account download ran at 23,000 accounts/s against 36,600/s on Mordor; not caused by the contract classification, which only feeds the storage file.
       Check per-peer timeout counts (AccountRangeWorker:200) and whether the 512 KB starting response size is too large for mainnet peers within the 30 s timeout.
       2026-11-24 blocked: needs logs from a live ETC mainnet SNAP run on a build with #2112
+      2026-11-26 released by dev-node: Unblocked by EG-12 (2026-11-25, 0.12.175, #2147): 353 GetAccountRange timeouts from 20 peers over 3801 completed account tasks (tester run: 421). Concentrated: 3 peers gave 207 (76/74/57), the rest <=26 each, pointing at peers, not response size. Client ids not logged (B-563). Next: per-peer served/timeout ratio + client id in the log; demote a peer after N account-range timeouts as storage does.
   - id: B-527
     title: sbt-git JGit fails to load in a linked git worktree (NoWorkTreeException); note workaround in worktree-protocol.md or fix build
     priority: P3
