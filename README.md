@@ -38,7 +38,7 @@ Fukuii is an execution layer client for EVM-compatible networks — an independe
 - **No network lock-in** — one binary runs ETC mainnet, Ethereum mainnet, testnets, and custom chains. Eliminate the operational overhead of running separate clients for separate networks.
 - **Consensus-agnostic** — PoW for ETC, PoS via Engine API for Ethereum, PoA for enterprise consortium chains, custom derivation for L2s. The client adapts to the network; the network does not dictate the client.
 - **Future-proof** — as networks evolve and new consensus mechanisms emerge, the pluggable architecture absorbs them without a rewrite.
-- **Verifiable artifact chain** — every release ships with SLSA Level 3 provenance, a CycloneDX SBOM, and a Cosign keyless signature. Operators under SOC2 audit or institutional procurement can verify exactly what they're running, from source commit to deployed container.
+- **Verifiable artifact chain** — every full release's container image is Cosign keyless-signed and carries BuildKit provenance and SBOM attestations, and the release attaches a CycloneDX SBOM and `SHA256SUMS.txt`. Operators under SOC2 audit or institutional procurement can verify what they're running, from source commit to deployed container.
 - **Client diversity** — Scala/JVM is a distinct implementation with a different dependency tree and failure profile. Risk frameworks requiring multiple independent client implementations can deploy Fukuii without running two instances of the same codebase.
 
 ## Who Uses Fukuii
@@ -206,7 +206,7 @@ Broad namespace coverage across `eth_`, `debug_`, `trace_`, `txpool_`, `admin_`,
 
 Operations teams query node state through Claude or GPT directly — no custom dashboards required. Compliance teams pull reorg history on demand. Infrastructure teams automate capacity planning through natural language.
 
-Fukuii is the first EVM execution client with a functional MCP server — built into the JSON-RPC API, not bolted on. Enable by adding `mcp` to the transport's list, e.g. `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,mcp"`. Works with any MCP-compatible AI assistant on port 8545.
+Fukuii is the first EVM execution client with a functional MCP server — built into the JSON-RPC API, not bolted on. Enable by adding `mcp` to the transport's list, e.g. `fukuii.network.rpc.http.apis = "eth,net,web3,fukuii,mcp"`. Works with any MCP-compatible AI assistant on the JSON-RPC HTTP port (8546 by default).
 
 **Operational** — node status, sync progress, peer list, fork history, chain config
 
@@ -245,13 +245,13 @@ The Barad-dûr reference deployment is the enterprise topology: Kong API gateway
 - Container images run as non-root with minimal attack surface
 
 **Supply Chain Security**
-- SLSA Level 3 provenance attestations on all release artifacts
+- BuildKit provenance and SBOM attestations on every full-release container image (SLSA provenance format; the separate SLSA Level 3 generator was removed from the release workflow in April 2026)
 - Cosign keyless image signing (GitHub OIDC — no long-lived signing keys)
-- Software Bill of Materials in CycloneDX format attached to every release
+- Software Bill of Materials in CycloneDX format attached to every full release, and `SHA256SUMS.txt` on every release
 - Weekly automated dependency monitoring
 - CodeQL static analysis on every push
 
-For SOC2-audited operators: SLSA provenance, SBOM, and signed artifacts support evidence collection for software integrity and change management controls. Structured logging integrates with SIEM systems.
+For SOC2-audited operators: build provenance, SBOMs, and signed artifacts support evidence collection for software integrity and change management controls. Structured logging integrates with SIEM systems.
 
 **Operational patterns**
 
@@ -310,7 +310,7 @@ Download the latest release from the [Releases page](https://github.com/chippr-r
 ### Option 1: Docker (Recommended)
 
 ```bash
-# GHCR is the primary registry — all images are SLSA-signed with provenance attestations
+# GHCR is the primary registry — release images are Cosign-signed, with provenance and SBOM attestations
 docker pull ghcr.io/chippr-robotics/fukuii:<version>
 
 # Verify the image signature
@@ -319,12 +319,17 @@ cosign verify \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
   ghcr.io/chippr-robotics/fukuii:<version>
 
-# Run
+# Run ETC mainnet. JSON-RPC HTTP is 8546; publishing it on 127.0.0.1 keeps it on the host's loopback.
 docker run -d --name fukuii \
-  -p 8545:8545 -p 8546:8546 -p 30303:30303 \
-  -v fukuii-data:/app/data -v fukuii-conf:/app/conf \
+  -p 30303:30303/tcp -p 30303:30303/udp \
+  -p 127.0.0.1:8546:8546 \
+  -v fukuii-data:/app/data \
   ghcr.io/chippr-robotics/fukuii:<version>
 ```
+
+The image keeps its data in `/app/data` (`FUKUII_DATADIR`) and binds JSON-RPC to every container interface
+(`FUKUII_RPC_INTERFACE=0.0.0.0`) so Docker can forward the published port; a `datadir` or `interface` in a conf you
+mount at `/app/conf` takes precedence. For Mordor, append `mordor` after the image name.
 
 Docker Hub (`chipprbots/fukuii:latest`) is also available as a mirror for environments where GHCR is restricted.
 

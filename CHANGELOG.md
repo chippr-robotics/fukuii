@@ -21,6 +21,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - DNS discovery checks a tree root's `sig=` is exactly 87 characters, and an ENR at most 400, before decoding them.
 
 ### Changed
+- **Container images: data lands on the `/app/data` volume and a published JSON-RPC port is reachable.** The images
+  set `FUKUII_DATA_DIR=/app/data`, which nothing read, so the node wrote to `/home/fukuii/.fukuii/<network>` in the
+  container layer, and RPC bound `localhost` inside the container, so a published port reached nothing.
+  `conf/base/fukuii.conf` now takes `datadir` from the new `FUKUII_DATADIR` (a separate name, as `FUKUII_DATA_DIR`
+  is already the test wrapper's log root and a compose variable in `ops/barad-dur`), and `network.conf` takes the HTTP and WebSocket
+  `interface` from `FUKUII_RPC_INTERFACE`, which the images set to `0.0.0.0`; a `datadir` or `interface` in an
+  operator's conf still wins, so the `ops/` stacks are unchanged. Outside a container neither variable is set and
+  nothing changes. **Upgrade note:** a container run from an earlier image without its own `datadir` kept its chain in
+  the container layer; a new container from this image starts from an empty `/app/data`. The images now `EXPOSE` 8546
+  (HTTP), 8552 (WebSocket) and 30303 TCP/UDP instead of 8545, 8546 and 30303, and the built-in healthcheck probes
+  8546 (it probed 8545, where nothing listens, and always fell back to the process check). Publish RPC as
+  `127.0.0.1:8546:8546` to keep it on the host's loopback.
 - **`app_engine_newpayload_invalid` counts INVALID answers alone (B-193).** It also counted every `engine_newPayload`
   answered ACCEPTED, and any status it did not know. ACCEPTED has its own series, `app_engine_newpayload_accepted`
   (since 0.10.0). A dashboard panel on the invalid series drops by the number of ACCEPTED answers, and its history
