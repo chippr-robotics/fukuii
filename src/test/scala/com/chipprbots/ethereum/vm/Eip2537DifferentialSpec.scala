@@ -24,8 +24,10 @@ import com.chipprbots.ethereum.testing.Tags.*
   */
 class Eip2537DifferentialSpec extends AnyFlatSpec with Matchers:
 
-  /** The production path comes first: it is what a node executes. B-151's blst backend is appended here. */
-  private val backends: Seq[Eip2537Backend] = Seq(ProductionEip2537Backend, GnarkEip2537Backend)
+  /** The production path comes first: it is what a node executes on Linux and macOS. B-151's blst backend, what a node
+    * executes on Windows, is third.
+    */
+  private val backends: Seq[Eip2537Backend] = Seq(ProductionEip2537Backend, GnarkEip2537Backend, BlstEip2537Backend)
 
   private val MaxReported = 25
   private val MaxHexBytes = 2048
@@ -49,6 +51,11 @@ class Eip2537DifferentialSpec extends AnyFlatSpec with Matchers:
       fail(
         s"EIP-2537 differential: a backend did not load on ${Eip2537Platform.os}/${Eip2537Platform.arch}, where its " +
           "native build exists. Refusing to skip:\n" + notLoaded.mkString("\n")
+      )
+    if !(NativeBackends.blsBackend eq NativeBackends.LibEthPairingsNative) then
+      fail(
+        s"EIP-2537 differential: the precompiles run on ${NativeBackends.blsBackend.name}, not eth_pairings, so the " +
+          s"production backend is not the oracle it is named for. Unset ${NativeBackends.BlsChoiceEnvironmentVariable}."
       )
 
   private def isSuccess(o: Eip2537Outcome): Boolean = o match
@@ -170,6 +177,26 @@ class Eip2537DifferentialSpec extends AnyFlatSpec with Matchers:
             split.take(MaxReported).map(report).mkString("\n\n") +
             (if split.size > MaxReported then s"\n\n... and ${split.size - MaxReported} more" else "")
         )
+    }
+  }
+
+  "The committed oracle digests" should "be eth_pairings' and gnark's outcomes on this corpus" taggedAs (
+    VMTest,
+    ConsensusTest
+  ) in {
+    requireBackends()
+    // BlstEip2537Spec holds blst to these digests where no oracle loads (Windows). Regenerate the file from the lines
+    // below when the corpus changes.
+    val committed = Eip2537OracleDigest.committed
+    Seq(ProductionEip2537Backend, GnarkEip2537Backend).foreach { oracle =>
+      val i = backends.indexOf(oracle)
+      val computed = Eip2537OracleDigest.lines(runs.map(r => (r.c, r.outcomes(i))))
+      withClue(
+        s"${oracle.name}'s outcome digests differ from ${Eip2537OracleDigest.Resource}. Computed:\n" +
+          computed.mkString("\n") + "\n"
+      ) {
+        computed shouldBe committed
+      }
     }
   }
 

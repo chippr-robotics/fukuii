@@ -1,9 +1,13 @@
 package com.chipprbots.ethereum.vm
 
+import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Locale
 
 import org.apache.pekko.util.ByteString
+
+import scala.io.Source
 
 import com.sun.jna.ptr.IntByReference
 import org.bouncycastle.util.encoders.Hex
@@ -129,3 +133,62 @@ object Eip2537Platform:
     val o = os.toLowerCase(Locale.ROOT)
     val a = arch.toLowerCase(Locale.ROOT)
     (o.startsWith("linux") || o.startsWith("mac")) && Set("amd64", "x86_64", "aarch64").contains(a)
+
+/** supranational blst through `tech.pegasys:jblst` (B-151, ADR VM-008): what a node runs where eth_pairings does not
+  * load, Windows above all. Called through [[NativeBackends.blsOperation]], the path the precompiles take, so a blst
+  * exception fails the test as `NativeBackendUnavailable` instead of reading as a rejected input.
+  */
+object BlstEip2537Backend extends Eip2537Backend:
+  val name: String = "fukuii BlstNative (blst via tech.pegasys:jblst 0.3.18)"
+
+  def loadFailure: Option[String] = BlstNative.loadFailure
+
+  /** eth_pairings' operation ids, which [[NativeBackends.BlsNative]] takes. */
+  def operationId(op: Eip2537Op): Byte = op match
+    case Eip2537Op.G1Add      => 1
+    case Eip2537Op.G1Msm      => 3
+    case Eip2537Op.G2Add      => 4
+    case Eip2537Op.G2Msm      => 6
+    case Eip2537Op.Pairing    => 7
+    case Eip2537Op.MapFpToG1  => 8
+    case Eip2537Op.MapFp2ToG2 => 9
+
+  def run(op: Eip2537Op, input: ByteString): Eip2537Outcome =
+    NativeBackends.blsOperation(BlstNative, operationId(op), input) match
+      case Some(out) => Eip2537Outcome.Success(out)
+      case None      => Eip2537Outcome.Failure("blst rejected the input")
+
+/** The oracles' outcomes on the whole corpus, one SHA-256 per op, so that a platform with no oracle (Windows: neither
+  * eth_pairings nor gnark ships a build) still checks a backend byte for byte against them. The digest covers, case by
+  * case in corpus order, the input and the outcome (the output bytes, or failure).
+  *
+  * `src/test/resources/eip2537/oracle-outcomes.txt` holds the digests. Eip2537DifferentialSpec recomputes them from
+  * gnark and eth_pairings wherever those load, so a corpus change that does not regenerate the file fails there.
+  */
+object Eip2537OracleDigest:
+  val Resource = "/eip2537/oracle-outcomes.txt"
+
+  /** One line per op: `<label> <cases> <sha256 hex>`. */
+  def lines(outcomes: Seq[(Eip2537Case, Eip2537Outcome)]): Seq[String] =
+    Eip2537Op.values.toSeq.map { op =>
+      val opOutcomes = outcomes.filter(_._1.op == op)
+      val sha = MessageDigest.getInstance("SHA-256")
+      def field(bytes: Array[Byte]): Unit =
+        sha.update(ByteBuffer.allocate(4).putInt(bytes.length).array())
+        sha.update(bytes)
+      opOutcomes.foreach { (c, outcome) =>
+        field(c.input.toArray)
+        outcome match
+          case Eip2537Outcome.Success(out) =>
+            sha.update(1.toByte)
+            field(out.toArray)
+          case Eip2537Outcome.Failure(_) => sha.update(0.toByte)
+      }
+      s"${op.label} ${opOutcomes.size} ${Hex.toHexString(sha.digest())}"
+    }
+
+  /** The committed lines, comments and blank lines dropped. */
+  def committed: Seq[String] =
+    val source = Source.fromInputStream(getClass.getResourceAsStream(Resource), "UTF-8")
+    try source.getLines().map(_.trim).filter(l => l.nonEmpty && !l.startsWith("#")).toSeq
+    finally source.close()
