@@ -5679,15 +5679,10 @@ items:
     refs: ["sync reports v0.12.117, 2026-11-23/24"]
     links: {}
     depends_on: [B-521]
-    claim:
-      by: dev-node
-      agent: claude-opus
-      since: 2026-11-26T15:12:09Z
-      heartbeat: 2026-11-26T15:12:09Z
     notes: |-
-      v0.12.117: mainnet 25.8M headers in 110 min, 2,870/s while the state downloaded and 5,330/s after; Mordor 4,430/s and 6,980/s, held 41 min. Both runs are header-bound.
       Once ChainDownloader logs (B-521): look at the SNAP-era header budget (boostHeaderDownload), chain-download-timeout (10 s) and how many peers serve headers during the state download.
       2026-11-24 blocked: needs ChainDownloader INFO logs from a live ETC run on a build with #2112
+      2026-11-26 released by dev-node: Unblocked by EG-12 (2026-11-25, 0.12.175, #2147): state sync done 07:43Z (133 min); finalisation held 72 min for headers (cursor 10.56M to pivot 25.80M, hand-off 08:55Z). During state sync chain download ran at concurrency 2 (~1,320 headers/s); after, at 16 (~3,500/s). Higher header concurrency during state sync would cut roughly 45-60 min.
   - id: B-523
     title: SNAP keeps the accounts-complete task files after finalisation (4.4 GB on ETC mainnet); the storage file also holds every code account with an empty root
     priority: P3
