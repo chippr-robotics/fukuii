@@ -5847,7 +5847,13 @@ only Windows-capable native, and it covers everything except MSM and the map.</p
 - <strong>Dependency</strong>: jblst brings Guava 18 as a runtime dependency, which the build's newer Guava evicts. Teku maintains
   jblst, on supranational blst, which is audited.
 - <strong>ETC</strong>: an ETC node on Windows past Olympia uses the same backend. The precompiles are the same EIP on both
-  chains, so no ETC-specific rule changes.</p>
+  chains, so no ETC-specific rule changes. Until Olympia is scheduled, <code>NativeBackends.required</code> is empty on ETC and
+  Mordor, so the selected backend is never loaded or probed and an ETC node starts with no BLS library at all.
+- <strong>An invalid backend value</strong> (<code>fukuii.vm.bls12-381-backend</code> / <code>FUKUII_BLS12381_BACKEND</code> other than <code>auto</code>,
+  <code>eth-pairings</code> or <code>blst</code>) stops the start on every chain, including chains that do not need the precompiles: an
+  operator's typo fails loudly rather than waiting for the fork that would read it.
+- <strong>Before ETC or Mordor schedules Olympia</strong> with Windows supported, the <code>windows-bls</code> gate must be promoted to
+  required: the Linux differential runs <code>libblst.so</code>, and the Windows <code>blst.dll</code> is checked only by that job.</p>
 <h2 id="alternatives-rejected">Alternatives rejected<a class="headerlink" href="#alternatives-rejected" title="Permanent link">&para;</a></h2>
 <ul>
 <li>Shipping our own Windows build of eth_pairings or blst: a native toolchain and signing in our release pipeline,
