@@ -11,7 +11,12 @@ sealed trait BlockParam
 
 object BlockParam:
   case class WithNumber(n: BigInt) extends BlockParam
-  case class WithHash(hash: org.apache.pekko.util.ByteString) extends BlockParam
+
+  /** A block named by hash. `requireCanonical` is EIP-1898's flag: geth and core-geth refuse a hash that is not the
+    * canonical block of its height (`HeaderByNumberOrHash`, `StateAndHeaderByNumberOrHash`), `-32000 hash is not
+    * currently canonical`. Only the object form `{blockHash, requireCanonical}` can set it.
+    */
+  case class WithHash(hash: org.apache.pekko.util.ByteString, requireCanonical: Boolean = false) extends BlockParam
   case object Latest extends BlockParam
   case object Pending extends BlockParam
   case object Earliest extends BlockParam
@@ -56,8 +61,9 @@ trait ResolveHeader:
             )
             getHeaderByHash(hashBytes).map(plain)
           case left => left.map(plain)
-      case BlockParam.WithHash(hash) => getHeaderByHash(hash).map(plain)
-      case BlockParam.Earliest       => getHeader(0).map(plain)
+      case BlockParam.WithHash(hash, requireCanonical) =>
+        getHeaderByHash(hash).flatMap(canonicalIfRequired(requireCanonical)).map(plain)
+      case BlockParam.Earliest => getHeader(0).map(plain)
       case BlockParam.Latest =>
         blockchainReader.getBestBlockHeader
           .toRight(JsonRpcError.InvalidParams("Latest block not found"))
@@ -109,10 +115,18 @@ trait ResolveHeader:
       case _                                                  => None
     header.toRight(ResolveBlock.HeaderNotFound)
 
+  /** geth's `blockNrOrHash.RequireCanonical && GetCanonicalHash(header.Number) != hash`, checked after the header is
+    * found: `-32000 hash is not currently canonical`.
+    */
+  protected def canonicalIfRequired(requireCanonical: Boolean)(header: BlockHeader): Either[JsonRpcError, BlockHeader] =
+    if !requireCanonical || blockchainReader.getCanonicalHashByNumber(header.number.value).contains(header.hash) then
+      Right(header)
+    else Left(ResolveBlock.NotCanonical)
+
   private def getHeaderByHash(hash: org.apache.pekko.util.ByteString): Either[JsonRpcError, BlockHeader] =
     blockchainReader
       .getBlockHeaderByHash(BlockHash(hash))
-      .toRight(JsonRpcError.InvalidParams(s"Block not found for hash"))
+      .toRight(ResolveBlock.HeaderForHashNotFound)
 
 trait ResolveBlock extends ResolveHeader:
   def blockchain: Blockchain
@@ -136,9 +150,12 @@ trait ResolveBlock extends ResolveHeader:
             )
             getBlockByHash(hashBytes).map(ResolvedBlock(_, pendingState = None))
           case left => left.map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.WithHash(hash) => getBlockByHash(hash).map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.Earliest       => getBlock(0).map(ResolvedBlock(_, pendingState = None))
-      case BlockParam.Latest         => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
+      case BlockParam.WithHash(hash, requireCanonical) =>
+        getBlockByHash(hash)
+          .flatMap(block => canonicalIfRequired(requireCanonical)(block.header).map(_ => block))
+          .map(ResolvedBlock(_, pendingState = None))
+      case BlockParam.Earliest => getBlock(0).map(ResolvedBlock(_, pendingState = None))
+      case BlockParam.Latest   => getLatestBlock().map(ResolvedBlock(_, pendingState = None))
       case BlockParam.Safe =>
         forkChoiceManagerOpt
           .flatMap(_.getSafeBlockHash)
@@ -177,7 +194,7 @@ trait ResolveBlock extends ResolveHeader:
   private def getBlockByHash(hash: org.apache.pekko.util.ByteString): Either[JsonRpcError, Block] =
     blockchainReader
       .getBlockByHash(BlockHash(hash))
-      .toRight(JsonRpcError.InvalidParams(s"Block not found for hash"))
+      .toRight(ResolveBlock.HeaderForHashNotFound)
 
   private def getBlock(number: BigInt): Either[JsonRpcError, Block] =
     blockchainReader
@@ -194,6 +211,18 @@ object ResolveBlock:
     * answer (`StateAndHeaderByNumber`), `-32000 header not found`.
     */
   val HeaderNotFound: JsonRpcError = JsonRpcError.LogicError("header not found")
+
+  /** What a read answers for a block hash that names no stored block: geth's `errors.New("header for hash not found")`
+    * (eth/api_backend.go `HeaderByNumberOrHash`, `StateAndHeaderByNumberOrHash`), a plain error, so `-32000`; it was
+    * `-32602 Block not found for hash` (B-485).
+    */
+  val HeaderForHashNotFound: JsonRpcError = JsonRpcError.LogicError("header for hash not found")
+
+  /** What a state read answers for `{blockHash, requireCanonical: true}` naming a stored block that is not canonical:
+    * geth's `errors.New("hash is not currently canonical")` (eth/api_backend.go `HeaderByNumberOrHash` and
+    * `StateAndHeaderByNumberOrHash`), a plain error, so the RPC layer's default code `-32000`.
+    */
+  val NotCanonical: JsonRpcError = JsonRpcError.LogicError("hash is not currently canonical")
 
   /** How far below a safe block the head's chain is looked for, at most: one block read each. */
   val SafeAncestorSearch: Int = 1_024

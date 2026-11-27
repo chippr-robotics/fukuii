@@ -20,6 +20,8 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
@@ -173,6 +175,60 @@ class EthServiceSpec
     val response: ServiceResponse[CallResponse] = ethService.call(CallRequest(tx, BlockParam.Latest))
 
     response.unsafeRunSync() shouldEqual Right(CallResponse(ByteString("return_value")))
+
+  // B-489: eth_call at "safe" / "finalized" resolve through the fork choice it is given
+  it should "run eth_call at \"safe\" and \"finalized\" by the fork choice it is given" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+    val tx: TxArgs = TxArgs(
+      from = Some(Address("0xda714fe079751fa7a1ad80b76571ea6ec52a446c")),
+      to = Some(Address("0xabbb6bebfa05aa13e908eaa492bd7a8343760477")),
+      gas = Some(GasAmount(50000)),
+      value = Some(3)
+    )
+
+    // no fork choice (a PoW chain): not available
+    ethService.call(CallRequest(tx, BlockParam.Safe)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError.InvalidParams("safe block not available"))
+    ethService.call(CallRequest(tx, BlockParam.Finalized)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError.InvalidParams("finalized block not available"))
+
+    val forkChoice = new ForkChoiceManager(blockchainReader, blockchainWriter, blockchain)
+    val head = blockToRequest.hash.value
+    forkChoice.applyForkChoiceState(ForkChoiceState(head, head, head)) shouldBe Right(())
+    val withForkChoice = new EthInfoService(
+      blockchain,
+      blockchainReader,
+      blockchainConfig,
+      mining,
+      stxLedger,
+      keyStore,
+      syncingController.ref.toTyped[SyncController.Command],
+      Capability.ETH63,
+      Timeouts.shortTimeout,
+      system.scheduler,
+      _forkChoiceManagerOpt = Some(forkChoice)
+    )
+    val worldStateProxy: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
+      storagesInstance.storages.evmCodeStorage,
+      blockchain.getBackingMptStorage(-1),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+      UInt256.Zero,
+      ByteString.empty,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+    val txResult: TxResult = TxResult(worldStateProxy, 123, Nil, ByteString("return_value"), None)
+    stxLedger.simulateCall
+      .expects(*, *, *, *, *)
+      .returning(Right(StxLedger.CallOutcome(txResult, codeDepositShortfall = false)))
+      .twice()
+    for tag <- Seq(BlockParam.Safe, BlockParam.Finalized) do
+      withForkChoice.call(CallRequest(tx, tag)).unsafeRunSync() shouldEqual
+        Right(CallResponse(ByteString("return_value")))
 
   // go-ethereum `applyMessageWithEVM` (internal/ethapi/api.go:838-840) wraps every error `core.ApplyMessage` returns
   // before the frame runs (preCheck, buyGas, intrinsic gas, the floor, the top-frame transfer check) as

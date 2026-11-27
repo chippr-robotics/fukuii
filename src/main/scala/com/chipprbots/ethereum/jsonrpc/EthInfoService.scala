@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
@@ -146,8 +147,12 @@ class EthInfoService(
     gasCap: BigInt = CallTxBuilder.DefaultGasCap,
     // On the unified state layout, the adoption of a long branch under way (spec 018 C4d part 4b): the head walks down
     // to the fork and up the branch meanwhile, and this node is syncing to it. None elsewhere.
-    adoption: () => Option[com.chipprbots.ethereum.ledger.StateRecovery.Progress] = () => None
+    adoption: () => Option[com.chipprbots.ethereum.ledger.StateRecovery.Progress] = () => None,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 ) extends ResolveBlock:
+
+  // "safe" and "finalized" are the consensus client's, as in EthBlocksService (B-489)
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
 
   import EthInfoService.*
 

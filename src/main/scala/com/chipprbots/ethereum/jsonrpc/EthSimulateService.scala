@@ -7,6 +7,7 @@ import scala.util.boundary
 import scala.util.boundary.break
 
 import com.chipprbots.ethereum.consensus.eip1559.BaseFeeCalculator
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.consensus.validators.std.MptListValidator
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator
@@ -364,9 +365,13 @@ class EthSimulateService(
     evmCodeStorage: EvmCodeStorage,
     blockPreparator: BlockPreparator,
     val mining: Mining,
-    blockchainConfig: BlockchainConfig
+    blockchainConfig: BlockchainConfig,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 ) extends ResolveBlock
     with Logger:
+
+  // "safe" and "finalized" are the consensus client's, as in EthBlocksService (B-489)
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
 
   import EthSimulateService.*
 

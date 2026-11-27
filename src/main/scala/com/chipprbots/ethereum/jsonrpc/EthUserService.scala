@@ -4,6 +4,7 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -39,8 +40,12 @@ class EthUserService(
     val blockchainReader: BlockchainReader,
     val mining: Mining,
     evmCodeStorage: EvmCodeStorage,
-    configBuilder: BlockchainConfigBuilder
+    configBuilder: BlockchainConfigBuilder,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 ) extends ResolveBlock:
+
+  // "safe" and "finalized" are the consensus client's, as in EthBlocksService (B-489)
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
   import configBuilder.*
   import EthUserService.*
 
