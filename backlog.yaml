@@ -2533,12 +2533,17 @@ items:
   - id: B-264
     title: "Node start prints about 200 logback status lines: logback.xml has a nested <if> inside <appender> (line 43)"
     priority: P3
-    status: open
+    status: claimed
     area: ops
     size: S
     opened: 2026-11-14
     refs: ["dev-node terminal gate of spec 029 slices 1-2, 2026-11-14"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T20:24:43Z
+      heartbeat: 2026-11-27T20:24:43Z
     notes: Seen on every start before the TUI takes the screen; predates spec 029.
   - id: B-265
     title: "TUI: with a root log level above INFO the Logs view and the TUI's own log lines are empty; consider a console-package level or say so on the Logs view"
