@@ -1,0 +1,7 @@
+jar: /home/dontpanic/work/eg12-etc/fukuii-assembly-0.12.175.jar
+jar sha256: 46ff8b62516e9b7e0fdd0ef90bfd3e21e1bb0a07b0f6ea1035477db3f34fe20d
+java: openjdk version "25.0.5.1" 2026-11-17
+jvm: java -Xmx6g -XX:+IgnoreUnrecognizedVMOptions -XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:+ExitOnOutOfMemoryError
+host: Linux 7.0.0-42-generic x86_64; cpus 4; memory 16293676 kB
+datadir filesystem: /dev/mapper/ubuntu--vg-ubuntu--lv  913G  710G  157G  82% /
+reference: https://etc.drpc.org (Geth/v10.0.0/drpc)
