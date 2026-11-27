@@ -6071,17 +6071,18 @@ items:
   - id: B-547
     title: "SNAP accounts-complete recovery: re-check the saved pivot's staleness once the first snap peer is polled (networkBest 0 at start)"
     priority: P3
-    status: claimed
+    status: review
     area: snap
     size: S
     opened: 2026-11-25
     refs: ["#1503"]
-    links: {}
+    links:
+      prs: [2158]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T20:24:35Z
-      heartbeat: 2026-11-27T20:24:35Z
+      heartbeat: 2026-11-27T21:13:05Z
     notes: skip at SnapResumePlanner.scala:435-437
   - id: B-548
     title: "ETC Olympia precompiles: drop KZG 0x0a from the Olympia set and warm list (EIP-4844 deferred in ECIP-1121); cross-client vectors"
