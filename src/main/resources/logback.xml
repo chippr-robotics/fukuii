@@ -27,7 +27,8 @@
         <rollingPolicy class="ch.qos.logback.core.rolling.FixedWindowRollingPolicy">
             <fileNamePattern>${LOGSDIR}/${LOGSFILENAME}.%i.log.zip</fileNamePattern>
             <minIndex>1</minIndex>
-            <maxIndex>50</maxIndex>
+            <!-- logback allows at most 20 above minIndex; a larger value is cut to 21 with a warning (B-264) -->
+            <maxIndex>21</maxIndex>
         </rollingPolicy>
         <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
             <maxFileSize>10MB</maxFileSize>
@@ -39,10 +40,19 @@
 
     <!-- prometheus-metrics 1.x does not ship a logback appender; removed in deps bump 6e73fcfcb -->
 
-    <!-- Console appender - uses JSON output if ASJSON property is true, otherwise plain text -->
-    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <if condition='p("ASJSON").contains("true")'>
-            <then>
+    <!-- Console appender: JSON when ASJSON is true, plain text otherwise. Any WARN or ERROR while logback reads this
+         file makes it print its whole configuration status, about 150 lines, on every start (B-264), so:
+         - the <if> is at the top level (logback 1.5 warns about an <if> nested in an <appender>);
+         - its test is a <condition> element, not the deprecated condition attribute (a Janino expression). In logback
+           1.5.34 the element must come just before its <if>: one placed inside the <if> is never evaluated and
+           neither branch runs. LogbackConfigSpec checks both branches and that reading this file reports no warning. -->
+    <condition class="ch.qos.logback.core.boolex.PropertyEqualityCondition">
+        <key>ASJSON</key>
+        <value>true</value>
+    </condition>
+    <if>
+        <then>
+            <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
                 <encoder class="net.logstash.logback.encoder.LogstashEncoder">
                     <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
                     <fieldNames>
@@ -55,23 +65,23 @@
                         <message>message</message>
                         <stackTrace>stack_trace</stackTrace>
                     </fieldNames>
-                    <includeMdcKeyNames>
-                        <includeMdcKeyName>peer</includeMdcKeyName>
-                        <includeMdcKeyName>block</includeMdcKeyName>
-                        <includeMdcKeyName>transaction</includeMdcKeyName>
-                        <includeMdcKeyName>actor</includeMdcKeyName>
-                    </includeMdcKeyNames>
+                    <!-- No MDC filter. An <includeMdcKeyNames> wrapper here (peer, block, transaction, actor) is no
+                         property LogstashEncoder has: logback dropped it with an ERROR on every JSON start, and every
+                         MDC key was written. Removed with B-264, which keeps that output; to filter, list
+                         <includeMdcKeyName> elements directly under the encoder. -->
                     <includeCallerData>false</includeCallerData>
                     <includeContext>true</includeContext>
                 </encoder>
-            </then>
-            <else>
+            </appender>
+        </then>
+        <else>
+            <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
                 <encoder>
                     <pattern>${stdoutEncoderPattern}</pattern>
                 </encoder>
-            </else>
-        </if>
-    </appender>
+            </appender>
+        </else>
+    </if>
 
     <root level="${LOGSLEVEL}">
         <appender-ref ref="CONSOLE" />
