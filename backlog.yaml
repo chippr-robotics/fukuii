@@ -3664,7 +3664,7 @@ items:
   - id: B-379
     title: Pin checkpoint-expected-block-hash per public chain (ETC, Mordor, ETH, Sepolia, Hoodi) once each has a v2 archive
     priority: P2
-    status: blocked
+    status: in-progress
     area: consensus
     opened: 2026-11-18
     refs: []
@@ -3674,10 +3674,11 @@ items:
       by: dev-node
       agent: claude-opus
       since: 2026-11-27T03:10:45Z
-      heartbeat: 2026-11-27T03:10:45Z
+      heartbeat: 2026-11-27T03:10:50Z
     notes: |-
       C5c PR2 (B-066) added the chain-conf key, empty on every public chain: no v2 archive exists yet. Pin from the EG-9 (Sepolia, Mordor) and EG-12 (ETC) exports; until then the operator must set sync.checkpoint-sync-expected-hash.
       2026-11-25 blocked: needs v2 checkpoint archives from EG-9 (Sepolia, Mordor) / EG-12 (ETC) exports, spec 018 track owned by cloud-dc960fdc; pin then
+      2026-11-27 in-progress: ETC pinned + published 2026-11-27 (#2152 merged a1cfaa3c2, forge CONFIRMED): block 25808558 0x7b3be997…9422, archive https://storage.googleapis.com/fukuii-checkpoints/etc/etc-25808558.checkpoint. Mordor next from the mordor-1126b export (dev-node); Sepolia from the GCP gate's EG-9 export; ETH/Hoodi still unpinned. (Took over cloud-719c6644's expired claim.)
   - id: B-380
     title: "C5c: SyncController-level test that a refused checkpoint archive is skipped at start (T292 wiring)"
     priority: P2
