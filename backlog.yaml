@@ -6356,3 +6356,13 @@ items:
     refs: ["wave 9C, 2026-11-27"]
     links: {}
     notes: Seen in a full snap.* run with another sbt process on the host; capture the failure text on recurrence and find the timing it depends on.
+  - id: B-572
+    title: "Release-hygiene follow-ups: AccountTrieAssembly stale scaladoc, ops logback <if condition=>, PeerActor.props dead code"
+    priority: P3
+    status: open
+    area: docs
+    size: S
+    opened: 2026-11-27
+    refs: [wave 9D]
+    links: {}
+    notes: "AccountTrieAssembly.scala:358 (spec 016 module, needs fix/ or refactor/snap-016 branch); cirith-ungol/barad-dur/gorgoroth/spec020 logback files; PeerActor.props: dead-code review."
