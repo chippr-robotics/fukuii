@@ -1242,18 +1242,14 @@ items:
   - id: B-118
     title: Constitution and docs name .github/agents/{forge,beacon,herald}.md; the agent files live in .claude/agents/
     priority: P3
-    status: review
+    status: done
     area: docs
     size: S
     opened: 2026-11-08
+    closed: 2026-11-27
     refs: [tracker setup]
     links:
       prs: [2159]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-27T20:25:08Z
-      heartbeat: 2026-11-27T21:21:38Z
   - id: B-119
     title: Triage the ~50 open GitHub issues into the tracker (add them, or close the done and superseded ones)
     priority: P2
