@@ -1,15 +1,22 @@
-# Hive client adapter for Fukuii
-# Built by the ethereum/hive test framework.
-# Receives test configuration via env vars and file uploads.
+# Hive client adapter for Fukuii (https://github.com/chippr-robotics/fukuii), built from the
+# published image. Build from source instead with Dockerfile.git.
+#
+# `tag` picks the image (default latest, the head of fukuii's main); set it from a
+# --client-file entry's build_args, e.g. tag: sha-<commit> or a release version.
+#
+# This directory is the single source of ethereum/hive's clients/fukuii: keep the two identical
+# (scripts/hive/check-upstream-adapter.sh, workflow hive-upstream-definition.yml).
 
-FROM chipprbots/fukuii:latest
+ARG baseimage=chipprbots/fukuii
+ARG tag=latest
+FROM $baseimage:$tag
 
 USER root
 
 # JDK-8385993: C2 ReduceAllocationMerges can silently miscompile field reads on
 # JDK 23+ (fixed in JDK 28). JDK_JAVA_OPTIONS is read by every `java` launch in
 # this container, including the AOT training run. Set here as well as in the base
-# image so an older chipprbots/fukuii:latest cannot drop it. fukuii.sh passes the
+# image so an older base image cannot drop it. fukuii.sh passes the
 # same flags explicitly. Side effect: java prints
 # "NOTE: Picked up JDK_JAVA_OPTIONS: ..." on stderr at startup.
 ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges"
@@ -44,7 +51,7 @@ RUN chmod +x /aot-train.sh && /aot-train.sh && rm /aot-train.sh
 ARG FUKUII_PATH_LIVE=
 ENV FUKUII_PATH_LIVE=${FUKUII_PATH_LIVE}
 
-# /version.txt is created by the base image (chipprbots/fukuii:latest) from
+# /version.txt is created by the base image (chipprbots/fukuii) from
 # the actual JAR filename, so a version bump propagates automatically.
 
 EXPOSE 8545 8546 8551 30303 30303/udp

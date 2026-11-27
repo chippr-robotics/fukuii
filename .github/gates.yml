@@ -211,6 +211,22 @@ gates:
     status_note: >-
       Required since 2026-11-26 (B-550). Main run 45903212878: 6/6.
 
+  - id: hive-upstream-definition
+    workflow: hive-upstream-definition.yml
+    context: run / upstream-definition
+    tier: informational
+    owner: realcodywburns
+    issue: 1402
+    promote_by: 2027-03-31
+    min_tests: 1
+    covers: >-
+      The fukuii client definition hive itself builds (clients/fukuii/, from chipprbots/fukuii:latest),
+      run unmodified against this checkout's build: smoke/genesis, nightly and on promotions to main.
+      Its `upstream-definition-drift` job fails when hive/fukuii/ and hive's copy differ (B-569).
+    status_note: >-
+      New 2026-11-27 (B-569). Points at the ethereum/hive#1677 branch until that pull request merges;
+      then at ethereum/hive master. Promote to required for main promotions once it has a green run.
+
   - id: hive-smoke-network
     workflow: hive-smoke-network.yml
     context: run / smoke-network
