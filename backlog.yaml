@@ -5146,12 +5146,17 @@ items:
   - id: B-485
     title: "RPC: a by-hash state read of an unknown block answers -32602 'Block not found for hash'; geth answers -32000 'header for hash not found'"
     priority: P3
-    status: open
+    status: claimed
     area: rpc
     opened: 2026-11-24
     refs: []
     links:
       spec: 018
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T20:24:23Z
+      heartbeat: 2026-11-27T20:24:23Z
     notes: Found in B-210 (which aligned the by-number answer to -32000 'header not found'). ResolveBlock.getHeaderByHash and EthProofService.resolveHeader. Decide with conduit; hive rpc-compat has no vector for it.
   - id: B-486
     title: "JsonRpcError.StateBusy text says 'too many reads behind the head': wrong for a write refused while another adoption holds the head (B-462)"
