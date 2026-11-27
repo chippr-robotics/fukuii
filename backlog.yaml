@@ -5958,12 +5958,17 @@ items:
   - id: B-543
     title: "SNAP resume: batch the carried code-hash presence check off the coordinator thread so replay stops holding account dispatch"
     priority: P2
-    status: open
+    status: claimed
     area: snap
     size: M
     opened: 2026-11-25
     refs: ["#1600"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T20:24:27Z
+      heartbeat: 2026-11-27T20:24:27Z
     notes: ~300 lookups/s skipPresent
   - id: B-544
     title: "snap-split verify.py hardening: core-local/wildcard name shadowing, object-level fields as file scope, multi-line binding patterns"
