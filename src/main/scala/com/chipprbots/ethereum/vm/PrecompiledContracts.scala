@@ -194,8 +194,10 @@ object PrecompiledContracts:
   def getContracts(evmConfig: EvmConfig, blockHeader: BlockHeader): Map[Address, PrecompiledContract] =
     val ethFork = evmConfig.blockchainConfig.ethForkForBlockNumber(blockHeader.number.value)
     val etcFork = evmConfig.blockchainConfig.etcForkForBlockNumber(blockHeader.number.value)
-    // Post-Cancun detection: check if block header has blob gas fields
-    val isCancun = blockHeader.blobGasUsed.isDefined || blockHeader.excessBlobGas.isDefined
+    // EIP-4844 KZG point evaluation (0x0a) activates at the Cancun timestamp on ETH chains. Read from the fork config,
+    // as go-ethereum's `ActivePrecompiledContracts(rules)` does, never from the header's shape: a header built for an
+    // eth_call time override into Cancun has no blob fields, and geth still has 0x0a there (B-155, B-159).
+    val isCancun = evmConfig.blockchainConfig.isCancunTimestamp(blockHeader.unixTimestamp)
     // EIP-2537 BLS12-381 precompiles activate at Prague timestamp on ETH chains
     val isPrague = evmConfig.blockchainConfig.isPragueTimestamp(blockHeader.unixTimestamp)
     // EIP-7951 P256VERIFY activates at Osaka timestamp on ETH chains

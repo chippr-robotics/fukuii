@@ -199,3 +199,29 @@ class EthPrecompileActivationSpec extends AnyFlatSpec with Matchers:
     after shouldBe (1 to 9).map(Address(_)).toSet ++ Bls + P256
     after shouldBe PrecompiledContracts.olympiaContracts.keySet
   }
+
+  it should "have no KZG at Olympia even on a header with blob fields: the set follows the fork config" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    active(mordorWithOlympia, cancun(20_000_000)) should not contain Kzg
+    active(mordorWithOlympia, cancun(19_999_999)) should not contain Kzg
+  }
+
+  // ── KZG follows the Cancun timestamp, not the header's shape (B-155, B-159) ──
+
+  "KZG 0x0a on an ETH chain" should "be active at the Cancun timestamp on a header without blob fields (eth_call time override)" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    // An eth_call with a time override from a Shanghai block into Cancun runs on a header shaped like the Shanghai
+    // block it started from. go-ethereum builds `rules` from the overridden time and has 0x0a there.
+    val overridden = header(LondonBlock + 10, CancunTs, HefPostShanghai(Gwei, BlockHeader.EmptyMpt))
+    active(hiveAsShipped, overridden) should contain(Kzg)
+    active(hiveAsShipped, overridden) shouldBe PrecompiledContracts.cancunContracts.keySet
+  }
+
+  it should "be inactive before the Cancun timestamp, whatever the header's shape" taggedAs (UnitTest, VMTest) in {
+    val blobShaped = header(LondonBlock + 10, CancunTs - 1, HefPostCancun(Gwei, BlockHeader.EmptyMpt, 0, 0, zero32))
+    active(hiveAsShipped, blobShaped) should not contain Kzg
+  }

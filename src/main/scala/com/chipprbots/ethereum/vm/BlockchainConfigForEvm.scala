@@ -80,6 +80,12 @@ case class BlockchainConfigForEvm(
       .paramsAt(timestamp, cancunTimestamp, pragueTimestamp, bpoTimestamps)
       .getOrElse(BlobParams.Cancun)
 
+  /** EIP-4844 KZG point evaluation (0x0a) — activates at Cancun on ETH chains, as
+    * [[com.chipprbots.ethereum.utils.BlockchainConfig.isCancunTimestamp]]. No ETC config sets a Cancun timestamp.
+    */
+  def isCancunTimestamp(timestamp: Timestamp): Boolean =
+    cancunTimestamp.exists(ts => timestamp.isAtOrAfter(ts))
+
   /** EIP-7623 calldata cost floor — activates at Prague on ETH chains. Note: EIP-7883/EIP-7823 MODEXP changes activate
     * at Osaka, not Prague (per execution-specs).
     */
