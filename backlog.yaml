@@ -6397,3 +6397,13 @@ items:
     refs: [wave 9D]
     links: {}
     notes: "MDC filter fix changes JSON output: decide. cli --help silence predates."
+  - id: B-575
+    title: "Olympia cross-client follow-ups: core-geth floor-before-refund (#1444 pt 2); check Nethermind's Olympia precompile set"
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-27
+    refs: [B-548 / PR for fix/b548-olympia-kzg]
+    links: {}
+    notes: "OlympiaCrossClientVectorsSpec records fukuii=Besu=spec vs core-geth per #1444 (61,000 vs 56,200 at 1,000 nonzero bytes). Also compare the local ECIP-1121 text if ahead of upstream."
