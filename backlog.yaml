@@ -1301,13 +1301,18 @@ items:
   - id: B-125
     title: "Launcher: silence the JDK 25 sun.misc.Unsafe warning that overprints the TUI's first frame"
     priority: P3
-    status: open
+    status: claimed
     area: ops
     size: S
     opened: 2026-11-08
     refs: [027 slice 1 PTY gate 2026-11-08]
     links:
       spec: specs/027-tui-dashboard
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T20:24:39Z
+      heartbeat: 2026-11-27T20:24:39Z
     notes: |-
       Scala 3 LazyVals trips JDK 24+'s one-time stderr warning (4 lines) during the first --tui frame; it scrolls the alt screen
       until the next repaint. In every staging --tui recording since 2026-11-07. Fix: --sun-misc-unsafe-memory-access=allow in the launcher.
