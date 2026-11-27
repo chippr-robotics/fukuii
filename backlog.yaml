@@ -6166,12 +6166,17 @@ items:
   - id: B-559
     title: "E2ESyncSpec P2P handshake tests use IO.sleep(2s/3s) waits (constitution: no sleeps)"
     priority: P3
-    status: open
+    status: claimed
     area: tests
     size: S
     opened: 2026-11-26
     refs: [B-018 follow-up]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T23:33:03Z
+      heartbeat: 2026-11-27T23:33:03Z
     notes: |-
       Three handshake tests in src/it E2ESyncSpec; replace with a condition wait on the handshake/peer state.
       2026-11-27 released by cloud-719c6644: 2026-11-27: E2EHandshakeSpec has the same pattern: ~20 fixed IO.sleep waits and most tests end in a bare succeed. Cover both specs.
