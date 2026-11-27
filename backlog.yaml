@@ -6366,3 +6366,13 @@ items:
     refs: [wave 9D]
     links: {}
     notes: "AccountTrieAssembly.scala:358 (spec 016 module, needs fix/ or refactor/snap-016 branch); cirith-ungol/barad-dur/gorgoroth/spec020 logback files; PeerActor.props: dead-code review."
+  - id: B-573
+    title: "B-125 launcher: verify the Unsafe flag on a JDK 25 start; cover the bare fukuii.bat path"
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-27
+    refs: [wave 9D]
+    links: {}
+    notes: Only JDK 21 was run in the container (JRE 25 download blocked).
