@@ -3209,17 +3209,18 @@ items:
   - id: B-341
     title: MerklePatriciaTrie scaladoc (:44, :88) says the Engine API answers a missing node ACCEPTED; since B-005 it may be SYNCING
     priority: P3
-    status: claimed
+    status: review
     area: docs
     opened: 2026-11-17
     refs: []
     links:
+      prs: [2159]
       spec: none
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T20:25:19Z
-      heartbeat: 2026-11-27T20:25:19Z
+      heartbeat: 2026-11-27T21:21:50Z
     notes: beacon-b005, flag-only (consensus file, inline-cleanup protocol). Comment only.
   - id: B-342
     title: BaseNode.shutdown forces lazy vals (actor system, discovery, mining) a failed start never built, building them only to stop them
