@@ -80,7 +80,7 @@ Tracked protocols that all agents reference live in `.claude/agent-protocols/`:
 | `logging-standards.md` | Preferred logging API, levels, message format, SLF4J patterns |
 | `scala3-style.md` | S1–S13 Scala 3 standards with grep-verifiable ratchets (S11: opaque type full-layer propagation; S12: `boundary`/`break` safety; S13: a case object compared with `==` stays a case object), and the `-source:3.9` mapping |
 | `scala3-given-migration.md` | G1–G3 operational pitfalls for `given/using` migration (P3a findings; P3b is done) |
-| `pekko-typed-api.md` | P1–P25 Pekko Typed API preferences + TL1/TL2 Cats Effect integration rules |
+| `pekko-typed-api.md` | P1–P25 Pekko Typed API preferences + TL1–TL3 Cats Effect integration rules (TL3: no metrics-object initialiser on an IO path) |
 | `pre-migration-checklist.md` | LOOM pre-flight: grep each actor for sender(), returns, timers, workers before migrating |
 | `migration-handoff.md` | Continuation file protocol when a thread ends mid-migration |
 | `storage-rocksdb.md` | DataSource contract, column families, iterator lifecycle, WriteBatch, EphemDataSource, RocksDB config |

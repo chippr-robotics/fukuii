@@ -723,6 +723,34 @@ grep -rn "unsafeRunSync" src/main/ --include="*.scala" | grep -v "//\|Benchmark\
 
 ---
 
+## TL3 — No metrics-object initialiser on an IO path
+
+**Status:** Rule (B-194, from the beacon and forge pre-flights of spec 027 slice 5). `EngineApiMetrics` is initialised
+in `StdNode.startEngineApiServer` and `PoWMiningMetrics` in `StdNode.startMining`, before any request or the mining
+thread exists; the dashboard's counters (`RpcCallStats.Node`, `EngineCallLog.Node`, `TxPoolMetrics.Node`) in
+`startMetricsClient`.
+
+A Scala `object` runs its initialiser on first access, on whichever thread gets there first. If that initialiser
+throws, the JVM raises `ExceptionInInitializerError`, a `LinkageError`, and every later access gets
+`NoClassDefFoundError`, another one. `NonFatal` does not match either. When it happens on an IO fiber, cats-effect's
+`IOFiber` treats it as fatal: `onFatalFailure` shuts down **every** `IORuntime` in the JVM and rethrows, so one bad
+metric registration on a JSON-RPC or Engine API request takes down every IO-based service in the node, not just that
+request. A metrics object (`extends MetricsContainer`) registers meters with the global registry in its initialiser, so
+it is exactly the kind of object that can fail there (a duplicate name, a registry not yet installed).
+
+**Rule:** a metrics object that IO code records into is initialised at node start, off any IO path: touch it
+(`val _ = FooMetrics`) in `StdNode`, after `startMetricsClient` has installed the registry and before the server,
+actor or thread that records into it starts. A new metrics object, or an existing one gaining a caller on an IO path,
+gets that line in the same PR. Keep the record methods themselves to atomic writes that cannot throw.
+
+```bash
+# Metrics objects; for each, check that StdNode touches it before its IO callers start
+grep -rln "extends MetricsContainer" src/main --include="*.scala"
+grep -n "val _ = \|val _ = (" src/main/scala/com/chipprbots/ethereum/nodebuilder/StdNode.scala
+```
+
+---
+
 ## CAPSTONE cleanup targets
 
 After all actors are Typed, sweep for:
