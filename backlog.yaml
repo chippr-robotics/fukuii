@@ -6395,3 +6395,13 @@ items:
     refs: ["PR #2160, commit 4044fdd671"]
     links: {}
     notes: Local scalafmtAll left FatalErrors.scala as is; the bot rewrote it into a parse error. Check the workflow's scalafmt version/config vs the repo's, and make the bot compile (or scalafmtCheck) before it pushes.
+  - id: B-577
+    title: Reject blob fields before Cancun (and Shanghai-shaped headers before Shanghai) in validateExtraFields and Engine V1, as geth does
+    priority: P3
+    status: open
+    area: consensus
+    size: S
+    opened: 2026-11-27
+    refs: ["beacon W2 on #2160"]
+    links: {}
+    notes: BlockHeaderValidatorSkeleton.validateExtraFields ~:309 accepts HefPostCancun/Prague pre-Cancun; EngineApiController case 1 (:201-204) never checks blob fields. geth consensus/beacon/consensus.go:253-262. Matters for hive/EEST chains starting pre-Cancun.
