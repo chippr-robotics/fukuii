@@ -224,13 +224,27 @@ private[actors] trait ByteCodeResponseHandling:
         log.error(s"Failed to store bytecodes: ${e.getMessage}", e)
         Left(s"Storage error: ${e.getMessage}")
 
+  /** The hashes of `received` the bytecode store already holds: one batched `multiGet` per chunk of
+    * [[ByteCodeResponseHandling.PresenceChunk]], no block-cache fill (B-543). Blocking: the coordinator runs it on the
+    * blocking dispatcher, never on its own thread.
+    */
+  def presentCodeHashes(received: Seq[ByteString]): Set[ByteString] =
+    val store = stateIngest.bytecode
+    val present = Set.newBuilder[ByteString]
+    received.grouped(ByteCodeResponseHandling.PresenceChunk).foreach { chunk =>
+      store.multiGetNoFill(chunk).zip(chunk).foreach { case (found, hash) => if found.isDefined then present += hash }
+    }
+    present.result()
+
   /** The #1501 `skipPresent` check of `AddByteCodeTasks` (lifted into a method, spec 016 C-B1). */
   def skipPresentCodeHashes(received: Seq[ByteString], skipPresent: Boolean): Seq[ByteString] =
     // Replayed (carried / recovered) codeHashes were identified before a restart and many were already fetched.
     // Bytecode is content-addressed and hash-checked on write, so one already in EvmCodeStorage is done: skip it.
-    // This lookup used to run on the controller thread (2.5M RocksDB reads per Sepolia resume — the mailbox lag
-    // that delayed the back-pressure signal by minutes, spec 014); here it costs this coordinator, not the controller.
-    if skipPresent then received.filter(h => stateIngest.bytecode.get(h).isEmpty) else received
+    // The coordinator does this lookup off its own thread (B-543); this form is the same filter, run inline.
+    if skipPresent then
+      val present = presentCodeHashes(received)
+      received.filterNot(present)
+    else received
 
   /** Filter and deduplicate codeHashes. Input is already Bloom-filtered by AccountRangeCoordinator (~0.01% FPR), so
     * this is a final dedup pass over ~2M entries (not 73.5M). Bug 20 fix.
@@ -259,3 +273,7 @@ private[actors] trait ByteCodeResponseHandling:
     if dupeCount > 0 then log.info(s"Deduplicated $dupeCount codeHashes (Bloom filter false positives)")
 
     filtered
+
+object ByteCodeResponseHandling:
+  /** Keys per `multiGet` of the presence check: one JNI call each, bounded so a 2.5M-hash replay is not one call. */
+  val PresenceChunk: Int = 1024
