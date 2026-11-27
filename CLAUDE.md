@@ -255,7 +255,7 @@ Read it before planning or implementing. Highlights:
 
 - Consensus-critical code (EVM/gas, state roots, hashes, RLP, Ethash, rewards,
   hard forks) MUST be byte-for-byte deterministic and ETC-spec compliant — design
-  before implementing; follow the `forge` protocol in `.github/agents/forge.md`.
+  before implementing; follow the `forge` protocol in `.claude/agents/forge.md`.
 - Scala 3.x LTS only; code MUST pass `scalafmt` + `scalafix`.
 - Tests MUST be deterministic (no `Thread.sleep`); keep statement coverage ≥ 70%.
 - Run `sbt pp` before opening a PR; CI gates and review must be green to merge.

@@ -150,7 +150,7 @@ Successfully completed Phase 1 (JSON Parsing) and Phase 2 (Execution Infrastruct
 
 ### Agent Update Recommendations
 
-See updated agent files in `.github/agents/` folder with lessons learned.
+See updated agent files in `.claude/agents/` folder with lessons learned.
 
 ## 4. Implementation Statistics
 
