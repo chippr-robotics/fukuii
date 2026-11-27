@@ -6098,17 +6098,18 @@ items:
   - id: B-548
     title: "ETC Olympia precompiles: drop KZG 0x0a from the Olympia set and warm list (EIP-4844 deferred in ECIP-1121); cross-client vectors"
     priority: P2
-    status: claimed
+    status: review
     area: consensus
     size: M
     opened: 2026-11-25
     refs: ["#1444"]
-    links: {}
+    links:
+      prs: [2160]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T20:24:06Z
-      heartbeat: 2026-11-27T20:24:06Z
+      heartbeat: 2026-11-27T21:29:31Z
     notes: forge. PrecompiledContracts.scala:193-196 gives Olympia osakaContracts incl. 0x0a; ECIP-1121 lists EIP-4844 as deferred. Also floor-vs-refund vector
   - id: B-549
     title: "Glamsterdam networking: negotiated snap version; EIP-8070 sparse blobpool GetCells; engine_getBlobsV3/V4; retire devp2p waivers"
