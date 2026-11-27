@@ -4650,18 +4650,14 @@ items:
   - id: B-444
     title: Shipped supervisor stop timeouts (docker stop_grace_period, systemd TimeoutStopSec) leave room for the bounded stop steps and the DB close
     priority: P3
-    status: review
+    status: done
     area: ops
     size: S
     opened: 2026-11-23
+    closed: 2026-11-27
     refs: []
     links:
       prs: [2159]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-27T20:24:47Z
-      heartbeat: 2026-11-27T21:21:18Z
     notes: "B-426: bounded stop steps total up to ~119 s worst case, then the unbounded RocksDB close; docker's default 10 s SIGKILLs mid-close. Set >=180 s in docker/*/docker-compose.yml, ops compose files and runbook units."
   - id: B-445
     title: Read the [SHUTDOWN] actor-system overrun log on the next live Mordor stop and fix the actor that holds termination past 15 s
