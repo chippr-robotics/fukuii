@@ -98,8 +98,7 @@ object FatalErrors extends Logger:
     val runner = new Thread(
       () =>
         try hook()
-        catch case NonFatal(e) => log.error(s"The before-halt hook failed: $e", e),
-      "FatalErrors-beforeHalt"
+        catch case NonFatal(e) => log.error(s"The before-halt hook failed: $e", e), "FatalErrors-beforeHalt"
     )
     runner.setDaemon(true)
     runner.start()
