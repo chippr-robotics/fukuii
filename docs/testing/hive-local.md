@@ -22,6 +22,27 @@ So they are a **release gate**, not a per-push check:
 Before cutting a version, open the staging → main PR, add the `hive-full` label, and wait for
 the `aggregate` verdict.
 
+## The upstream client definition (one source)
+
+hive builds fukuii from its own `clients/fukuii/`, `FROM chipprbots/fukuii:latest` (the head of
+`main`). That directory and this repository's `hive/fukuii/` are one source and must stay
+identical. A change to the adapter goes to both, in this repository's pull request and in a pull
+request to ethereum/hive.
+
+- `scripts/hive/check-upstream-adapter.sh [--repo OWNER/NAME] [--ref REF]` diffs the two. It exits 0
+  when they are identical, 1 when they differ (and prints the diff), and 2 when the ref has no
+  `clients/fukuii/`.
+- The workflow `hive-upstream-definition.yml` runs nightly and on pull requests to `main`. Its
+  `upstream-definition-drift` job runs that check. `run / upstream-definition` runs smoke/genesis
+  with hive's copy left unmodified (`_hive-sim.yml` input `adapter: upstream`), built `FROM` the
+  checkout. That catches a fukuii change the published definition would not survive before it
+  reaches `latest`, such as plaintext binds being refused without `allow-insecure-bind`.
+- Until ethereum/hive#1677 merges, hive's copy lives on that pull request's branch
+  (`chippr-robotics/hive@add-fukuii-client`); the workflow's defaults point there.
+
+Every other hive workflow copies `hive/fukuii/` over hive's copy, so they test this repository's
+adapter, not the published one.
+
 ## Targeted runs on a local machine
 
 To check a fix between releases, run just the affected tests locally:

@@ -114,6 +114,22 @@ on:
         required: false
         type: string
         default: 'master'
+      hive_repo:
+        description: |
+          The hive repository to clone (OWNER/NAME). ethereum/hive except while a change to its
+          clients/fukuii is still a pull request from a fork (hive-upstream-definition.yml).
+        required: false
+        type: string
+        default: 'ethereum/hive'
+      adapter:
+        description: |
+          Which fukuii client definition hive builds. `repo` (default) copies this repository's
+          hive/fukuii/ over hive's clients/fukuii/, as every gate does. `upstream` leaves hive's own
+          clients/fukuii/ in place, so the run tests the definition hive users get (B-569); the
+          base image is still this checkout's build.
+        required: false
+        type: string
+        default: 'repo'
       clients:
         description: |
           Comma-separated list of hive client names to test (e.g. "fukuii"
@@ -269,6 +285,7 @@ jobs:
       - name: Check out hive
         env:
           HIVE_REF: ${{ inputs.hive_ref }}
+          HIVE_REPO: ${{ inputs.hive_repo }}
         run: |
           set -euxo pipefail
           mkdir -p external
@@ -276,16 +293,16 @@ jobs:
             rm -rf external/hive
             if git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 \
                  clone --depth=1 --filter=blob:none \
-                 https://github.com/ethereum/hive.git external/hive; then
+                 "https://github.com/${HIVE_REPO}.git" external/hive; then
               break
             fi
             echo "Clone attempt $i failed; sleeping before retry..."
             sleep $((i * 5))
           done
           if [ ! -d external/hive/.git ]; then
-            echo "::error::Failed to clone ethereum/hive after 5 retries."
+            echo "::error::Failed to clone ${HIVE_REPO} after 5 retries."
             git --version
-            curl -I https://github.com/ethereum/hive.git || true
+            curl -I "https://github.com/${HIVE_REPO}.git" || true
             exit 1
           fi
           # If the caller pinned a specific ref (not master), check it out.
@@ -296,7 +313,23 @@ jobs:
           test -f external/hive/hive.go
 
       - name: Sync fukuii hive adapter
+        env:
+          ADAPTER: ${{ inputs.adapter }}
+          HIVE_REPO: ${{ inputs.hive_repo }}
+          HIVE_REF: ${{ inputs.hive_ref }}
         run: |
+          if [ "$ADAPTER" = upstream ]; then
+            # Test hive's own clients/fukuii as hive users get it (B-569): do not overwrite it.
+            if [ ! -f external/hive/clients/fukuii/Dockerfile ]; then
+              echo "::error::adapter=upstream, but ${HIVE_REPO}@${HIVE_REF} has no clients/fukuii."
+              exit 1
+            fi
+            echo "Using the upstream client definition:"; ls -l external/hive/clients/fukuii/
+            exit 0
+          elif [ "$ADAPTER" != repo ]; then
+            echo "::error::adapter must be repo or upstream, not '$ADAPTER'"
+            exit 1
+          fi
           mkdir -p external/hive/clients/fukuii
           # Copy the WHOLE adapter directory: it is hive's docker build context, and the
           # Dockerfile COPYs files a per-name list would silently miss (aot-train.sh broke

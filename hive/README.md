@@ -94,7 +94,7 @@ hive/fukuii/
 │                    #   (and FUKUII_PATH_LIVE, a build arg, to fukuii.state.path-live)
 ├── mapper.jq        # Converts geth-format genesis to fukuii format
 ├── enode.sh         # Returns enode:// URL for P2P discovery
-└── hive.yaml        # Declares roles: eth1, eth1_engine
+└── hive.yaml        # Declares the role eth1 (eth1_snap once a published image serves snap ranges geth accepts, #2154)
 ```
 
 ### Configuration Flow

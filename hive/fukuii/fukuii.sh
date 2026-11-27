@@ -265,7 +265,8 @@ fi
 
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.enabled=true"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.interface=0.0.0.0"
-# Plaintext on 0.0.0.0 by choice: hive's containers share a private Docker network (spec 030 FR-018, FR-019).
+# Plaintext on 0.0.0.0 by choice: hive's containers share a private Docker network. Newer fukuii
+# refuses a plaintext non-loopback bind without this; older versions ignore the key.
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.allow-insecure-bind=true"
 FLAGS="$FLAGS -Dfukuii.network.rpc.http.port=8545"
 # Pekko HTTP request timeout, raised from the shipped 30 s (which matches go-ethereum's
@@ -306,7 +307,7 @@ FLAGS="$FLAGS -Dfukuii.network.rpc.apis=eth,web3,net,debug,txpool,admin,testing"
 if [ "$TTD" != "$MAX" ]; then
     FLAGS="$FLAGS -Dfukuii.network.engine-api.enabled=true"
     FLAGS="$FLAGS -Dfukuii.network.engine-api.interface=0.0.0.0"
-    # As for RPC: hive's private network; the JWT still authenticates the consensus client (spec 030).
+    # As for RPC: hive's private network; the JWT still authenticates the consensus client.
     FLAGS="$FLAGS -Dfukuii.network.engine-api.allow-insecure-bind=true"
     FLAGS="$FLAGS -Dfukuii.network.engine-api.port=8551"
     FLAGS="$FLAGS -Dfukuii.network.engine-api.jwt-secret-path=$JWT_SECRET_FILE"

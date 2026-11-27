@@ -57,6 +57,7 @@ must become required or be formally re-scoped in a reviewed PR.
 
 | Check | Covers | Promote by | Issue | Note |
 |---|---|---|---|---|
+| `hive-upstream-definition` | The fukuii client definition hive itself builds (clients/fukuii/, from chipprbots/fukuii:latest), run unmodified against this checkout's build: smoke/genesis, nightly and on promotions to main. Its `upstream-definition-drift` job fails when hive/fukuii/ and hive's copy differ (B-569). | 2027-03-31 | #1402 | New 2026-11-27 (B-569). Points at the ethereum/hive#1677 branch until that pull request merges; then at ethereum/hive master. Promote to required for main promotions once it has a green run. |
 | `hive-consensus` | ethereum/consensus — state-transition conformance. | 2027-03-31 | #1402 |  |
 | `hive-consume-engine` | EELS consume-engine — payload import via Engine API. Runs the fixed shard consume-engine-13 of .github/hive-shards.json (874 tests, ~44 min) to completion; the whole suite runs in hive-full. | 2027-03-31 | #1402 |  |
 | `hive-full` | consume-engine, consume-rlp and consensus run TO COMPLETION, sharded per .github/hive-shards.json (an exact partition, proven by scripts/hive/gen-shards.py). The release-PR hive-consume-*/hive-consensus workflows only sample these suites. | 2027-03-31 | #1402 | Release gate: runs on a `hive-full`-labelled PR to main, or workflow_dispatch — ~33 jobs x ~3.5 h per pass, so never per push or nightly. Verdict comes from the aggregate job, never the workflow conclusion. |
