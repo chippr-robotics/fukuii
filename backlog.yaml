@@ -6208,12 +6208,17 @@ items:
   - id: B-564
     title: "Gate Integrity C14 is dead: check_blocked_by reads first_required_slice.gates, the YAML key is members"
     priority: P3
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-26
     refs: ["PR #2151"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T23:32:51Z
+      heartbeat: 2026-11-27T23:32:51Z
     notes: Fix the key and add a self-test so the check inspects the slice.
   - id: B-565
     title: "Promote the windows-bls gate to required before ETC/Mordor schedule Olympia with Windows supported (forge N2 on #2150)"
