@@ -27,6 +27,7 @@ Usage, from anywhere inside a fukuii clone (set FUKUII_NODE once per host, e.g. 
     backlog.py drop B-012 --reason "..."
     backlog.py prune [--before 2026-11-17] [--dry-run]  (closed items move to archive.yaml; ids stay taken)
     backlog.py priority B-012 P1 --reason "..."   (anyone: triage, not ownership)
+    backlog.py note B-012 --text "..."            (anyone: a dated note; status and claim unchanged)
     backlog.py render --out DIR
     backlog.py check [--file backlog.yaml [--archive-file archive.yaml]]
 
@@ -861,6 +862,25 @@ def cmd_priority(tr: Tracker, a) -> None:
     print(tr.mutate(fn, by) or f"{iid} is already {new}")
 
 
+def cmd_note(tr: Tracker, a) -> None:
+    """Append a dated note to an item, claimed or not, without touching its status, priority or claim (B-123).
+    `status --note` needs a held item, so a finding about an open one had nowhere to go but a new item. Like a
+    priority change it is not ownership: anyone may note an item that is still live. Notes keep their last 3 lines."""
+    by, iid = need_by(a), norm_id(a.id)
+    text = " ".join((a.text or "").split())
+    if not text:
+        raise Refused("a note needs its text: --text TEXT")
+
+    def fn(doc):
+        it, now = find(doc, iid), now_utc()
+        if it["status"] in TERMINAL:
+            raise Refused(f"{iid} is {it['status']}; add a new item instead")
+        add_note(it, f"{stamp(now)[:10]} note by {by}: {text}")
+        return f"tracker: note {iid} by {by}\n\n{text}", f"noted {iid}"
+
+    print(tr.mutate(fn, by))
+
+
 def cmd_add(tr: Tracker, a) -> None:
     by = need_by(a)
     if a.opened and not _date_ok(a.opened):
@@ -1382,6 +1402,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("priority", choices=PRIORITIES)
     s.add_argument("--reason", required=True, help="why; recorded in the item's notes and the commit")
     s.set_defaults(fn=cmd_priority)
+
+    s = sub.add_parser("note", parents=[common], help="append a dated note (anyone; status and claim unchanged)")
+    s.add_argument("id")
+    s.add_argument("--text", required=True, help="one line; the notes keep their last 3 lines; no secrets")
+    s.set_defaults(fn=cmd_note)
 
     s = sub.add_parser("render", parents=[common, reader], help="write the Tracker page (index.md, burndown.svg)")
     s.add_argument("--out", required=True)
