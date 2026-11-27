@@ -1,7 +1,8 @@
 name: Autofix (scalafmt)
 
 # Auto-applies `sbt scalafmtAll` and commits the result, so formatting never has to
-# be fixed by hand and never blocks a release. Runs on same-repo PRs (pushes the fix
+# be fixed by hand and never blocks a release. The result is pushed only after it re-checks
+# and compiles (B-576: scalafmt can write code that does not parse). Runs on same-repo PRs (pushes the fix
 # to the PR's source branch only with CI_PAT, see below) and on pushes to the integration branches (self-heals a
 # squash-merge that landed unformatted code — the exact gap that broke the 0.6.0
 # release prep). `ci.yml` keeps `formatCheck` as the backstop for fork PRs, which
@@ -92,7 +93,42 @@ jobs:
         # selector and fails with "Expected '/'"), which had this job red on every PR.
         # The root project does not aggregate the other modules, so a bare scalafmtAll formats
         # root alone; each module is named here, the same set ci.yml's formatCheck checks.
-        run: sbt "scalafmtAll; scalafmtSbt; bytes / scalafmtAll; crypto / scalafmtAll; rlp / scalafmtAll; scalanet / scalafmtAll; scalanetDiscovery / scalafmtAll"
+        # Two passes: scalafmt 3.8.3 is not always idempotent in one (some braced `else { ... }` blocks lose their
+        # braces only on the second, B-082), and the verify step below re-checks, so one pass would fail it there.
+        # sbt-scalafmt caches by modification time and skips a file it wrote itself, so the second pass is a second
+        # sbt run after a `touch` of the changed files, not a repeat in the same run.
+        run: |
+          FMT="scalafmtAll; scalafmtSbt; bytes / scalafmtAll; crypto / scalafmtAll; rlp / scalafmtAll; scalanet / scalafmtAll; scalanetDiscovery / scalafmtAll"
+          sbt "$FMT"
+          git diff --name-only -z | xargs -0 -r touch
+          sbt "$FMT"
+        env:
+          FUKUII_DEV: true
+
+      - name: Verify the formatted tree before any push
+        # B-576: on PR #2160 this job pushed 4044fdd671, which does not parse. scalafmt 3.8.3 (and 3.10.1) joins a
+        # lambda whose body is a one-line `try ... catch case ...` with the next argument on the same line,
+        # `catch case NonFatal(e) => log.error(...), "FatalErrors-beforeHalt"`, where the comma then ends nothing.
+        # Local `sbt scalafmtAll` gives the same bytes, so this is a scalafmt bug, not a CI/local difference, and
+        # scalafmt does not re-parse what it writes. Only a fixed tree is pushed: a re-check (the check tasks parse
+        # every file, so they fail on unparseable output and on a rewrite that has not converged) and `compile-all`
+        # (every compiled module and configuration) must pass first. A failure fails the job, so nothing is pushed.
+        # The changed files are touched first: sbt-scalafmt's cache would otherwise skip the files it just wrote,
+        # and a check right after scalafmtAll passes on that broken FatalErrors.scala (reproduced locally).
+        if: github.event_name == 'push' || env.HAS_CI_PAT == 'true'
+        run: |
+          if git diff --quiet; then
+            echo "Formatted: nothing to verify."
+            exit 0
+          fi
+          echo "Reformatted by scalafmt:"
+          git diff --name-only | sed 's/^/  /'
+          git diff --name-only -z | xargs -0 -r touch
+          if ! sbt "scalafmtCheckAll; scalafmtSbtCheck; bytes / scalafmtCheckAll; crypto / scalafmtCheckAll; rlp / scalafmtCheckAll; scalanet / scalafmtCheckAll; scalanetDiscovery / scalafmtCheckAll; compile-all"; then
+            echo "::error::scalafmt produced a tree that does not re-check or compile; nothing was pushed. Format these files by hand so scalafmt leaves them valid (B-576), and push."
+            git diff
+            exit 1
+          fi
         env:
           FUKUII_DEV: true
 
