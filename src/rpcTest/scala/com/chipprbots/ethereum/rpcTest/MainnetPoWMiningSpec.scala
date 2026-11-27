@@ -13,12 +13,12 @@ import com.chipprbots.ethereum.rpcTest.Tags.MainNet
 // scalastyle:off magic.number
 /** Live PoW mining verification tests for ETC mainnet.
   *
-  * Requires a fukuii node synced to ETC mainnet and listening on the configured RPC URL. These tests verify
-  * PoW/ETChash mining correctness on the live production chain.
+  * Requires a fukuii node synced to ETC mainnet and listening on the configured RPC URL. These tests verify PoW/ETChash
+  * mining correctness on the live production chain.
   *
   * Run with: sbt "rpcTest:testOnly *MainnetPoWMiningSpec"
   */
-class MainnetPoWMiningSpec extends AnyFlatSpec with Matchers {
+class MainnetPoWMiningSpec extends AnyFlatSpec with Matchers:
 
   val testConfig: RpcTestConfig = RpcTestConfig("test.conf")
   val service: Web3j = Web3j.build(new HttpService(testConfig.fukuiiUrl))
@@ -33,22 +33,17 @@ class MainnetPoWMiningSpec extends AnyFlatSpec with Matchers {
   val ExpectedGasLimitApprox: BigInteger = BigInteger.valueOf(8000000L)
   val GasLimitTolerance: BigInteger = BigInteger.valueOf(2000000L) // ±2M tolerance
 
-  private def skipIfNotETCMainnet(): Unit = {
+  private def skipIfNotETCMainnet(): Unit =
     val chainId = service.ethChainId().send().getChainId
-    if (chainId.compareTo(ETCChainId) != 0) {
-      cancel(s"Not connected to ETC mainnet (chain ID $chainId, expected 61)")
-    }
-  }
+    if chainId.compareTo(ETCChainId) != 0 then cancel(s"Not connected to ETC mainnet (chain ID $chainId, expected 61)")
 
-  private def getBlock(number: Long, fullTxs: Boolean = false) = {
+  private def getBlock(number: Long, fullTxs: Boolean = false) =
     val param = DefaultBlockParameter.valueOf(BigInteger.valueOf(number))
     service.ethGetBlockByNumber(param, fullTxs).send().getBlock
-  }
 
-  private def getLatestBlock(fullTxs: Boolean = false) = {
+  private def getLatestBlock(fullTxs: Boolean = false) =
     val param = DefaultBlockParameter.valueOf("latest")
     service.ethGetBlockByNumber(param, fullTxs).send().getBlock
-  }
 
   "ETC mainnet PoW" should "be connected to ETC mainnet (chain ID 61)" taggedAs MainNet in {
     skipIfNotETCMainnet()
@@ -71,7 +66,7 @@ class MainnetPoWMiningSpec extends AnyFlatSpec with Matchers {
     block.getDifficulty.compareTo(BigInteger.ZERO) should be > 0
     block.getNonce should not be null
     block.getMixHash should not be null
-    block.getMixHash should have length 66
+    (block.getMixHash should have).length(66)
   }
 
   it should "have difficulty in expected range for ETC mainnet" taggedAs MainNet in {
@@ -114,7 +109,7 @@ class MainnetPoWMiningSpec extends AnyFlatSpec with Matchers {
     val latestBlock = getLatestBlock()
     val latestNumber = latestBlock.getNumber.longValue()
 
-    if (latestNumber < 20000001) cancel("Node not synced past era 4 boundary")
+    if latestNumber < 20000001 then cancel("Node not synced past era 4 boundary")
 
     // First block of era 4
     val era4Block = getBlock(20000001)
@@ -132,13 +127,12 @@ class MainnetPoWMiningSpec extends AnyFlatSpec with Matchers {
     val latestBlock = getLatestBlock()
     val latestNumber = latestBlock.getNumber.longValue()
 
-    if (latestNumber < ETCEcip1099Block) cancel("Node not synced past ECIP-1099 fork")
+    if latestNumber < ETCEcip1099Block then cancel("Node not synced past ECIP-1099 fork")
 
     val forkBlock = getBlock(ETCEcip1099Block)
     forkBlock should not be null
     forkBlock.getNumber.longValue() shouldBe ETCEcip1099Block
     forkBlock.getDifficulty.compareTo(BigInteger.ZERO) should be > 0
-    forkBlock.getHash should have length 66
+    (forkBlock.getHash should have).length(66)
   }
-}
 // scalastyle:on magic.number

@@ -12,12 +12,11 @@ import com.chipprbots.ethereum.vm.*
 import scala.language.dynamics
 import scala.util.Random
 
-object EvmTestEnv {
+object EvmTestEnv:
   val ContractsDir = new File("target/contracts")
-}
 
 // scalastyle:off magic.number
-trait EvmTestEnv {
+trait EvmTestEnv:
 
   import EvmTestEnv.*
 
@@ -35,22 +34,22 @@ trait EvmTestEnv {
 
   def world: MockWorldState = internalWorld
 
-  def contract(name: String): Contract = {
+  def contract(name: String): Contract =
     new Contract(name, contractsAddresses(name))
-  }
 
-  def createAccount(balance: BigInt = 0): Address = {
+  def createAccount(balance: BigInt = 0): Address =
     val newAddress = Address(Random.nextLong())
     internalWorld = world.saveAccount(newAddress, Account.empty().copy(balance = UInt256(balance)))
     newAddress
-  }
 
-  def deployContract(name: String,
-                     creatorAddress: Address = defaultContractCreator,
-                     value: BigInt = 0,
-                     gasLimit: BigInt = BigInt(2).pow(256) - 1,
-                     gasPrice: BigInt = 1,
-                     constructorArgs: Seq[Any] = Nil): (ProgramResult[MockWorldState, MockStorage], Contract) = {
+  def deployContract(
+      name: String,
+      creatorAddress: Address = defaultContractCreator,
+      value: BigInt = 0,
+      gasLimit: BigInt = BigInt(2).pow(256) - 1,
+      gasPrice: BigInt = 1,
+      constructorArgs: Seq[Any] = Nil
+  ): (ProgramResult[MockWorldState, MockStorage], Contract) =
     val creator = world.getAccount(creatorAddress).get
 
     val worldAfterNonceIncrease = world.increaseNonce(creatorAddress)
@@ -71,63 +70,57 @@ trait EvmTestEnv {
     contractsAddresses += (name -> contractAddress)
 
     internalWorld = result.world
-      .saveAccount(contractAddress, Account(UInt256(0), UInt256(value), Account.EmptyStorageRootHash, kec256(result.returnData)))
+      .saveAccount(
+        contractAddress,
+        Account(UInt256(0), UInt256(value), Account.EmptyStorageRootHash, kec256(result.returnData))
+      )
       .saveCode(contractAddress, result.returnData)
 
     (result, new Contract(name, contractAddress))
-  }
 
-  private def parseArg(arg: Any): ByteString = arg match {
-    case b: ByteString => UInt256(b).bytes
-    case b: BigInt => UInt256(b).bytes
+  private def parseArg(arg: Any): ByteString = arg match
+    case b: ByteString  => UInt256(b).bytes
+    case b: BigInt      => UInt256(b).bytes
     case a: Array[Byte] => UInt256(a).bytes
-    case i: Int => UInt256(i).bytes
-    case b: Byte => UInt256(b).bytes
-    case a: Address => UInt256(a.bytes).bytes
-    case other => throw new RuntimeException("Invalid call argument")
-  }
+    case i: Int         => UInt256(i).bytes
+    case b: Byte        => UInt256(b).bytes
+    case a: Address     => UInt256(a.bytes).bytes
+    case other          => throw new RuntimeException("Invalid call argument")
 
-  class Contract(val name: String, val address: Address) extends Dynamic {
+  class Contract(val name: String, val address: Address) extends Dynamic:
 
-    def applyDynamic(methodName: String)(args: Any*): ContractMethodCall = {
+    def applyDynamic(methodName: String)(args: Any*): ContractMethodCall =
       callMethod(methodName)(args*)
-    }
 
-    def callMethod(methodName: String)(args: Any*): ContractMethodCall = {
-      if (methodName.contains("("))
-        callWithSignature(methodName)(args*)
-      else
-        callWithMethodName(methodName)(args*)
-    }
+    def callMethod(methodName: String)(args: Any*): ContractMethodCall =
+      if methodName.contains("(") then callWithSignature(methodName)(args*)
+      else callWithMethodName(methodName)(args*)
 
-    private def callWithMethodName(methodName: String)(args: Any*): ContractMethodCall = {
+    private def callWithMethodName(methodName: String)(args: Any*): ContractMethodCall =
       val matchedAbis = contractsAbis(name)
-        .filter { a => a.inputs.size == args.size && a.name == methodName && a.`type` == "function" }
+        .filter(a => a.inputs.size == args.size && a.name == methodName && a.`type` == "function")
 
-      if (matchedAbis.isEmpty)
-        throw new RuntimeException("No matching ABI found. Please specify the signature")
-      else if (matchedAbis.size > 1)
+      if matchedAbis.isEmpty then throw new RuntimeException("No matching ABI found. Please specify the signature")
+      else if matchedAbis.size > 1 then
         throw new RuntimeException("More than one matching ABI found. Please specify the signature")
-      else {
+      else
         val abi = matchedAbis.head
         callWithSignature(s"$methodName(${abi.inputs.map(_.`type`).mkString(",")})")(args*)
-      }
-    }
 
-    private def callWithSignature(signature: String)(args: Any*): ContractMethodCall = {
+    private def callWithSignature(signature: String)(args: Any*): ContractMethodCall =
       val signatureHash = ByteString(crypto.kec256(signature.getBytes)).take(4)
       val callData = args.map(parseArg).foldLeft(signatureHash)(_ ++ _)
       new ContractMethodCall(this, callData)
-    }
 
     def storage: MockStorage = world.storages(address)
-  }
 
-  class ContractMethodCall(contract: Contract, callData: ByteString) {
-    def call(value: BigInt = 0,
-             gasLimit: BigInt = BigInt(2).pow(256) - 1,
-             gasPrice: BigInt = 1,
-             sender: Address = defaultSender): ProgramResult[MockWorldState, MockStorage] = {
+  class ContractMethodCall(contract: Contract, callData: ByteString):
+    def call(
+        value: BigInt = 0,
+        gasLimit: BigInt = BigInt(2).pow(256) - 1,
+        gasPrice: BigInt = 1,
+        sender: Address = defaultSender
+    ): ProgramResult[MockWorldState, MockStorage] =
       val transaction = MockVmInput.transaction(sender, callData, value, gasLimit, gasPrice, Some(contract.address))
       val blockHeader = MockVmInput.blockHeader
       val pc = ProgramContext[MockWorldState, MockStorage](transaction, blockHeader, sender, world, config)
@@ -135,7 +128,3 @@ trait EvmTestEnv {
       val res = vm.run(pc)
       internalWorld = res.world
       res
-    }
-  }
-
-}

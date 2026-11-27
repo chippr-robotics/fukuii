@@ -13,15 +13,14 @@ import com.chipprbots.ethereum.rpcTest.Tags.MainNet
 // scalastyle:off magic.number
 /** Live Olympia hard fork verification tests for Mordor testnet.
   *
-  * Requires a fukuii node synced to Mordor and listening on the configured RPC URL.
-  * Tests Olympia EIP activation, baseFee behavior, and pre/post-fork chain state.
+  * Requires a fukuii node synced to Mordor and listening on the configured RPC URL. Tests Olympia EIP activation,
+  * baseFee behavior, and pre/post-fork chain state.
   *
-  * Mordor Olympia activation: block 15,800,850
-  * Treasury: 0xd6165F3aF4281037bce810621F62B43077Fb0e37
+  * Mordor Olympia activation: block 15,800,850 Treasury: 0xd6165F3aF4281037bce810621F62B43077Fb0e37
   *
   * Run with: sbt "rpcTest:testOnly *MordorOlympiaSpec"
   */
-class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
+class MordorOlympiaSpec extends AnyFlatSpec with Matchers:
 
   val testConfig: RpcTestConfig = RpcTestConfig("test.conf")
   val service: Web3j = Web3j.build(new HttpService(testConfig.fukuiiUrl))
@@ -32,27 +31,21 @@ class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
   val TreasuryAddress: String = "0xcfe1e0ecbff745e6c800ff980178a8ddef94bee2"
   val Eip2935ContractAddress: String = "0x0000f90827f1c53a10cb7a02335b175320002935"
 
-  private def skipIfNotMordor(): Unit = {
+  private def skipIfNotMordor(): Unit =
     val chainId = service.ethChainId().send().getChainId
-    if (chainId.compareTo(MordorChainId) != 0) {
-      cancel(s"Not connected to Mordor (chain ID $chainId, expected 63)")
-    }
-  }
+    if chainId.compareTo(MordorChainId) != 0 then cancel(s"Not connected to Mordor (chain ID $chainId, expected 63)")
 
-  private def getBlock(number: Long, fullTxs: Boolean = false) = {
+  private def getBlock(number: Long, fullTxs: Boolean = false) =
     val param = DefaultBlockParameter.valueOf(BigInteger.valueOf(number))
     service.ethGetBlockByNumber(param, fullTxs).send().getBlock
-  }
 
-  private def getLatestBlock(fullTxs: Boolean = false) = {
+  private def getLatestBlock(fullTxs: Boolean = false) =
     val param = DefaultBlockParameter.valueOf("latest")
     service.ethGetBlockByNumber(param, fullTxs).send().getBlock
-  }
 
-  private def isPostOlympia: Boolean = {
+  private def isPostOlympia: Boolean =
     val latest = getLatestBlock()
     latest != null && latest.getNumber.longValue() >= OlympiaForkBlock
-  }
 
   "Mordor Olympia" should "be connected to Mordor testnet" taggedAs MainNet in {
     skipIfNotMordor()
@@ -80,9 +73,7 @@ class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
 
   it should "have blocks immediately before fork without baseFee" taggedAs MainNet in {
     skipIfNotMordor()
-    if (!isPostOlympia) {
-      cancel("Olympia fork not yet active on Mordor")
-    }
+    if !isPostOlympia then cancel("Olympia fork not yet active on Mordor")
     val preForkBlock = getBlock(OlympiaForkBlock - 1)
     preForkBlock should not be null
     preForkBlock.getBaseFeePerGas shouldBe null
@@ -90,9 +81,7 @@ class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
 
   it should "have baseFee on fork activation block" taggedAs MainNet in {
     skipIfNotMordor()
-    if (!isPostOlympia) {
-      cancel("Olympia fork not yet active on Mordor")
-    }
+    if !isPostOlympia then cancel("Olympia fork not yet active on Mordor")
     val forkBlock = getBlock(OlympiaForkBlock)
     forkBlock should not be null
     forkBlock.getBaseFeePerGas should not be null
@@ -102,9 +91,7 @@ class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
 
   it should "have dynamic baseFee after fork" taggedAs MainNet in {
     skipIfNotMordor()
-    if (!isPostOlympia) {
-      cancel("Olympia fork not yet active on Mordor")
-    }
+    if !isPostOlympia then cancel("Olympia fork not yet active on Mordor")
     // Check a few blocks after the fork
     val block1 = getBlock(OlympiaForkBlock + 1)
     val block2 = getBlock(OlympiaForkBlock + 2)
@@ -117,14 +104,12 @@ class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
 
   it should "have valid block structure at fork boundary" taggedAs MainNet in {
     skipIfNotMordor()
-    if (!isPostOlympia) {
-      cancel("Olympia fork not yet active on Mordor")
-    }
+    if !isPostOlympia then cancel("Olympia fork not yet active on Mordor")
     val forkBlock = getBlock(OlympiaForkBlock)
     forkBlock should not be null
     forkBlock.getNumber.longValue() shouldEqual OlympiaForkBlock
-    forkBlock.getHash should have length 66
-    forkBlock.getParentHash should have length 66
+    (forkBlock.getHash should have).length(66)
+    (forkBlock.getParentHash should have).length(66)
     forkBlock.getGasLimit.longValue() should be > 0L
     forkBlock.getDifficulty.longValue() should be > 0L
 
@@ -135,14 +120,15 @@ class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
 
   it should "have EIP-2935 history contract deployed at fork block" taggedAs MainNet in {
     skipIfNotMordor()
-    if (!isPostOlympia) {
-      cancel("Olympia fork not yet active on Mordor")
-    }
+    if !isPostOlympia then cancel("Olympia fork not yet active on Mordor")
     // Check that the EIP-2935 system contract has code after the fork
-    val code = service.ethGetCode(
-      Eip2935ContractAddress,
-      DefaultBlockParameter.valueOf(BigInteger.valueOf(OlympiaForkBlock))
-    ).send().getCode
+    val code = service
+      .ethGetCode(
+        Eip2935ContractAddress,
+        DefaultBlockParameter.valueOf(BigInteger.valueOf(OlympiaForkBlock))
+      )
+      .send()
+      .getCode
 
     code should not be null
     code should not be "0x"
@@ -151,10 +137,13 @@ class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
 
   it should "not have EIP-2935 contract before fork" taggedAs MainNet in {
     skipIfNotMordor()
-    val code = service.ethGetCode(
-      Eip2935ContractAddress,
-      DefaultBlockParameter.valueOf(BigInteger.valueOf(OlympiaForkBlock - 1))
-    ).send().getCode
+    val code = service
+      .ethGetCode(
+        Eip2935ContractAddress,
+        DefaultBlockParameter.valueOf(BigInteger.valueOf(OlympiaForkBlock - 1))
+      )
+      .send()
+      .getCode
 
     // Pre-fork: no code at the system contract address
     (code == null || code == "0x" || code == "0x0") shouldBe true
@@ -162,14 +151,15 @@ class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
 
   it should "have treasury address with balance post-fork" taggedAs MainNet in {
     skipIfNotMordor()
-    if (!isPostOlympia) {
-      cancel("Olympia fork not yet active on Mordor")
-    }
+    if !isPostOlympia then cancel("Olympia fork not yet active on Mordor")
     // Check treasury balance at a block after the fork (after some transactions)
-    val balance = service.ethGetBalance(
-      TreasuryAddress,
-      DefaultBlockParameter.valueOf("latest")
-    ).send().getBalance
+    val balance = service
+      .ethGetBalance(
+        TreasuryAddress,
+        DefaultBlockParameter.valueOf("latest")
+      )
+      .send()
+      .getBalance
 
     balance should not be null
     // If any transactions have been processed post-fork, treasury should have received baseFee
@@ -179,10 +169,13 @@ class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
   it should "have zero treasury baseFee credit pre-fork" taggedAs MainNet in {
     skipIfNotMordor()
     // Check that treasury has no baseFee credits before the fork
-    val preForkBalance = service.ethGetBalance(
-      TreasuryAddress,
-      DefaultBlockParameter.valueOf(BigInteger.valueOf(OlympiaForkBlock - 1))
-    ).send().getBalance
+    val preForkBalance = service
+      .ethGetBalance(
+        TreasuryAddress,
+        DefaultBlockParameter.valueOf(BigInteger.valueOf(OlympiaForkBlock - 1))
+      )
+      .send()
+      .getBalance
 
     // Treasury may have existing balance from ECIP-1098 treasury split,
     // but baseFee credits specifically start at Olympia
@@ -191,26 +184,21 @@ class MordorOlympiaSpec extends AnyFlatSpec with Matchers {
 
   it should "have valid PoW nonce/mixHash on post-fork blocks" taggedAs MainNet in {
     skipIfNotMordor()
-    if (!isPostOlympia) {
-      cancel("Olympia fork not yet active on Mordor")
-    }
+    if !isPostOlympia then cancel("Olympia fork not yet active on Mordor")
     // Olympia does NOT remove PoW — blocks should still have valid ETChash
     val forkBlock = getBlock(OlympiaForkBlock)
     forkBlock.getNonce should not be null
     forkBlock.getMixHash should not be null
-    forkBlock.getMixHash should have length 66
+    (forkBlock.getMixHash should have).length(66)
     forkBlock.getDifficulty.longValue() should be > 0L
   }
 
   it should "maintain gas limit around 8M post-fork" taggedAs MainNet in {
     skipIfNotMordor()
-    if (!isPostOlympia) {
-      cancel("Olympia fork not yet active on Mordor")
-    }
+    if !isPostOlympia then cancel("Olympia fork not yet active on Mordor")
     val forkBlock = getBlock(OlympiaForkBlock)
     val gasLimit = forkBlock.getGasLimit.longValue()
     // ETC gas limit should be around 8M (±4M tolerance for adjustment)
     gasLimit should be > 4000000L
     gasLimit should be < 12000000L
   }
-}

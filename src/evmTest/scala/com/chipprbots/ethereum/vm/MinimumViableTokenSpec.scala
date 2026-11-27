@@ -6,11 +6,11 @@ import org.scalatest.matchers.should.Matchers
 import org.scalatest.freespec.AnyFreeSpec
 
 // scalastyle:off magic.number
-class MinimumViableTokenSpec extends AnyFreeSpec with Matchers {
+class MinimumViableTokenSpec extends AnyFreeSpec with Matchers:
 
   "EVM running MinimumViableToken contract" - {
 
-    "should init the balance and allow token transfer" in new EvmTestEnv {
+    "should init the balance and allow token transfer" in new EvmTestEnv:
       val sender = createAccount(balance = 10)
       val receiver = createAccount(balance = 10)
 
@@ -23,9 +23,8 @@ class MinimumViableTokenSpec extends AnyFreeSpec with Matchers {
 
       contract.balanceOf(receiver).call().returnData shouldBe UInt256(40).bytes
       contract.balanceOf(sender).call().returnData shouldBe UInt256(110).bytes
-    }
 
-    "should return an error when attempted to transfer more tokens than owned" in new EvmTestEnv {
+    "should return an error when attempted to transfer more tokens than owned" in new EvmTestEnv:
       val sender = createAccount(balance = 10)
       val receiver = createAccount(balance = 10)
 
@@ -33,9 +32,8 @@ class MinimumViableTokenSpec extends AnyFreeSpec with Matchers {
 
       val transferRes = contract.transfer(receiver, 200).call(sender = sender)
       transferRes.error shouldBe Some(InvalidOpCode(0xfe.toByte))
-    }
 
-    "should return an error when attempted to deploy and run out of gas" in new EvmTestEnv {
+    "should return an error when attempted to deploy and run out of gas" in new EvmTestEnv:
       val sender = createAccount(balance = 10)
       val receiver = createAccount(balance = 10)
 
@@ -43,9 +41,8 @@ class MinimumViableTokenSpec extends AnyFreeSpec with Matchers {
         deployContract("MinimumViableToken", creatorAddress = sender, constructorArgs = Seq(100), gasLimit = 102934)
 
       result.error shouldBe Some(OutOfGas)
-    }
 
-    "should return an error when attempted to transfer and run out of gas" in new EvmTestEnv {
+    "should return an error when attempted to transfer and run out of gas" in new EvmTestEnv:
       val sender = createAccount(balance = 10)
       val receiver = createAccount(balance = 10)
 
@@ -53,7 +50,4 @@ class MinimumViableTokenSpec extends AnyFreeSpec with Matchers {
 
       val transferRes = contract.transfer(receiver, 10).call(sender = sender, gasLimit = 25934)
       transferRes.error shouldBe Some(OutOfGas)
-    }
   }
-
-}

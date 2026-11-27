@@ -13,8 +13,8 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.defaultByteArraySerializab
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Bytes allocated per trie operation on a hash-keyed store, the store every chain runs on until spec 018 Track C
-  * switches it. It is the comparison spec 018 calls M7, in the small: run it on a commit and on its parent
-  * (`sbt "Benchmark / testOnly *TrieAllocationBenchmark"`) and compare the `[TRIE-ALLOC]` lines of the test report.
+  * switches it. It is the comparison spec 018 calls M7, in the small: run it on a commit and on its parent (`sbt
+  * "Benchmark / testOnly *TrieAllocationBenchmark"`) and compare the `[TRIE-ALLOC]` lines of the test report.
   *
   * It uses nothing but the trie's public API, so the same file compiles on either side of a change to the trie.
   * Allocation is counted for the calling thread (`ThreadMXBean.getThreadAllocatedBytes`, the idiom of spec 007), and
@@ -54,10 +54,26 @@ class TrieAllocationBenchmark extends AnyFunSuite:
 
     def round(report: Boolean): Unit =
       var trie = build()
-      val puts = allocatedBy { var i = 0; while i < Ops do { trie = trie.put(newKeys(i), values(i)); i += 1 } }
-      val overwrites = allocatedBy { var i = 0; while i < Ops do { trie = trie.put(oldKeys(i), values(i)); i += 1 } }
-      val gets = allocatedBy { var i = 0; while i < Ops do { trie.get(oldKeys(i)); i += 1 } }
-      val removes = allocatedBy { var i = 0; while i < Ops do { trie = trie.remove(newKeys(i)); i += 1 } }
+      val puts = allocatedBy {
+        var i = 0;
+        while i < Ops do
+          trie = trie.put(newKeys(i), values(i)); i += 1
+      }
+      val overwrites = allocatedBy {
+        var i = 0;
+        while i < Ops do
+          trie = trie.put(oldKeys(i), values(i)); i += 1
+      }
+      val gets = allocatedBy {
+        var i = 0;
+        while i < Ops do
+          trie.get(oldKeys(i)); i += 1
+      }
+      val removes = allocatedBy {
+        var i = 0;
+        while i < Ops do
+          trie = trie.remove(newKeys(i)); i += 1
+      }
       if report then
         info(
           s"[TRIE-ALLOC] size=$Size ops=$Ops bytes/op: put=${puts / Ops} overwrite=${overwrites / Ops} " +
