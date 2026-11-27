@@ -911,12 +911,17 @@ items:
   - id: B-080
     title: "T061a coverage gaps: task-file read-back at force-complete, partial storage tries on Path, S=C entry after repair"
     priority: P3
-    status: open
+    status: claimed
     area: tests
     size: M
     opened: 2026-11-03
     refs: [CHASE E T061a]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T23:33:22Z
+      heartbeat: 2026-11-27T23:33:22Z
     notes: beacon.
   - id: B-081
     title: "Ratchet: scalafix on scalanet and scalanetDiscovery (remove 21 returns first), then add them to formatCheck"
