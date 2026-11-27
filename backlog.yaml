@@ -1914,12 +1914,17 @@ items:
   - id: B-194
     title: "Protocol: no metrics-object initialiser on an IO path (rule in agent-protocols); init EngineApiMetrics/PoWMiningMetrics off it"
     priority: P3
-    status: open
+    status: claimed
     area: docs
     size: S
     opened: 2026-11-10
     refs: ["beacon/forge pre-flights, 027 slice 5, 2026-11-10"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T20:25:15Z
+      heartbeat: 2026-11-27T20:25:15Z
     notes: cats-effect onFatalFailure shuts down all IORuntimes on a LinkageError (e.g. ExceptionInInitializerError from a metrics object). Initialise metrics objects off the hot IO paths (EngineApiMetrics, PoWMiningMetrics); add a rule to .claude/agent-protocols/.
   - id: B-195
     title: "Peer scorer: does the recency term lower every idle peer's score between publishes? (TUI trend column noise)"
