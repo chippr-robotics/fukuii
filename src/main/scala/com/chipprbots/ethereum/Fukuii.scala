@@ -147,6 +147,9 @@ object Fukuii extends Logger:
       // restores before it exits; this hook covers Ctrl-C and SIGTERM, including when JLine's hook closes the terminal
       // first (Tui.shutdown then writes the reset to the process output).
       Runtime.getRuntime.addShutdownHook(new Thread(() => tui.shutdown(), "TuiRestore"))
+      // A halt (FatalErrors: a precompile backend missing at call time) skips the shutdown hooks, TuiRestore with them,
+      // so it restores the terminal itself before it prints its message (B-155).
+      FatalErrors.beforeHalt(() => tui.shutdown())
       if tui.initialize() then
         tui.updateNetwork(Config.blockchains.network)
         tui.updateConnectionStatus("Starting node...")

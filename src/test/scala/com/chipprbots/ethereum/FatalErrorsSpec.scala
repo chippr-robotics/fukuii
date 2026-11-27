@@ -80,6 +80,45 @@ class FatalErrorsSpec extends AnyFlatSpec with Matchers:
     reports.toList shouldBe List(oom, other)
   }
 
+  "A halt" should "run the before-halt hook (the TUI restore) before it halts, and only a halt runs it" taggedAs (
+    UnitTest
+  ) in {
+    val events = ListBuffer.empty[String]
+    FatalErrors.beforeHalt(() => events.synchronized(events += "restore"))
+    try
+      FatalErrors.handle(
+        Thread.currentThread(),
+        new IllegalStateException("boom"),
+        _ => events.synchronized(events += "halt"),
+        (_, _) => ()
+      )
+      events.synchronized(events.toList) shouldBe empty
+      FatalErrors.handle(
+        Thread.currentThread(),
+        unavailable(),
+        code => events.synchronized(events += s"halt $code"),
+        (_, _) => ()
+      )
+      events.synchronized(events.toList) shouldBe List("restore", "halt 1")
+    finally FatalErrors.beforeHalt(() => ())
+  }
+
+  it should "halt even when the before-halt hook throws or never returns" taggedAs UnitTest in {
+    val halts = ListBuffer.empty[Int]
+    val release = new java.util.concurrent.CountDownLatch(1)
+    try
+      FatalErrors.beforeHalt(() => throw new IllegalStateException("terminal gone"))
+      FatalErrors.handle(Thread.currentThread(), unavailable(), halts += _, (_, _) => ())
+      halts.toList shouldBe List(1)
+
+      // A hook that blocks: the wait is bounded, and the halt goes ahead.
+      FatalErrors.beforeHalt(() => release.await())
+      FatalErrors.runBeforeHalt(scala.concurrent.duration.Duration(50, TimeUnit.MILLISECONDS))
+    finally
+      release.countDown()
+      FatalErrors.beforeHalt(() => ())
+  }
+
   // ── In a child JVM, on the Cats Effect runtime block import uses ──────────────────────────────────────────────────
 
   private def runProbe(hooks: String, run: String): (Int, String) =
