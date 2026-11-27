@@ -6207,3 +6207,13 @@ items:
     refs: []
     links: {}
     notes: "2026-11-27 Kurtosis devnet: ethereum-genesis-generator writes genesis.json \"timestamp\": \"1795764845\" (decimal, no 0x). fukuii's GenesisDataLoader parsed it as hex (0x1795764845), computed a different genesis hash and answered every forkchoiceUpdated with SYNCING; the devnet never produced a block. Same quirk fetch-genesis.sh handles for Ephemery. Workaround in the ethereum-package launcher (ethpandaops/ethereum-package#1541). Fix: accept 0x-hex or decimal per geth's math.HexOrDecimal256, or refuse an ambiguous value loudly; never misread it silently."
+  - id: B-568
+    title: "Snap storage serving: empty slot-set between served sets misaligns fukuii's client; add the exact-limit test"
+    priority: P3
+    status: open
+    area: snap
+    size: S
+    opened: 2026-11-27
+    refs: []
+    links: {}
+    notes: "From herald's review of #2154 (B-566). (1) serveStorageRanges appends Seq.empty for an empty-root account; fukuii's client counts only non-empty sets (servedCount = slots.count(_.nonEmpty)) but indexes slots(idx)/tasks.take(servedCount), so [A, empty, C] drops C and lands the proof on the empty set. geth omits empty sets (handlers.go:249). Only arises if a client requests empty-root accounts (neither geth nor fukuii does). Fix: omit empty sets server-side, or index by position client-side. (2) Add a test for a range ending exactly at the limit hash. (3) Optional: geth's 12.5% hardLimit slack."
