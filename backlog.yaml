@@ -6405,3 +6405,13 @@ items:
     refs: ["beacon W2 on #2160"]
     links: {}
     notes: BlockHeaderValidatorSkeleton.validateExtraFields ~:309 accepts HefPostCancun/Prague pre-Cancun; EngineApiController case 1 (:201-204) never checks blob fields. geth consensus/beacon/consensus.go:253-262. Matters for hive/EEST chains starting pre-Cancun.
+  - id: B-578
+    title: Refuse to start when a chain conf has *-timestamp forks but network-type is not eth (it falls to the ETC/Olympia branch)
+    priority: P3
+    status: open
+    area: config
+    size: S
+    opened: 2026-11-27
+    refs: ["beacon N2 on #2160"]
+    links: {}
+    notes: BlockchainConfig.scala:367-368 defaults to ETC; no shipped conf affected.
