@@ -6343,3 +6343,13 @@ items:
     refs: []
     links: {}
     notes: "2026-11-27 dev-node, staging 0.12.197 jar, Mordor harness follow (-Xmx6g, path-live). Steady 11:45-12:45Z: RSS ~7.8 GB with heap used 1.0-2.5 GB (=> ~5 GB native: RocksDB caches/buffers?), 13 peers. 12:51Z peers 13->7->0, node back to syncing, reorgs + PEER_REQUEST_TIMEOUT + branch resolution; heap used 1->4.1 GB and RSS 8.5->9.9->11.9 GB in ~15 min; systemd-oomd killed the unit at 13:05Z (host 15 GB, core-geth alongside). EG-12 ETC mainnet also peaked at 11.8 GB RSS on -Xmx6g. Matters for small devices (B-552). Next: NMT summary breakdown (restart mordor-1127c runs -XX:NativeMemoryTracking=summary, -Xmx5g); bound RocksDB native memory (db memory-budget) and check what the peer-loss burst allocates. Samples: ~/work/mordor-1126/OUT4/samples.tsv."
+  - id: B-571
+    title: BackgroundAuditSpec 'keep a peer that serves a wrong node to itself' failed once under sbt load (passed 65/65 alone)
+    priority: P3
+    status: open
+    area: tests
+    size: S
+    opened: 2026-11-27
+    refs: ["wave 9C, 2026-11-27"]
+    links: {}
+    notes: Seen in a full snap.* run with another sbt process on the host; capture the failure text on recurrence and find the timing it depends on.
