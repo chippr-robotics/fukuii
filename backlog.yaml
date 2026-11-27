@@ -6376,3 +6376,13 @@ items:
     refs: [wave 9D]
     links: {}
     notes: Only JDK 21 was run in the container (JRE 25 download blocked).
+  - id: B-574
+    title: logback JSON MDC filter (peer/block/transaction/actor) never worked; fukuii cli --help prints nothing at ERROR level
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-27
+    refs: [wave 9D]
+    links: {}
+    notes: "MDC filter fix changes JSON output: decide. cli --help silence predates."
