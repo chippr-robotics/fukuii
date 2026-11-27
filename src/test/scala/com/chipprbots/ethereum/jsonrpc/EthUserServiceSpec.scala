@@ -124,6 +124,14 @@ class EthUserServiceSpec
     balanceAt(BlockParam.WithNumber(canonical.number.value)) shouldEqual Right(GetBalanceResponse(123))
     balanceAt(BlockParam.Latest) shouldEqual Right(GetBalanceResponse(123))
 
+    // B-484, EIP-1898 requireCanonical: geth's `-32000 hash is not currently canonical` for the side block; the
+    // canonical block, and a side block without the flag, are answered
+    val notCanonical = Left(JsonRpcError(-32000, "hash is not currently canonical", None))
+    balanceAt(BlockParam.WithHash(side.hash.value, requireCanonical = true)) shouldEqual notCanonical
+    balanceAt(BlockParam.WithHash(side.hash.value, requireCanonical = false)) shouldEqual Right(GetBalanceResponse(456))
+    balanceAt(BlockParam.WithHash(canonical.hash.value, requireCanonical = true)) shouldEqual
+      Right(GetBalanceResponse(123))
+
   // B-489: NodeBuilder wired the consensus client's fork choice into EthBlocksService and EthProofService only, so
   // every other state read answered "not available" for "safe" and "finalized" on a PoS chain.
   it should "read getBalance at \"safe\" and \"finalized\" by the fork choice it is given" taggedAs (

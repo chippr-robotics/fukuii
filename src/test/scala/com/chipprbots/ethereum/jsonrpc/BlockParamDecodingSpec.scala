@@ -37,7 +37,12 @@ class BlockParamDecodingSpec extends AnyFreeSpec with Matchers:
       Decoder.decode(JObject("blockHash" -> JString(hashHex))) shouldBe Right(BlockParam.WithHash(hash))
       Decoder.decode(
         JObject("blockHash" -> JString(hashHex), "requireCanonical" -> JBool(true))
+      ) shouldBe Right(BlockParam.WithHash(hash, requireCanonical = true))
+      Decoder.decode(
+        JObject("blockHash" -> JString(hashHex), "requireCanonical" -> JBool(false))
       ) shouldBe Right(BlockParam.WithHash(hash))
+      Decoder.decode(JObject("blockHash" -> JString(hashHex), "requireCanonical" -> JString("true"))).isLeft shouldBe
+        true
     }
 
     "rejects invalid object shapes with InvalidParams" in {

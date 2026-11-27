@@ -164,10 +164,16 @@ trait JsonMethodsImplicits:
               case JString(_) | JInt(_) => extractBlockParam(num)
               case _                    => Left(JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
           case (None, Some(JString(hash))) =>
-            extractBytes(JString(hash))
-              .map(h => BlockParam.WithHash(h))
-              .left
-              .map(_ => JsonRpcError.InvalidParams(s"Invalid block hash"))
+            val requireCanonical = fields.collectFirst { case ("requireCanonical", v) => v } match
+              case None | Some(JNull) => Right(false)
+              case Some(JBool(b))     => Right(b)
+              case Some(_)            => Left(JsonRpcError.InvalidParams("Invalid requireCanonical"))
+            requireCanonical.flatMap { canonical =>
+              extractBytes(JString(hash))
+                .map(h => BlockParam.WithHash(h, canonical))
+                .left
+                .map(_ => JsonRpcError.InvalidParams(s"Invalid block hash"))
+            }
           case _ =>
             Left(JsonRpcError.InvalidParams(s"Invalid default block param: $input"))
       case other =>
