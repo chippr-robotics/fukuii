@@ -1,8 +1,7 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
-# header are not kept when the tool rewrites the file.
+# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -6183,3 +6182,13 @@ items:
     refs: ["PR #2150"]
     links: {}
     notes: Linux differential covers libblst.so; Windows blst.dll is checked only by the informational windows-bls job (BlstEip2537Spec digests).
+  - id: B-566
+    title: "Snap server: go-ethereum and nethermind cannot snap-sync from fukuii in hive's snapsync suite (head stays 0)"
+    priority: P2
+    status: open
+    area: snap
+    size: M
+    opened: 2026-11-27
+    refs: []
+    links: {}
+    notes: "2026-11-27, hive master 9a8517a3, chipprbots/fukuii:latest (0.12.79). With hive.yaml declaring eth1_snap, the snapsync suite gives: fukuii snap-syncs from geth, nethermind and itself (PASS), but 'sync go-ethereum from fukuii' and 'sync nethermind from fukuii' FAIL: 'sync failed: timeout (1m0s elapsed, current head is 0)'. devp2p snap 6/6 and snap2 4/4 pass, so message handling is right; the gap is a full snap sync served by fukuii (pivot/root availability on hive's short chain?). Blocks declaring eth1_snap in ethereum/hive clients/fukuii (#1677 stays eth1-only). Local results: ~/work/hive-up/workspace/r5-sync-snap."
