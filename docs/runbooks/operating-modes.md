@@ -1234,7 +1234,7 @@ Switching between operating modes requires careful planning and may involve re-s
 1. **Stop Current Node:**
 ```bash
 # Docker
-docker stop fukuii
+docker stop -t 180 fukuii
 
 # Direct
 pkill -f fukuii
@@ -1285,7 +1285,7 @@ tail -f ~/.fukuii/etc/logs/fukuii.log
 
 1. **Stop Archive Node:**
 ```bash
-docker stop fukuii-archive
+docker stop -t 180 fukuii-archive
 ```
 
 2. **Option A: Keep Archive Data (Safe)**
@@ -1327,7 +1327,7 @@ curl -X POST --data '{"jsonrpc":"2.0","method":"eth_syncing","params":[],"id":1}
 
 2. **Stop Node:**
 ```bash
-docker stop fukuii
+docker stop -t 180 fukuii
 ```
 
 3. **Update Configuration:**

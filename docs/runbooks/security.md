@@ -447,6 +447,9 @@ ReadWritePaths=/data/fukuii
 
 Restart=on-failure
 RestartSec=10
+# Room for the bounded stop steps (up to ~119 s) and the RocksDB close after them (B-444); systemd's default of 90 s
+# can SIGKILL the node mid-close.
+TimeoutStopSec=180
 
 [Install]
 WantedBy=multi-user.target

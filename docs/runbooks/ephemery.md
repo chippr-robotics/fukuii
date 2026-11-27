@@ -120,6 +120,8 @@ ExecStart=/opt/fukuii/bin/fukuii ephemery
 Restart=on-failure
 RestartSec=120
 RestartPreventExitStatus=78
+# the bounded stop steps (up to ~119 s) and the RocksDB close after them (B-444)
+TimeoutStopSec=180
 ```
 
 - **Why 120 s.** A restart that finds the release not published exits 69 after at most one budget and waits 120 s,
