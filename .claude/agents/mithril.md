@@ -50,7 +50,7 @@ Before starting a work item, claim it in the shared backlog (`.claude/agent-prot
 ## References
 
 In the repo:
-- `.claude/agent-protocols/scala3-style.md`: S1–S11 standards with grep ratchets.
+- `.claude/agent-protocols/scala3-style.md`: S1–S13 standards with grep ratchets.
 - `.claude/agent-protocols/scala3-given-migration.md`: G1–G3 pitfalls, and "P3b applicability".
 - `specs/020-scala-3-9-lts-migration/`:
   - `spec.md`: DC-3, G-4 and FR-004 govern P3b.
