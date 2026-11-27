@@ -483,6 +483,13 @@ private[snap] trait SnapResumePlanner
                 "drift unknown: no snap peer polled yet" +
                   clHeadForRecovery.fold("")(h => s"; CL head $h is ${h - pivot} blocks ahead")
             ctx.log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot ($driftText)")
+            // B-547: the drift check above could not run without a peer height; run it when the first one arrives.
+            if networkBest <= 0 && !(storageAlreadyDone && bytecodeAlreadyDone) then
+              timers.startSingleTimer(
+                RecoveredPivotDriftKey,
+                RecoveredPivotDriftRecheck(pivot),
+                RecoveredPivotDriftPollInterval
+              )
 
             val storage = getOrCreateMptStorage(pivot)
             coordinatorGeneration += 1

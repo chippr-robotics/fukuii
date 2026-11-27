@@ -287,6 +287,59 @@ private[actors] class ByteCodeCoordinatorImpl(
       .map(ExcludedAccount(_, ExcludedReason.CodeMissing))
       .toSeq
 
+  /** An `AddByteCodeTasks` waiting for its presence answer (B-543). `present` is None until the lookup ends; an add
+    * that needs no lookup queues behind one that does, with `Some(empty)`, so batches are applied in arrival order.
+    */
+  final private class DeferredAdd(
+      val id: Long,
+      val received: Seq[ByteString],
+      val skipQueued: Boolean,
+      var present: Option[Set[ByteString]]
+  )
+  private val deferredAdds = mutable.Queue.empty[DeferredAdd]
+  private var nextDeferredAddId: Long = 0L
+
+  private def startPresenceLookup(add: DeferredAdd): Unit =
+    val ec = context.system.dispatchers.lookup(org.apache.pekko.actor.typed.DispatcherSelector.blocking())
+    val received = add.received
+    context.pipeToSelf(scala.concurrent.Future(presentCodeHashes(received))(using ec))(outcome =>
+      CodeHashesPresenceChecked(add.id, outcome)
+    )
+
+  /** Apply the deferred adds whose answers are in, from the head, so arrival order holds. */
+  private def drainReadyAdds(): Unit =
+    while deferredAdds.nonEmpty && deferredAdds.head.present.isDefined do
+      val add = deferredAdds.dequeue()
+      applyAdd(add.received, add.skipQueued, add.present.getOrElse(Set.empty))
+
+  /** Apply every deferred add now, looking up what is still unanswered on this thread: a force-complete must see what
+    * arrived before it, as it did when the lookup ran inline. A late answer finds no entry and is ignored.
+    */
+  private def drainAllAddsInline(): Unit =
+    deferredAdds.foreach { add =>
+      if add.present.isEmpty then add.present = Some(presentCodeHashes(add.received))
+    }
+    drainReadyAdds()
+
+  private def applyAdd(received: Seq[ByteString], skipQueued: Boolean, present: Set[ByteString]): Unit =
+    val wanted = if skipQueued then notQueuedCodeHashes(received) else received
+    val codeHashes = if present.isEmpty then wanted else wanted.filterNot(present)
+    val alreadyPresent = wanted.size - codeHashes.size
+    if alreadyPresent > 0 then
+      // Count them as done so the progress estimate (which includes every replayed hash) can still reach 100%.
+      snapSyncController ! SNAPSyncController.ProgressBytecodesDownloaded(alreadyPresent.toLong)
+    val filtered = filterAndDedupeCodeHashes(codeHashes)
+    if filtered.nonEmpty then
+      val newTasks = ByteCodeTask.createBatchedTasks(filtered, batchSize)
+      pendingTasks.enqueueAll(newTasks)
+      log.debug(
+        s"Added ${newTasks.size} bytecode tasks from ${filtered.size} incremental hashes (pending: ${pendingTasks.size})"
+      )
+      // Account-range download is the only path that grows the queue faster than dispatch can
+      // drain it. Mirrors the storage coordinator's pattern (#1233).
+      notifyBackpressureIfChanged()
+    intakeBudget.foreach(_.byteCodeReceived(received.size, pendingHashCount))
+
   private def handleCommand(msg: Command): Behavior[Command] =
     msg match
       case StartByteCodeSync(codeHashes) =>
@@ -299,23 +352,31 @@ private[actors] class ByteCodeCoordinatorImpl(
         Behaviors.same
 
       case AddByteCodeTasks(received, skipPresent, skipQueued) =>
-        val wanted = if skipQueued then notQueuedCodeHashes(received) else received
-        val codeHashes = skipPresentCodeHashes(wanted, skipPresent)
-        val alreadyPresent = wanted.size - codeHashes.size
-        if alreadyPresent > 0 then
-          // Count them as done so the progress estimate (which includes every replayed hash) can still reach 100%.
-          snapSyncController ! SNAPSyncController.ProgressBytecodesDownloaded(alreadyPresent.toLong)
-        val filtered = filterAndDedupeCodeHashes(codeHashes)
-        if filtered.nonEmpty then
-          val newTasks = ByteCodeTask.createBatchedTasks(filtered, batchSize)
-          pendingTasks.enqueueAll(newTasks)
-          log.debug(
-            s"Added ${newTasks.size} bytecode tasks from ${filtered.size} incremental hashes (pending: ${pendingTasks.size})"
+        // B-543: the presence lookup of a replayed batch runs off this thread; the batch is applied, in arrival order,
+        // when its answer comes back as `CodeHashesPresenceChecked`. Anything arriving behind it waits its turn.
+        val needsLookup = skipPresent && received.nonEmpty
+        if !needsLookup && deferredAdds.isEmpty then applyAdd(received, skipQueued, Set.empty)
+        else
+          val add =
+            new DeferredAdd(nextDeferredAddId, received, skipQueued, if needsLookup then None else Some(Set.empty))
+          nextDeferredAddId += 1
+          deferredAdds.enqueue(add)
+          if needsLookup then startPresenceLookup(add)
+        Behaviors.same
+
+      case CodeHashesPresenceChecked(id, outcome) =>
+        deferredAdds.find(_.id == id).foreach { add =>
+          add.present = Some(outcome match
+            case scala.util.Success(present) => present
+            case scala.util.Failure(e)       =>
+              // Safe direction: with nothing known present the batch is fetched again (content-addressed, idempotent).
+              log.error(s"Presence lookup of ${add.received.size} replayed codeHashes failed; fetching them all", e)
+              Set.empty[ByteString]
           )
-          // Account-range download is the only path that grows the queue faster than dispatch can
-          // drain it. Mirrors the storage coordinator's pattern (#1233).
-          notifyBackpressureIfChanged()
-        intakeBudget.foreach(_.byteCodeReceived(received.size, pendingHashCount))
+        }
+        drainReadyAdds()
+        // The phase's end waited for these adds (`checkCompletion`).
+        if deferredAdds.isEmpty then checkCompletion()
         Behaviors.same
 
       case NoMoreByteCodeTasks =>
@@ -471,6 +532,7 @@ private[actors] class ByteCodeCoordinatorImpl(
         // spec 022 T033: durable before they are dropped, and by hash: this download does not know the accounts that use
         // them. Healing cannot complete until the code is there. A failed write drops nothing and reports nothing.
         forceCompleteWanted = true
+        drainAllAddsInline()
         excludedRecorder.stage(undecidedCodeHashes)
         if codeFileSweep.running then
           log.debug("ForceCompleteByteCodes: reading the code-hash file — ignoring duplicate")
@@ -592,7 +654,8 @@ private[actors] class ByteCodeCoordinatorImpl(
 
   def checkCompletion(): Unit =
     // A decision still to be written holds the completion: the phase's end may be the last trace of what it gave up on.
-    if noMoreTasksExpected && pendingTasks.isEmpty && activeTasks.isEmpty && excludedRecorder.flushThrottled() &&
+    if noMoreTasksExpected && deferredAdds.isEmpty && pendingTasks.isEmpty && activeTasks.isEmpty &&
+      excludedRecorder.flushThrottled() &&
       !codeFileSweepHoldsCompletion
     then
       log.info("Bytecode sync complete!")
@@ -610,6 +673,12 @@ object ByteCodeCoordinator:
     * unreadable, and told to stop.
     */
   final private[actors] case class CodeFileSweepTimedOut(token: Long) extends Command
+
+  /** The presence lookup of one replayed `AddByteCodeTasks` has ended (B-543): the hashes the store already holds. */
+  final private[actors] case class CodeHashesPresenceChecked(
+      id: Long,
+      outcome: scala.util.Try[Set[ByteString]]
+  ) extends Command
 
   /** A restarted coordinator has waited `ExcludedSweep.PointerWaitLimit` for the code-hash file's pointer. */
   private[actors] case object CodeFilePointerWaitOver extends Command

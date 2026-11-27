@@ -347,6 +347,39 @@ private[snap] trait PivotRefresher
       Behaviors.same
   }
 
+  /** B-547: the saved pivot's staleness check of an accounts-complete recovery that resumed before any snap peer had a
+    * height (`networkBest` 0, so `recoverAccountsComplete` skipped its drift check). Polls every
+    * `RecoveredPivotDriftPollInterval` until a snap peer's best is known, then applies the recovery's own bound,
+    * `maxPivotStalenessBlocks`, to the pivot the recovery resumed on: a drift past it restarts SNAP sync, whose
+    * recovery then sees the peers and takes its stale-pivot branch (heal at a newer pivot when every download phase is
+    * complete, else clear the flags and start fresh). One check per resume: a timer for a pivot or phase that has since
+    * changed is dropped, and the polling ends with the phase.
+    */
+  private[snap] lazy val recoveredPivotDriftArms: PartialFunction[Command, Behavior[Command]] = {
+    case RecoveredPivotDriftRecheck(pivot) =>
+      if currentPhase != ByteCodeAndStorageSync || !pivotBlock.contains(pivot) then Behaviors.same
+      else
+        currentNetworkBestFromSnapPeers() match
+          case None =>
+            timers.startSingleTimer(
+              RecoveredPivotDriftKey,
+              RecoveredPivotDriftRecheck(pivot),
+              RecoveredPivotDriftPollInterval
+            )
+            Behaviors.same
+          case Some(best) =>
+            val drift = (best - pivot).abs
+            if drift > snapSyncConfig.maxPivotStalenessBlocks then
+              restartSnapSync(
+                s"the recovered pivot $pivot is $drift blocks from network best $best " +
+                  s"(> maxPivotStalenessBlocks=${snapSyncConfig.maxPivotStalenessBlocks}); " +
+                  "no snap peer had a height when the recovery resumed on it"
+              )
+            else
+              ctx.log.info(s"Recovery: pivot $pivot is $drift blocks from network best $best, fresh enough: resuming")
+              Behaviors.same
+  }
+
   /** A `commonSyncingArms` arm lifted into a class member (spec 016 lift before M10), body unchanged:
     * `RetryPivotRefresh`, the 30-s/60-s pivot-refresh retry: refresh in place in the download and healing phases (the
     * phase test stays in the body), passing on whether the timer was armed by a counted attempt (`retryRefreshCounts`)

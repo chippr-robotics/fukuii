@@ -68,9 +68,11 @@ final class SnapIntakeBudget(
 
   /** Why new intake must wait, or None when producers may proceed. Cheap; safe from any thread. */
   def intakeBlockedReason(): Option[String] =
+    // B-546: write off stale in-transit work first, under heap pressure too. The heap watchdog's max-pause escape
+    // waits for the queues (in transit + queued) to read empty; work stuck in transit would pin it paused.
+    writeOffStaleInTransit()
     if heapPressure.get() then Some("heap pressure")
     else
-      writeOffStaleInTransit()
       val storage = pendingStorageTasks
       val byteCodes = pendingByteCodeHashes
       if storage >= maxPendingStorageTasks then
