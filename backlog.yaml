@@ -1596,12 +1596,17 @@ items:
   - id: B-162
     title: "maxUsedGas tests: add an Amsterdam case with non-zero EIP-8037 state gas; mark TxResultMaxUsedGasSpec:155 zero-state-gas-only"
     priority: P3
-    status: open
+    status: claimed
     area: tests
     size: S
     opened: 2026-11-09
     refs: [B-130]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T23:33:19Z
+      heartbeat: 2026-11-27T23:33:19Z
     notes: "beacon review of #1773: every pin scenario has state 0; exec+state==maxUsedGas holds only at zero state gas (max(before-state,floor)+state can exceed max(before,floor))."
   - id: B-163
     title: "eth_simulateV1: run the request system calls (withdrawal/consolidation queues, deposit logs) for Prague and Osaka blocks, as geth PostExecution does"
