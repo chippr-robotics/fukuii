@@ -5,6 +5,7 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -225,8 +226,14 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
 
       result.slots should have size 1
       result.slots.head should have size slotValues.size
-      // Left-bound proof always present (proves the left boundary of the served range).
-      result.proof should not be empty
+      // The whole trie is in the reply, so there is no proof (geth handlers.go): the slots alone rebuild the root.
+      result.proof shouldBe empty
+      MerkleProofVerifier(storageRoot).verifyStorageRange(
+        result.slots.head,
+        Seq.empty,
+        zeroHash,
+        maxHash
+      ) shouldBe Right(())
     }
 
   it should "include a proof when startingHash is non-zero" taggedAs UnitTest in {
@@ -252,8 +259,10 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
       accountRoot = _ => Some(storageRoot)
     )
 
-    // Non-zero origin → proof required to prove the left boundary.
+    // Non-zero origin → proof of the origin (left edge) and the last slot (right edge).
     result.proof should not be empty
+    MerkleProofVerifier(storageRoot)
+      .verifyStorageRange(result.slots.head, result.proof, nonZeroStart, result.slots.head.last._1) shouldBe Right(())
   }
 
   it should "include both a left-bound and right-bound proof when response is truncated" taggedAs UnitTest in {
@@ -279,8 +288,10 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
     )
 
     result.slots.head.size should be < slotValues.size
-    // Truncated → proof present.
+    // Truncated → proof of the origin and the last slot returned, and it verifies against this account's root.
     result.proof should not be empty
+    MerkleProofVerifier(storageRoot)
+      .verifyStorageRange(result.slots.head, result.proof, zeroHash, result.slots.head.last._1) shouldBe Right(())
   }
 
   it should "return all requested accounts' slots when budget is sufficient" taggedAs UnitTest in {
@@ -318,7 +329,11 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
     result.slots should have size 2
     result.slots(0) should have size 3
     result.slots(1) should have size 3
-    result.proof should not be empty // left-bound proof always present for first account
+    // B-566: both tries are complete, so there is no proof. A client applies a proof to the LAST slot-set (geth
+    // sync.go); the old reply proved the first account, and geth checked account 2 against account 1's proof.
+    result.proof shouldBe empty
+    MerkleProofVerifier(root1).verifyStorageRange(result.slots(0), Seq.empty, zeroHash, maxHash) shouldBe Right(())
+    MerkleProofVerifier(root2).verifyStorageRange(result.slots(1), Seq.empty, zeroHash, maxHash) shouldBe Right(())
   }
 
   it should "stop after the first account and emit proofs when budget is exceeded on that account" taggedAs UnitTest in {
@@ -377,10 +392,78 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
       accountRoot = _ => None
     )
 
-    // Unknown account → empty slot list for that account, no proof.
-    result.slots should have size 1
-    result.slots.head shouldBe empty
+    // Unknown account → the reply ends there, as geth refuses the request. An empty slot-set would tell the client
+    // that the account has no storage.
+    result.slots shouldBe empty
     result.proof shouldBe empty
+  }
+
+  it should "prove only the last slot-set when a later account is capped, as a go-ethereum client verifies it (B-566)" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val small = (1 to 3).map(i => kec256(ByteString(s"b566-small-$i")) -> ByteString(Array.fill[Byte](32)(1.toByte)))
+    val big = (1 to 64).map(i => kec256(ByteString(s"b566-big-$i")) -> ByteString(Array.fill[Byte](32)(2.toByte)))
+    val root1 = buildStorageTrie(small, storage)
+    val root2 = buildStorageTrie(big, storage)
+    val hash1 = kec256(ByteString("b566-account-1"))
+    val hash2 = kec256(ByteString("b566-account-2"))
+    val (stateRoot, _) =
+      buildAccountTrie(Seq(hash1 -> accountWithStorage(root1), hash2 -> accountWithStorage(root2)), storage)
+    val rootMap = Map(hash1 -> root1, hash2 -> root2)
+
+    // Room for account 1 in full and part of account 2: (32 + 33) bytes a slot.
+    val result = SnapServer.serveStorageRanges(
+      requestId = 1,
+      rootHash = stateRoot,
+      accountHashes = Seq(hash1, hash2),
+      startingHash = zeroHash,
+      limitHash = maxHash,
+      responseBytes = BigInt(65 * 10),
+      storage = storage,
+      accountRoot = rootMap.get
+    )
+
+    result.slots should have size 2
+    result.slots(0) should have size small.size
+    result.slots(1).size should be < big.size
+    result.proof should not be empty
+    // geth's client: every slot-set but the last is verified without a proof, the last one with the reply's proof
+    // from its origin (zero: the origin is the first account's) to its last key.
+    MerkleProofVerifier(root1).verifyStorageRange(result.slots(0), Seq.empty, zeroHash, maxHash) shouldBe Right(())
+    MerkleProofVerifier(root2)
+      .verifyStorageRange(result.slots(1), result.proof, zeroHash, result.slots(1).last._1) shouldBe Right(())
+    // and the proof is not account 1's: checked against account 1 it fails, which is what geth saw before the fix
+    MerkleProofVerifier(root1)
+      .verifyStorageRange(result.slots(0), result.proof, zeroHash, result.slots(0).last._1) should not be Right(())
+  }
+
+  it should "end the reply at the first account when the origin is non-zero (B-566)" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val slots1 = (1 to 6).map(i => kec256(ByteString(s"b566-origin-$i")) -> ByteString(Array.fill[Byte](32)(3.toByte)))
+    val slots2 = (1 to 3).map(i => kec256(ByteString(s"b566-next-$i")) -> ByteString(Array.fill[Byte](32)(4.toByte)))
+    val root1 = buildStorageTrie(slots1, storage)
+    val root2 = buildStorageTrie(slots2, storage)
+    val hash1 = kec256(ByteString("b566-origin-account-1"))
+    val hash2 = kec256(ByteString("b566-origin-account-2"))
+    val (stateRoot, _) =
+      buildAccountTrie(Seq(hash1 -> accountWithStorage(root1), hash2 -> accountWithStorage(root2)), storage)
+    val rootMap = Map(hash1 -> root1, hash2 -> root2)
+    val origin = slots1.map(_._1).sorted(using Ordering.by[ByteString, BigInt](bs => BigInt(1, bs.toArray)))(2)
+
+    val result = SnapServer.serveStorageRanges(
+      requestId = 1,
+      rootHash = stateRoot,
+      accountHashes = Seq(hash1, hash2),
+      startingHash = origin,
+      limitHash = maxHash,
+      responseBytes = bigBudget,
+      storage = storage,
+      accountRoot = rootMap.get
+    )
+
+    // the proved range ends the reply: account 2 is not served
+    result.slots should have size 1
+    MerkleProofVerifier(root1)
+      .verifyStorageRange(result.slots.head, result.proof, origin, result.slots.head.last._1) shouldBe Right(())
   }
 
   // ═══════════════════════════════════════════════════════════════════════════

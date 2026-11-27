@@ -180,8 +180,9 @@ class SnapServePositionStoreSpec extends AnyFlatSpec with Matchers:
           SnapServer.storageRootOf(f.hashed.root, storage)
         )
       }
-      // alice and bob hold the same storage: the same slots, each read under its own account
-      served.slots.map(_.size) shouldBe Seq(manySlots.size, manySlots.size, otherSlots.size, 0, 0)
+      // alice and bob hold the same storage: the same slots, each read under its own account. dave has no storage
+      // (an empty slot-set); the unknown account ends the reply rather than reading as "no storage" (B-566)
+      served.slots.map(_.size) shouldBe Seq(manySlots.size, manySlots.size, otherSlots.size, 0)
       served.slots(0) shouldBe served.slots(1)
     }
 

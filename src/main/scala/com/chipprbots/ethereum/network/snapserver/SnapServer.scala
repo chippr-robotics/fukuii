@@ -376,9 +376,18 @@ object SnapServer extends Logger:
         // else rootNode != NullNode
   // else !isEmptyRoot
 
-  /** Build a `StorageRanges` response — for each account, walk the per-account storage trie between `startingHash` and
-    * `limitHash`. Only the first account's range is proved (per SNAP/1 spec — subsequent accounts are returned in full,
-    * no proof).
+  /** Build a `StorageRanges` response — geth's `ServiceGetStorageRangesQuery` (eth/protocols/snap/handlers.go):
+    *   - the request's origin and limit apply to the FIRST account only; later accounts are walked in full;
+    *   - a proof is attached only when the served range does not cover the whole trie: a non-zero origin, or a range
+    *     capped by the byte budget, the deadline or the limit hash. It proves the ORIGIN (left edge) and the last slot
+    *     returned (right edge);
+    *   - the proved account ENDS the reply. A client verifies the proof against the last slot-set it receives (geth
+    *     sync.go, and fukuii's own StorageResponseProcessing), so a proof followed by more accounts makes the client
+    *     check one account's slots against another account's proof. Before B-566 the first account was always proved
+    *     and later accounts were still appended: go-ethereum and nethermind rejected those replies ("invalid proof,
+    *     want hash …, got …") and dropped the peer;
+    *   - an account whose storage root is unknown here, or whose root node is missing, ends the reply (geth refuses the
+    *     request): an empty slot-set would tell the client that the account has no storage.
     */
   def serveStorageRanges(
       requestId: BigInt,
@@ -395,66 +404,51 @@ object SnapServer extends Logger:
       notServed("GetStorageRanges", StorageRanges(requestId, Seq.empty, Seq.empty)):
         val maxBytes = responseBytes.min(BigInt(2 * 1024 * 1024)).max(BigInt(0)).toInt
         val deadline = System.currentTimeMillis() + 4000
+        val zeroHash = ByteString(new Array[Byte](32))
+        val maxHash = ByteString(Array.fill[Byte](32)(0xff.toByte))
         var accumulated = 0
         val perAccount = scala.collection.mutable.ArrayBuffer.empty[Seq[(ByteString, ByteString)]]
-        var firstProof: Seq[ByteString] = Seq.empty
+        var proof: Seq[ByteString] = Seq.empty
         var done = false
+        var isFirst = true
         val it = accountHashes.iterator
-        while it.hasNext && !done && System.currentTimeMillis() < deadline do
+        // Like geth, do not open a new storage range once the budget is spent.
+        while it.hasNext && !done && accumulated < maxBytes && System.currentTimeMillis() < deadline do
           val accountHash = it.next()
+          val origin = if isFirst then startingHash else zeroHash
+          val limit = if isFirst then limitHash else maxHash
+          isFirst = false
           accountRoot(accountHash) match
-            case None =>
-              // Account or its storage root unknown — skip.
-              perAccount += Seq.empty
-            case Some(storageRoot) =>
-              if isEmptyRoot(storageRoot) then perAccount += Seq.empty
+            case None                                          => done = true
+            case Some(storageRoot) if isEmptyRoot(storageRoot) => perAccount += Seq.empty
+            case Some(storageRoot)                             =>
+              // this account's storage trie: two accounts with the same storage hold two tries
+              val slots = storage.forOwner(Some(accountHash))
+              val rootNode = fetchRootNode(storageRoot, slots)
+              if rootNode == NullNode then done = true
               else
-                // this account's storage trie: two accounts with the same storage hold two tries
-                val slots = storage.forOwner(Some(accountHash))
-                val rootNode = fetchRootNode(storageRoot, slots)
-                if rootNode == NullNode then perAccount += Seq.empty
-                else
-                  // First account uses the requested [start, limit] range; subsequent
-                  // accounts are returned in FULL.
-                  val isFirst = perAccount.isEmpty
-                  val (originN, limitN) =
-                    if isFirst then (hashToNibbles(startingHash), hashToNibbles(limitHash))
-                    else
-                      (
-                        hashToNibbles(ByteString(new Array[Byte](32))),
-                        hashToNibbles(ByteString(Array.fill[Byte](32)(0xff.toByte)))
-                      )
-                  val collected = scala.collection.mutable.ArrayBuffer.empty[(ByteString, ByteString)]
-                  // Streaming walk: visitor returns false to stop the trie traversal as
-                  // soon as the budget is exhausted. Match geth byte accounting
-                  // (handler.go:410-413) — only `HashLength + len(slot)` counts toward
-                  // the budget.
-                  walkRangeVisit(rootNode, slots, originN, limitN) { (k, v) =>
-                    collected += ((k, v))
-                    accumulated += k.size + v.size
-                    (accumulated < maxBytes || (isFirst && collected.size == 1)) &&
-                    System.currentTimeMillis() < deadline
-                  }
-                  val truncated = accumulated >= maxBytes
-                  if isFirst then
-                    // Per geth (handler.go:435-438): the right-bound proof is only
-                    // needed when the response was truncated. If the walker ran to
-                    // completion the right edge is implicit.
-                    firstProof =
-                      val first = collected.headOption.map(_._1).getOrElse(startingHash)
-                      val leftProof = proofFor(rootNode, slots, hashToNibbles(first))
-                      val full =
-                        if !truncated then leftProof
-                        else
-                          collected.lastOption match
-                            case Some((last, _)) if last != first =>
-                              leftProof ++ proofFor(rootNode, slots, hashToNibbles(last))
-                            case _ => leftProof
-                      full.distinct
-                  perAccount += collected.toSeq
-                  if truncated then done = true
+                val limitN = hashToNibbles(limit)
+                val collected = scala.collection.mutable.ArrayBuffer.empty[(ByteString, ByteString)]
+                var capped = false
+                // Match geth byte accounting (handlers.go): only `HashLength + len(slot)` counts toward the budget.
+                walkRangeVisit(rootNode, slots, hashToNibbles(origin), limitN) { (k, v) =>
+                  collected += ((k, v))
+                  accumulated += k.size + v.size
+                  if cmpNibbles(hashToNibbles(k), limitN) >= 0 then capped = true
+                  val keep = accumulated < maxBytes && System.currentTimeMillis() < deadline
+                  if !keep then capped = true
+                  keep
+                }
+                if collected.nonEmpty then perAccount += collected.toSeq
+                if origin != zeroHash || (capped && collected.nonEmpty) then
+                  val left = proofFor(rootNode, slots, hashToNibbles(origin))
+                  val right = collected.lastOption match
+                    case Some((last, _)) => proofFor(rootNode, slots, hashToNibbles(last))
+                    case None            => Seq.empty
+                  proof = (left ++ right).distinct
+                  done = true
 
-        StorageRanges(requestId, perAccount.toSeq, firstProof)
+        StorageRanges(requestId, perAccount.toSeq, proof)
   // else !isEmptyRoot
 
   /** Build a `TrieNodes` response — look up each requested HP-encoded path from `rootHash` and return the raw
