@@ -5186,17 +5186,18 @@ items:
   - id: B-484
     title: "RPC: EIP-1898 requireCanonical is parsed and ignored; a by-hash read of a non-canonical block must answer 'hash is not currently canonical'"
     priority: P3
-    status: claimed
+    status: review
     area: rpc
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2157]
       spec: 018
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T20:24:19Z
-      heartbeat: 2026-11-27T20:24:19Z
+      heartbeat: 2026-11-27T21:12:18Z
     notes: Found in B-210. JsonMethodsImplicits drops requireCanonical; geth/core-geth HeaderByNumberOrHash/StateAndHeaderByNumberOrHash refuse a non-canonical hash when it is true. Since B-210 a stored non-canonical block is answered from its state by hash, so requireCanonical=true now matters. BlockParam.WithHash needs the flag.
   - id: B-485
     title: "RPC: a by-hash state read of an unknown block answers -32602 'Block not found for hash'; geth answers -32000 'header for hash not found'"
