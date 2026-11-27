@@ -1162,3 +1162,46 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe defined
     deleteDir(dir)
   }
+
+  // B-547: right after a restart no snap peer has a height, so the resume's drift check cannot run. The resume arms a
+  // re-check for the pivot it resumed on; it is not armed when a height is known or every download phase is complete.
+  private def resumeWithFiles(networkBest: Option[BigInt], phasesComplete: Boolean): Harness =
+    val dir = tempDir("snap-resume-planner-recheck")
+    val h = new Harness()
+    def h32(b: Int): ByteString = ByteString(Array.fill[Byte](32)(b.toByte))
+    val storagePath = dir.resolve("fukuii-contract-storage-recheck")
+    val codeHashesPath = dir.resolve("fukuii-unique-codehashes-recheck")
+    Files.write(storagePath, (h32(1) ++ h32(0x11)).toArray)
+    Files.write(codeHashesPath, h32(0xc1).toArray)
+    h.saveRecovery(BigInt(1_000), phasesComplete = phasesComplete)
+    val app = h.module.appStateStorage
+    app
+      .putSnapSyncStorageFilePath(storagePath.toString)
+      .and(app.putSnapSyncStorageFileCount(Some(1L)))
+      .and(app.putSnapSyncCodeHashesPath(codeHashesPath.toString))
+      .and(app.putSnapSyncCodeHashesCount(Some(1L)))
+      .commit()
+    h.module.storageRangeCoordinator = Some(TestInbox[StorageRangeCoordinator.Command]().ref)
+    h.module.bytecodeCoordinator = Some(TestInbox[ByteCodeCoordinator.Command]().ref)
+    h.module.networkBest = networkBest
+    h.recoveryStep() shouldBe false
+    h
+
+  it should "arm a staleness re-check of the pivot it resumed on when no snap peer had a height (B-547)" taggedAs
+    UnitTest in {
+      val h = resumeWithFiles(networkBest = None, phasesComplete = false)
+      h.module.pivotBlock shouldBe Some(BigInt(1_000))
+      h.scheduledTimers() should contain(
+        (RecoveredPivotDriftKey, RecoveredPivotDriftRecheck(BigInt(1_000)), RecoveredPivotDriftPollInterval)
+      )
+    }
+
+  it should "not arm the re-check when a peer height was known, or every download phase was complete (B-547)" taggedAs
+    UnitTest in {
+      resumeWithFiles(networkBest = Some(BigInt(1_100)), phasesComplete = false)
+        .scheduledTimers()
+        .map(_._1) should not contain
+        RecoveredPivotDriftKey
+      resumeWithFiles(networkBest = None, phasesComplete = true).scheduledTimers().map(_._1) should not contain
+        RecoveredPivotDriftKey
+    }

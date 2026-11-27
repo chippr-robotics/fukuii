@@ -82,6 +82,7 @@ class SNAPIdleTotalitySpec
     RetrySnapSyncStart,
     FlushPeerDisconnects,
     RetryPivotRefresh,
+    RecoveredPivotDriftRecheck(BigInt(5)),
     RetryBootstrapAtBlock(BigInt(5)),
     CheckSnapCapability,
     TuneRateTracker,

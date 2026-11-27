@@ -688,8 +688,10 @@ private class SNAPSyncControllerImpl(
           ctx.log.debug("Dropping stale ChainDownloaderRewound in idle"); Behaviors.same
 
         // ── Syncing-state retry timers (stale after sync stops) ───────────────────────
-        case RetrySnapSyncStart       => ctx.log.debug("Dropping stale RetrySnapSyncStart in idle"); Behaviors.same
-        case RetryPivotRefresh        => ctx.log.debug("Dropping stale RetryPivotRefresh in idle"); Behaviors.same
+        case RetrySnapSyncStart => ctx.log.debug("Dropping stale RetrySnapSyncStart in idle"); Behaviors.same
+        case RetryPivotRefresh  => ctx.log.debug("Dropping stale RetryPivotRefresh in idle"); Behaviors.same
+        case _: RecoveredPivotDriftRecheck =>
+          ctx.log.debug("Dropping stale RecoveredPivotDriftRecheck in idle"); Behaviors.same
         case _: RetryBootstrapAtBlock => ctx.log.debug("Dropping stale RetryBootstrapAtBlock in idle"); Behaviors.same
         case CheckSnapCapability      => ctx.log.debug("Dropping stale CheckSnapCapability in idle"); Behaviors.same
         case TuneRateTracker          => ctx.log.debug("Dropping stale TuneRateTracker in idle"); Behaviors.same
@@ -1050,6 +1052,10 @@ private class SNAPSyncControllerImpl(
       case msg if retryPivotRefreshArms.isDefinedAt(msg) =>
         retryPivotRefreshArms(msg)
 
+      // recoveredPivotDriftArms (B-547): the staleness re-check of a recovery that resumed before any peer height.
+      case msg if recoveredPivotDriftArms.isDefinedAt(msg) =>
+        recoveredPivotDriftArms(msg)
+
       // retryBootstrapAtBlockArms (spec 016 restructure): delegated here, at its original position.
       case msg if retryBootstrapAtBlockArms.isDefinedAt(msg) =>
         retryBootstrapAtBlockArms(msg)
@@ -1266,6 +1272,14 @@ object SNAPSyncController:
   private[snap] case object FlushPeerDisconnects
       extends Command // Debounce flush: forward batched PeerUnavailable to coordinators
   private[snap] case object RetryPivotRefresh extends Command
+
+  /** B-547: re-check, once a snap peer has a height, the saved pivot an accounts-complete recovery resumed on while
+    * `networkBest` was 0. `pivot` is the pivot the recovery resumed on; the timer is `RecoveredPivotDriftKey`.
+    */
+  final private[snap] case class RecoveredPivotDriftRecheck(pivot: BigInt) extends Command
+  private[snap] val RecoveredPivotDriftKey = "recovered-pivot-drift-recheck"
+  private[snap] val RecoveredPivotDriftPollInterval: scala.concurrent.duration.FiniteDuration =
+    scala.concurrent.duration.DurationInt(30).seconds
   final private[snap] case class RetryBootstrapAtBlock(blockNumber: BigInt) extends Command
   private[snap] case object CheckSnapCapability extends Command
   private[snap] case object TuneRateTracker extends Command

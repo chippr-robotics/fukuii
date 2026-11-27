@@ -851,3 +851,47 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     h.module.pendingPivotRefresh shouldBe None
     h.parent.hasMessages shouldBe false
   }
+
+  // B-547: the staleness re-check of a recovery that resumed before any snap peer had a height.
+  private def recheck(h: Harness, pivot: BigInt): Unit =
+    h.call(m => m.recoveredPivotDriftArms(RecoveredPivotDriftRecheck(pivot)): Unit)
+
+  it should "restart when the recovered pivot is past maxPivotStalenessBlocks once a peer height is known (B-547)" taggedAs
+    UnitTest in {
+      val h = new Harness()
+      h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+      h.module.networkBest = Some(BigInt(400 + 4096 + 1))
+      recheck(h, BigInt(400))
+      h.module.restarts.size shouldBe 1
+      h.module.restarts.head should include("recovered pivot 400")
+      h.scheduledTimers() shouldBe empty
+    }
+
+  it should "keep a recovered pivot exactly at the staleness bound, and one with no drift (B-547)" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+    h.module.networkBest = Some(BigInt(400 + 4096))
+    recheck(h, BigInt(400))
+    h.module.networkBest = Some(BigInt(400))
+    recheck(h, BigInt(400))
+    h.module.restarts shouldBe empty
+    h.scheduledTimers() shouldBe empty
+  }
+
+  it should "poll again while no snap peer has a height, and drop a re-check for another pivot or phase (B-547)" taggedAs
+    UnitTest in {
+      val h = new Harness()
+      h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+      h.module.networkBest = None
+      recheck(h, BigInt(400))
+      h.scheduledTimers() shouldBe Seq(
+        (RecoveredPivotDriftKey, RecoveredPivotDriftRecheck(BigInt(400)), RecoveredPivotDriftPollInterval)
+      )
+
+      h.module.networkBest = Some(BigInt(100_000))
+      recheck(h, BigInt(399)) // another pivot: a roll or restart moved it
+      h.module.currentPhase = SyncPhase.StateHealing
+      recheck(h, BigInt(400)) // the download phases are over
+      h.module.restarts shouldBe empty
+      h.scheduledTimers() shouldBe empty
+    }
