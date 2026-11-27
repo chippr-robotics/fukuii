@@ -73,8 +73,8 @@ object PrecompiledContracts:
     KzgPointEvalAddr -> KzgPointEvaluation
   )
 
-  /** BLS12-381 precompiles (EIP-2537). Active at ETH Prague and ETC Olympia base set. */
-  val olympiaContracts: Map[Address, PrecompiledContract] = cancunContracts ++ Map(
+  /** BLS12-381 precompiles (EIP-2537), 0x0b-0x11: ETH from Prague, ETC from Olympia. */
+  private val blsContracts: Map[Address, PrecompiledContract] = Map(
     BlsG1AddAddr -> BlsG1Add,
     BlsG1MultiExpAddr -> BlsG1MultiExp,
     BlsG2AddAddr -> BlsG2Add,
@@ -84,8 +84,21 @@ object PrecompiledContracts:
     BlsMapG2Addr -> BlsMapG2
   )
 
-  /** ETC Olympia (block-based) and ETH Osaka (timestamp-based): BLS12-381 + P256VERIFY (EIP-7951, ECIP-1121). */
-  val osakaContracts: Map[Address, PrecompiledContract] = olympiaContracts ++ Map(
+  /** ETH Prague (timestamp): the Cancun set plus BLS12-381 (EIP-2537). */
+  val pragueContracts: Map[Address, PrecompiledContract] = cancunContracts ++ blsContracts
+
+  /** ETH Osaka (timestamp): the Prague set plus P256VERIFY (EIP-7951). */
+  val osakaContracts: Map[Address, PrecompiledContract] = pragueContracts ++ Map(
+    P256VerifyAddr -> P256Verify
+  )
+
+  /** ETC Olympia (block number, ECIP-1121): the Phoenix set plus BLS12-381 (EIP-2537) and P256VERIFY (EIP-7951), and no
+    * KZG point evaluation. ECIP-1121 defers EIP-4844 ("ETC does not implement blobs"), so 0x0a stays an ordinary empty
+    * account on ETC: a CALL to it runs no code and it is not pre-warmed (EIP-2929). Besu's ETC Olympia registry
+    * (`MainnetPrecompiledContracts.populateForOlympia`: Istanbul, BLS12-381, MODEXP bounds, P256VERIFY) and core-geth
+    * (0x0a only on an EIP-4844 transition, which no ETC config sets) agree (#1444, B-548).
+    */
+  val olympiaContracts: Map[Address, PrecompiledContract] = istanbulPhoenixContracts ++ blsContracts ++ Map(
     P256VerifyAddr -> P256Verify
   )
 
@@ -191,13 +204,13 @@ object PrecompiledContracts:
 
     if isOsaka then osakaContracts
     else if etcFork >= EtcForks.Olympia && !isEthereum then
-      // ETC Olympia activates BLS12-381 + P256VERIFY (ECIP-1121). Same set as ETH Osaka. Never on an ETH chain, whose
-      // olympia-block-number is London (fukuii.sh, the shipped ETH configs): there these arrive at Prague and Osaka
-      // by timestamp, as ModExp's EIP-7823/7883 routing does (B-177).
-      osakaContracts
+      // ETC Olympia activates BLS12-381 + P256VERIFY (ECIP-1121), without KZG (EIP-4844 is deferred there). Never on an
+      // ETH chain, whose olympia-block-number is London (fukuii.sh, the shipped ETH configs): there these arrive at
+      // Prague and Osaka by timestamp, as ModExp's EIP-7823/7883 routing does (B-177).
+      olympiaContracts
     else if isPrague then
       // ETH Prague activates BLS12-381 (EIP-2537) but NOT P256VERIFY (that is Osaka-only).
-      olympiaContracts
+      pragueContracts
     else if isCancun then cancunContracts
     else if ethFork >= EthForks.Istanbul || etcFork >= EtcForks.Phoenix then istanbulPhoenixContracts
     else if ethFork >= EthForks.Byzantium || etcFork >= EtcForks.Atlantis then

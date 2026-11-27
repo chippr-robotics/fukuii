@@ -105,18 +105,27 @@ class OlympiaEipEnablementSpec extends AnyWordSpec with Matchers:
 
   "ETC Olympia precompile dispatch (ECIP-1121)" when {
 
-    "osakaContracts (ETC Olympia / ETH Osaka set)" should {
+    "olympiaContracts (ETC Olympia set)" should {
       "include P256VERIFY at address 0x100" taggedAs (UnitTest, OlympiaTest) in {
-        // Both ETC Olympia (block-based) and ETH Osaka (timestamp-based) route to osakaContracts.
-        // Regression guard: previously the etcFork >= Olympia branch routed to olympiaContracts
-        // (BLS-only), missing P256VERIFY per ECIP-1121 / EIP-7951.
-        (PrecompiledContracts.osakaContracts should contain).key(PrecompiledContracts.P256VerifyAddr)
+        // Regression guard: the etcFork >= Olympia branch once routed to the BLS-only set, missing P256VERIFY per
+        // ECIP-1121 / EIP-7951.
+        (PrecompiledContracts.olympiaContracts should contain).key(PrecompiledContracts.P256VerifyAddr)
+      }
+      "NOT include KZG point evaluation 0x0a (ECIP-1121 defers EIP-4844; B-548, #1444)" taggedAs (
+        UnitTest,
+        OlympiaTest
+      ) in {
+        PrecompiledContracts.olympiaContracts should not contain key(PrecompiledContracts.KzgPointEvalAddr)
+      }
+      "be the ETH Osaka set without 0x0a" taggedAs (UnitTest, OlympiaTest) in {
+        PrecompiledContracts.olympiaContracts.keySet shouldBe
+          (PrecompiledContracts.osakaContracts.keySet - PrecompiledContracts.KzgPointEvalAddr)
       }
     }
 
-    "olympiaContracts (ETH Prague / BLS-only set)" should {
+    "pragueContracts (ETH Prague / BLS-only set)" should {
       "NOT include P256VERIFY (EIP-7951 is Osaka-only on ETH)" taggedAs (UnitTest, OlympiaTest) in {
-        PrecompiledContracts.olympiaContracts should not contain key(PrecompiledContracts.P256VerifyAddr)
+        PrecompiledContracts.pragueContracts should not contain key(PrecompiledContracts.P256VerifyAddr)
       }
     }
 

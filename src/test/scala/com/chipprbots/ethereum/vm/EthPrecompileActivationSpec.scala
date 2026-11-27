@@ -181,7 +181,7 @@ class EthPrecompileActivationSpec extends AnyFlatSpec with Matchers:
         .withFallback(shippedRoot.getConfig("fukuii.blockchains.mordor"))
     )
 
-  "Precompile activation on Mordor" should "add BLS12-381 and P256VERIFY at Olympia, by block number" taggedAs (
+  "Precompile activation on Mordor" should "add BLS12-381 and P256VERIFY at Olympia, by block number, and no KZG" taggedAs (
     UnitTest,
     VMTest
   ) in {
@@ -189,8 +189,13 @@ class EthPrecompileActivationSpec extends AnyFlatSpec with Matchers:
     val before = at(19_999_999)
     before.intersect(Bls) shouldBe empty
     before should not contain P256
+    before should not contain Kzg
     val after = at(20_000_000)
     after should contain allElementsOf Bls
     after should contain(P256)
-    after shouldBe PrecompiledContracts.osakaContracts.keySet
+    // ECIP-1121 defers EIP-4844: Besu's ETC Olympia registry has no 0x0a, and core-geth adds it only on an EIP-4844
+    // transition, which no ETC config sets (B-548, #1444).
+    after should not contain Kzg
+    after shouldBe (1 to 9).map(Address(_)).toSet ++ Bls + P256
+    after shouldBe PrecompiledContracts.olympiaContracts.keySet
   }

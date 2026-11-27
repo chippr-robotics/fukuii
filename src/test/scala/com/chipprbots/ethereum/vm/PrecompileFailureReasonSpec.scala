@@ -102,8 +102,11 @@ class PrecompileFailureReasonSpec extends AnyFlatSpec with Matchers with BeforeA
       case Some(OutOfGas) => "out of gas"
       case other          => fail(s"not a precompile's failure: $other")
 
-  private def check(failing: Failing): Unit =
-    for chain <- Seq(etcOlympia, ethOsaka) do
+  private def check(failing: Failing): Unit = checkOn(Seq(etcOlympia, ethOsaka))(failing)
+
+  /** KZG point evaluation is an ETH precompile only: ECIP-1121 defers EIP-4844, so ETC Olympia has no 0x0a (B-548). */
+  private def checkOn(chains: Seq[Chain])(failing: Failing): Unit =
+    for chain <- chains do
       withClue(s"${chain.name} ${failing.name}: ") {
         val (context, result) = run(chain, failing.address, failing.input, failing.gas)
         result.gasRemaining shouldBe 0
@@ -453,7 +456,7 @@ class PrecompileFailureReasonSpec extends AnyFlatSpec with Matchers with BeforeA
         Plenty,
         Kzg + "can't verify opening proof"
       )
-    ).foreach(check)
+    ).foreach(checkOn(Seq(ethOsaka)))
   }
 
   // ── BLS12-381 (0x0b - 0x11) ──────────────────────────────────────────────────────────────────────────────────

@@ -143,7 +143,7 @@ class Eip2537DifferentialSpec extends AnyFlatSpec with Matchers:
     }
   }
 
-  "The production EIP-2537 backend" should "be the contract each address 0x0b-0x11 dispatches to at Prague and Osaka" taggedAs (
+  "The production EIP-2537 backend" should "be the contract each address 0x0b-0x11 dispatches to at Prague, Osaka and Olympia" taggedAs (
     VMTest,
     ConsensusTest,
     OlympiaTest
@@ -151,11 +151,14 @@ class Eip2537DifferentialSpec extends AnyFlatSpec with Matchers:
     Eip2537Op.values.foreach { op =>
       val addr = Address(op.address.toLong)
       val expected = ProductionEip2537Backend.contract(op)
-      withClue(s"${op.label} in olympiaContracts (ETH Prague): ") {
-        PrecompiledContracts.olympiaContracts(addr).eq(expected) shouldBe true
+      withClue(s"${op.label} in pragueContracts (ETH Prague): ") {
+        PrecompiledContracts.pragueContracts(addr).eq(expected) shouldBe true
       }
-      withClue(s"${op.label} in osakaContracts (ETH Osaka, ETC Olympia): ") {
+      withClue(s"${op.label} in osakaContracts (ETH Osaka): ") {
         PrecompiledContracts.osakaContracts(addr).eq(expected) shouldBe true
+      }
+      withClue(s"${op.label} in olympiaContracts (ETC Olympia): ") {
+        PrecompiledContracts.olympiaContracts(addr).eq(expected) shouldBe true
       }
     }
   }
