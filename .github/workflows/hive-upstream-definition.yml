@@ -12,8 +12,17 @@ name: Hive · upstream definition
 # Until ethereum/hive#1677 merges, hive's copy lives on its pull request branch, so the default
 # repository and ref point there. Switch the two defaults to ethereum/hive / master once it merges.
 on:
+  # Every promotion to main, and any change to staging that could break or desynchronise the
+  # definition (an informational gate, so the path filter cannot leave a required check waiting;
+  # GitHub applies `paths` to both branches, and promotions to main always touch src/).
   pull_request:
-    branches: [main]
+    branches: [main, staging]
+    paths:
+      - 'hive/**'
+      - 'src/**'
+      - 'scripts/hive/**'
+      - '.github/workflows/_hive-sim.yml'
+      - '.github/workflows/hive-upstream-definition.yml'
   schedule:
     - cron: '30 5 * * *'
   workflow_dispatch:
