@@ -113,7 +113,19 @@ class FatalErrorsSpec extends AnyFlatSpec with Matchers:
 
       // A hook that blocks: the wait is bounded, and the halt goes ahead.
       FatalErrors.beforeHalt(() => release.await())
+      val started = System.nanoTime()
       FatalErrors.runBeforeHalt(scala.concurrent.duration.Duration(50, TimeUnit.MILLISECONDS))
+      TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started) should be < 5L
+      halts.clear()
+      FatalErrors.handle(Thread.currentThread(), unavailable(), halts += _, (_, _) => ())
+      halts.toList shouldBe List(1)
+
+      // An interrupt on the halting thread neither skips the halt nor escapes it (beacon W1); the flag is kept.
+      Thread.currentThread().interrupt()
+      halts.clear()
+      FatalErrors.handle(Thread.currentThread(), unavailable(), halts += _, (_, _) => ())
+      halts.toList shouldBe List(1)
+      Thread.interrupted() shouldBe true
     finally
       release.countDown()
       FatalErrors.beforeHalt(() => ())

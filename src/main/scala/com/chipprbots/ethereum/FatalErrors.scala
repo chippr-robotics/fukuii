@@ -103,7 +103,10 @@ object FatalErrors extends Logger:
     val runner = new Thread(run, "FatalErrors-beforeHalt")
     runner.setDaemon(true)
     runner.start()
-    runner.join(bound.toMillis)
+    // An interrupt on the halting thread (an import or RPC thread) must not end the wait by throwing past the halt:
+    // keep the flag for whoever reads it, and go on to halt.
+    try runner.join(bound.toMillis)
+    catch case _: InterruptedException => Thread.currentThread().interrupt()
     if runner.isAlive then log.error(s"The before-halt hook did not finish within $bound; halting without it")
 
   /** Applies [[decide]]. `halt` and `report` are parameters so that a test can run this without stopping its JVM. A
@@ -113,10 +116,14 @@ object FatalErrors extends Logger:
     decide(thread.getName, error) match
       case Action.Halt(message) =>
         log.error(message, error)
-        runBeforeHalt()
-        System.err.println(message)
-        System.err.flush()
-        halt(1)
+        // The halt is unconditional, as before the hook existed: nothing the hook's thread does (it cannot start, the
+        // wait is interrupted, it throws) may skip it or replace the LinkageError with a NonFatal one (beacon W1).
+        try runBeforeHalt()
+        catch case e: Throwable => log.error(s"The before-halt hook could not run: $e", e)
+        finally
+          System.err.println(message)
+          System.err.flush()
+          halt(1)
       case Action.Report(message) =>
         log.error(message, error)
         report(thread, error)
