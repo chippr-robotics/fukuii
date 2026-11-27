@@ -446,18 +446,14 @@ items:
   - id: B-037
     title: "Correct the handoff file's H9 row: the lost DNS queries were the TXT-join bug, not a lossy WSL proxy"
     priority: P3
-    status: review
+    status: done
     area: docs
     size: S
     opened: 2026-11-08
+    closed: 2026-11-27
     refs: [H9]
     links:
       prs: [2159]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-27T20:25:00Z
-      heartbeat: 2026-11-27T21:21:30Z
     notes: .claude/agent-protocols/handoffs/0.12.0-dev-node-to-fukuii-fc.md, CHASE C DNS row.
   - id: B-046
     title: "Spec 021 T004-T005 (P-6): ETC node follow, datadir copy at a planned stop, export H+1..H+5000"
