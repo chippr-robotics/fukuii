@@ -6117,12 +6117,17 @@ items:
   - id: B-559
     title: "E2ESyncSpec P2P handshake tests use IO.sleep(2s/3s) waits (constitution: no sleeps)"
     priority: P3
-    status: open
+    status: claimed
     area: tests
     size: S
     opened: 2026-11-26
     refs: [B-018 follow-up]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T04:08:44Z
+      heartbeat: 2026-11-27T04:08:44Z
     notes: Three handshake tests in src/it E2ESyncSpec; replace with a condition wait on the handshake/peer state.
   - id: B-560
     title: "E2EStateTestSpec 'detect and reject invalid state roots' rejects nothing: harness validators accept any root"
