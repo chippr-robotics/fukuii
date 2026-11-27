@@ -16,7 +16,7 @@ So they are a **release gate**, not a per-push check:
 | Workflow | Runs on |
 |---|---|
 | hive-smoke-genesis, hive-smoke-network, hive-sync, hive-rpc-compat, hive-graphql (5–10 min each) | every PR to `staging` or `main` (path-filtered) |
-| hive-consensus, hive-consume-engine, hive-consume-rlp, hive-engine, hive-devp2p, hive-osaka, hive-prague | PRs to `main` (the staging → main release PR), `workflow_dispatch` |
+| hive-consensus, hive-consume-engine, hive-consume-rlp, hive-engine, hive-devp2p | PRs to `main` (the staging → main release PR), `workflow_dispatch` |
 | hive-full (sharded, runs to completion) | PRs to `main` labelled `hive-full`, `workflow_dispatch` |
 
 Before cutting a version, open the staging → main PR, add the `hive-full` label, and wait for
