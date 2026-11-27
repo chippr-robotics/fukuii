@@ -166,16 +166,12 @@ class NativeBackendsSpec extends AnyFlatSpec with Matchers:
     NativeBackends.required(withOlympiaAt(shipped("etc"), BigInt(Long.MaxValue))) shouldBe empty
   }
 
-  it should "be both on ETC and Mordor once Olympia is scheduled, which activates the Osaka precompile set" taggedAs (
+  it should "be BLS12-381 only on ETC and Mordor once Olympia is scheduled: ECIP-1121 defers EIP-4844, so no KZG" taggedAs (
     UnitTest,
     VMTest
   ) in {
-    NativeBackends.required(withOlympiaAt(shipped("etc"), BigInt(25_000_000))) shouldBe Set(
-      Backend.Bls12381,
-      Backend.Kzg
-    )
-    NativeBackends.required(withOlympiaAt(shipped("mordor"), BigInt(15_000_000))) shouldBe
-      Set(Backend.Bls12381, Backend.Kzg)
+    NativeBackends.required(withOlympiaAt(shipped("etc"), BigInt(25_000_000))) shouldBe Set(Backend.Bls12381)
+    NativeBackends.required(withOlympiaAt(shipped("mordor"), BigInt(15_000_000))) shouldBe Set(Backend.Bls12381)
   }
 
   "The startup self-check" should "name each required backend whose probe fails" taggedAs (UnitTest, VMTest) in {

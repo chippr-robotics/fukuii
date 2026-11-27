@@ -91,10 +91,12 @@ object NativeBackends:
     * decides that set:
     *   - ETH Prague and Osaka (timestamps): BLS12-381 and KZG;
     *   - ETC Olympia (ECIP-1121), once the block dispatch reaches it at a scheduled block, on an ETC chain only (an ETH
-    *     chain's olympia-block-number is London): the Osaka set, so both;
+    *     chain's olympia-block-number is London): BLS12-381 only. Olympia has no KZG point evaluation, since ECIP-1121
+    *     defers EIP-4844 (B-548);
     *   - ETH Cancun (timestamp): KZG.
     *
-    * Each fork's set contains the previous fork's, so a backend that some fork needs is needed from that fork on.
+    * On each chain family a fork's set contains the previous fork's, so a backend that some fork needs is needed from
+    * that fork on.
     */
   def required(config: BlockchainConfig): Set[Backend] =
     val timestamps = config.forkTimestamps
@@ -102,8 +104,9 @@ object NativeBackends:
     val olympia = !evm.isEthereum && config.forkBlockNumbers.all.exists(block =>
       block < NotScheduled && evm.etcForkForBlockNumber(block) >= EtcForks.Olympia
     )
-    val bls = olympia || timestamps.pragueTimestamp.isDefined || timestamps.osakaTimestamp.isDefined
-    val kzg = bls || timestamps.cancunTimestamp.isDefined
+    val pragueOrOsaka = timestamps.pragueTimestamp.isDefined || timestamps.osakaTimestamp.isDefined
+    val bls = olympia || pragueOrOsaka
+    val kzg = pragueOrOsaka || timestamps.cancunTimestamp.isDefined
     Backend.values.toSet.filter {
       case Backend.Bls12381 => bls
       case Backend.Kzg      => kzg

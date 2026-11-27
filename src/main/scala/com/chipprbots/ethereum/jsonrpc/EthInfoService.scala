@@ -312,7 +312,7 @@ class EthInfoService(
   private def ethPrecompilesAt(ts: Timestamp): Map[String, Address] =
     val active =
       if blockchainConfig.isOsakaTimestamp(ts) then PrecompiledContracts.osakaContracts
-      else if blockchainConfig.isPragueTimestamp(ts) then PrecompiledContracts.olympiaContracts
+      else if blockchainConfig.isPragueTimestamp(ts) then PrecompiledContracts.pragueContracts
       else if blockchainConfig.isCancunTimestamp(ts) then PrecompiledContracts.cancunContracts
       else PrecompiledContracts.istanbulPhoenixContracts
     active.keys.flatMap(addr => Eip7910PrecompileNames.get(addr).map(_ -> addr)).toMap

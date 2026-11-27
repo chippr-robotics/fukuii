@@ -181,7 +181,7 @@ class EthPrecompileActivationSpec extends AnyFlatSpec with Matchers:
         .withFallback(shippedRoot.getConfig("fukuii.blockchains.mordor"))
     )
 
-  "Precompile activation on Mordor" should "add BLS12-381 and P256VERIFY at Olympia, by block number" taggedAs (
+  "Precompile activation on Mordor" should "add BLS12-381 and P256VERIFY at Olympia, by block number, and no KZG" taggedAs (
     UnitTest,
     VMTest
   ) in {
@@ -189,8 +189,39 @@ class EthPrecompileActivationSpec extends AnyFlatSpec with Matchers:
     val before = at(19_999_999)
     before.intersect(Bls) shouldBe empty
     before should not contain P256
+    before should not contain Kzg
     val after = at(20_000_000)
     after should contain allElementsOf Bls
     after should contain(P256)
-    after shouldBe PrecompiledContracts.osakaContracts.keySet
+    // ECIP-1121 defers EIP-4844: Besu's ETC Olympia registry has no 0x0a, and core-geth adds it only on an EIP-4844
+    // transition, which no ETC config sets (B-548, #1444).
+    after should not contain Kzg
+    after shouldBe (1 to 9).map(Address(_)).toSet ++ Bls + P256
+    after shouldBe PrecompiledContracts.olympiaContracts.keySet
+  }
+
+  it should "have no KZG at Olympia even on a header with blob fields: the set follows the fork config" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    active(mordorWithOlympia, cancun(20_000_000)) should not contain Kzg
+    active(mordorWithOlympia, cancun(19_999_999)) should not contain Kzg
+  }
+
+  // ── KZG follows the Cancun timestamp, not the header's shape (B-155, B-159) ──
+
+  "KZG 0x0a on an ETH chain" should "be active at the Cancun timestamp on a header without blob fields (eth_call time override)" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    // An eth_call with a time override from a Shanghai block into Cancun runs on a header shaped like the Shanghai
+    // block it started from. go-ethereum builds `rules` from the overridden time and has 0x0a there.
+    val overridden = header(LondonBlock + 10, CancunTs, HefPostShanghai(Gwei, BlockHeader.EmptyMpt))
+    active(hiveAsShipped, overridden) should contain(Kzg)
+    active(hiveAsShipped, overridden) shouldBe PrecompiledContracts.cancunContracts.keySet
+  }
+
+  it should "be inactive before the Cancun timestamp, whatever the header's shape" taggedAs (UnitTest, VMTest) in {
+    val blobShaped = header(LondonBlock + 10, CancunTs - 1, HefPostCancun(Gwei, BlockHeader.EmptyMpt, 0, 0, zero32))
+    active(hiveAsShipped, blobShaped) should not contain Kzg
   }

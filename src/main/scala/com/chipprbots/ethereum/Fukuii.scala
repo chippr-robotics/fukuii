@@ -86,8 +86,8 @@ object Fukuii extends Logger:
       System.exit(1)
 
     // The native libraries behind the precompiles of every configured fork (BLS12-381 from ETH Prague or ETC Olympia,
-    // KZG from ETH Cancun or ETC Olympia). A missing one would make this node compute different results from the
-    // network, so it must not start without them (B-135).
+    // KZG from ETH Cancun only: ECIP-1121 defers EIP-4844, so ETC Olympia has no 0x0a). A missing one would make this
+    // node compute different results from the network, so it must not start without them (B-135).
     NativeBackends.BlsChoice.parse(Config.config.getString("vm.bls12-381-backend")) match
       case Left(error) =>
         log.error("Configuration error: {}", error)
@@ -147,6 +147,9 @@ object Fukuii extends Logger:
       // restores before it exits; this hook covers Ctrl-C and SIGTERM, including when JLine's hook closes the terminal
       // first (Tui.shutdown then writes the reset to the process output).
       Runtime.getRuntime.addShutdownHook(new Thread(() => tui.shutdown(), "TuiRestore"))
+      // A halt (FatalErrors: a precompile backend missing at call time) skips the shutdown hooks, TuiRestore with them,
+      // so it restores the terminal itself before it prints its message (B-155).
+      FatalErrors.beforeHalt(() => tui.shutdown())
       if tui.initialize() then
         tui.updateNetwork(Config.blockchains.network)
         tui.updateConnectionStatus("Starting node...")
