@@ -126,6 +126,15 @@ accepted) or `fukuii.sync.checkpoint-sync-url`. It runs only while the best bloc
 both state layouts, including `fukuii.state.path-live = true`. Version 1 archives are refused: export again with this
 release. **Stop sync before exporting**: an export takes hours and fails with `StateNotHeld` if the state moves.
 
+**Published archives.** Each one is pinned by its block hash in the chain config, so setting the URL is enough:
+
+| Chain | Block | `checkpoint-sync-url` | Size, SHA-256 |
+| --- | --- | --- | --- |
+| ETC | 25,808,558 | `https://storage.googleapis.com/fukuii-checkpoints/etc/etc-25808558.checkpoint` | 17.7 GB, `39a5dc64326ced884f32bb6c6119ccccd02a8d4e338490e6254f6088fc11fe95` |
+
+The download goes to `${datadir}/checkpoint.bin` and resumes with HTTP Range if interrupted. After the import, the node
+syncs the remaining blocks from peers.
+
 **What the node trusts.**
 
 - **Total difficulty is trusted from the archive**, not re-derived, and proof-of-work fork choice compares it. An archive

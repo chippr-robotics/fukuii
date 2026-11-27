@@ -8,6 +8,7 @@ import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
 import com.typesafe.config.ConfigFactory
 import com.typesafe.config.ConfigValueFactory
+import org.bouncycastle.util.encoders.Hex
 import org.scalatest.EitherValues
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
@@ -105,6 +106,11 @@ class CheckpointV2TrustSpec extends AnyWordSpec with Matchers with EitherValues:
 
     "read each public chain's pinned expected hash from its chain config, the operator's winning over it" taggedAs UnitTest in {
       val shipped = ConfigFactory.load()
+      // A chain is pinned once its first format version 2 archive is exported and published (B-379). ETC: the EG-12
+      // export, block 25,808,558 (spec 018 c7-gate-report). The rest pin none yet.
+      val shippedPins = Map(
+        "etc" -> ByteString(Hex.decode("7b3be997e45d25215ab47131b8595516cc0b7cde746f461c82abe8d42e399422"))
+      )
       Seq("etc", "mordor", "eth", "sepolia", "hoodi").foreach { name =>
         val raw = shipped.getConfig(s"fukuii.blockchains.$name")
         withClue(s"$name carries the key: ")(raw.hasPath("checkpoint-expected-block-hash") shouldBe true)
@@ -116,8 +122,8 @@ class CheckpointV2TrustSpec extends AnyWordSpec with Matchers with EitherValues:
         Trust(config, tipA, None).expectedBlockHash shouldBe Some(pinned)
         Trust(config, tipA, Some(tipA.hash.value)).expectedBlockHash shouldBe Some(tipA.hash.value)
         Trust(config, tipA, None).chainId shouldBe config.chainId.value
-        withClue(s"$name pins none yet (no format version 2 archive exists): ") {
-          BlockchainConfig.fromRawConfig(raw).checkpointExpectedBlockHash shouldBe None
+        withClue(s"$name's shipped pin: ") {
+          BlockchainConfig.fromRawConfig(raw).checkpointExpectedBlockHash shouldBe shippedPins.get(name)
         }
       }
       an[IllegalArgumentException] should be thrownBy BlockchainConfig.fromRawConfig(
