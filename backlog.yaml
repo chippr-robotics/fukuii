@@ -6219,16 +6219,14 @@ items:
   - id: B-569
     title: "Guard the upstream hive definition: CI smoke of ethereum/hive clients/fukuii against the release image, and one adapter source"
     priority: P1
-    status: review
+    status: done
     area: ci
     size: M
     opened: 2026-11-27
+    closed: 2026-11-27
     refs: []
     links:
       prs: [2155]
-    claim:
-      by: dev-node
-      agent: claude-opus
-      since: 2026-11-27T11:43:36Z
-      heartbeat: 2026-11-27T11:43:42Z
-    notes: "User 2026-11-27: do not break the hive harness now that it works upstream (ethereum/hive#1677, clients/fukuii builds FROM chipprbots/fukuii:latest = main). Two ways it breaks: (1) a fukuii change the upstream adapter does not know (spec 030 S6 refusing plaintext non-loopback binds would have stopped the client; fixed in #1677 by allow-insecure-bind, b821188f). Add a CI job that builds ethereum/hive master's clients/fukuii (or the PR branch until merged) against the candidate image and runs smoke/genesis + a short engine/sync slice, required on the staging->main promotion and nightly. (2) Drift between fukuii's own hive/fukuii and upstream clients/fukuii (roles eth1 vs eth1_engine, Dockerfile ARG baseimage/tag, insecure-bind lines): make hive/fukuii the single source, sync it to upstream by PR, and add a diff check against ethereum/hive master. Also: add eth1_snap upstream once a published image carries #2154."
+    notes: |-
+      User 2026-11-27: do not break the hive harness now that it works upstream (ethereum/hive#1677, clients/fukuii builds FROM chipprbots/fukuii:latest = main). Two ways it breaks: (1) a fukuii change the upstream adapter does not know (spec 030 S6 refusing plaintext non-loopback binds would have stopped the client; fixed in #1677 by allow-insecure-bind, b821188f). Add a CI job that builds ethereum/hive master's clients/fukuii (or the PR branch until merged) against the candidate image and runs smoke/genesis + a short engine/sync slice, required on the staging->main promotion and nightly. (2) Drift between fukuii's own hive/fukuii and upstream clients/fukuii (roles eth1 vs eth1_engine, Dockerfile ARG baseimage/tag, insecure-bind lines): make hive/fukuii the single source, sync it to upstream by PR, and add a diff check against ethereum/hive master. Also: add eth1_snap upstream once a published image carries #2154.
+      2026-11-27 done: Merged. hive/fukuii == chippr-robotics/hive@add-fukuii-client (ethereum/hive#1677); hive-upstream-definition.yml: drift + smoke with the upstream definition, first run green (45997394217). Follow-ups: promote the gate to required for main promotions; repoint defaults to ethereum/hive master after #1677 merges; add eth1_snap to both once a published image has #2154.
