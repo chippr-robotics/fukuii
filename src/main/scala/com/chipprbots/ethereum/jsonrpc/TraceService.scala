@@ -9,6 +9,7 @@ import org.json4s.JsonAST.*
 import org.json4s.JsonDSL.*
 import org.json4s.jvalue2monadic
 
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.domain.Address
@@ -108,8 +109,12 @@ class TraceService(
     // go-ethereum --rpc.gascap, as for eth_call (TraceCall runs CallDefaults with the backend's RPCGasCap)
     gasCap: BigInt = CallTxBuilder.DefaultGasCap,
     // the rules of the chain the blocks are replayed under: the node's, unless a caller serves another chain
-    chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
+    chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 ) extends ResolveBlock:
+
+  // "safe" and "finalized" are the consensus client's, as in EthBlocksService (B-489)
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
 
   import TraceService.*
 

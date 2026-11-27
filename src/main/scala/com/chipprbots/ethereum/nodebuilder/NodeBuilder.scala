@@ -845,7 +845,8 @@ trait EthProofServiceBuilder:
 
 trait EthInfoServiceBuilder:
   self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & StxLedgerBuilder &
-    KeyStoreBuilder & SyncControllerBuilder & AsyncConfigBuilder & InstanceConfigProvider & ActorSystemBuilder =>
+    KeyStoreBuilder & SyncControllerBuilder & AsyncConfigBuilder & InstanceConfigProvider & ActorSystemBuilder &
+    EthBlocksServiceBuilder =>
 
   lazy val ethInfoService = new EthInfoService(
     blockchain,
@@ -859,7 +860,8 @@ trait EthInfoServiceBuilder:
     asyncConfig.askTimeout,
     classicSystem.toTyped.scheduler,
     com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config),
-    () => stateAdoptionForRpc()
+    () => stateAdoptionForRpc(),
+    forkChoiceManagerForRpc
   )
 
   /** The adoption of a long branch under way on the unified layout, for `eth_syncing` (spec 018 C4d part 4b).
@@ -868,7 +870,7 @@ trait EthInfoServiceBuilder:
   def stateAdoptionForRpc: () => Option[com.chipprbots.ethereum.ledger.StateRecovery.Progress] = () => None
 
 trait EthSimulateServiceBuilder:
-  self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder =>
+  self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & EthBlocksServiceBuilder =>
 
   lazy val ethSimulateService = new com.chipprbots.ethereum.jsonrpc.EthSimulateService(
     blockchain,
@@ -876,7 +878,8 @@ trait EthSimulateServiceBuilder:
     storagesInstance.storages.evmCodeStorage,
     mining.blockPreparator,
     mining,
-    blockchainConfig
+    blockchainConfig,
+    forkChoiceManagerForRpc
   )
 
 trait EthMiningServiceBuilder:
@@ -915,7 +918,8 @@ trait GasPriceOracleBuilder:
 
 trait EthTxServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & PendingTransactionsManagerBuilder & MiningBuilder &
-    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder & InstanceConfigProvider & GasPriceOracleBuilder =>
+    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder & InstanceConfigProvider & GasPriceOracleBuilder &
+    EthBlocksServiceBuilder =>
 
   lazy val ethTxService = new EthTxService(
     blockchain,
@@ -926,7 +930,8 @@ trait EthTxServiceBuilder:
     storagesInstance.storages.transactionMappingStorage,
     classicSystem.toTyped.scheduler,
     com.chipprbots.ethereum.jsonrpc.RpcTxSubmission.fromConfig(instanceConfig.config),
-    gasPriceOracleOpt = Some(gasPriceOracle)
+    gasPriceOracleOpt = Some(gasPriceOracle),
+    _forkChoiceManagerOpt = forkChoiceManagerForRpc
   )
 
 trait EthBlocksServiceBuilder:
@@ -950,14 +955,15 @@ trait EthBlocksServiceBuilder:
     )
 
 trait EthUserServiceBuilder:
-  self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & StorageBuilder =>
+  self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & StorageBuilder & EthBlocksServiceBuilder =>
 
   lazy val ethUserService = new EthUserService(
     blockchain,
     blockchainReader,
     mining,
     storagesInstance.storages.evmCodeStorage,
-    this
+    this,
+    forkChoiceManagerForRpc
   )
 
 trait EthFilterServiceBuilder:
@@ -1094,7 +1100,8 @@ trait TxPoolServiceBuilder:
   )
 
 trait DebugTracingServiceBuilder:
-  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider =>
+  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider &
+    EthBlocksServiceBuilder =>
 
   lazy val debugTracingService: com.chipprbots.ethereum.jsonrpc.DebugTracingService =
     new com.chipprbots.ethereum.jsonrpc.DebugTracingService(
@@ -1103,11 +1110,13 @@ trait DebugTracingServiceBuilder:
       mining,
       stxLedger,
       storagesInstance.storages.transactionMappingStorage,
-      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config)
+      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config),
+      _forkChoiceManagerOpt = forkChoiceManagerForRpc
     )
 
 trait TraceServiceBuilder:
-  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider =>
+  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider &
+    EthBlocksServiceBuilder =>
 
   lazy val traceService: com.chipprbots.ethereum.jsonrpc.TraceService =
     new com.chipprbots.ethereum.jsonrpc.TraceService(
@@ -1116,7 +1125,8 @@ trait TraceServiceBuilder:
       mining,
       stxLedger,
       storagesInstance.storages.transactionMappingStorage,
-      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config)
+      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config),
+      _forkChoiceManagerOpt = forkChoiceManagerForRpc
     )
 
 trait JSONRpcConfigBuilder:

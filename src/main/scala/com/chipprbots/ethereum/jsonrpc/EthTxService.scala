@@ -13,6 +13,7 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.crypto.KzgCellProofs
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
@@ -80,11 +81,15 @@ class EthTxService(
     val scheduler: Scheduler,
     val rpcTxSubmission: RpcTxSubmission = RpcTxSubmission.Default,
     // NodeBuilder passes the node's one oracle (shared with EthBlocksService); tests get their own
-    gasPriceOracleOpt: Option[GasPriceOracle] = None
+    gasPriceOracleOpt: Option[GasPriceOracle] = None,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 )(implicit val blockchainConfig: BlockchainConfig)
     extends TransactionPicker
     with ResolveBlock
     with Logger:
+
+  // "safe" and "finalized" are the consensus client's, as in EthBlocksService (B-489)
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
   import EthTxService.*
   // blockchainConfig is taken as an implicit constructor parameter so multi-instance
   // runtime callers (NodeBuilder) automatically supply the per-instance config in scope
