@@ -970,18 +970,14 @@ items:
   - id: B-086
     title: "Stale comments: SNAP \"writes through FastSyncNodeStorage\", seven \"still Classic\" actors, two Behavior[Any] docs"
     priority: P3
-    status: review
+    status: done
     area: docs
     size: S
     opened: 2026-11-05
+    closed: 2026-11-27
     refs: [H13, CHASE G]
     links:
       prs: [2159]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-27T20:25:04Z
-      heartbeat: 2026-11-27T21:21:34Z
   - id: B-087
     title: Private members shadow imported extensions (EthMiningService.ifEthash, DynamicTlsChannel.sendMessage)
     priority: P3
