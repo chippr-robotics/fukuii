@@ -434,17 +434,18 @@ items:
   - id: B-036
     title: "Chore: list enrtree:// URLs in the chain confs, document dns-tree-deadline/dns-concurrency, refresh a sync.conf comment"
     priority: P3
-    status: claimed
+    status: review
     area: config
     size: S
     opened: 2026-11-08
     refs: [H9 follow-up, "#1746 follow-up", "#1654-A follow-up"]
-    links: {}
+    links:
+      prs: [2159]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T20:24:56Z
-      heartbeat: 2026-11-27T20:24:56Z
+      heartbeat: 2026-11-27T21:21:26Z
     notes: network.conf; base/sync.conf chain-download-boosted-concurrent-requests. A chore/* branch (fix/* cannot touch resources).
   - id: B-037
     title: "Correct the handoff file's H9 row: the lost DNS queries were the TXT-join bug, not a lossy WSL proxy"
