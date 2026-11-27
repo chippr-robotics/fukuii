@@ -5259,17 +5259,18 @@ items:
   - id: B-489
     title: "RPC: 'safe'/'finalized' state reads answer 'not available' on PoS: only EthBlocksService and EthProofService get the ForkChoiceManager"
     priority: P2
-    status: claimed
+    status: review
     area: rpc
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2157]
       spec: 018
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T20:24:15Z
-      heartbeat: 2026-11-27T20:24:15Z
+      heartbeat: 2026-11-27T21:12:14Z
     notes: Found in B-210 round 2. ResolveHeader.forkChoiceManagerOpt defaults to None; NodeBuilder passes forkChoiceManagerForRpc only to EthBlocksService and (since B-210) EthProofService. EthUserService (getBalance/getCode/getStorageAt/getTransactionCount), EthInfoService (call/estimateGas), EthTxService, EthSimulateService, TraceService and DebugTracingService resolve Safe/Finalized to InvalidParams. Wire forkChoiceManagerForRpc into each builder; test with a real ForkChoiceManager as EthProofServiceSpec does.
   - id: B-490
     title: "Chain weights: check StateRecovery's in-place adoption and the p2p hand-off re-derive weights of blocks they make canonical (B-126 covers fork-choice moves)"
