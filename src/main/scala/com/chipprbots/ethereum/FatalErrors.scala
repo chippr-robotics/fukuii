@@ -95,11 +95,12 @@ object FatalErrors extends Logger:
     */
   private[ethereum] def runBeforeHalt(bound: FiniteDuration = BeforeHaltBound): Unit =
     val hook = beforeHaltHook.get()
-    val runner = new Thread(
-      () =>
-        try hook()
-        catch case NonFatal(e) => log.error(s"The before-halt hook failed: $e", e), "FatalErrors-beforeHalt"
-    )
+    // A named Runnable: a lambda ending in try/catch followed by the thread name parses ambiguously, and scalafmt
+    // once joined the two into code that does not compile.
+    val run: Runnable = () =>
+      try hook()
+      catch case NonFatal(e) => log.error(s"The before-halt hook failed: $e", e)
+    val runner = new Thread(run, "FatalErrors-beforeHalt")
     runner.setDaemon(true)
     runner.start()
     runner.join(bound.toMillis)
