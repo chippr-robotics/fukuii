@@ -6346,12 +6346,17 @@ items:
   - id: B-572
     title: "Release-hygiene follow-ups: AccountTrieAssembly stale scaladoc, ops logback <if condition=>, PeerActor.props dead code"
     priority: P3
-    status: open
+    status: claimed
     area: docs
     size: S
     opened: 2026-11-27
     refs: [wave 9D]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T23:33:30Z
+      heartbeat: 2026-11-27T23:33:30Z
     notes: "AccountTrieAssembly.scala:358 (spec 016 module, needs fix/ or refactor/snap-016 branch); cirith-ungol/barad-dur/gorgoroth/spec020 logback files; PeerActor.props: dead-code review."
   - id: B-573
     title: "B-125 launcher: verify the Unsafe flag on a JDK 25 start; cover the bare fukuii.bat path"
