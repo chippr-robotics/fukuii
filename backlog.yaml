@@ -6409,3 +6409,13 @@ items:
     refs: [B-548 / PR for fix/b548-olympia-kzg]
     links: {}
     notes: "OlympiaCrossClientVectorsSpec records fukuii=Besu=spec vs core-geth per #1444 (61,000 vs 56,200 at 1,000 nonzero bytes). Also compare the local ECIP-1121 text if ahead of upstream."
+  - id: B-576
+    title: Apply scalafmt workflow pushed a commit that does not parse (lambda ending in try/catch + trailing arg); its result differs from local scalafmtAll
+    priority: P2
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-27
+    refs: ["PR #2160, commit 4044fdd671"]
+    links: {}
+    notes: Local scalafmtAll left FatalErrors.scala as is; the bot rewrote it into a parse error. Check the workflow's scalafmt version/config vs the repo's, and make the bot compile (or scalafmtCheck) before it pushes.
