@@ -1370,17 +1370,18 @@ items:
   - id: B-138
     title: "Protocol: case objects compared with == must stay case objects (Scala 3 equality footgun)"
     priority: P3
-    status: claimed
+    status: review
     area: docs
     size: S
     opened: 2026-11-08
     refs: []
-    links: {}
+    links:
+      prs: [2159]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T20:25:12Z
-      heartbeat: 2026-11-27T20:25:12Z
+      heartbeat: 2026-11-27T21:21:42Z
     notes: "forge: without strictEquality, x == Obj still compiles against a case-class companion and is always false. Add to scala3-style.md or consensus-change-protocol.md."
   - id: B-139
     title: Fetcher advances lastBlock at an announce the importer may drop, so the next announce reads as an orphan
