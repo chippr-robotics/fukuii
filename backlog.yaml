@@ -6415,3 +6415,13 @@ items:
     refs: ["beacon N2 on #2160"]
     links: {}
     notes: BlockchainConfig.scala:367-368 defaults to ETC; no shipped conf affected.
+  - id: B-579
+    title: Timestamp fork gates (Cancun/Prague/Osaka) ignore geth's isMerge/IsLondon requirement on RPC overrides
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-27
+    refs: ["beacon N3 on #2160"]
+    links: {}
+    notes: Only visible on overrides with a pre-London number and a post-Cancun time.
