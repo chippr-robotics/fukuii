@@ -6051,18 +6051,14 @@ items:
   - id: B-546
     title: "SNAP heap watchdog: write off stale in-transit reservations before the heap-pressure early return, so max-pause escape fires"
     priority: P3
-    status: review
+    status: done
     area: snap
     size: S
     opened: 2026-11-25
+    closed: 2026-11-27
     refs: ["#1506"]
     links:
       prs: [2158]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-27T20:24:31Z
-      heartbeat: 2026-11-27T21:13:02Z
     notes: SnapIntakeBudget.scala:70-73; fake-clock test
   - id: B-547
     title: "SNAP accounts-complete recovery: re-check the saved pivot's staleness once the first snap peer is polled (networkBest 0 at start)"
