@@ -20,7 +20,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --repo) REPO=$2; shift 2 ;;
     --ref) REF=$2; shift 2 ;;
-    -h | --help) sed -n '2,16p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,14p' "$0"; exit 0 ;;
     *) echo "check-upstream-adapter: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -45,9 +45,15 @@ git -C "$WORK/hive" -c advice.detachedHead=false checkout -q FETCH_HEAD -- clien
 }
 COMMIT=$(git -C "$WORK/hive" rev-parse --short FETCH_HEAD)
 
-if diff -ru "$WORK/hive/clients/fukuii" "$LOCAL" >"$WORK/diff.txt"; then
+rc=0
+diff -ru "$WORK/hive/clients/fukuii" "$LOCAL" >"$WORK/diff.txt" 2>&1 || rc=$?
+if [ "$rc" -eq 0 ]; then
   echo "check-upstream-adapter: hive/fukuii/ is identical to $REPO@$REF ($COMMIT) clients/fukuii/"
   exit 0
+elif [ "$rc" -ne 1 ]; then
+  echo "check-upstream-adapter: diff could not compare the two directories (exit $rc):" >&2
+  cat "$WORK/diff.txt" >&2
+  exit 2
 fi
 echo "check-upstream-adapter: hive/fukuii/ differs from $REPO@$REF ($COMMIT) clients/fukuii/:" >&2
 sed -e "s#$WORK/hive/clients/fukuii#upstream:clients/fukuii#g" -e "s#$LOCAL#fukuii:hive/fukuii#g" "$WORK/diff.txt" >&2

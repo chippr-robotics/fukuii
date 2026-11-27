@@ -315,11 +315,13 @@ jobs:
       - name: Sync fukuii hive adapter
         env:
           ADAPTER: ${{ inputs.adapter }}
+          HIVE_REPO: ${{ inputs.hive_repo }}
+          HIVE_REF: ${{ inputs.hive_ref }}
         run: |
           if [ "$ADAPTER" = upstream ]; then
             # Test hive's own clients/fukuii as hive users get it (B-569): do not overwrite it.
             if [ ! -f external/hive/clients/fukuii/Dockerfile ]; then
-              echo "::error::adapter=upstream, but ${{ inputs.hive_repo }}@${{ inputs.hive_ref }} has no clients/fukuii."
+              echo "::error::adapter=upstream, but ${HIVE_REPO}@${HIVE_REF} has no clients/fukuii."
               exit 1
             fi
             echo "Using the upstream client definition:"; ls -l external/hive/clients/fukuii/
