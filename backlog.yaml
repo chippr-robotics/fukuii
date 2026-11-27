@@ -1,7 +1,8 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
+# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
+# header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -6033,12 +6034,17 @@ items:
   - id: B-552
     title: "Spec 018 follow-on: history expiry and tiered storage (hot state on SSD, move/expire old bodies and receipts)"
     priority: P1
-    status: open
+    status: claimed
     area: storage
     size: L
     opened: 2026-11-25
     refs: ["#1483"]
     links: {}
+    claim:
+      by: cloud-dc960fdc
+      agent: main
+      since: 2026-11-27T14:13:40Z
+      heartbeat: 2026-11-27T14:13:40Z
     notes: |-
       folded into spec 018 at the user's decision 2026-11-25; for the spec-018 owner (cloud-dc960fdc) to place in its plan
       2026-11-27 user: P1, stays in spec 018 (history expiry is key to running nodes on smaller devices). Verified on staging 94e57beac: no expiry/prune/freezer of bodies, receipts or log indexes exists (EthBlocksService.scala:522 says so). Evidence: the Sepolia gate VM needed 1,400 GB to finish EG-4's 24 h follow; full-history backfill ~17-20 GB/h with 3M of 12.2M bodies in; #1483's sample: ~1.08 TiB bodies + ~1.5 TiB receipts raw. EG-4's ~150 GB target needs this. Scope per #1483: expiry cutoff (merge / block / none), correct JSON-RPC + devp2p answers for expired ranges and no advertising of history not held, optional tiered (freezer) path; ETC defaults unchanged (forge sign-off); reviews vault, conduit, herald, beacon.
