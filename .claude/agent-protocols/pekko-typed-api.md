@@ -26,7 +26,7 @@ grep -rn "PropsAdapter" src/main --include="*.scala" | grep -vE ':[0-9]+:\s*(//|
 grep -rn "\.toClassic" src/main --include="*.scala" | grep -vE ':[0-9]+:\s*(//|\*|/\*)'
 # 5 hits: PeerManagerActor (2), ServerActor (2), RLPxConnectionHandler (1)
 grep -rn "Behavior\[Any\]" src/main --include="*.scala"
-# 2 hits, both in doc comments (BytecodeRecoveryActor, StorageRecoveryActor); no `Behavior[Any]` is left in code
+# 0 hits (B-086 rewrote the last two, stale doc comments in BytecodeRecoveryActor and StorageRecoveryActor)
 ```
 
 So the old allowance ("Classic adapters are intentional scaffolding until CAPSTONE") no longer covers new code: a

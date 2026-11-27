@@ -33,8 +33,8 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
   *
   * Pekko Typed actor (Group S3). The coordinator spawns Typed `ByteCodeWorker` children and holds typed refs; it
   * receives a sealed `Command` ADT (see Messages.scala — `ByteCodeCoordinatorMessage` extends `Command`).
-  * SNAPSyncController is still Classic at S3 time and sends commands via the Classic `!`, routed through a
-  * `PropsAdapter` spawn.
+  * SNAPSyncController and BytecodeRecoveryActor, both Typed, spawn it as a child with `ctx.spawn` and send commands
+  * through its typed ref.
   *
   * All mutable state lives on the private `Impl` class; the single behavior `Impl.active()` threads no state through
   * its parameters (the coordinator has one operating phase).
