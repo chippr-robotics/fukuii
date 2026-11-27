@@ -1,8 +1,7 @@
 # fukuii shared backlog (schema version 1). Rendered at https://docs.fukuii.com/development/tracker/
 # Change it with scripts/backlog/backlog.py on staging (claim, status, done, ...); README.md has the protocol.
 # Hand edits in the GitHub web UI are fine: keep the schema (backlog.py check), never delete or reuse an id
-# (drop the item instead; `backlog.py prune` moves closed items to archive.yaml). Comments other than this
-# header are not kept when the tool rewrites the file.
+# (drop the item instead). Comments other than this header are not kept when the tool rewrites the file.
 version: 1
 expiry_hours: 24
 items:
@@ -6235,3 +6234,13 @@ items:
     notes: |-
       User 2026-11-27: do not break the hive harness now that it works upstream (ethereum/hive#1677, clients/fukuii builds FROM chipprbots/fukuii:latest = main). Two ways it breaks: (1) a fukuii change the upstream adapter does not know (spec 030 S6 refusing plaintext non-loopback binds would have stopped the client; fixed in #1677 by allow-insecure-bind, b821188f). Add a CI job that builds ethereum/hive master's clients/fukuii (or the PR branch until merged) against the candidate image and runs smoke/genesis + a short engine/sync slice, required on the staging->main promotion and nightly. (2) Drift between fukuii's own hive/fukuii and upstream clients/fukuii (roles eth1 vs eth1_engine, Dockerfile ARG baseimage/tag, insecure-bind lines): make hive/fukuii the single source, sync it to upstream by PR, and add a diff check against ethereum/hive master. Also: add eth1_snap upstream once a published image carries #2154.
       2026-11-27 done: Merged. hive/fukuii == chippr-robotics/hive@add-fukuii-client (ethereum/hive#1677); hive-upstream-definition.yml: drift + smoke with the upstream definition, first run green (45997394217). Follow-ups: promote the gate to required for main promotions; repoint defaults to ethereum/hive master after #1677 merges; add eth1_snap to both once a published image has #2154.
+  - id: B-570
+    title: "Memory: Mordor follow node grows to ~12 GB RSS on a 6 GB heap during a peer-loss burst (oomd kill); ~5 GB steady off-heap"
+    priority: P2
+    status: open
+    area: storage
+    size: M
+    opened: 2026-11-27
+    refs: []
+    links: {}
+    notes: "2026-11-27 dev-node, staging 0.12.197 jar, Mordor harness follow (-Xmx6g, path-live). Steady 11:45-12:45Z: RSS ~7.8 GB with heap used 1.0-2.5 GB (=> ~5 GB native: RocksDB caches/buffers?), 13 peers. 12:51Z peers 13->7->0, node back to syncing, reorgs + PEER_REQUEST_TIMEOUT + branch resolution; heap used 1->4.1 GB and RSS 8.5->9.9->11.9 GB in ~15 min; systemd-oomd killed the unit at 13:05Z (host 15 GB, core-geth alongside). EG-12 ETC mainnet also peaked at 11.8 GB RSS on -Xmx6g. Matters for small devices (B-552). Next: NMT summary breakdown (restart mordor-1127c runs -XX:NativeMemoryTracking=summary, -Xmx5g); bound RocksDB native memory (db memory-budget) and check what the peer-loss burst allocates. Samples: ~/work/mordor-1126/OUT4/samples.tsv."
