@@ -306,16 +306,21 @@ class E2EHandshakeSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         for
           // Peer1 has blocks, peer2 is at genesis
           _ <- peer1.importBlocksUntil(100)(com.chipprbots.ethereum.sync.util.SyncCommonItSpec.IdentityUpdate)
+          peer2AtStart = peer2.blockchainReader.getBestBlockNumber
 
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
-          _ <- IO.sleep(3.seconds)
+          // B-188: the handshake from genesis succeeded iff peer2 then syncs peer1's chain. The old check, that peer2
+          // was still at 0 after a 3 s sleep, failed whenever regular sync worked. A condition wait, no sleep.
+          synced <- peer2.waitForRegularSyncLoadLastBlock(100)
         yield
-          // Handshake should succeed with peer at genesis
-          val peer2BestBlock = peer2.blockchainReader.getBestBlockNumber
-          peer2BestBlock shouldBe 0
-          succeed
+          peer2AtStart shouldBe 0
+          synced shouldBe true
+          peer2.blockchainReader.getBestBlockNumber shouldBe 100
+          peer2.blockchainReader.getBestBlockHeader.map(_.hash) shouldBe peer1.blockchainReader.getBestBlockHeader.map(
+            _.hash
+          )
       }
 
       "should exchange total difficulty information" taggedAs (IntegrationTest, NetworkTest) in customTestCaseResourceM(
