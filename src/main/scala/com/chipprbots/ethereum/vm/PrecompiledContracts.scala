@@ -744,15 +744,16 @@ object PrecompiledContracts:
     def failureReason(inputData: ByteString): String = UnexplainedFailure
 
   // ===== EIP-2537: BLS12-381 Precompiles (final spec: 7 precompiles at 0x0b-0x11) =====
-  // Uses org.hyperledger.besu:bls12-381 native library: Matter Labs' eth_pairings via JNA (not gnark or Constantine).
-  // G1MUL/G2MUL removed — MSM at k=1 covers single-point multiplication.
+  // Runs on NativeBackends.blsBackend: Matter Labs' eth_pairings via JNA (org.hyperledger.besu:bls12-381) where it loads,
+  // else supranational blst via jblst (Windows; ADR VM-008). G1MUL/G2MUL removed: MSM at k=1 covers single-point
+  // multiplication.
 
-  /** Executes a BLS12-381 operation on the Besu native library: `Some(result)` on success, `None` when the library
-    * rejects the input (invalid point, wrong input size, etc.). A library that did not load raises
+  /** Executes a BLS12-381 operation on the selected library: `Some(result)` on success, `None` when the library rejects
+    * the input (invalid point, wrong input size, etc.). A library that did not load raises
     * [[NativeBackends.NativeBackendUnavailable]] instead of failing the call (B-135).
     */
   private def blsNativeOp(opByte: Byte, inputData: ByteString): Option[ByteString] =
-    NativeBackends.blsOperation(NativeBackends.LibEthPairingsNative, opByte, inputData)
+    NativeBackends.blsOperation(NativeBackends.blsBackend, opByte, inputData)
 
   sealed trait BlsPrecompile extends PrecompiledContract
 
@@ -766,10 +767,10 @@ object PrecompiledContracts:
     * `decodeBLS12381FieldElement`, `decodePointG1` and `decodePointG2`, then the subgroup checks in the MSM and pairing
     * `Run`s). A coordinate's error is gnark-crypto's `fp.BigEndian.Element`.
     *
-    * The encoding and curve checks are pure. Subgroup membership is not a property of the bytes alone: Besu's library
-    * is asked, through [[NativeBackends.blsAccepts]], whether it accepts the point in a one-pair MSM with a zero
-    * scalar. EIP-2537 makes an MSM check every point's subgroup whatever its scalar, and the point already decodes, so
-    * a rejection can only be the subgroup. A library that cannot answer leaves the point reported outside the subgroup.
+    * The encoding and curve checks are pure. Subgroup membership is not a property of the bytes alone: the library is
+    * asked, through [[NativeBackends.blsAccepts]], whether it accepts the point in a one-pair MSM with a zero scalar.
+    * EIP-2537 makes an MSM check every point's subgroup whatever its scalar, and the point already decodes, so a
+    * rejection can only be the subgroup. A library that cannot answer leaves the point reported outside the subgroup.
     */
   private object Eip2537Reasons:
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
@@ -821,7 +822,7 @@ object PrecompiledContracts:
 
     private def inSubgroup(msm: Byte, point: ByteString): Boolean =
       point.forall(_ == 0) ||
-        NativeBackends.blsAccepts(NativeBackends.LibEthPairingsNative, msm, point ++ ZeroScalar).contains(true)
+        NativeBackends.blsAccepts(NativeBackends.blsBackend, msm, point ++ ZeroScalar).contains(true)
 
   object BlsG1Add extends BlsPrecompile:
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings

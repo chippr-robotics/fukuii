@@ -29,7 +29,9 @@ class NativeBackendsSpec extends AnyFlatSpec with Matchers:
   private val blsInput = ByteString(new Array[Byte](256))
 
   private def bls(isEnabled: Boolean)(answer: => Option[Array[Byte]]): BlsNative = new BlsNative:
+    def name: String = "stand-in"
     def enabled: Boolean = isEnabled
+    def unavailableDetail: String = "the native library did not load (LibEthPairings.ENABLED is false)"
     def perform(operation: Byte, input: Array[Byte]): Option[Array[Byte]] = answer
 
   private def kzg(answer: => Boolean): KzgNative = new KzgNative:
@@ -204,6 +206,43 @@ class NativeBackendsSpec extends AnyFlatSpec with Matchers:
   it should "pass the real BLS12-381 library through the precompile's own path" taggedAs (UnitTest, VMTest) in {
     assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
     NativeBackends.probeBackend(Backend.Bls12381) shouldBe Right(())
+  }
+
+  "The BLS12-381 backend choice" should "keep eth_pairings where it loads and fall back to blst where it does not" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    import NativeBackends.BlsChoice
+    NativeBackends.resolveBls(Right(BlsChoice.Auto), ethPairingsLoads = true) shouldBe LibEthPairingsNative
+    NativeBackends.resolveBls(Right(BlsChoice.Auto), ethPairingsLoads = false) shouldBe BlstNative
+    NativeBackends.resolveBls(Right(BlsChoice.EthPairings), ethPairingsLoads = false) shouldBe LibEthPairingsNative
+    NativeBackends.resolveBls(Right(BlsChoice.Blst), ethPairingsLoads = true) shouldBe BlstNative
+  }
+
+  it should "parse the config values, and read an invalid one as a library that is not usable" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    import NativeBackends.BlsChoice
+    BlsChoice.parse("auto") shouldBe Right(BlsChoice.Auto)
+    BlsChoice.parse(" eth-pairings ") shouldBe Right(BlsChoice.EthPairings)
+    BlsChoice.parse("blst") shouldBe Right(BlsChoice.Blst)
+    val invalid = BlsChoice.parse("gnark")
+    invalid.left.toOption.get should include("auto, eth-pairings, blst")
+    // An invalid choice fails the self-check and the call, as a missing library does (B-135).
+    val native = NativeBackends.resolveBls(invalid, ethPairingsLoads = true)
+    native.enabled shouldBe false
+    val error = the[NativeBackendUnavailable] thrownBy blsOperation(native, G1Add, blsInput)
+    error.getMessage should include("gnark")
+  }
+
+  "The startup self-check" should "pass blst through the precompile's own path where jblst loads" taggedAs (
+    UnitTest,
+    VMTest
+  ) in {
+    assume(BlstNative.enabled, s"blst not loaded: ${BlstNative.unavailableDetail}")
+    // probeBackend's known answer, on blst: G1ADD of the point at infinity to itself.
+    blsOperation(BlstNative, G1Add, blsInput) shouldBe Some(ByteString(new Array[Byte](128)))
   }
 
   it should "pass the real c-kzg library once the trusted setup is loaded" taggedAs (UnitTest, VMTest) in {

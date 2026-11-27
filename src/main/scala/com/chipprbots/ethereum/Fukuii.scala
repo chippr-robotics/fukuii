@@ -88,6 +88,11 @@ object Fukuii extends Logger:
     // The native libraries behind the precompiles of every configured fork (BLS12-381 from ETH Prague or ETC Olympia,
     // KZG from ETH Cancun or ETC Olympia). A missing one would make this node compute different results from the
     // network, so it must not start without them (B-135).
+    NativeBackends.BlsChoice.parse(Config.config.getString("vm.bls12-381-backend")) match
+      case Left(error) =>
+        log.error("Configuration error: {}", error)
+        System.exit(1)
+      case Right(choice) => NativeBackends.selectBls(choice)
     val nativeBackends = NativeBackends.required(Config.blockchains.blockchainConfig)
 
     if nativeBackends.contains(NativeBackends.Backend.Kzg) then
@@ -118,6 +123,8 @@ object Fukuii extends Logger:
       System.exit(1)
     else if nativeBackends.nonEmpty then
       log.info("Native precompile backends checked: {}", nativeBackends.map(_.library).mkString("; "))
+      if nativeBackends.contains(NativeBackends.Backend.Bls12381) then
+        log.info("BLS12-381 precompiles run on {}", NativeBackends.blsBackendName)
     // From here on, a precompile that finds its backend missing halts the node where it finds it. Installed after the
     // self-check, whose probes report a missing backend instead of halting.
     FatalErrors.installCallTimeHalt()
