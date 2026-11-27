@@ -3180,12 +3180,17 @@ items:
   - id: B-340
     title: "Hive engine/cancun/prague/osaka run on B-005's branch: newPayload SYNCING vs ACCEPTED on missing-ancestor and syncing cases"
     priority: P2
-    status: open
+    status: claimed
     area: engine-api
     opened: 2026-11-17
     refs: []
     links:
       spec: none
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T23:33:46Z
+      heartbeat: 2026-11-27T23:33:46Z
     notes: beacon-b005. B-005 changes unexecuted newPayload answers (SYNCING on canonical parent or requested head). Unit-tested only; no hive run in the container. Check Invalid Missing Ancestor Syncing ReOrg, Invalid NewPayload Syncing=True, Re-Org Sync.
   - id: B-341
     title: MerklePatriciaTrie scaladoc (:44, :88) says the Engine API answers a missing node ACCEPTED; since B-005 it may be SYNCING
