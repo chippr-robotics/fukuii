@@ -476,7 +476,7 @@ docker run -d \
 Every runtime image sets
 
 ```dockerfile
-ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges"
+ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:DisableIntrinsic=_base64_decodeBlock --sun-misc-unsafe-memory-access=allow"
 ```
 
 to disable a HotSpot C2 optimisation that can silently miscompile field reads on JDK 23+
@@ -486,7 +486,10 @@ for your own tuning. Two things to know:
 
 - `java` prints `NOTE: Picked up JDK_JAVA_OPTIONS: ...` on stderr at startup. That is expected.
 - If you set `JDK_JAVA_OPTIONS` yourself (`-e` or compose `environment:`), you replace the image's value:
-  include both flags in yours.
+  include its flags in yours.
+- `--sun-misc-unsafe-memory-access=allow` only silences the JDK 24+ `sun.misc.Unsafe` warning that Scala 3 lazy
+  vals trigger, which would otherwise print four lines over the TUI's first frame (B-125). JDK 22 and older refuse
+  it, so leave it out if you run the jar on such a JDK.
 
 Details and other launch paths:
 [known-issues Issue 16](../runbooks/known-issues.md#issue-16-jdk-25-c2-reduceallocationmerges-workaround).

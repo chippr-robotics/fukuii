@@ -19,7 +19,9 @@ import com.chipprbots.ethereum.blockchain.sync.StoredBodyRepair
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.consensus.engine.EngineApiMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
+import com.chipprbots.ethereum.consensus.mining.ifEthash
 import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
 import com.chipprbots.ethereum.console.AuditReading
 import com.chipprbots.ethereum.console.AuditSample
@@ -468,12 +470,15 @@ abstract class BaseNode extends Node:
   private def startMining(): Unit =
     // A node that produces blocks takes transactions from peers: core-geth's StartMining calls
     // `enableSyncedFeatures()` for the same reason, or a miner held behind the gate would mine empty blocks.
-    if mining.config.generic.miningEnabled then
-      txGossipGate.markSynced("block production is enabled")
-      // The DAG gauges are written from the mining thread (EthashDAGManager), inside loops whose failure paths
-      // delete and regenerate the DAG file. Initialise the metrics object here, after startMetricsClient and before
-      // that thread exists, so that a failed initialiser surfaces at start-up and not on it (spec 027 slice 5, M2).
+    if mining.config.generic.miningEnabled then txGossipGate.markSynced("block production is enabled")
+    // The DAG gauges are written from the mining thread (EthashDAGManager), inside loops whose failure paths delete and
+    // regenerate the DAG file, and eth_getWork / eth_submitWork / eth_mining touch the object on an IO fiber whether
+    // or not this node mines. Initialise it here, after startMetricsClient and before that thread or the first request
+    // exists, so that a failed initialiser surfaces at start-up and not on either (spec 027 slice 5, M2; B-194: a
+    // LinkageError on an IO fiber is fatal to every IORuntime). Only under Ethash: no other mining touches it.
+    mining.ifEthash { _ =>
       val _ = PoWMiningMetrics
+    }(())
     mining.startProtocol(this)
 
   /** The pre-bind TLS pass: refuses the start on the first misconfiguration, logs one line per TLS listener. */
@@ -631,6 +636,10 @@ abstract class BaseNode extends Node:
     */
   private def startEngineApiServer(): Unit =
     maybeEngineApiServer.foreach { server =>
+      // engine_newPayload, engine_forkchoiceUpdated and the JWT check record into EngineApiMetrics on an IO fiber.
+      // Initialise it here, after startMetricsClient and before the first request can arrive, so that a failed
+      // initialiser surfaces at start-up (B-194: a LinkageError on an IO fiber is fatal to every IORuntime).
+      val _ = EngineApiMetrics
       StdNode.awaitEngineApiBind(server.start(), engineApiConfig.interface, engineApiConfig.port, 10.seconds) match
         case Right(binding) => log.info(s"Engine API server bound to ${binding.localAddress}")
         case Left(message)  => throw StdNode.startupRefusal(message)

@@ -120,6 +120,8 @@ ExecStart=/opt/fukuii/bin/fukuii ephemery
 Restart=on-failure
 RestartSec=120
 RestartPreventExitStatus=78
+# the bounded stop steps (up to ~119 s) and the RocksDB close after them (B-444)
+TimeoutStopSec=180
 ```
 
 - **Why 120 s.** A restart that finds the release not published exits 69 after at most one budget and waits 120 s,
@@ -238,9 +240,11 @@ with credentials, or a scheme the JDK cannot speak, is refused at start (exit 78
 
 A trial run of `fukuii ephemery` or `fukuii cli ephemery-fetch` writes under `fukuii.datadir` (default
 `~/.fukuii/ephemery`). The JVM takes its home from the account database, not from `$HOME`, so setting `HOME` does not
-move it. Use `JAVA_OPTS="-Duser.home=/scratch/home -Dlogging.logs-dir=/scratch/logs"` (or `-Dfukuii.datadir=...`). The
-launcher also appends one "Loading network configuration" line to the default network's log file before it reads those
-options (known, B-241); `fetch-genesis.sh` and `--out` runs write everything else under the `--out` directory.
+move it. Use `JAVA_OPTS="-Duser.home=/scratch/home -Dlogging.logs-dir=/scratch/logs"` (or `-Dfukuii.datadir=...`).
+`fukuii ephemery` also appends one "Loading network configuration" line to the default network's log file before it
+reads those options. `fukuii cli ephemery-fetch`, like every `fukuii cli` command, logs to the console only (B-241),
+though the launcher still creates that log file, empty, if it is missing; `fetch-genesis.sh` and `--out` runs write
+everything else under the `--out` directory.
 
 ## 1. Fetch the current iteration
 

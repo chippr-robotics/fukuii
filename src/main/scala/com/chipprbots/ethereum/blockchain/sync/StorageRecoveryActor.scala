@@ -38,8 +38,8 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.StorageRanges
   * with no data dependency.
   *
   * Pekko Typed actor (`Behavior[Command]`, narrowed S5): SyncController sends `StoragePeerAvailable`, `RecentRoot`, and
-  * coordinator messages; all are members of the sealed `Command` ADT. SyncController holds a Classic-visible ref via
-  * the CAPSTONE co-existence bridge; `Behavior[Any]` is no longer needed — all Typed machinery active.
+  * coordinator messages; all are members of the sealed `Command` ADT. SyncController, also Typed, spawns it and holds a
+  * typed `ActorRef[Command]`.
   *
   * Lifecycle:
   *   1. If none missing → mark recovery done, report to SyncController 2. If missing → download via

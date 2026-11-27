@@ -164,8 +164,9 @@ object PeerActor:
     }
   // scalastyle:on parameter.number method.length
 
-  /** Classic-callable factory. PeerManagerActor (still Classic) spawns this via PropsAdapter, getting back a Classic
-    * ActorRef. The spawned behavior is fully Typed; the parent-direction RLPx co-existence is preserved.
+  /** Classic-callable factory: the Typed behavior wrapped in Classic `Props` via `PropsAdapter`. PeerManagerActor is
+    * Typed and spawns [[apply]] directly with `ctx.spawn` (`PeerManagerActor.peerFactory`); nothing in the code base
+    * calls this factory any more.
     */
   // scalastyle:off parameter.number
   def props[R <: HandshakeResult](

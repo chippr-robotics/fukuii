@@ -23,7 +23,7 @@ object LogbackReload:
       case _ => ()
 
   /** Detaches every file appender from the root logger: the console keeps working, and nothing more is written to a log
-    * file. For a command (`cli ephemery-fetch --out`) whose output must not land in a node's datadir.
+    * file. For a one-shot `cli` command, whose output must not land in a node's datadir (B-241).
     */
   def consoleOnly(): Unit =
     LoggerFactory.getILoggerFactory match

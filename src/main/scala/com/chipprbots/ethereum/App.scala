@@ -264,16 +264,17 @@ object App extends Logger:
     val modifiers = args.filter(isModifier).toSet
     val argsWithoutModifiers = args.filterNot(isModifier)
 
+    // A `cli` command is a one-shot tool, not a node: its log belongs on the console, not in a node's datadir
+    // (`cli ephemery-fetch` writes into the directory it is given, spec 028 S3; every other subcommand, B-241). So the
+    // file appenders are dropped first, before `setNetworkConfig` logs, and it logs to the console only. BEST EFFORT:
+    // the launcher's logger was set up when `App` was initialised, before any argument was read, and its file appender
+    // has already opened (and created) the default network's log file; nothing is written to it. A caller can also
+    // pass `-Dlogging.logs-dir` (fetch-genesis.sh and update-bundled.sh do).
+    if isCli(argsWithoutModifiers) then LogbackReload.consoleOnly()
+
     // Configure network before any logging (required for logback property definers)
     val network = determineNetworkArg(argsWithoutModifiers)
     network.foreach(setNetworkConfig)
-
-    // `cli ephemery-fetch` writes into the directory it is given (or a node's root): its log should not go to a node's
-    // datadir, so the file appenders are dropped and it logs to the console only. BEST EFFORT: the launcher's logger was set up when `App` was
-    // initialised, before any argument was read, and its file appender has already opened (and created) the default
-    // network's log file. Moving that is App-init logging, which is B-241 and the user's call; this only stops further
-    // writes to it. A caller can also pass `-Dlogging.logs-dir` (fetch-genesis.sh and update-bundled.sh do).
-    if isEphemeryFetch(argsWithoutModifiers) then LogbackReload.consoleOnly()
 
     // Ephemery needs no preparation step (spec 028): choose its iteration now, after the network is set and before
     // anything reads `utils.Config`, which reads its properties once. A refusal ends the process with its code.
@@ -291,8 +292,7 @@ object App extends Logger:
         try dispatch(argsWithoutModifiers, modifiers, deps)
         finally EphemeryResolver.flushReport()
 
-  private def isEphemeryFetch(args: Array[String]): Boolean =
-    args.headOption.contains(cli) && args.tail.headOption.contains(EphemeryFetchCli.CommandName)
+  private def isCli(args: Array[String]): Boolean = args.headOption.contains(cli)
 
   private def dispatch(argsWithoutModifiers: Array[String], modifiers: Set[String], deps: StartupDeps): Unit =
 

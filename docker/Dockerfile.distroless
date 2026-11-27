@@ -87,7 +87,10 @@ ENV FUKUII_CONF_DIR=/app/conf
 # corruption by crafted input. The pinned base image carries the fix; disabling
 # the intrinsic also covers a host or image still on an affected JDK. Remove once
 # no supported JDK predates 25.0.5.1 / 21.0.13.1.
-ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:DisableIntrinsic=_base64_decodeBlock"
+# B-125: --sun-misc-unsafe-memory-access=allow stops JDK 24+ printing its
+# sun.misc.Unsafe warning (Scala 3 lazy vals) over the TUI's first frame. This
+# image's JDK is 25; JDK 22 and older would refuse the flag.
+ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:DisableIntrinsic=_base64_decodeBlock --sun-misc-unsafe-memory-access=allow"
 
 # Expose default ports
 # 8545: HTTP RPC

@@ -25,9 +25,9 @@ import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
   * flag was then settled on that partial walk, and it was retired (B-217).
   *
   * Pekko Typed actor (`Behavior[Command]`, narrowed S5): SyncController sends both `ByteCodePeerAvailable` and
-  * `ByteCodeSyncComplete` / `ProgressBytecodesDownloaded` to this actor. SyncController holds a Classic-visible ref via
-  * the CAPSTONE co-existence bridge; all inbound messages are members of the sealed `Command` ADT, so `Behavior[Any]`
-  * is no longer needed — all Typed machinery (named behavior functions, `Behaviors.withTimers`, `watchWith`) is active.
+  * `ByteCodeSyncComplete` / `ProgressBytecodesDownloaded` to this actor. SyncController, also Typed, spawns it and
+  * holds a typed `ActorRef[Command]`; every inbound message is a member of the sealed `Command` ADT, and it uses the
+  * Typed machinery throughout (named behavior functions, `Behaviors.withTimers`, `watchWith`).
   *
   * Lifecycle:
   *   1. If none missing → mark recovery done, report to SyncController 2. If missing → download via

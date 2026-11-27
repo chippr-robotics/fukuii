@@ -165,7 +165,7 @@ echo "Stopping Fukuii..."
 # For systemd:
 # sudo systemctl stop fukuii
 # For Docker:
-# docker stop fukuii
+# docker stop -t 180 fukuii   # the default 10 s SIGKILLs the node while it closes the database
 # For screen/tmux: send stop command or kill process
 pkill -f fukuii || echo "Fukuii not running"
 

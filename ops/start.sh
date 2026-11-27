@@ -84,10 +84,22 @@ else
   INIT_ARG="-Xms${INIT_MB}m"
 fi
 
+# B-125: JDK 24+ prints a four-line sun.misc.Unsafe warning on stderr (Scala 3 lazy
+# vals) over the TUI's first frame. --sun-misc-unsafe-memory-access=allow silences
+# it, but JDK 22 and older refuse to start with it: probe this java first, and skip
+# the probe when JDK_JAVA_OPTIONS (the Docker images) already carries the flag.
+UNSAFE_ACCESS_ARG=()
+case " ${JDK_JAVA_OPTIONS:-} " in
+  *--sun-misc-unsafe-memory-access=*) ;;
+  *) java --sun-misc-unsafe-memory-access=allow -version >/dev/null 2>&1 &&
+       UNSAFE_ACCESS_ARG=(--sun-misc-unsafe-memory-access=allow) ;;
+esac
+
 # JDK-8385993: C2 ReduceAllocationMerges can silently miscompile field reads on
 # JDK 23+ (fixed in JDK 28); the two diagnostic flags below disable it. Host java
 # gets nothing from the Docker images' JDK_JAVA_OPTIONS, so they are set here.
 exec java \
+  ${UNSAFE_ACCESS_ARG[@]+"${UNSAFE_ACCESS_ARG[@]}"} \
   "$HEAP_ARG" \
   "$INIT_ARG" \
   -Xss1M \

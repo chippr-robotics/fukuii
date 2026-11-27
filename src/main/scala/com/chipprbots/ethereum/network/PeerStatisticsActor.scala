@@ -17,15 +17,15 @@ object PeerStatisticsActor:
   /** Behavior factory for the Typed PeerStatisticsActor.
     *
     * The Classic `var maybeStats` is replaced by state threaded through the recursive [[active]] behavior.
-    * Subscriptions to the (still Classic) PeerEventBus are wired through a message adapter that lifts Classic
-    * [[PeerEvent]] messages into the typed [[Command]] ADT ([[PeerMessageReceived]] / [[PeerGone]]); the adapter's
-    * underlying Classic ref is what we hand to the bus via `Subscribe`.
+    * Subscriptions to the (Typed) PeerEventBusActor are wired through a message adapter that lifts [[PeerEvent]]
+    * notifications into the typed [[Command]] ADT ([[PeerMessageReceived]] / [[PeerGone]]); the adapter ref is the
+    * subscriber handed to the bus in `SubscribeCmd`.
     */
   def apply(peerEventBus: TypedActorRef[PeerEventBusActor.Command], slotDuration: FiniteDuration, slotCount: Int)(
       implicit clock: Clock
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
-      // Lift Classic PeerEventBus notifications into the typed Command ADT.
+      // Lift PeerEventBus notifications into the typed Command ADT.
       val eventAdapter: TypedActorRef[PeerEvent] = ctx.messageAdapter[PeerEvent] {
         case PeerEvent.MessageFromPeer(msg, peerId) => PeerMessageReceived(msg, peerId)
         case PeerEvent.PeerDisconnected(peerId)     => PeerGone(peerId)

@@ -17,8 +17,8 @@ import com.chipprbots.ethereum.mpt.StackTrie
   *   - `commit()` finalises the right-boundary path and flushes the remainder.
   *
   * The `writeBatch` callback is the integration boundary. Callers pass in a function adapted from their storage layer —
-  * typically `mptStorage.storeRawNodes` for the SNAP path, which goes through `FastSyncNodeStorage` and picks up the
-  * pivot-block-number tag for pruning automatically.
+  * typically `mptStorage.storeRawNodes` for the SNAP path, whose storage is `StateStorage.getBackingStorage` at the
+  * pivot (`StateIngest.trieStore`), so under basic or in-memory pruning the nodes carry the pivot block number.
   *
   * ==Why this is so simple==
   *

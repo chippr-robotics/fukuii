@@ -51,6 +51,17 @@ class AppSpec extends AnyFlatSpec with Matchers:
     determineNetworkArg(Array("cli")) shouldBe None
   }
 
+  it should "log every cli command to the console only, not only `cli ephemery-fetch` (B-241)" taggedAs (UnitTest) in {
+    val isCli = App.getClass.getDeclaredMethod("isCli", classOf[Array[String]])
+    isCli.setAccessible(true)
+    def consoleOnly(args: String*): Boolean = isCli.invoke(App, args.toArray.asInstanceOf[AnyRef]).asInstanceOf[Boolean]
+    consoleOnly("cli", "ephemery-fetch", "--from-dir", "x") shouldBe true
+    consoleOnly("cli", "generate-private-key") shouldBe true
+    consoleOnly("cli") shouldBe true
+    consoleOnly("etc") shouldBe false
+    consoleOnly() shouldBe false
+  }
+
   it should "recognize 'public' as a modifier" taggedAs (UnitTest) in {
     getIsModifierMethod.invoke(App, "public").asInstanceOf[Boolean] shouldBe true
     getIsModifierMethod.invoke(App, "etc").asInstanceOf[Boolean] shouldBe false

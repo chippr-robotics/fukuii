@@ -9,6 +9,10 @@ if not defined _FUKUII_JH if defined JAVA_HOME if exist "%JAVA_HOME%\bin\java.ex
   "%JAVA_HOME%\bin\java.exe" -version 2>&1 | findstr /r /c:"version \"2[5-9][.\"]" /c:"version \"[3-9][0-9][.\"]" >nul && set "_FUKUII_JH=%JAVA_HOME%"
 )
 if not defined _FUKUII_JH for /d %%D in ("%ProgramFiles%\Eclipse Adoptium\jre-25*" "%ProgramFiles%\Eclipse Adoptium\jdk-25*") do set "_FUKUII_JH=%%~D"
+rem B-125: Java 24+ prints a sun.misc.Unsafe warning (Scala 3 lazy vals) over the first TUI frame. The flag that
+rem silences it stops Java 22 and older starting, so set it only when a Java 25 was picked above. fukuii.bat
+rem appends FUKUII_OPTS to the java command line.
+if defined _FUKUII_JH set "FUKUII_OPTS=--sun-misc-unsafe-memory-access=allow %FUKUII_OPTS%"
 if defined _FUKUII_JH (
   call "%~dp0fukuii-__VERSION__\bin\fukuii.bat" -java-home "%_FUKUII_JH%" %*
 ) else (

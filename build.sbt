@@ -133,6 +133,11 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   // Scoverage's statement/branch instrumentation slows forked test JVMs several-fold; the 3 s TestKit expectMsg
   // defaults in BlockFetcherSpec then time out (observed: 3 failures only when the root module is instrumented).
   // (Classic TestKit and the typed ActorTestKit use separate timefactor keys.) Scale timeouts only while `sbt coverage` is active; normal runs are unchanged.
+  // B-125: JDK 24+ warns on stderr the first time Scala 3 lazy vals touch sun.misc.Unsafe. The forked test JVM uses
+  // sbt's java, and JDK 22 and older refuse the flag, so add it only when sbt itself runs on 24 or newer.
+  Test / javaOptions ++= (if (sys.props("java.specification.version").toDouble >= 24)
+                            Seq("--sun-misc-unsafe-memory-access=allow")
+                          else Seq.empty),
   Test / javaOptions ++= (if (coverageEnabled.value)
                             Seq("-Dpekko.test.timefactor=4", "-Dpekko.actor.testkit.typed.timefactor=4")
                           else Seq.empty),
@@ -389,6 +394,18 @@ lazy val node = {
       // Remove once no supported JDK predates the fix.
       bashScriptExtraDefines += """addJava "-XX:+UnlockDiagnosticVMOptions"""",
       bashScriptExtraDefines += """addJava "-XX:DisableIntrinsic=_base64_decodeBlock"""",
+      // B-125: Scala 3 lazy vals (LazyVals) use sun.misc.Unsafe, and JDK 24+ prints a four-line warning on stderr
+      // the first time, over the TUI's first frame. --sun-misc-unsafe-memory-access=allow silences it, but JDK 22 and
+      // older refuse to start with it, so add it only when this java accepts it. process_my_args is the template's
+      // hook that runs after -java-home has picked java_cmd; it must hand the residual arguments back.
+      bashScriptExtraDefines += """process_my_args() {
+  case " ${JDK_JAVA_OPTIONS:-} ${JAVA_OPTS:-} " in
+    *--sun-misc-unsafe-memory-access=*) ;;
+    *) "$java_cmd" --sun-misc-unsafe-memory-access=allow -version >/dev/null 2>&1 &&
+         addJava "--sun-misc-unsafe-memory-access=allow" ;;
+  esac
+  residual_args+=("$@")
+}""",
       batScriptExtraDefines += """call :add_java "-Dconfig.file=%APP_HOME%\conf\app.conf"""",
       batScriptExtraDefines += """call :add_java "-Dlogback.configurationFile=%APP_HOME%\conf\logback.xml"""",
       batScriptExtraDefines += """call :add_java "-XX:+UnlockDiagnosticVMOptions"""",
