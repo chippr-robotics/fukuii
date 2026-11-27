@@ -1299,12 +1299,17 @@ items:
   - id: B-123
     title: "backlog.py: a note command for unclaimed items (status only takes held states)"
     priority: P3
-    status: open
+    status: claimed
     area: tooling
     size: S
     opened: 2026-11-08
     refs: [B-003]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-27T23:32:55Z
+      heartbeat: 2026-11-27T23:32:55Z
     notes: "Found adding beacon carry-forward to B-004 (PR C: write the genesis weight on TTD=0 chains; SyncController:2689, SnapFinalization:277)."
   - id: B-125
     title: "Launcher: silence the JDK 25 sun.misc.Unsafe warning that overprints the TUI's first frame"
