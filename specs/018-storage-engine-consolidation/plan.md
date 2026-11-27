@@ -61,7 +61,8 @@ read/write lock, so T-010 (the close-fence, OQ-7) has not shipped.
 - **C8a** (B-069), after C7 and EG-12; **C8b** (B-070), after C8a. B-292 (fault injection for reverse-then-commit at the
   cap) is to land before the guard goes.
 - **C9a and C9b** (B-552, P1, the user, 2026-11-27): history expiry, then an optional tiered freezer for history. They
-  wait for nothing in Track C's gate. EG-4's disk figure depends on them (open item 7).
+  wait for nothing in Track C's gate. EG-4 is accepted without them, its disk figure marked without expiry (open
+  item 7, decided 2026-11-27).
 - Code follow-ups that need no host are listed in the backlog (spec 018, area storage/sync).
 
 **The guard.** `fukuii.state.path-live` is **`false` by default** (`src/main/resources/conf/base/state.conf`) in every
@@ -295,7 +296,7 @@ neither, nor on GT-1 or the constitution amendment.
 | 8, path-aware node resolution | C1, C2a, C2b | The trie reports positions; a position store resolves by `(owner, path)` with hash verification; every reader can be handed it; the typed `StateFault`s exist |
 | 6, changesets | C3a, C3b, C3c, C4a, C4b, C4d, C4e (C4c is withdrawn; its id is not reused) | The `BlockDiff` record and CF `v`; the in-place canonical commit under the state lock; the proposer view, the bypass writers and the ported test harnesses; the overlay; head moves planned from the anchor; the PoS arms (Engine API, local recovery, finality-aware retention) and the PoW arms (pinned branches, `SYNC-FORK`, result mapping) |
 | 10, one gate | C5a, C5b, C5c, C6, C7, C8a, C8b | Hand-off without a copy, with the ancestor window; the layout guard; the audit, on-demand fetch and recovery scans by position; the checkpoint v2 format and importer; ETC enablement and mainnet readiness; the soak and exit gate; then deletion of the exporter and the Hash scheme and removal of the guard flag |
-| 19, history expiry and tiered history (B-552, #1483; added 2026-11-27) | C9a, C9b | A history cutoff (the backfill stops there, stored history below it is pruned, the earliest block is recorded and advertised, and RPC and devp2p answer for expired ranges as geth does); then an optional second path for frozen bodies and receipts. It touches history only (namespaces `b`, `r`, `l`), not the state layout, so it runs with the guard on or off |
+| 19, history expiry and tiered history (B-552, #1483; added 2026-11-27) | C9a, C9b | A history cutoff (the backfill stops there, stored history below it is pruned, the earliest block is recorded and advertised, and RPC and devp2p answer for expired ranges as geth does); then an optional second path for frozen bodies and receipts. One design for every chain, ETC included (the user, 2026-11-27). It touches history only (namespaces `b`, `r`, `l`), not the state layout, so it runs with the guard on or off |
 
 **Order.** Item 6 lands before item 10, as decided. Because C3 and C4 cannot be soaked on a live chain without a hand-off that
 does not publish, the hand-off (C5) is built behind the same in-development guard before the soak (C7). The guard
@@ -351,8 +352,8 @@ measurements: M1 to M15 (data-model 13) replace the guesses, and the sizes have 
 | **C7** | **Soak and exit gate** (below), run with the guard on. **C7 runs EG-12.** No code | eye; user |
 | **C8a** | Retirement 1. Delete `PathToHashExporter` and the publish plumbing (destructive block below), `StorageScheme` and every Hash branch in `snap/`, the `PathPublish*` messages and their specs. **Merges only after EG-12 passes** | vault; beacon; forge (ETC SNAP); prism; the 016 ratchet |
 | **C8b** | Retirement 2, **the last slice.** Delete the Hash-scheme storages in `db/`, `getBackingStorage` and `getReadOnlyStorage` as state accessors, the pruning caches and config blocks; migrate or delete the remaining tests that use them; **remove the guard flag**; rewrite the operator docs, skills and `storage-rocksdb.md`; re-run the EG-1 subset on the final tree | vault; beacon; forge; prism; eye |
-| **C9a** | **History expiry** (B-552, P1; added 2026-11-27; design in "C9: history expiry" below). The cutoff `fukuii.history.chain` (`none`, `merge`, `prague`, `osaka`, or `<number>:<hash>`; geth's `--history.chain`), **default `none` on every chain** (geth's default); the named points per chain copied from geth's table; refusals at start before any side effect; the backfill stops at the cutoff and headers are all kept; a bounded, kill-safe background prune of stored bodies, receipts and transaction-index rows below it; the earliest available block recorded; JSON-RPC answers for expired ranges as geth's (error 4444, `earliest` resolves to the cutoff, `eth_getLogs` ranges, `eth_capabilities`); eth/69 and eth/70 `Status` and `BlockRangeUpdate` advertise the real earliest block (today they say 0); `GetBlockBodies` and `GetReceipts` stop at the first block not held (already so). SNAP serving is unaffected. Independent of C7, C8a and C8b; touches no state code | vault (owner; prune write and delete order); **beacon** (ETH semantics, named points) and **forge** (ETC defaults) **before code**; **conduit** (RPC); **herald** (devp2p, advertising); prism; eye |
-| **C9b** | **Tiered freezer** (operator opt-in; after C9a). A second path for frozen bodies and receipts (geth's ancient store and `--datadir.ancient`); finalized data migrated from the hot RocksDB (PoS: up to the finalized block; PoW: `head - 90,000`); reads fall through from hot to frozen; append and fsync before the hot delete. Built as a simple append-only freezer in the format FR-022's segment store will use, **not** on the `ColdStore` seam (FR-024, which is lossy by design). Expiry then truncates the freezer's tail. Track E's E1b and Track H's H2 build on it | vault (owner; crash order); beacon (PoS threshold); forge (PoW threshold, reorg depth); conduit and herald (fall-through answers); prism; eye |
+| **C9a** | **History expiry** (B-552, P1; added 2026-11-27; design in "C9: history expiry" below). **One design for every chain** (the user, 2026-11-27: ETC follows ETH). The cutoff `fukuii.history.chain`: `none`, a named fork point (ETH: `merge`, `prague`, `osaka`, from geth's table; ETC and Mordor: activated forks, at least `spiral`, the set and its hashes forge's), `"<number>:<hash>"`, or **`pivot`** (a fukuii extension: history from the sync's pivot on); **default `none` on every chain** (geth's `all`); refusals at start before any side effect; one floor under every backfill cursor write; headers all kept; a bounded, kill-safe background prune (intent first under `commitSync`, `l` rows deleted only when they name the pruned block, compaction in slices with a pending marker); the earliest block recorded and advertised as `max(cutoff, L)`; one RPC predicate (4444 below the cutoff, geth's -32000 "block body not found" in a not-yet-backfilled gap) over every block-reading method; `BlockRangeUpdate` at the intent write; the transaction-index window `history.transactions` (default 0); `GetBlockBodies` and `GetReceipts` stop at the first block not held (already so). SNAP serving is unaffected; `none` is inert on every chain. Independent of C7, C8a and C8b; touches no state code | vault (owner; prune write and delete order, the floor); **beacon** (ETH points, `pivot` on PoS) and **forge** (ETC points and hashes, `pivot` and the ommer window on PoW) **before code**; **conduit** (RPC); **herald** (devp2p, advertising, peer choice); prism; eye |
+| **C9b** | **Tiered freezer** (operator opt-in; after C9a; every chain). A second path for frozen canonical bodies and receipts (geth's ancient store and `--datadir.ancient`); data at or below `max(finalized, head - 90,000)` migrated from the hot RocksDB (append, fsync of the files and the directory, synced high-water mark, then the hot delete); each record carries its block hash and a CRC32C; a repair that would truncate below the high-water mark refuses the start; reads fall through in `BlockchainReader` with a hash check; orphans stay hot; `l` stays hot and windowed. Built as a simple append-only freezer in the format FR-022's segment store will use, **not** on the `ColdStore` seam (FR-024, lossy by design). Expiry then truncates the freezer's tail. Track E's E1b and Track H's H2 build on it | vault (owner; crash order); beacon (PoS threshold); forge (PoW threshold, reorg depth); conduit and herald (fall-through answers); prism; eye |
 
 #### Files, size and tests per slice
 
@@ -375,8 +376,8 @@ measurements: M1 to M15 (data-model 13) replace the guesses, and the sizes have 
 | C6 | `blockchain/sync/SyncController.scala` (guard); the peer-count logging; `consensus/pow/*` (if the PoW paths need changes beyond C3c); test harnesses and `scripts` | 440 / 550 | ETC PoW reorg matrix on Mordor and the **private ETC-config PoW net** (two or three fukuii miners plus a core-geth, Olympia at a low block); mined root equals import root; rewards and era-boundary differential; ETC ethereum/tests; the EG-12 harness; M10, M13 |
 | C8a | delete `snap/PathToHashExporter.scala` and 3 specs; `StorageScheme`, `SnapHashTrie` and every `StorageScheme.Hash` arm (64 references, 18 files); `PathPublish*` in `SNAPSyncController` and two dispatch specs | about -2,000 / -1,000 | `sbt pp`; 016 ratchet; the EG-1 subset |
 | C8b | delete `ReferenceCountNodeStorage` (520), `CachedReferenceCountedStorage` (292), `FastSyncNodeStorage`, the Hash classes of `StateStorage.scala`, pruning caches and config; remove the guard; migrate the remaining tests | about -1,300 / -2,500, plus 700 migrated | `sbt pp`; `grep` for every removed symbol is empty; EG-1 subset on the final tree |
-| C9a | `storage/history/HistoryPolicy.scala`, `HistoryRange.scala`, `HistoryPruner.scala` (new); `storage/AppStateStorage.scala`; `conf/base/history.conf` (new) and the named points in `conf/base/chains/{eth,sepolia,hoodi}-chain.conf`; `nodebuilder/NodeBuilder.scala` (start-up checks); `blockchain/sync/snap/ChainDownloader.scala`, `HeaderChainCheck.scala` (outside `db/`); `jsonrpc/ResolveBlock.scala`, `EthBlocksService.scala`, `EthTxService.scala`, `FilterManager.scala`, `EthFilterService.scala`, `JsonRpcError.scala`, `jsonrpc/graphql/GraphQLSchema.scala`; `network/handshaker/EthNodeStatus69ExchangeState.scala`, `EthNodeStatus70ExchangeState.scala`, `blockchain/sync/regular/BlockBroadcast.scala` | about 1,100 / 1,300 (a guess; set again after T293) | the policy table against geth's points; start-up refusals before any side effect; backfill floor at the cutoff; the prune killed at each step; the RPC answer table; `eth_getLogs` ranges; `Status` and `BlockRangeUpdate`; body and receipt serving; SNAP serving unchanged; a live Sepolia run (SC-017) |
-| C9b | `db/freezer/HistoryFreezer.scala`, `FreezerTable.scala`, `FreezeMigrator.scala` (new); `domain/BlockchainReader.scala`, `storage/BlockBodiesStorage.scala`, `ReceiptStorage.scala` (fall-through); `conf/base/db.conf`; data-model.md (the freezer format) | about 1,200 / 1,100 (a guess) | append, fsync and repair; the migration killed at each step; fall-through answers equal to hot-only; the threshold per chain; expiry through the freezer; the path refusals; a live SSD and HDD Sepolia run (SC-018) |
+| C9a | `storage/history/HistoryPolicy.scala`, `HistoryRange.scala`, `HistoryPruner.scala`, `TxIndexWindow.scala` (new); `storage/AppStateStorage.scala` (the floor in the cursor writers); `conf/base/history.conf` (new) and the named points in `conf/base/chains/{eth,sepolia,hoodi,etc,mordor}-chain.conf`; `nodebuilder/NodeBuilder.scala` (start-up checks); `blockchain/sync/snap/ChainDownloader.scala`, `HeaderChainCheck.scala`, `snap/controller/SnapFinalization.scala` (the `pivot` record), `blockchain/sync/StoredBodyRepair.scala`, `blockchain/checkpoint/CheckpointImporter.scala` (outside `db/`); `jsonrpc/ResolveBlock.scala`, `EthBlocksService.scala`, `EthTxService.scala`, `DebugTracingService.scala`, `TraceService.scala`, `FilterManager.scala`, `EthFilterService.scala`, `McpService.scala`, `JsonRpcError.scala`, `jsonrpc/graphql/GraphQLSchema.scala`; `consensus/engine/EngineApiController.scala` (payload bodies); `network/handshaker/EthNodeStatus69ExchangeState.scala`, `EthNodeStatus70ExchangeState.scala`, `blockchain/sync/regular/BlockBroadcast.scala`, `network/NetworkPeerManagerActor.scala` (peer ranges) | about 1,600 / 1,900 (a guess; set again after T293) | the policy table against geth's points and the ETC points; `pivot` cases; start-up refusals before any side effect; the floor under every cursor writer, with reset and re-peg; the prune killed at each step; `l` compare-hash; compaction resume; the RPC predicate over every method; `eth_getLogs` up front; `Status` and `BlockRangeUpdate`; body and receipt serving; the transaction-index window; `none` inert on ETH and ETC; SNAP serving unchanged; live Sepolia and Mordor runs (SC-017, SC-020) |
+| C9b | `db/freezer/HistoryFreezer.scala`, `FreezerTable.scala`, `FreezeMigrator.scala` (new); `domain/BlockchainReader.scala` (fall-through with the hash check in `getBlockBodyByHash`, `getReceiptsByHash`, `hasReceipts`); `conf/base/db.conf`; data-model.md (the freezer format) | about 1,200 / 1,200 (a guess) | append, fsync (files and directory) and repair, refusing below the high-water mark; per-record hash and CRC32C; the migration killed at each step; fall-through answers equal to hot-only, and a side-chain hash at a frozen height reads nothing; the threshold per chain; expiry through the freezer; the path refusals; a live SSD and HDD Sepolia run (SC-018) |
 
 #### S0 prerequisites per slice (round 2)
 
@@ -760,113 +761,273 @@ repository.
 | eth/69 and eth/70 | `Status.EarliestBlock` and `BlockRangeUpdate.EarliestBlock` are `min(latest, cutoff)`; a peer with `earliest > latest` is refused | `eth/handler.go:720-727`; `eth/protocols/eth/handshake.go:53`, `:156-157` |
 | `GetBlockBodies`, `GetReceipts` | stop at the first block not held and return the prefix (no error, no gap) | `eth/protocols/eth/handlers.go:231-250`, `:274-302`, `:308-338` |
 | Freezer | `--datadir.ancient` (and `--datadir.era`); a background freezer moves blocks below `max(finalized, head - 90,000)` into append-only tables, syncs them, then deletes the key-value copies in a batch | `cmd/utils/flags.go:109-117`; `core/rawdb/chain_freezer.go:134-150`, `:157-300` |
-| **core-geth (ETC)** | **no history expiry at all**: no `--history.chain`, no `prune-history`, no pruned-history error, no eth/69; it keeps every body and receipt. It has the freezer (`--datadir.ancient`) and a transaction-index window (`TransactionHistory = 2,350,000`) | `cmd/utils/flags.go:118-122`, `:326`; `eth/ethconfig/config.go:70-71`; `eth/protocols/eth/protocol.go:34` |
+| `debug_getRaw*`, `eth_feeHistory`, transaction by block and index | through the block lookup, so 4444 below the cutoff; `debug_getRawHeader` **by number** also goes through the block lookup (4444), by hash it answers the header; `eth_feeHistory` reads blocks and receipts only when reward percentiles are asked, otherwise headers | `internal/ethapi/api.go:1493-1499`, `:2050-2095`; `eth/gasprice/feehistory.go:306-312` |
+| `debug_traceTransaction` | the transaction's index row is gone, so "transaction not found" | `eth/tracers/api.go:835-848` |
+| `engine_getPayloadBodiesBy*` | a `null` entry for every block whose body is not held | `eth/catalyst/api.go:1356-1364`, `:1387-1390` |
+| `BlockRangeUpdate` received | checked only for `earliest <= latest` and a non-zero hash, then stored; **a decreasing earliest is accepted**. EIP-7642 (Final) sets no monotonicity rule: the message "should be sent whenever the block range available from this client is updated", at most once per epoch (32 blocks) | `eth/protocols/eth/handshake.go:155-163`, `handlers.go:718-729`; EIP-7642 "BlockRangeUpdate message" |
+| **core-geth (ETC)** | **no history expiry at all**: no `--history.chain`, no `prune-history`, no pruned-history error, no eth/69; it keeps every body and receipt. It has the freezer (`--datadir.ancient`) and a transaction-index window (`TransactionHistory = 2,350,000`). A fact, not a parity target: under a cutoff, ETC's answer tables are fukuii's extension, the same as ETH's, and core-geth parity holds only with `none` | `cmd/utils/flags.go:118-122`, `:326`; `eth/ethconfig/config.go:70-71`; `eth/protocols/eth/protocol.go:34` |
+
+**One design for every chain** (the user, 2026-11-27: "etc should follow the same pattern as eth"). ETC and Mordor get the
+same cutoff kinds, the same default, the same RPC and devp2p answers and the same optional freezer as ETH. Nothing below
+is ETC-only; where a chain differs it is only in which named points exist.
 
 **C9a decisions** (each one for the reviewers named; none is a consensus rule: no state root, hash, RLP or gas changes):
 
-1. **Config.** `fukuii.history.chain` in a new `conf/base/history.conf`: `none` (geth's `all`), `merge`, `prague`,
-   `osaka`, or `"<number>:<hash>"`. The named points per chain live in the chain files
-   (`conf/base/chains/{eth,sepolia,hoodi}-chain.conf`, `history-cutoffs { merge { number, hash } ... }`), copied from
-   geth's table above and pinned by a test. A named mode with no point for the chain (`merge` on Hoodi; any named
-   mode on ETC, Mordor, Gorgoroth or a private chain) and a malformed custom point (no hash, block 0, zero hash) are
-   **refused at start**. *(beacon: the ETH points; forge: the ETC refusals.)*
-2. **Defaults: `none` on every chain.** geth's default is `all` on `master` and on `v1.17.10`, for new and existing
-   datadirs alike, so "match geth" means nothing expires unless the operator sets it. ETC and Mordor stay `none`
-   (core-geth has no expiry), subject to forge's sign-off. No existing datadir changes. Whether fukuii should go
-   beyond geth (a different default for new ETH datadirs, or a cutoff near the head for small devices) is open
-   item 8, for the user.
+1. **Config.** `fukuii.history.chain` in a new `conf/base/history.conf`, one of:
+   - `none` (geth's `all`): keep everything;
+   - a **named fork point**, from the chain file's `history-cutoffs` block: on ETH, `merge`, `prague` and `osaka`
+     (copied from geth's table, mainnet, Sepolia, Hoodi; Hoodi has no `merge`); on ETC and Mordor, **activated ETC
+     forks only**, at least `spiral` (ETC mainnet 19,250,000, `etc-chain.conf:129`; Mordor 9,957,000,
+     `mordor-chain.conf:135`) and possibly `mystique` (14,525,000, `etc-chain.conf:120`; 5,520,000,
+     `mordor-chain.conf:126`) and others: **forge picks the set** at T293. No unscheduled fork is named (no `olympia`):
+     every named mode is a permanent promise. **No hash is written into these documents:** each ETC point's hash comes
+     from a verified archive checked against two clients, forge signs it, and a test pins it (T329);
+   - `"<number>:<hash>"`: a custom point on any chain (the hash is required, block 0 and the zero hash are refused);
+   - **`pivot`**: a fukuii extension geth lacks (the user, 2026-11-27): history from the sync's starting block on, and
+     nothing below it is backfilled or kept. Defined in decision 1a.
+
+   A named mode with no point on the chain (`merge` on Hoodi, `spiral` on Sepolia, any named mode on Gorgoroth or a
+   private chain) and a malformed custom point are **refused at start**. That is one rule for every chain.
+   *(beacon: the ETH points; forge: the ETC point set and its hashes.)*
+1a. **`pivot`, precisely.**
+   - **Which block.** The SNAP pivot P recorded at the hand-off (C5a's synced finalization commit), or, for a checkpoint
+     v2 import, the checkpoint block C. The cutoff is **P + 1** (C + 1): the first block the node holds with both its
+     body and its receipts. It is recorded (`history.cutoff`, number and hash) in the hand-off's or the import's own
+     final synced batch.
+   - **A full sync has no pivot.** `pivot` is **refused at start** when the configuration makes a sync from genesis
+     certain on a datadir with no recorded pivot (`do-snap-sync = false` and no checkpoint import). A SNAP-configured
+     node that falls back to a sync from genesis (PoW with no snap peer within `pow-snap-peer-wait`, open item 3)
+     records a pivot of 0 and runs as `none`, with one WARN naming the fallback.
+   - **An already synced datadir** switched to `pivot` takes its recorded hand-off pivot; with none recorded (a datadir
+     older than C9a, or one synced from genesis) it is refused at start with a message to use a named or custom point.
+   - **The ommer window (PoW).** The ancestor window that C5a's hand-off and C5c's import store for ommer validation
+     (`AncestorWindow`: the pivot's header window and, on PoW, the bodies of C..C-4 whose headers name ommers, B-302;
+     the S0 text said 6 bodies) is kept: it is exempt from the floor, and the prune's 90,000-block guard (decision 5)
+     keeps it until no import can read it. It is a consensus input, not served history: it does not lower the
+     advertised earliest block, since the window carries no receipts.
+   - **A re-peg or a re-SNAP.** Before the hand-off the pivot is not final and nothing is recorded; a re-peg only moves
+     it. After a hand-off, an escalation's re-SNAP (C5a) to a new pivot P2: if every block from P + 1 to P2 is held,
+     the cutoff stays at P + 1; otherwise it rises to P2 + 1 (with decision 5's intent write) and the range left
+     between is pruned. **The cutoff never decreases**: a later pivot below it fetches no history below it, and blocks a
+     sync imports below it are pruned by the normal rule.
+   - **What peers see.** `max(cutoff, L)` (decision 6), which is the cutoff from the hand-off on: with no backfill there
+     is no gap.
+2. **Defaults: `none` on every chain**, ETC and Mordor included: geth's default is `all` on `master` and on `v1.17.10`,
+   for new and existing datadirs alike. No existing datadir changes. The user added `pivot` as a mode, not as a default
+   (2026-11-27); the default can be revisited after T313 has measured `pivot`.
 3. **Start-up checks, before anything with side effects starts.** The policy is resolved and checked against the
    datadir in `NodeBuilder` before the P2P server, the JSON-RPC listeners, the sync controller, the backfill and the
    pruner start, and before any store writer runs; only the RocksDB open and the AppState read have happened when
-   it refuses. Refusals: the named-mode and malformed cases of 1; a datadir **pruned beyond** the configured cutoff
-   (geth's "Cannot unprune"); a canonical header at the cutoff whose hash differs from the configured one. Not a
-   refusal (a divergence from geth, decision 5): a datadir that holds history below the cutoff.
-4. **Backfill.** `ChainDownloader` puts the body and receipt floors (`BackfillBestBody`, `BackfillBestReceipt`) at the
-   cutoff and requests nothing below it. **Headers stay, all of them**, as in geth: the header download from genesis,
-   the exact total difficulty at the pivot and `HeaderChainCheck` are unchanged, and the header at the cutoff is
-   checked against the configured hash when it arrives (geth `beaconsync.go:277-295`). Block-access lists (Amsterdam)
-   are kept: every cutoff is below Amsterdam, and geth prunes them as a separate group.
+   it refuses. Refusals: the named-mode, malformed and `pivot` cases of 1 and 1a; a datadir **pruned beyond** the
+   configured cutoff (geth's "Cannot unprune"); a canonical header at the cutoff whose hash differs from the
+   configured one. Not a refusal (a divergence from geth, decision 5): a datadir that holds history below the cutoff.
+4. **Backfill and its floor (B1).** **Headers stay, all of them**, as in geth: the header download from genesis, the
+   exact total difficulty at the pivot and `HeaderChainCheck` are unchanged, and the header at the cutoff is checked
+   against the configured hash when it arrives (geth `beaconsync.go:277-295`). Block-access lists are kept.
+   - **One floor accessor.** `HistoryRange.floor` is `history.cutoff` (0 with `none`). Every write of the body and
+     receipt cursors goes through `AppStateStorage.putBackfillBestBody` and `putBackfillBestReceipt`, which store
+     `max(floor - 1, n)`. That covers every writer that resets or lowers them: the reset to 0
+     (`ChainDownloader.scala:972-976`), the lowering on a fork (`:1023-1024`), `StoredBodyRepair.armBackfill`
+     (`StoredBodyRepair.scala:82-87`), `headerCursorsBackTo` and `backfillCursorsAtMost`
+     (`AppStateStorage.scala:166-167`, `:199-200`). A reset to 0 therefore becomes a reset to the floor and refetches
+     nothing below it.
+   - **What cursor N means now.** It was "every block from 1 to N is held" (`AppStateStorage.scala:1157`, `:1171`); it
+     becomes "every block from the floor to N is held". `needsBackfillResume` (`:1220`) and the resume in
+     `SyncController.scala:3232-3236` read it with that meaning; with `none` the floor is 0 and nothing changes.
+   - **Writes below the floor are refused at the store.** The backfill's body and receipt stores
+     (`ChainDownloader.scala:1154`, `:1213`, `:1237`) drop any block below the floor they read in the same actor
+     message; `StoredBodyRepair` treats an absent body below the floor as expected (no remove, no re-arm).
+   - **The intent write is serialized with the backfill.** While the `ChainDownloader` actor runs, the pruner's intent
+     write (decision 5 (a)) is a message to it, committed between two of its stores and in the same batch that raises
+     the cursors to the new floor, so no response in flight can land below the new cutoff after it. When the actor is
+     not running, the pruner writes directly.
+   - **Exempt from the floor:** the ancestor window and the pivot body (decision 1a), which are consensus inputs.
 5. **Prune of stored history: online, bounded and kill-safe (a divergence from geth).** geth refuses to start and
    prunes offline; fukuii prunes in the background, because the read side is told first. Order (vault owns it):
-   (a) one **synced** AppState write of the target (`history.prune.target`, number and hash) and the cursor; from this
-   write on, every RPC and devp2p answer treats the target as the cutoff, so a half-pruned range is never served as
-   held; (b) batches in ascending block order, each one atomic RocksDB batch that deletes, per block, the
-   transaction-index rows (`l`, read from the body first), the receipts (`r`) and the body (`b`), and advances the
-   cursor in the same batch; the batch is bounded in blocks and bytes and yields between batches; (c) when the
-   cursor reaches the target, a synced write records `history.earliest` (number and hash) and clears the target;
-   (d) a `compactRange` over `b`, `r` and `l` (the keys are hashes, so `deleteRange` cannot be used and the space
-   comes back only at compaction). A kill at any point resumes from the cursor; no row at or above the cutoff is ever
-   deleted. The prune needs the head at least 90,000 blocks past the target (geth's guard), runs only after the SNAP
-   hand-off (like the deferred backfill) and never during SNAP. Headers, the number index, chain weights and
-   block-access lists are never deleted. Whether a geth-style refusal plus an offline `fukuii prune-history`
-   command should be offered as well is for vault.
-6. **The earliest available block.** Two numbers, both in AppState: the **cutoff** (`history.earliest`, or the
-   prune target while a prune runs), and the **lowest contiguous held block**, derived from the backfill cursors (the
-   backfill runs upward from its floor, so while it runs the node holds `[floor, cursor]` and `[pivot + 1, head]`
-   with a gap between). RPC refuses below the cutoff (4444); peers are told `max(cutoff, lowest block L such that
-   every block in [L, head] is held)`, which during a backfill is the block after the SNAP pivot (or the checkpoint
-   block, C5c, whose archive carries 256 headers and no bodies on PoS). geth has no backfill gap, so it advertises the
-   cutoff; fukuii must not advertise the gap (herald).
-7. **JSON-RPC** (conduit; geth's answers above): a new `JsonRpcError.PrunedHistory` (4444, "pruned history
-   unavailable"); `eth_getBlockByNumber`, `eth_getBlockByHash`, `eth_getBlockReceipts`, the transaction-count and uncle
-   methods and `debug_traceBlock*` below the cutoff answer it; `eth_getHeaderByNumber` answers the header; `earliest`
-   resolves to the cutoff (`ResolveBlock.scala:60`, `:140` resolve it to 0 today); `eth_getTransactionByHash`,
-   `eth_getTransactionReceipt` and the raw variants answer null; `eth_getLogs` and `eth_newFilter` with a `fromBlock`
-   below the cutoff, or a `blockHash` below it, answer 4444; `eth_capabilities` reports the cutoff as `oldestBlock` of
-   blocks, receipts, logs and transactions; GraphQL follows the same rule. **Above the cutoff but not yet backfilled**
-   (no geth precedent): `FilterManager.getLogs` today stops the scan at the first block whose bloom matches and whose
-   receipts are absent and returns what it has (`FilterManager.scala:201-207`, `case None => logsSoFar`), a silently
-   short answer; C9a makes it an error and conduit names it (today's `-32000` family or a new one).
-8. **devp2p** (herald): `Status` (eth/69 and eth/70) and every `BlockRangeUpdate` carry decision 6's number. Today all
-   four places send 0 (`EthNodeStatus69ExchangeState.scala:187`, `EthNodeStatus70ExchangeState.scala:188`,
-   `BlockBroadcast.scala:55`, `:137`), which already claims history a node in backfill does not hold; C9a fixes
-   that for every node, cutoff or not. `GetBlockBodies` and `GetReceipts` already stop at the first block not held
-   (`BlockchainHostActor.scala:115-160`, geth's rule); C9a adds the tests for expired hashes. `GetBlockHeaders` is
-   unchanged (headers are kept). The backfill asks for bodies and receipts below a peer's advertised earliest block
-   from no eth/69+ peer.
-9. **SNAP serving is unaffected**: it serves state (account and storage ranges, bytecodes, trie nodes) and reads no
-   history. A test pins it.
+   - (a) **Intent.** One `commitSync` (`DataSourceBatchUpdate.scala:20`) of `history.cutoff` (the new target, number and
+     hash), `history.prune.cursor` (the old earliest block), the cursor floor of decision 4, and
+     `history.compaction.pending`. From this write on, every RPC and devp2p answer treats the target as the cutoff and
+     a `BlockRangeUpdate` is due (decision 8), so a half-pruned range is never served as held.
+   - (b) **Batches**, in ascending block order, each one atomic RocksDB batch, bounded in blocks and bytes, that per
+     block deletes the receipts (`r`), the body (`b`) and the transaction-index rows of that block (`l`, read from the
+     body first), and advances the cursor in the same batch. **An `l` row is deleted only if its stored block hash is
+     the block being pruned (B2)**: `storeBlockBody` writes `l` rows for side blocks too
+     (`BlockchainWriter.scala:193` via `saveTxsLocations`, `:696-699`), and a later canonical block takes the row over,
+     so a transaction in a pruned uncle and in a kept canonical block keeps its row. Each batch reads the canonical
+     hash by number and compares under the **import lock** (`ImportLock`, `SyncController.scala:576`), which every
+     import and head move holds (`promoteToCanonicalHead` and `rewriteCanonicalIndex` rewrite `l` at
+     `BlockchainWriter.scala:342`, `:355`, `:623`); a bounded batch keeps the hold short. The lock is the guarantee;
+     the guard below is why it is never contended in practice.
+   - (c) **End.** When the cursor reaches the target, a `commitSync` records `history.earliest` (number and hash) and
+     removes `history.prune.cursor`.
+   - (d) **Compaction (W1).** The keys are hashes, so `deleteRange` cannot be used and the space comes back only at
+     compaction, which rewrites what remains (about 1 TB on Sepolia). It runs **in slices of the key space** with
+     `compactRange(namespace, from, to)` (`RocksDbDataSource.scala:353`): 256 slices per namespace (by the first key
+     byte) over `b`, `r` and `l`, one slice at a time, with a configured pause between slices
+     (`history.prune.compaction-pause`) as its I/O budget, and the slice reached recorded in
+     `history.compaction.pending`. The marker is cleared after the last slice; a start that finds it resumes from the
+     recorded slice.
+   - A kill at any point resumes from the cursor or the slice; no row at or above the cutoff is deleted.
+   - **The 90,000-block guard (W8).** The prune deletes only below `min(cutoff, head - 90,000)` (geth's
+     `FullImmutabilityThreshold`). A cutoff nearer the head than that (a custom point, or `pivot` just after a hand-off)
+     is accepted: RPC answers 4444 below it at once (a block reported absent while its rows still exist is benign), and
+     the rows are deleted as the head moves on. Blocks between a pivot and a cutoff above it are imported with their
+     bodies and pruned by this rule. It also keeps the 7 ancestors that ommer validation reads
+     (`OmmersValidator.scala:36-52`) out of reach.
+   - It runs only after the SNAP hand-off (like the deferred backfill; the hand-off is persisted, so a restart need not
+     re-derive it) and never during SNAP. Headers, the number index, chain weights and block-access lists are never
+     deleted. Side-chain bodies and receipts below the cutoff are not visited (the prune walks canonical numbers); they
+     stay until a sweep (a follow-up).
+6. **The earliest available block (B3).** Two numbers:
+   - the **cutoff**, `history.cutoff` (0 with `none`), below which RPC answers 4444;
+   - **L**, the lowest block from which every block to the head is held, body and receipts:
+     - L = the cutoff, **unless a backfill target T is recorded and unfinished** (`BackfillTarget` set and
+       `min(BackfillBestBody, BackfillBestReceipt) < T`), in which case L = T + 1. Receipts lag bodies, hence the
+       minimum. A node that never ran a backfill (a full sync from genesis on ETC or Mordor, an old datadir with unset
+       cursors) has L = the cutoff, which is 0 with `none`: today's answer, not a regression.
+     - After a checkpoint v2 import, T is the checkpoint block C, so L = C + 1 until the backfill reaches C. The PoS
+       archive carries 256 headers and no bodies; the PoW archive also carries the window bodies of C..C-4 (B-302),
+       but no receipts, so they do not lower L.
+     - When a backfill finishes, the batch that writes its last cursor also writes `history.earliest` = the cutoff
+       (number and hash), with or without a prune.
+
+   Peers are told `min(latest, max(cutoff, L))`. geth has no backfill gap, so it advertises the cutoff; fukuii must not
+   advertise the gap (herald).
+7. **JSON-RPC (conduit), one predicate for every block read (W3).** For a block n: if its body (and, where the method
+   needs them, its receipts) is held, answer; if not and n < cutoff, **4444, "pruned history unavailable"** (a new
+   `JsonRpcError.PrunedHistory`); if not and n >= cutoff (above the cutoff but not yet backfilled), geth's own
+   missing-body error, **-32000 "block body not found"** (geth `eth/api_backend.go:199-210`), distinct from 4444. The
+   predicate reads `history.cutoff` before the store, so a row deleted by a running prune is never answered as held.
+   `earliest` resolves to the cutoff everywhere `ResolveBlock` is used (`ResolveBlock.scala:60`, `:140` resolve it to 0
+   today).
+
+   | Method (file) | Below the cutoff | Above it, not yet backfilled |
+   | --- | --- | --- |
+   | `eth_getBlockByNumber`, `eth_getBlockByHash`, `eth_getBlockReceipts`, `eth_getBlockTransactionCountBy*`, `eth_getUncleByBlock*AndIndex`, `eth_getUncleCountBy*` (`EthBlocksService.scala`) | 4444 | -32000 |
+   | `eth_getHeaderByNumber`, `eth_getHeaderByHash` | the header | the header |
+   | `eth_getTransactionByBlockHashAndIndex`, `eth_getTransactionByBlockNumberAndIndex` and the raw variants (`EthTxService.scala:115`, `:203`, `:393`, `:409`) | 4444 (geth `api.go:1493-1499`) | -32000 |
+   | `eth_getTransactionByHash`, `eth_getTransactionReceipt`, `eth_getRawTransactionByHash` (`EthTxService.scala:106`) | null (the index row is gone) | null, as for any transaction not indexed |
+   | `debug_getRawBlock`, `debug_getRawReceipts` (`EthBlocksService.scala:565`, `:579`) | 4444 | -32000 |
+   | `debug_getRawHeader` (`:572`) | by hash: the header; by number: 4444, as geth (`api.go:2050-2066`; conduit decides whether to copy that quirk) | the header |
+   | `debug_traceBlockByNumber`, `debug_traceBlockByHash` (`DebugTracingService.scala:227`, `:247`) | 4444 | -32000 |
+   | `debug_traceTransaction` (`DebugTracingService.scala:148`) | "transaction not found" (geth `tracers/api.go:835-848`) | the same |
+   | `trace_block`, `trace_transaction`, `trace_filter` (`TraceService.scala:127`, `:166`, `:430`; no geth counterpart) | `trace_block` 4444; `trace_transaction` not found; `trace_filter` with `fromBlock` below the cutoff refused whole with 4444, like `eth_getLogs` | -32000; `trace_filter` checks its range up front |
+   | `eth_feeHistory` (`EthBlocksService.scala:385`) | with reward percentiles 4444 (it needs bodies and receipts); without them, answered from headers, as geth (`feehistory.go:306-312`) | -32000 with percentiles |
+   | `eth_getLogs`, `eth_newFilter`, `eth_getFilterLogs` (`FilterManager.scala:188-218`, `EthFilterService.scala`) | **the range is checked up front**: `fromBlock` (or a `blockHash`) below the cutoff, 4444 for the whole range, not clipped (geth `filters/api.go:484-486`) | any block of the range in the gap: -32000 for the whole range, up front, whatever the filter. Today the scan stops at the first matching bloom with missing receipts and returns what it has (`FilterManager.scala:208`, `case None => logsSoFar`), so the same range succeeds or fails by filter |
+   | `eth_capabilities` (`EthBlocksService.scala:516-563`) | reports the cutoff as `oldestBlock` of blocks, receipts, logs and transactions (geth `capabilities.go:122`) | |
+   | `engine_getPayloadBodiesByHash*`, `engine_getPayloadBodiesByRange*` (`EngineApiController.scala:69-75`, `:566`) | a `null` entry per block (the Engine API rule; geth `catalyst/api.go:1387-1390`) | `null` |
+   | `eth_call`, `eth_simulateV1`, `eth_estimateGas`, `eth_getBalance`, `eth_getProof` and the other state methods | unchanged: they need the header (kept) and the state; where the state is not held, its own error comes first (`JsonRpcError.NodeNotFound`, -32000 "missing trie node"), as today | unchanged |
+   | GraphQL block and transaction queries (`jsonrpc/graphql/GraphQLSchema.scala`) | the same predicate, as a GraphQL error carrying 4444 | the -32000 message |
+   | `McpService.scala`, `TestService.scala`, `TestingService.scala` | every block read goes through the same `BlockchainReader` members and the same predicate; test mode starts with `none` | the same |
+
+8. **devp2p (herald).**
+   - `Status` (eth/69 and eth/70) and every `BlockRangeUpdate` carry decision 6's number. Today all four places send 0
+     (`EthNodeStatus69ExchangeState.scala:187`, `EthNodeStatus70ExchangeState.scala:188`, `BlockBroadcast.scala:55`,
+     `:137`), which already claims history a node in backfill does not hold; C9a fixes that for every node, cutoff or
+     not.
+   - **When.** A new handshake's `Status` uses the current number at once. A `BlockRangeUpdate` is sent **at the
+     prune's intent write (W2)**, when a backfill finishes, and when a re-SNAP moves the cutoff, within EIP-7642's
+     at-most-once-per-32-blocks rule (a change inside that window rides on the next update). The number may decrease (a
+     backfill reaching below the pivot lowers L): EIP-7642 and geth accept a decrease, and so does fukuii
+     (`PeerActor.scala:656-672`).
+   - `GetBlockBodies` and `GetReceipts` already stop at the first block not held (`BlockchainHostActor.scala:115-160`,
+     geth's rule), so an ascending request that starts below the cutoff gets an **empty** reply although later blocks
+     are held (geth's behaviour too), and a descending one gets a prefix. `GetBlockHeaders` is unchanged.
+   - **The backfill's peer choice (W5).** The backfill blacklists a peer that answers bodies or receipts with nothing
+     (`ChainDownloader.scala:148-152`, `:537-552`), so asking a pruned peer for history it does not hold would cost us
+     the peer. fukuii does not store a peer's advertised range today (`NetworkPeerManagerActor.scala:656-664` only logs
+     it): T310 stores it per peer, asks eth/69+ peers only within it, and treats an empty reply from a peer whose
+     advertised range was stale (it moved since we asked) or from an eth/68 peer (which cannot advertise a range) as a
+     skip of that peer for that range, not a blacklist.
+9. **SNAP serving is unaffected**: it serves state and reads no history. A test pins it.
+10. **The transaction index `l` (W6).** One row per transaction, hash-keyed, never windowed today: about 1.16 billion
+    rows on Sepolia (#1483), on the order of 100 GB, so it cannot stay whole on a small disk. C9a adds
+    `fukuii.history.transactions` with geth's meaning (`--history.transactions`: the number of recent blocks whose
+    transactions are indexed; 0 = every held block), **default 0** (today's behaviour; geth's default is 2,350,000, and
+    the choice of default is the user's, after T313). A background un-indexer keeps a tail cursor
+    (`history.txindex.tail`) and deletes the rows of blocks below `head - window` with B2's compare-hash rule; a lookup
+    by hash below the window answers null, as geth's. `l` stays in the hot store (it is read by hash, and the freezer is
+    read by number). Budget at 2,350,000 blocks: about 226 million rows on Sepolia (about 96 transactions per block on
+    average), about 20 GB; that is the `l` share of SC-018 and SC-020.
+11. **`none` is inert on every chain.** With `none`, no freezer and `history.transactions = 0`, `b`, `r` and `l` are
+    byte-identical to staging's and every RPC answer is unchanged (rpc-compat 40, graphql 2) on Sepolia, ETC and Mordor
+    alike; the only change is decision 8's advertised number on a node mid-backfill, which today is wrong.
+
+**The writers of `b`, `r` and `l` (rule 8), and why the prune is disjoint from them.**
+
+| Writer | File:line | Disjoint from the prune because |
+| --- | --- | --- |
+| backfill bodies and receipts | `ChainDownloader.scala:1154`, `:1213`, `:1237` | the floor (decision 4) and the intent write serialized with the actor |
+| ancestor bodies on import | `BlockImporter.scala:1198` | heights near the head, within 90,000 |
+| pivot body at the hand-off | `SnapFinalization.scala:1054` (and its remove, `:1066`) | the pivot, above the cutoff or within 90,000 of the head |
+| checkpoint window bodies | `CheckpointImporter.scala:403` | C..C-4, at the head of a fresh datadir |
+| stored-body repair | `StoredBodyRepair.scala:63`, `:67` | below the floor it does nothing (decision 4) |
+| receipts of an executed block | `BlockExecution.scala:642`; `EngineApiService.scala:384` | executed blocks are near the head |
+| whole blocks | `EngineApiService.scala:911`; `TestingService.scala:179`; `BlockchainWriter.scala:81-82`, `:110-111`, `:119`, `:127` | near the head; test mode runs with `none` |
+| bodies with their `l` rows | `BlockchainWriter.scala:193`, `:200-207`, `:213`, `saveTxsLocations` `:696-699` | the floor for history; near the head otherwise |
+| canonical-index rewrites of `l` | `BlockchainWriter.scala:342`, `:355`, `:623` | under the import lock, which each prune batch also takes (decision 5 (b)) |
+| block removal | `Blockchain.scala:199-265` (`b` `:249`, `r` `:251`, `l` `:265`) | side and abandoned blocks near the head |
 
 **Interactions recorded.**
-- **EG-4.** Its ~150 GB figure is a node without history: state, headers and the blocks since the hand-off. With
-  `merge` Sepolia keeps nearly all of its history (#1483), so `merge` alone does not reach it; a cutoff near the head
-  (a custom point, or open item 8) or C9b's second path does. What EG-4 records is open item 7, for the user.
-- **Checkpoint v2 (C5c).** A PoS archive carries 256 headers and no bodies; after an import the node holds no
-  history below the checkpoint block until the backfill reaches it, and advertises accordingly (decision 6). The
-  format is unchanged.
+- **EG-4 (decided 2026-11-27, open item 7 option (b)).** EG-4 runs without C9 and is accepted on its current run, with
+  its disk figure marked **without expiry**. The ~150 GB expectation moves to T313, where it is SC-020's target for
+  Sepolia `pivot`.
+- **Checkpoint v2 (C5c).** Decision 6 gives L after an import; the format is unchanged. With `pivot`, the cutoff is
+  C + 1 (decision 1a).
 - **SNAP's chain backfill** (`sync.snap-sync.defer-chain-backfill-until-state-complete`, on). The deferral is
-  unchanged; after it the backfill starts at the cutoff instead of genesis. The prune follows the same gate.
-- **The audit (C5b)** reads state rows only; the prune deletes history rows only. They do not share data; both are
-  background disk work and are measured together in T313.
+  unchanged; after it the backfill starts at the floor instead of genesis, or, with `pivot`, does not run.
+- **The audit (C5b)** reads state rows only; the prune deletes history rows only. Both are background disk work and
+  are measured together in T313.
 - **Receipts, `eth_getLogs` and the log index.** fukuii has no separate log index: `getLogs` scans header blooms and
-  reads receipts (`FilterManager.scala:188-218`). Blooms are in the headers, which stay; receipts below the cutoff go,
-  so ranges below it are refused (decision 7). geth's `--history.logs` and `--history.transactions` windows
-  (2,350,000 blocks by default, `eth/ethconfig/config.go`) are a separate retention that fukuii does not have; not in
-  C9 (a follow-up for the backlog).
+  reads receipts (`FilterManager.scala:188-218`). Blooms are in the headers, which stay; ranges below the cutoff are
+  refused (decision 7). geth's `--history.logs` window has no fukuii counterpart because there is no log index to
+  window.
 - **Spec 013 §5.6.** A snapshot-imported node's earliest block is N-255 and must be advertised; decision 6 is that
-  rule. Era and era1 files stay Track H's H2, which now builds on C9b.
+  rule.
+- **Executed-block checks (N2).** `EngineApiService.scala:649`, `:824` and `:1128` treat "receipts present" as "the
+  block was executed". Those blocks are near the head and never below a cutoff; with C9b, `hasReceipts` falls through to
+  the freezer, so the answer stays right.
+- **Known-block check (N3).** `ConsensusAdapter.scala:724` treats `getBlockByHash.isDefined` as "known". A block gossiped
+  from below the cutoff would look unknown; it is far below the head and refused by the import's depth checks. T338
+  pins that.
+- **ETC: expiry is one-way.** There is no era1 archive for ETC history. Once pruned, ETC history comes back only from a
+  peer that holds it (a resync, or a backfill after switching back to `none` on a fresh datadir) or from a file
+  someone exports. A pruned node is also a poor server for the many ETC nodes that full-sync from genesis; the operator
+  doc says so, and T339 records what core-geth does when such a node is in its peer set.
+- **ETC consensus under a cutoff (forge).** ECIP-1017 rewards read the block number and the block's own ommer
+  headers; MESS (ECBP-1100) and total difficulty read headers and chain weights, which are never deleted; ommer
+  validation reads at most 7 ancestor headers and the bodies of those that name ommers, which decisions 1a and 5 keep.
 
-**C9b: the tiered freezer** (operator opt-in, after C9a).
+**C9b: the tiered freezer** (operator opt-in, after C9a; vault confirmed the shape with four changes, open item 9).
 - **Shape: a simple append-only freezer, not the `ColdStore` seam.** FR-024's `ColdStore` is asynchronous, bounded
   and drops with a metric when full (spec Edge Cases): right for derived, query-oriented data, wrong for the only copy
   of a block's body. The freezer is the source of truth for the frozen range, so its writes are synchronous and never
-  dropped. It is written in the format FR-022's segment store will use (per table: a data file and an offset index
-  by block number; headers and the hash index stay hot in the first cut), so Track E's E1b extends it rather than
-  replacing it, and Track H's H2 (era and era1 export) reads it.
+  dropped. It is written in the format FR-022's segment store will use (per table a data file and an offset index by
+  block number; **each record carries its block hash and a CRC32C**, which geth's freezer lacks), so Track E's E1b
+  extends it rather than replacing it, and Track H's H2 (era and era1 export, for ETH) reads it.
 - **Path.** `db.history.freezer.path` (geth's `--datadir.ancient`), empty by default (no freezer). An unwritable path,
   or a path that differs from the one recorded in AppState while frozen data exists, refuses the start before any
   side effect (decision 3's rule).
-- **Migration.** A background mover freezes blocks at or below `max(finalized, head - 90,000)` (geth's
+- **Migration.** A background mover freezes canonical blocks at or below `max(finalized, head - 90,000)` (geth's
   `freezeThreshold`): on PoS that is the finalized block, on PoW (no finality) `head - 90,000`, deeper than any reorg
-  C4e accepts. Order: append to the freezer, fsync, write its high-water mark (synced), then delete the hot rows in
-  one batch. A kill between leaves both copies, reads prefer the frozen copy for numbers below the high-water mark,
-  and the next run deletes the hot duplicate. On open, the freezer truncates every table to the shortest consistent
-  length (geth's repair).
-- **Reads** fall through: by number, a block below the high-water mark is read from the freezer, otherwise from the
-  hot store; by hash, the number comes from the hot index first. Every RPC and devp2p answer is identical to a
-  hot-only node's.
+  C4e or ECBP-1100 accepts. Order: append to the freezer, fsync the files **and their directory** (after a file is
+  created or renamed), write the high-water mark with `commitSync`, then delete the hot rows in one batch. A kill
+  between leaves both copies, and the next run deletes the hot duplicate. On open, the freezer truncates every table
+  to the shortest consistent length (geth's repair), and **refuses to start if that falls below the recorded
+  high-water mark** (frozen data lost: the hot copies are gone), never re-freezing silently.
+- **Canonical only; orphans.** The freezer holds canonical blocks. Side-chain bodies and receipts at frozen heights are
+  not moved; they stay in the hot store until a sweep (a follow-up; on PoW they are mostly ommer blocks, a small
+  share).
+- **Reads fall through in `BlockchainReader`, with a hash check (W7, iron rule 7).** Every read of `b` and `r` goes
+  through three members: `getBlockBodyByHash` (`BlockchainReader.scala:241`), `getReceiptsByHash` (`:284`) and
+  `hasReceipts` (`:292`); nothing else reads those stores. Each tries the hot store, then: hash, hot header, number;
+  below the high-water mark, the freezer record at that number; **the record's stored hash must equal the requested
+  hash**, so a side-chain hash at a frozen height reads nothing rather than the canonical body. `StoredBodyRepair`,
+  `advanceBodyCursor` and the backfill's `hasReceipts` check (`ChainDownloader.scala:295`) therefore see frozen blocks
+  as held and refetch nothing, and the reorg readers (`ConsensusImpl`, `StateRecovery`) reach frozen bodies.
+- **`l` stays hot**, windowed by decision 10.
 - **Expiry with a freezer** truncates the freezer's tail instead of deleting rows (geth's `TruncateTail`), after the
-  same intent-first write of decision 5.
+  same intent write of decision 5; it frees the space at once, with no compaction.
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
@@ -908,18 +1069,18 @@ spec (Tracks E and R, the C0 measurements M1, M6 and M8, FR-009 and SC-001) name
 an item is taken up, Sepolia stands in.
 
 **C9 (history expiry, B-552; 2026-11-27).** C9a and C9b are not part of this gate and wait for none of it; their own
-checks are T293 to T328 and SC-017 to SC-019. One item depends on them: **EG-4's disk figure.** EG-4 expects about
-150 GB, which is a node with no history below its hand-off. Without C9 the backfill fetches the whole history (the
-0.12.184 run needed 1,400 GB to finish its 24 h follow), and with C9a's `merge` Sepolia keeps nearly all of it, so
-the figure is reached only with a cutoff near the head or with C9b's second path. Whether EG-4 is re-run once C9a lands,
-or accepted on its current run with the disk figure marked as without expiry, is the user's decision (open item 7).
+checks are T293 to T342 and SC-017 to SC-021. EG-4's disk figure was the one link: EG-4 expects about 150 GB, a node with
+no history below its hand-off, and without C9 the backfill fetches the whole history (the 0.12.184 run needed 1,400 GB
+to finish its 24 h follow). **Decided 2026-11-27 (the user, open item 7 option (b)):** EG-4 keeps running and is
+accepted on its current run, with its disk figure marked **without expiry**; the ~150 GB expectation moves to T313, as
+SC-020's target for Sepolia with `pivot`.
 
 | # | Check | Pass condition |
 | --- | --- | --- |
 | EG-1 | **Roots-equal import differential.** ETH: a fixed Sepolia range (the Platåberget range is dropped: the user, 2026-11-25: Platåberget was retired on 2026-10-28, so its gate is dropped (B-068)), **including Prague and Amsterdam ranges with request and block-access-list activity**, and an ETH mainnet range if a mainnet state exists. **ETC: an offline import from genesis** of ETC blocks 0 to 5,100,000 (`ChainImporter.importChainFileStrict` over a chain file; **the source is this project's own ETC mainnet sync, exported with `fukuii etc export <file> 0 5100000` (the user, 2026-11-07, T010; exported 2026-11-07, `baselines/README.md`)**; a core-geth export or a fukuii full sync with SNAP off are the fallbacks), and a Mordor import from genesis to 2,600,000 (era 0 to 1, Agharta 301,243, Phoenix 999,983, ECIP-1099 2,520,000) | ETH: every state root, receipt root and gas-used equal, and `requestsHash` and `blockAccessListHash` equal explicitly. ETC: **every block validates against its canonical header** (state root, receipts root including the pre-Atlantis intermediate roots, gas used), node-set equality with the pinned jar **every 100,000 blocks**, and every miner and ommer balance equal across the 5,000,000 era boundary and Mordor's two. At Sepolia and Mordor scale the position store walked from the anchor equals a `StackTrie` rebuild. `app.db.state.record.tombstones` is recorded over the ETC import and the Mordor runs (a non-zero count is explained before the bound is frozen, M15). Mordor also under `archive` (EG-10) |
 | EG-2 | ethereum/tests and EEST on the ported harnesses | the ETH job and the ETC job green; **`ForkChoiceBlockchainTestsSpec`** (Istanbul and Berlin, i.e. Phoenix and Magneto, through `reorganise`) green under `basic` and `archive`; the pre-Byzantium and EIP-150 networks green (intermediate-root receipts) |
 | EG-3 | the matrices of C3b to C6: reorg (PoS and PoW), ETC PoW, crash, isolation and concurrency, fault injection | all green; I1 to I6 asserted; **the deterministic interleaving test** over the importer commit, `moveHead`, `newPayload` and a builder view gives a position map equal to a from-scratch replay; the fault-injection runs never produce INVALID, `markInvalidRecursive`, `reportInvalid` or a delete; the no-anchor refusal and the escalation tests (hysteresis, cool-down, loop guard, kill at every step) pass |
-| EG-4 | **Fresh Sepolia sync with 24 h of head following (the T063 rerun)**, under a real consensus client | no `[PATH-PUBLISH]`; hand-off time, disk (expect about 150 GB below T063's 300-340 GB; **that figure assumes no history below the hand-off, which needs C9: see "C9" above and open item 7**; a run without C9 records the disk figure as without expiry, with the backfill's progress), import p50 and p99 and `[IMPORT-COMMIT]` recorded as a first DC-14 baseline on cloud hardware (a GCP VM with no pinned-jar run on the same VM, so a new baseline, not a delta; the user, 2026-11-25), heap and RSS, overlay gauges, `app.db.state.view.stale` and `.retries`, the audit's first pass clean; **`app.db.state.record.tombstones == 0`** (a tombstone at the head would turn a routine depth-1 reorg into a multi-hour re-SNAP) |
+| EG-4 | **Fresh Sepolia sync with 24 h of head following (the T063 rerun)**, under a real consensus client | no `[PATH-PUBLISH]`; hand-off time, disk, recorded and **marked without expiry** (the user, 2026-11-27, open item 7 option (b): EG-4 is accepted on its current run; the earlier expectation of about 150 GB, below T063's 300-340 GB, assumed no history below the hand-off and moved to T313 and SC-020), with the backfill's progress, import p50 and p99 and `[IMPORT-COMMIT]` recorded as a first DC-14 baseline on cloud hardware (a GCP VM with no pinned-jar run on the same VM, so a new baseline, not a delta; the user, 2026-11-25), heap and RSS, overlay gauges, `app.db.state.view.stale` and `.retries`, the audit's first pass clean; **`app.db.state.record.tombstones == 0`** (a tombstone at the head would turn a routine depth-1 reorg into a multi-hour re-SNAP) |
 | EG-5 | **T064's intent on a FRESH datadir** | on a fresh Mordor datadir and then on EG-4's datadir once its measurements are taken: rows deleted, bytes corrupted and positions moved are found and filled, the hand-off completes with no copy, and the audit's first pass records its time and findings |
 | EG-6 | **ETC end to end** | a fresh Mordor SNAP sync and 24 h of head following with a local miner (running on dev-node since 2026-11-21), **and a private ETC-config PoW net** (two or three fukuii miners plus a core-geth) that produces routine depth 1 to 3 forks, **with Olympia at a low block** (treasury credit every block, the base-fee floor, genesis `HefPostOlympia`): mined blocks valid, each mined block's root equal to its import root (with ommers), ECIP-1017 rewards unchanged, M7 and M10. **The private-net half is skipped** (the user, 2026-11-20: no Olympia core-geth on the host); Olympia is covered in process (#1901, #1937) |
 | EG-7 | repository gates | `sbt pp`; the 016 ratchet; the 017 and stateless-closure dependency checks (DC-8): `NibblePath` is in `mpt/`, no new `db/` import reaches the closure; the grep ratchets (state accessors, hash-only walkers) |
@@ -956,7 +1117,7 @@ the PR on staging.
 | C6 | ETC SNAP or mining breaks on the unified layout | EG-6; EG-12; the ETC PoW matrix | guard off |
 | C7 | the gate fails, or EG-12 does not pass | any EG item | C8 does not merge; fix forward |
 | C8a, C8b | a deleted path was still used; the oracle jar is lost | `grep`, `sbt pp`, EG-11 | revert the PR on staging |
-| C9a | the prune deletes a row at or above the cutoff; a half-pruned range is served as held; a named point is wrong; the node advertises history it lacks or refuses a good datadir | the prune kill test; the answer tables; the policy table against geth's; the start-up refusal test | `history.chain = none` (the default) stops new deletes; deleted history comes back only by a resync or a later era import (H2): the prune is a one-way door for that datadir, so it starts only on an explicit setting |
+| C9a | the prune deletes a row at or above the cutoff (or an `l` row a kept block owns); a backfill refetches below the floor; a half-pruned range is served as held; a named point or an ETC hash is wrong; the node advertises history it lacks or refuses a good datadir | the prune kill test; the floor test with reset and re-peg; the `l` compare-hash test; the answer tables; the policy table against geth's and the signed ETC hashes; the start-up refusal test | `history.chain = none` (the default) stops new deletes; deleted history comes back only by a resync, or on ETH a later era import (H2); **on ETC there is no era1 archive, so it is one-way**: the prune starts only on an explicit setting |
 | C9b | a block is in neither store after a kill; a read misses the frozen copy; the freezer path is lost | the migration kill test; fall-through fixtures; the path refusal | the freezer is opt-in; with the path lost the node refuses to start, and a resync is the recovery |
 
 ### Specialist routing (additions for Track C)
@@ -976,15 +1137,17 @@ the PR on staging.
 - `prism`: non-consensus review of C2a, C3a, C4a, C5a, C5b, C8a, C8b.
 - `wraith`: compile fallout from the `MptStorage` additions, the `commitWith` mode and the deletions.
 - `flow`, `loom`, `mithril`: not needed.
-- **C9a and C9b (B-552, 2026-11-27).** `vault` owns both: the prune's write and delete order (intent first, the
-  cursor in each batch, compaction), the freezer's append, fsync and delete order, its repair and the path rules.
-  `conduit`: the RPC answer table (4444, `earliest`, `eth_getLogs`, `eth_capabilities`, GraphQL) and the error for a
-  range not yet backfilled. `herald`: `Status` and `BlockRangeUpdate`, body and receipt serving, the backfill's peer
-  choice, SNAP serving unchanged. `beacon`: the ETH semantics, **before code**: the named points for mainnet,
-  Sepolia and Hoodi, `none` as the ETH default (geth's), the PoS freezer threshold. `forge`: **signs the ETC
-  defaults before code**: `none` on ETC and Mordor (core-geth has no expiry), named modes refused there, whether a
-  custom point is allowed on ETC, and the PoW freezer threshold against the reorg depth. `eye` validates; `prism`
-  reviews the docs and the non-consensus code.
+- **C9a and C9b (B-552, 2026-11-27).** One design for every chain (the user: ETC follows ETH). `vault` owns both: the
+  floor under the backfill cursors, the prune's write and delete order (intent first under `commitSync`, the cursor in
+  each batch, `l` compare-hash under the import lock, compaction in slices with its marker), the freezer's append, fsync
+  and delete order, its repair and the path rules. `conduit`: the RPC predicate and its table (4444, -32000 in the gap,
+  `earliest`, `eth_getLogs` and `trace_filter` up front, `eth_capabilities`, Engine payload bodies, GraphQL, MCP).
+  `herald`: `Status` and `BlockRangeUpdate` (when, and decreases), body and receipt serving, the backfill's peer
+  choice by advertised range, SNAP serving unchanged. `beacon`: the ETH semantics, **before code**: the named points for
+  mainnet, Sepolia and Hoodi, `pivot` on PoS, `none` as the default, the PoS freezer threshold. `forge`: **before
+  code**: the ETC named point set (activated forks only, at least `spiral`), each hash from a verified archive checked
+  against two clients (T329), `pivot` and the ommer window on PoW, the ETC consensus invariants under a cutoff, and the
+  PoW freezer threshold against the reorg depth. `eye` validates; `prism` reviews the docs and the non-consensus code.
 
 
 ### Project-structure additions and deletions (for plan.md "Source Code")
@@ -1040,7 +1203,7 @@ the rest of the list is not yet applied (verify against spec.md when T017 is clo
 ### Remaining open items
 
 The numbers are kept because tasks.md, scripts and code comments cite them ("plan open item 3"). Items 1 and 3 are
-decided; 2, 4 and 5 are partly decided; 6 to 9 are open (7 to 9 added 2026-11-27 with C9). Each decision is also in
+decided; 2, 4 and 5 are partly decided; 6 is open; 7 to 9 were added and decided on 2026-11-27 with C9. Each decision is also in
 the "Decision log".
 
 1. **The source of ETC blocks 0 to 5,100,000 for EG-1's ETC half. Decided 2026-11-07 (T010).** This project's own ETC
@@ -1078,24 +1241,23 @@ the "Decision log".
    and the pass count of the 658 `eip8246_selfdestruct_no_burn` EEST fixtures on the pinned jar (T009; baseline 1 passing
    before #1422, `specs/009-amsterdam-fork-support/baselines/eest-v21-amsterdam-2026-09-26.txt:24`).
 6. **Archive view reach** (`state.archive.view-reach = 1024`) and its disk cost, after M1 and M9. **Open** (T234, the user).
-7. **EG-4 and history expiry. Open: the user's decision.** EG-4 expects about 150 GB of disk, a figure for a node
-   with no history below its hand-off. Without C9a the backfill stores the whole history (the 0.12.184 run on the GCP
-   VM grew 17 to 20 GB/h, had 3M of 12.2M bodies and no receipts at about 21 h, filled a 460 GB disk and needed
-   1,400 GB to finish the 24 h follow), and with C9a's `merge` Sepolia still keeps nearly all of it (#1483). The
-   choice: **(a)** re-run EG-4 once C9a lands, with a cutoff the user names (a custom point near the head, or C9b's
-   second path if it has landed), so the disk figure is measured with expiry; or **(b)** accept EG-4 on its current
-   run, with every other criterion judged as written and the disk figure recorded and marked **without expiry**
-   (the 150 GB expectation then moves to C9's own check, T313). Either way the other EG-4 criteria
-   (hand-off, import timings, tombstones, the audit) do not depend on C9. T256 and T313 carry the outcome.
-8. **The default and a small-device cutoff. Open: the user's decision.** C9a defaults to `none` on every chain,
-   because geth's default is `all` (`eth/ethconfig/config.go:53` on `master`, `:54` on `v1.17.10`) and core-geth has no
-   expiry. `merge` saves little on Sepolia (#1483: nearly all history is after the merge), and geth offers nothing
-   between `postosaka` and a custom `<number>:<hash>`. Two questions: whether a new ETH datadir should default to
-   something other than geth's `all`; and whether fukuii adds a value geth lacks (for example "history from the SNAP
-   pivot or the checkpoint block on", which is what a small device needs) or leaves that to a custom point. beacon
-   recommends staying with geth's values in C9a and deciding this after T313 has measured `merge` and `osaka`.
-9. **C9b's shape.** Recommended: a simple append-only freezer in FR-022's segment format, not the `ColdStore` seam
-   (which drops data when full, by design), with E1b and H2 building on it. **Open: vault's confirmation** at T293.
+7. **EG-4 and history expiry. Decided 2026-11-27 (the user): option (b).** EG-4 keeps running and is accepted on its
+   current run, with its disk figure recorded and marked **without expiry**; every other EG-4 criterion (hand-off,
+   import timings, tombstones, the audit) is judged as written. The ~150 GB expectation, a node with no history below
+   its hand-off, moves to T313 as SC-020's target for Sepolia with `pivot`. The reason: without C9a the backfill
+   stores the whole history (the 0.12.184 run grew 17 to 20 GB/h, had 3M of 12.2M bodies and no receipts at about
+   21 h, filled a 460 GB disk and needed 1,400 GB), and `merge` keeps nearly all of Sepolia's (#1483). T256 and T313
+   carry it.
+8. **A small-device cutoff. Decided 2026-11-27 (the user): `pivot` is added** ("pivot onward will work"): a fukuii
+   extension geth lacks, on every chain, ETC included, defined in "C9", decision 1a. The default stays `none` on every
+   chain (geth's `all`): the user added a mode, not a default. The default can be revisited after T313 has measured
+   `pivot`. The same day the user agreed that ETC offers named points for its activated forks ("spiral or other named
+   forks"); forge picks the set.
+9. **C9b's shape. Decided 2026-11-27 (vault's review): confirmed with four changes.** A simple append-only freezer in
+   FR-022's segment format, not the `ColdStore` seam (which drops data when full, by design), with E1b and H2 building on
+   it; and: fall-through in `BlockchainReader` with a hash check; `l` decided (it stays hot, windowed, "C9" decision
+   10); a block hash and a CRC32C per record, and a directory fsync; orphans stated (they stay hot until a sweep).
+
 
 ## Phase 2 — Track E: the engine (after Track C and GT-1; it does not wait for spec 017)
 
@@ -1306,3 +1468,6 @@ slice sections and data-model.md, not here.
 
 **2026-11-27**
 - B-552 (history expiry and tiered storage, #1483) is P1 and stays in spec 018: history expiry is key to running nodes on smaller devices. It is placed as Track C slice C9 (C9a expiry, C9b the tiered freezer; "C9: history expiry"), which does not wait for GT-3, C7, C8a or C8b. The slice shape, the defaults (geth's `all`, so `none`) and C9b's form are this plan's proposals for the reviewers; open items 7 (EG-4) and 8 (the default and a small-device cutoff) are the user's.
+- ETC follows ETH: ETC and Mordor get the same C9 design (the same cutoff kinds, `none` by default on every chain, the same RPC and devp2p answers, the same optional freezer); every ETC-only rule and refusal is removed. ETC offers named points for its activated forks ("spiral or other named forks"; forge picks the set, each hash from a verified archive checked against two clients); no unscheduled fork is named. Expiry on ETC is one-way (no era1 archive).
+- Open item 7: option (b). EG-4 is accepted on its current run with its disk figure marked without expiry; the ~150 GB expectation moves to T313 (SC-020).
+- Open item 8: a `pivot` cutoff is added (history from the sync's pivot on; every chain); the default stays `none` and may be revisited after T313 measures `pivot`.

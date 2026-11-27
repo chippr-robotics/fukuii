@@ -4,7 +4,7 @@
 
 **Created**: 2026-10-17
 
-**Status**: Active (2026-11-27). Track C slices C1 to C6 are merged behind the `fukuii.state.path-live` guard, and C7, the live exit gate, is in progress: the T248 Mordor rehearsal and EG-6's Mordor half passed, EG-12's ETC mainnet sync passed and is in its 24 h follow on dev-node, the Sepolia gates wait for a GCP VM, and the Platåberget gate is dropped (2026-11-25); C0's pinned-jar comparisons and the destructive slices C8a and C8b remain; **C9, history expiry (C9a) and the tiered freezer (C9b), was added as P1 on 2026-11-27 (B-552) and has not started**; Tracks E, F, H and R are planned only. Per-slice state and PRs: [tasks.md](./tasks.md).
+**Status**: Active (2026-11-27). Track C slices C1 to C6 are merged behind the `fukuii.state.path-live` guard, and C7, the live exit gate, is in progress: the T248 Mordor rehearsal and EG-6's Mordor half passed, EG-12's ETC mainnet sync passed and is in its 24 h follow on dev-node, the Sepolia gates wait for a GCP VM, and the Platåberget gate is dropped (2026-11-25); C0's pinned-jar comparisons and the destructive slices C8a and C8b remain; **C9, history expiry (C9a, with a `pivot` cutoff for small devices) and the tiered freezer (C9b), one design for every chain, ETC included, was added as P1 on 2026-11-27 (B-552) and has not started**; Tracks E, F, H and R are planned only. Per-slice state and PRs: [tasks.md](./tasks.md).
 
 **In flight**: `dev-node` (B-393): the C7 live gates (EG-12 in its 24 h follow; the Sepolia gates on a GCP VM next)
 
@@ -295,8 +295,9 @@ Track R (read serving) runs beside all of them and gates none.
 19. **History expiry and a second path for frozen history.** An operator-set cutoff below which block bodies,
     receipts and transaction-index rows are not backfilled and are pruned if held; headers are all kept; the
     earliest available block is recorded and advertised; JSON-RPC and devp2p answer for expired ranges as go-ethereum
-    does (FR-034 to FR-040). Then, operator opt-in, a freezer that moves finalized bodies and receipts to a second
-    path (FR-041). It does not wait for GT-3: it is slice C9 of Track C (plan.md "C9: history expiry"), and Track H's
+    does (FR-034 to FR-040), with a `pivot` cutoff for small devices (FR-042) and a transaction-index window (FR-043).
+    Then, operator opt-in, a freezer that moves finalized bodies and receipts to a second path (FR-041). One design for
+    every chain, ETC and Mordor included (the user, 2026-11-27). It does not wait for GT-3: it is slice C9 of Track C (plan.md "C9: history expiry"), and Track H's
     era export (item 14) builds on it.
 
 Track F cannot start before Track E's SC-001 is green on both chains, except the copy-removal track (items 8, 6 and 10,
@@ -611,7 +612,7 @@ and tells RPC clients and peers exactly what it holds (added 2026-11-27, B-552).
 Sepolia node needed 1,400 GB to finish EG-4's 24 h follow.
 
 **Independent Test**: C9a's and C9b's tests (tasks.md T294 to T301, T316 to T321) and the live runs T313 and T327
-(SC-017 to SC-019).
+(SC-017 to SC-021).
 
 **Acceptance Scenarios**:
 
@@ -625,6 +626,10 @@ Sepolia node needed 1,400 GB to finish EG-4's 24 h follow.
    earliest block is never below what the node holds.
 5. **Given** a freezer on a second path, **When** blocks are finalized, **Then** they move there, reads answer as on a
    hot-only node, and the primary datadir meets SC-018.
+6. **Given** `history.chain = pivot` on Sepolia, **When** the node SNAP-syncs and follows for 24 h, **Then** nothing
+   below the pivot is backfilled or kept and the datadir meets SC-020.
+7. **Given** an ETC or Mordor node, **When** it is configured with any of the same cutoff kinds, **Then** it behaves as
+   an ETH node does (the same answers, SC-019), and with `none` it is byte-identical to a node without C9 (SC-021).
 
 ### Edge Cases
 
@@ -654,7 +659,14 @@ Sepolia node needed 1,400 GB to finish EG-4's 24 h follow.
 - `history.chain = none` on a pruned datadir: starts with a WARN and records the real earliest block (FR-036).
 - A kill during a history prune or a freeze: resumed from the recorded cursor; no block is lost and none at or above
   the cutoff is deleted (FR-036, FR-041).
-- A node mid-backfill, with or without a cutoff: advertises only the contiguous range it holds (FR-038).
+- A node mid-backfill, with or without a cutoff: advertises only the contiguous range it holds (FR-038); a node that
+  never ran a backfill advertises the cutoff (0 with `none`).
+- A backfill cursor reset to genesis, lowered on a fork, re-armed by a stored-body repair, or a re-peg, with a cutoff
+  set: the floor holds and nothing below the cutoff is refetched (FR-035).
+- `pivot` on a node that will sync from genesis: refused at start; a SNAP node that falls back to genesis runs as
+  `none` with a WARN; a re-SNAP never lowers the cutoff (FR-042).
+- A transaction included in a pruned uncle and in a kept canonical block: its index row stays (FR-036).
+- Expiry on ETC: one-way; there is no era1 archive to restore from (FR-040).
 
 ## Requirements *(mandatory)*
 
@@ -748,39 +760,66 @@ Sepolia node needed 1,400 GB to finish EG-4's 24 h follow.
   - `pruning.mode = "inmemory"` MUST be rejected at start with a message naming `basic`. The mode, its cache and its
     configuration are removed (OQ-5).
 
-FR-034 to FR-041 are slice C9 (B-552, added 2026-11-27). go-ethereum references are to `master` at `6fe8b63d41`;
-plan.md "C9: history expiry" has the line citations.
+FR-034 to FR-043 are slice C9 (B-552, added 2026-11-27; revised the same day: one design for every chain, ETC
+included, and the `pivot` cutoff). go-ethereum references are to `master` at `6fe8b63d41`; plan.md "C9: history expiry"
+has the line citations and the decisions these requirements cite.
 
-- **FR-034** The system MUST provide a history cutoff, `fukuii.history.chain`: `none`, `merge`, `prague`, `osaka` or
-  `"<number>:<hash>"` (go-ethereum's `--history.chain` values `all`, `postmerge`, `postprague`, `postosaka` and a
-  custom point, which needs the hash). The named points MUST equal go-ethereum's per chain (mainnet, Sepolia, Hoodi).
-  The default MUST be `none` on every chain, as go-ethereum's default is `all`. A named mode with no point for the
-  chain (any on ETC, Mordor or a private chain; `merge` on Hoodi) and a malformed custom point MUST be refused at start.
+- **FR-034** The system MUST provide a history cutoff, `fukuii.history.chain`, with **the same kinds on every chain**:
+  `none`; a named fork point from the chain file (ETH: `merge`, `prague`, `osaka`, equal to go-ethereum's points for
+  mainnet, Sepolia and Hoodi; ETC and Mordor: activated ETC forks only, at least `spiral`, the set chosen by `forge`, no
+  unscheduled fork named); `"<number>:<hash>"` (the hash required); or `pivot` (FR-042). Each ETC point's hash MUST come
+  from a verified archive checked against two clients, signed by `forge` and pinned by a test. The default MUST be
+  `none` on every chain, as go-ethereum's default is `all`. A named mode with no point on the chain (for example
+  `merge` on Hoodi or on ETC, `spiral` on Sepolia) and a malformed custom point MUST be refused at start.
 - **FR-035** With a cutoff, the backfill MUST NOT request or store bodies or receipts below it, and MUST still store
-  every header; the header at the cutoff MUST match the configured hash.
+  every header; the header at the cutoff MUST match the configured hash. Every write of the backfill's body and receipt
+  cursors, including resets, fork lowerings, stored-body repairs and re-pegs, MUST go through one floor, `max(cutoff - 1,
+  n)`; a cursor N MUST mean "every block from the cutoff to N is held"; a response below the floor MUST be dropped at the
+  store. The ancestor window and the pivot body are exempt (they are consensus inputs).
 - **FR-036** History already stored below a configured cutoff MUST be pruned in the background, in bounded atomic
-  batches with a persisted cursor, after a synced record of the target that makes every read treat the target as the
-  cutoff before the first delete; a kill MUST resume without deleting anything at or above the cutoff. Headers, chain
-  weights and block-access lists MUST NOT be pruned. A datadir pruned beyond the configured cutoff, or whose canonical
-  header at the cutoff has another hash, MUST be refused at start before the P2P server, any listener or any store
-  writer starts; `none` on a pruned datadir MUST start, record the real earliest block and WARN.
-- **FR-037** JSON-RPC MUST answer below the cutoff as go-ethereum does: error code 4444, "pruned history unavailable",
-  for block, block-receipt and trace requests; the header for header requests; null for transaction and receipt
-  lookups by hash; `earliest` resolving to the cutoff; `eth_getLogs` with a `fromBlock` or `blockHash` below the cutoff
-  refused whole; `eth_capabilities` reporting the cutoff as the oldest block of blocks, receipts, logs and
-  transactions. A log query that meets a block above the cutoff whose receipts are not held MUST fail with an error,
-  never return a short result.
-- **FR-038** eth/69 and eth/70 `Status` and `BlockRangeUpdate` MUST advertise the lowest block from which every block
-  to the head is held, and never less than the cutoff; `GetBlockBodies` and `GetReceipts` MUST stop at the first block
-  not held.
+  batches with a persisted cursor, after a synced intent write (the target, the cursor, the floor and a compaction
+  marker) that makes every read treat the target as the cutoff before the first delete, serialized with the backfill's
+  stores; a kill MUST resume without deleting anything at or above the cutoff. A transaction-index row MUST be deleted
+  only if it names the pruned block, under the lock that canonical-index rewrites take. The prune MUST delete only below
+  `min(cutoff, head - 90,000)`. Space MUST be reclaimed by a compaction run in slices under an I/O budget and resumed
+  after a kill. Headers, chain weights and block-access lists MUST NOT be pruned. A datadir pruned beyond the configured
+  cutoff, or whose canonical header at the cutoff has another hash, MUST be refused at start before the P2P server, any
+  listener or any store writer starts; `none` on a pruned datadir MUST start, record the real earliest block and WARN.
+- **FR-037** JSON-RPC MUST answer every block-reading method through one predicate: the block is held, answer; it is
+  not and lies below the cutoff, error code 4444, "pruned history unavailable"; it is not and lies at or above the cutoff
+  (not yet backfilled), -32000 "block body not found" (go-ethereum's missing-body error). Headers MUST still be
+  answered; lookups by transaction hash below the cutoff MUST answer null; `earliest` MUST resolve to the cutoff;
+  `eth_getLogs` and `trace_filter` MUST check their range up front and refuse it whole; `engine_getPayloadBodiesBy*`
+  MUST answer `null` entries; `eth_capabilities` MUST report the cutoff; state methods MUST be unchanged. The full
+  per-method table is plan.md "C9" decision 7.
+- **FR-038** eth/69 and eth/70 `Status` and `BlockRangeUpdate` MUST advertise `min(latest, max(cutoff, L))`, where L is
+  the cutoff unless an unfinished backfill target T is recorded (then T + 1, judged on the lower of the body and receipt
+  cursors), so a node that never ran a backfill advertises the cutoff; a `BlockRangeUpdate` MUST be due at a prune's
+  intent write; a decreasing earliest MUST be allowed in both directions (EIP-7642 sets no monotonicity rule);
+  `GetBlockBodies` and `GetReceipts` MUST stop at the first block not held; the backfill MUST ask eth/69+ peers only
+  within their advertised range and MUST NOT blacklist a peer whose range moved or an eth/68 peer for an empty reply.
 - **FR-039** SNAP serving MUST be unchanged by any cutoff.
-- **FR-040** The ETC and Mordor defaults MUST stay `none` (core-geth keeps all history); any change needs `forge`'s
-  sign-off.
-- **FR-041** As an operator opt-in, the system MUST be able to keep frozen bodies and receipts on a second path:
-  blocks at or below `max(finalized, head - 90,000)` move there in the background (append and fsync before the hot
-  delete), reads fall through with answers identical to a node without the freezer, a kill loses no block, and expiry
-  truncates the freezer's tail. Its format MUST be the one FR-022's segment store uses, and it MUST NOT depend on the
-  `ColdStore` seam (FR-024), which may drop data.
+- **FR-040** With `none`, no freezer and no transaction-index window, the bodies, receipts and transaction index MUST
+  be byte-identical to a node without C9, and every RPC answer unchanged, **on ETH, ETC and Mordor alike**. ETC
+  consensus inputs under a cutoff (ECIP-1017 rewards, MESS and total difficulty, ommer validation) MUST be unaffected;
+  `forge` checks them. Expiry on ETC MUST be documented as one-way (there is no era1 archive for ETC).
+- **FR-041** As an operator opt-in on any chain, the system MUST be able to keep frozen canonical bodies and receipts
+  on a second path: blocks at or below `max(finalized, head - 90,000)` move there in the background (append and fsync of
+  the files and their directory, a synced high-water mark, then the hot delete); each record MUST carry its block hash
+  and a CRC32C; a repair that would truncate below the high-water mark MUST refuse the start; reads MUST fall through in
+  `BlockchainReader` with the record's hash checked against the requested hash, with answers identical to a node
+  without the freezer; a kill MUST lose no block; expiry MUST truncate the freezer's tail. Side-chain bodies and receipts
+  are not frozen. Its format MUST be the one FR-022's segment store uses, and it MUST NOT depend on the `ColdStore` seam
+  (FR-024), which may drop data.
+- **FR-042** The system MUST provide the `pivot` cutoff on every chain (a fukuii extension; go-ethereum has none): the
+  cutoff is P + 1 for the SNAP pivot P recorded at the hand-off, or C + 1 for a checkpoint v2 import at C, recorded in
+  that hand-off's or import's final synced batch; nothing below it is backfilled; on PoW the ancestor window's bodies are
+  kept for ommer validation; a re-SNAP MAY raise the cutoff and MUST never lower it; `pivot` MUST be refused at start
+  when a sync from genesis is certain on a datadir with no recorded pivot, and a SNAP node that falls back to a sync from
+  genesis MUST run as `none` with a WARN.
+- **FR-043** The system MUST provide a transaction-index window, `fukuii.history.transactions` (go-ethereum's
+  `--history.transactions` meaning; 0 = every held block, the default), whose un-indexer deletes rows only when they
+  name the block being un-indexed and resumes after a kill.
 
 ### Key Entities
 
@@ -801,9 +840,10 @@ plan.md "C9: history expiry" has the line citations.
 - **Access set**: the hashed keys, code hashes and ancestor headers a block's execution touched; input to the proof walk
   that produces the witness.
 - **Oldest-reader lag**: how far behind head the oldest open read transaction is; the DC-5 health signal.
-- **History cutoff and earliest block** (C9a): the first block whose body and receipts the node keeps
-  (`history.earliest`, number and hash), and the lowest block from which it holds every block to the head, which is
-  what it advertises to peers.
+- **History cutoff and earliest block** (C9a): the cutoff (`history.cutoff`, number and hash: a named fork point, a
+  custom point, or with `pivot` the block after the sync's pivot), below which nothing is kept; the earliest block
+  recorded when a backfill or a prune finishes (`history.earliest`); and L, the lowest block from which every block to
+  the head is held, which with the cutoff gives what the node advertises to peers.
 - **History freezer** (C9b): append-only tables of frozen bodies and receipts on an operator-chosen path, read by
   block number below a recorded high-water mark; the first part of FR-022's segment store.
 
@@ -853,22 +893,35 @@ plan.md "C9: history expiry" has the line citations.
 - **SC-016** After spec 021 lands, the GT-1 RPC arm is re-run: trace re-execution of the fixture blocks shows no
   `BigInteger` allocation on the arithmetic path (spec 021 SC-003) and the trace p99 figure is republished beside the
   comparators.
-- **SC-017** *(C9a, history expiry on disk)* A fresh Sepolia node with `history.chain = merge`, after SNAP, the full
+- **SC-017** *(C9a, a fork cutoff on disk)* A fresh Sepolia node with `history.chain = merge`, after SNAP, the full
   backfill from block 1,450,409 and a 24 h follow, holds no body, receipt or transaction-index row below 1,450,409, and
-  its datadir is **under 1,100 GB**. Derivation: about 150 GB for state, headers and the blocks since the hand-off (EG-4's
-  expected figure for a node with no history), plus about 900 GB for the history above the merge (the top of #1483's
-  500 to 900 GB on-disk estimate for the whole history, which is nearly all post-merge), plus about 5% for compaction
-  headroom. EG-4's run without expiry needed 1,400 GB. **This is not a small-device figure:** on Sepolia `merge` removes
-  little; T313 also measures `osaka` (block 9,408,577), and a near-head cutoff is plan open item 8. The figure is set
-  again from T313's measurement.
-- **SC-018** *(C9b, tiered)* A fresh Sepolia node with the freezer on a second path, after SNAP, the full backfill and a
-  24 h follow, uses **at most 150 GB on the primary datadir** (state, every header, and the blocks not yet frozen: on PoS
-  those above the finalized block), with every other body and receipt on the second path. This is EG-4's expected
-  figure and #1483's acceptance ("the SSD footprint bounded by state plus a recent-block window").
+  its datadir is **under 1,100 GB**. Derivation: about 150 GB for state, headers and the blocks since the hand-off (the
+  figure EG-4 expected for a node with no history), plus about 900 GB for the history above the merge (the top of
+  #1483's 500 to 900 GB on-disk estimate for the whole history, which is nearly all post-merge), plus about 5% for
+  compaction headroom. EG-4's run without expiry needed 1,400 GB. **Not a small-device figure:** on Sepolia `merge`
+  removes little (SC-020 is the small-device target). Set again from T313's measurement.
+- **SC-018** *(C9b, tiered)* A fresh Sepolia node with the freezer on a second path and
+  `history.transactions = 2,350,000`, after SNAP, the full backfill and a 24 h follow, uses **at most 150 GB on the
+  primary datadir** (state, every header, the windowed transaction index of about 20 GB, and the blocks not yet frozen:
+  on PoS those above the finalized block), with every other canonical body and receipt on the second path. #1483's
+  acceptance ("the SSD footprint bounded by state plus a recent-block window").
 - **SC-019** *(C9a and C9b, answers)* On the fixtures of tasks.md T298 to T300, every JSON-RPC and devp2p answer below,
-  at and above the cutoff equals go-ethereum's at `6fe8b63d41` with the same cutoff, and is the same with and without
-  the freezer; with `none` and no freezer, rpc-compat (40) and graphql (2) are unchanged; a prune or a freeze killed at
-  each step loses no block and deletes none at or above the cutoff.
+  at and above the cutoff, and in a not-yet-backfilled gap, equals **the answer table of plan.md "C9" decision 7 and
+  decision 8**, and is the same with and without the freezer. **The oracle:** on ETH, that table is go-ethereum's at
+  `6fe8b63d41` with the same cutoff; **on ETC and Mordor, the oracle is the same ETH-side table** (core-geth has no
+  expiry, so core-geth parity holds only with `none`, SC-021's invariant). A prune or a freeze killed at each step loses
+  no block and deletes none at or above the cutoff.
+- **SC-020** *(C9a, `pivot`: the small-device target; unmeasured until T313)* A fresh Sepolia node with
+  `history.chain = pivot`, after SNAP and a 24 h follow, uses **at most 150 GB** (the expectation EG-4 had, moved here on
+  2026-11-27). Derivation: state about 95 to 110 GB (#1483: the path families are about 95 GB on Sepolia), every
+  header about 8 GB (12.2 million headers of about 0.6 KB, with the number index and chain weights), a day of blocks
+  since the pivot with their receipts and transaction index about 2 GB (about 7,200 blocks of about 0.2 MB raw), the
+  changesets and overlay of the retention window a few GB, and about 15% compaction headroom: about 125 to 145 GB. The
+  figure is a derivation, not a measurement; T313 (c) measures it, and it is set again from that. The Mordor `pivot`
+  figure is recorded by T313 (f) with no target set beforehand.
+- **SC-021** *(C9a, `none` inert)* With `none`, no freezer and no transaction-index window, a fixed range imported on
+  Sepolia, ETC and Mordor configurations leaves the bodies, receipts and transaction index byte-identical to a node
+  without C9, and rpc-compat (40) and graphql (2) unchanged (tasks.md T341).
 
 ## Assumptions
 
@@ -1058,4 +1111,7 @@ item that carries the decision; "Source" is where it was recorded. The design no
 | 2026-11-21 | The Ethash DAG is memory-mapped off-heap (not linked to spec 018). | B-413 | #1977 |
 | 2026-11-24 | Regular sync from genesis is taken on the guard on every chain, a chain with a TTD included (ends the 2026-11-17 refusal); a node with no state at all is still refused. | B-314 | plan "Decision log" |
 | 2026-11-25 | The Platåberget gate is dropped: the chain was retired on 2026-10-28. EG-15 (T267) and the Platåberget halves of EG-1 (T251) and EG-10 (T262) go; EG-1's ETH half is Sepolia only. The Sepolia gates run on a GCP VM that is shut down after each test; EG-4's DC-14 figures there are a first baseline on cloud hardware, not a delta against the pinned jar. | B-068 | plan "Exit gate" |
-| 2026-11-27 | B-552 (history expiry and tiered storage, #1483) is P1 and stays in spec 018, because history expiry is key to running nodes on smaller devices. It is placed as Track C slice C9 (C9a expiry, C9b the tiered freezer), which waits for neither GT-3 nor C7, C8a or C8b. Still the user's: whether EG-4 waits for C9a (plan open item 7) and the default and small-device cutoff (open item 8). | Scope item 19, FR-034 to FR-041, SC-017 to SC-019, US9, C9a, C9b, B-552 | backlog B-552; plan "C9: history expiry" |
+| 2026-11-27 | B-552 (history expiry and tiered storage, #1483) is P1 and stays in spec 018, because history expiry is key to running nodes on smaller devices. It is placed as Track C slice C9 (C9a expiry, C9b the tiered freezer), which waits for neither GT-3 nor C7, C8a or C8b. Open items 7 and 8 were decided later the same day (rows below). | Scope item 19, FR-034 to FR-043, SC-017 to SC-021, US9, C9a, C9b, B-552 | backlog B-552; plan "C9: history expiry" |
+| 2026-11-27 | ETC follows ETH: ETC and Mordor get the same C9 design (the same cutoff kinds, `none` by default on every chain, the same RPC and devp2p answers, the same optional freezer); every ETC-only rule and refusal is removed. ETC offers named points for its activated forks ("spiral or other named forks"; forge picks the set; each hash from a verified archive checked against two clients); no unscheduled fork is named. | FR-034, FR-040, SC-019, SC-021, T293, T329, T339, T340 | plan "C9", decision 1 |
+| 2026-11-27 | Open item 7: option (b). EG-4 keeps running and is accepted on its current run, with its disk figure marked without expiry; the ~150 GB expectation moves to T313. | EG-4, T256, T313, SC-020 | plan "Remaining open items" 7 |
+| 2026-11-27 | Open item 8: a `pivot` cutoff is added (history from the sync's pivot on, on every chain); the default stays `none` (geth's `all`) and may be revisited after T313 measures `pivot`. | FR-042, SC-020, T334, T342 | plan "C9", decision 1a; open item 8 |
