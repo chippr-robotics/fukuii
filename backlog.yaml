@@ -6185,12 +6185,17 @@ items:
   - id: B-566
     title: "Snap server: go-ethereum and nethermind cannot snap-sync from fukuii in hive's snapsync suite (head stays 0)"
     priority: P2
-    status: open
+    status: claimed
     area: snap
     size: M
     opened: 2026-11-27
     refs: []
     links: {}
+    claim:
+      by: dev-node
+      agent: claude-opus
+      since: 2026-11-27T09:25:06Z
+      heartbeat: 2026-11-27T09:25:06Z
     notes: "2026-11-27, hive master 9a8517a3, chipprbots/fukuii:latest (0.12.79). With hive.yaml declaring eth1_snap, the snapsync suite gives: fukuii snap-syncs from geth, nethermind and itself (PASS), but 'sync go-ethereum from fukuii' and 'sync nethermind from fukuii' FAIL: 'sync failed: timeout (1m0s elapsed, current head is 0)'. devp2p snap 6/6 and snap2 4/4 pass, so message handling is right; the gap is a full snap sync served by fukuii (pivot/root availability on hive's short chain?). Blocks declaring eth1_snap in ethereum/hive clients/fukuii (#1677 stays eth1-only). Local results: ~/work/hive-up/workspace/r5-sync-snap."
   - id: B-567
     title: Genesis loader reads decimal header quantities as hex (silent wrong genesis hash)
