@@ -50,48 +50,77 @@ canonical:
     record: docs/development/fukuii-project.md
 
 # ---------------------------------------------------------------------------
-# Required status checks. These are the contexts branch protection must list.
-# Apply with the `gh api` invocation in .github/BRANCH_PROTECTION.md.
+# Required status checks. These are the contexts the `main` ruleset must list,
+# spelled exactly as GitHub names the check runs (a reusable-workflow job is
+# `<caller job> / <job name>`, e.g. `run / engine`). Steps in
+# .github/BRANCH_PROTECTION.md.
 # ---------------------------------------------------------------------------
-# TARGET STATE. The live ruleset is NOT verifiable from inside the repository
-# (see the reconciliation note below) — this is what it SHOULD require.
+# TARGET STATE. The Gate Integrity check cannot read the ruleset (see the
+# reconciliation note below) — this is what it SHOULD require. Each entry is
+# the context of a `tier: required` gate below.
 required_contexts:
-  - Test and Build (JDK 25, Scala 3.9.0)
-  - Docker Build
-  - Gate Integrity
+  - Test and Build (JDK 25, Scala 3.9.0)   # ci-test-build
+  - Gate Integrity                         # gate-integrity
+  # docker-build: docker.yml reports one check per image, none named `Docker Build`.
+  - Build Main Docker Image
+  - Build Dev Docker Image
+  - Build Base Docker Image
+  - Build Mainnet Docker Image
+  - Build Mordor Docker Image
+  - Build Bootnode Docker Image
+  - EEST Amsterdam                         # eest-amsterdam
+  - run / smoke-genesis                    # hive-smoke-genesis
+  - run / smoke-network                    # hive-smoke-network
+  - run / sync                             # hive-sync
+  - run / engine                           # hive-engine
+  - run / consume-rlp                      # hive-consume-rlp
 
 # ---------------------------------------------------------------------------
-# RECONCILIATION NOTE — discovered 2026-09-20 while attempting to merge #1406.
+# RECONCILIATION NOTE — first written 2026-09-20 (#1406); re-checked
+# 2026-11-26 (B-550) by reading the live ruleset, which `gh api
+# repos/chippr-robotics/fukuii/rules/branches/main` returns to any reader.
 #
-# The live ruleset and this file disagree, and no check in this repository can
-# see that. A merge attempt was rejected with:
+# Ruleset `Main_Protection` (id 10604881) on `main` requires SIX contexts:
 #
-#     405 Repository rule violations found
-#     2 of 5 required status checks are failing.
+#     Test and Build (JDK 25, Scala 3.9.0)    -> keep
+#     Coverage (JDK 25, Scala 3.9.0)          -> NOT a gate here (see below)
+#     run / engine                            -> keep (hive-engine, required)
+#     run / consume-engine                    -> hive-consume-engine is informational
+#     Consume-engine Prague sweep             -> REMOVE: hive-prague.yml deleted
+#     Consume-engine Osaka sweep              -> REMOVE: hive-osaka.yml deleted
 #
-# So the ruleset requires FIVE contexts. `.github/BRANCH_PROTECTION.md`
-# documented TWO. This file declared THREE. All three numbers were different,
-# and two of the five are Hive suites that this matrix declares
-# `informational` — i.e. suites it says cannot block a merge, which in fact do.
+# ACTION (needs admin; the ruleset is the user's to change, no check can):
+#   1. REMOVE `Consume-engine Prague sweep` and `Consume-engine Osaka sweep`
+#      BEFORE the staging -> main 0.13.0 PR merges. Their workflows no longer
+#      exist on staging, so those checks never report and the PR waits forever.
+#      (The Osaka one ran zero tests and passed — see REMOVED GATES.)
+#   2. ADD `Gate Integrity`, `EEST Amsterdam`, `run / smoke-genesis`,
+#      `run / smoke-network`, `run / sync` and `run / consume-rlp`, and the six
+#      `Build * Docker Image` checks, AFTER the 0.13.0 promotion lands on main:
+#      the hive and EEST callers report on every PR only once their `changes`
+#      job (_hive-changes.yml) is on main; before that a docs-only PR waits on
+#      them forever.
+#   3. DECIDE `run / consume-engine` and `Coverage (JDK 25, Scala 3.9.0)`.
+#      Both are required by the ruleset and neither is a required gate here:
+#      consume-engine is informational (promote_by 2027-03-31, no main-branch
+#      evidence yet), and ci.yml labels the Coverage job "Informational, NOT a
+#      required check". Either promote/declare them in this file with
+#      evidence, or remove them from the ruleset. Until one of those happens the
+#      ruleset blocks on checks this matrix says cannot block — the drift this
+#      note was written to expose.
 #
-# That is this feature's own defect class one layer out: a declared
-# configuration that does not match the enforced one. Constitution rule V.4 is
-# labelled `aspirational` in docs/governance/constitution-enforcement.md for
-# exactly this reason — GitHub settings live outside the repo and the
-# Gate Integrity check cannot read them. The honest position is that
-# `required_contexts` above is a TARGET a maintainer must apply and verify by
-# hand, not an observation.
+# Facts that differ from the 2026-09-20 note:
+#   * Merge commits are ALLOWED again (repository `allow_merge_commit: true`;
+#     the ruleset's allowed_merge_methods are merge, squash, rebase). It has a
+#     `non_fast_forward` rule but no `required_linear_history` rule.
+#   * There is no `Docker Build` check run: that is docker.yml's workflow name.
+#     Its jobs report as `Build <Variant> Docker Image`.
+#   * The ruleset has `strict_required_status_checks_policy: true` (branch
+#     must be up to date) and requires review-thread resolution.
 #
-# Two further facts the merge attempt established, both previously undocumented:
-#   * Merge commits are DISABLED on this repository ("Merge commits are not
-#     allowed"). Squash or rebase only — linear history is enforced, not
-#     "optional" as BRANCH_PROTECTION.md described it.
-#   * The Docker context is named `Docker Build`, not `Build Docker Images` as
-#     previously declared here and in BRANCH_PROTECTION.md.
-#
-# ACTION (needs admin): reconcile the ruleset to `required_contexts` above —
-# drop the Hive contexts, which belong in the informational tier until #1407
-# makes them passable, and add `Gate Integrity`. Steps in BRANCH_PROTECTION.md.
+# Constitution rule V.4 stays `aspirational` in
+# docs/governance/constitution-enforcement.md: the ruleset can be read, but
+# nothing in CI compares it to this list.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------
@@ -114,7 +143,8 @@ gates:
 
   - id: docker-build
     workflow: docker.yml
-    context: Docker Build
+    # One check run per image; all six are in required_contexts.
+    context: Build Main Docker Image
     tier: required
     owner: realcodywburns
     covers: Container images build and push for mainnet/mordor/bootnode variants.
@@ -133,27 +163,29 @@ gates:
 
   # --- Hive suites ----------------------------------------------------------
   #
-  # HONEST STATE, 2026-09-20: every Hive suite is `informational`. Not one is
-  # declared required, because none has evidence of a green run on `main` that
-  # we could point at. The last green main-branch smoke-genesis run was
-  # 2026-04-30 (run 25184051794); every PR run since has been red.
+  # STATE, 2026-11-26 (B-550): smoke-genesis, smoke-network, sync, engine and
+  # consume-rlp are `required`, each on a green workflow_dispatch run on `main`
+  # at 78d436c49 (its `evidence:`). The rest stay `informational` with dates.
   #
-  # Declaring these required today would repeat the v0.8.0 defect in reverse:
-  # a required check nobody can pass gets waived into meaninglessness within a
-  # week. So instead: the MECHANISM lands now (zero-results fails, min_tests,
-  # hive_exit enforced — see _hive-sim.yml), the PROMOTION is scheduled below,
-  # and promotion requires `evidence`: a green run URL on `main`.
+  # History: on 2026-09-20 every Hive suite was informational, because none had
+  # a green run on `main` to point at, and declaring them required would have
+  # repeated the v0.8.0 defect in reverse. The MECHANISM landed first
+  # (zero-results fails, min_tests, hive_exit enforced — see _hive-sim.yml);
+  # promotion needs `evidence`, a green run URL on `main` (check C4).
   #
-  # #1402 asks for "the first required slice". It is declared in
-  # `first_required_slice` below with dates, not asserted as already true.
+  # A required Hive caller starts on every PR and passes `skip` to
+  # _hive-sim.yml from a `changes` job (_hive-changes.yml), never a `paths:`
+  # filter: a workflow that does not start never reports, and a required check
+  # that never reports blocks the PR.
 
   - id: hive-sync
     workflow: hive-sync.yml
-    context: Hive · sync
-    tier: informational
+    context: run / sync
+    tier: required
     owner: realcodywburns
-    issue: 1402
-    promote_by: 2026-12-31
+    # workflow_dispatch on main at 78d436c49, 2026-11-26: 18/18, gated fukuii subset all green
+    # (min_tests 8).
+    evidence: https://github.com/chippr-robotics/fukuii/actions/runs/45903220520
     min_tests: 8
     covers: >-
       Cross-client sync interop. fukuii as sync CLIENT (fukuii syncs from
@@ -161,63 +193,71 @@ gates:
       from fukuii). Gated on the `fukuii` subset only, so upstream
       geth<->nethermind failures do not pollute this signal.
     status_note: >-
-      #1402's first required-slice item. Both waivers are retired (#1407).
-      `sync go-ethereum from fukuii` passes since fukuii's ENR `eth` entry
-      became [[fork-hash, fork-next]] and the hive adapter advertises the
-      container address. `sync fukuii from nethermind` was an intermittent
-      fukuii-sink failure; it passes after the fix for the dropped-reply race
-      behind the same intermittent sink stall (3af08c103). Evidence: CI run
-      35997930212 on a78d2557d, 18/18; locally with all three clients, every
-      fukuii test green.
+      Required since 2026-11-26 (B-550). #1402's first required-slice item. Both waivers
+      are retired (#1407): sync go-ethereum from fukuii passes since fukuii's ENR eth
+      entry became [[fork-hash, fork-next]] and the hive adapter advertises the container
+      address; sync fukuii from nethermind passes after the fix for the dropped-reply race
+      (3af08c103). Main run 45903220520: 18/18.
 
   - id: hive-smoke-genesis
     workflow: hive-smoke-genesis.yml
-    context: Hive · smoke-genesis
-    tier: informational
+    context: run / smoke-genesis
+    tier: required
     owner: realcodywburns
-    issue: 1402
-    promote_by: 2026-11-30
+    # workflow_dispatch on main at 78d436c49, 2026-11-26: 6/6 (min_tests 1).
+    evidence: https://github.com/chippr-robotics/fukuii/actions/runs/45903212878
     min_tests: 1
     covers: Client starts from a hive-supplied genesis and reports a chain head.
     status_note: >-
-      Cheapest suite and the natural first promotion: if this cannot be made
-      required, nothing can. Last green on main 2026-04-30; red since.
+      Required since 2026-11-26 (B-550). Main run 45903212878: 6/6.
 
   - id: hive-smoke-network
     workflow: hive-smoke-network.yml
-    context: Hive · smoke-network
-    tier: informational
+    context: run / smoke-network
+    tier: required
     owner: realcodywburns
-    issue: 1402
-    promote_by: 2026-11-30
+    # workflow_dispatch on main at 78d436c49, 2026-11-26: 2/2 (min_tests 1).
+    evidence: https://github.com/chippr-robotics/fukuii/actions/runs/45903216684
     min_tests: 1
     covers: Client accepts peers and forms a network under hive's harness.
+    status_note: >-
+      Required since 2026-11-26 (B-550). Main run 45903216684: 2/2.
 
   - id: hive-consume-rlp
     workflow: hive-consume-rlp.yml
-    context: Hive · consume-rlp
-    tier: informational
+    context: run / consume-rlp
+    tier: required
     owner: realcodywburns
-    issue: 1402
-    promote_by: 2026-12-31
+    # workflow_dispatch on main at 78d436c49, 2026-11-26: 1471/1471, 4 tests cut off by
+    # --sim.timelimit and counted in neither column (min_tests 50).
+    evidence: https://github.com/chippr-robotics/fukuii/actions/runs/45903228406
     min_tests: 50
     covers: >-
       EELS consume-rlp — block import from RLP across the fork schedule,
       including the ETC forks. #1402's third required-slice item.
     status_note: >-
-      ~67% failing at v0.8.0. Not claimed as verified anywhere until promoted.
+      Required since 2026-11-26 (B-550). #1402's third required-slice item. Main run
+      45903228406: 1471/1471, 4 cut off. Green on every completed run since 2026-11-20;
+      the red runs from 2026-09-23 to 2026-11-19 were those 4 cut-off tests scored as
+      failures, which _hive-sim.yml now counts as cut_off (#1957). The 80m limit reaches
+      about 1,500-1,700 of the 47,589 tests, so this gate samples; Hive full pass runs the
+      suite to completion.
 
   - id: hive-engine
     workflow: hive-engine.yml
-    context: Hive · engine
-    tier: informational
+    context: run / engine
+    tier: required
     owner: realcodywburns
-    issue: 1402
-    promote_by: 2026-12-31
+    # workflow_dispatch on main at 78d436c49, 2026-11-26: 383/383 across 5 suites (min_tests 20).
+    evidence: https://github.com/chippr-robotics/fukuii/actions/runs/45903224242
     min_tests: 20
     covers: >-
       Engine API suite, including invalid-payload rejection — #1402's second
       required-slice item. ETH/Sepolia path only.
+    status_note: >-
+      Required since 2026-11-26 (B-550). #1402's second required-slice item. Main run
+      45903224242: 383/383. Already a required context (run / engine) in the live main
+      ruleset before this promotion.
 
   - id: hive-consensus
     workflow: hive-consensus.yml
@@ -316,10 +356,13 @@ gates:
   - id: eest-amsterdam
     workflow: eest-amsterdam.yml
     context: EEST Amsterdam
-    tier: informational
+    tier: required
     owner: realcodywburns
     issue: 1419
-    promote_by: 2026-11-30
+    # A green push run on `main` (002ee9ba9, 2026-11-26): import replay 26,503 / 26,503,
+    # builder rebuild 27,352 blocks, position-mirror replay 26,503 / 26,503.
+    evidence: https://github.com/chippr-robotics/fukuii/actions/runs/45816167881
+    min_tests: 26503
     covers: >-
       execution-specs tests@v21.0.0 Amsterdam and BPO2->Amsterdam blockchain_tests
       (26,503) replayed from the release's own block RLP through the import path
@@ -332,10 +375,14 @@ gates:
       fixture's storage (EEST_POSITIONS=1, spec 018 Track C T026) and fails on a
       read or an update a position-keyed trie store would have refused.
     status_note: >-
-      26,503 / 26,503 on the import replay (run 36294294338, 2026-09-27), up from a
-      baseline of 18,081 on 2026-09-26 before the Glamsterdam work items (#1415).
-      The builder rebuild (#1427) reproduced all 27,352 blocks when run locally on
-      2026-09-27. Promote once 0.9.0 ships.
+      Required since 2026-11-26 (B-550). All six push runs on main are green
+      (2026-10-07 to 2026-11-26); the one red push run on staging since (44560962111,
+      2026-11-19) failed to download scala3-library 3.9.0, before any test ran. The
+      import replay first reached 26,503 / 26,503 on 2026-09-27 (run 36294294338), from
+      a baseline of 18,081 (#1415). The workflow starts on every PR and skips its
+      job by `if:` when the PR changes nothing it depends on (_hive-changes.yml), so the
+      required check always reports. Hive consume-rlp / consume-engine against an
+      Amsterdam-capable fixture release is #1419's open remainder, outside this gate.
 
   # B-151 has no GitHub issue of its own: `issue` is #1767, the B-135 refusal
   # that keeps ETH chains off Windows without this backend. Repoint it once an
@@ -360,31 +407,6 @@ gates:
       runs on Linux in Eip2537DifferentialSpec (ci-test-build). Promote after a
       green run on windows-latest and a green history on BLS-touching PRs.
 
-  # --- Quarantined: parallel unchecked paths, excluded from all claims -------
-
-  - id: hive-prague
-    workflow: hive-prague.yml
-    context: Hive Prague Suite
-    tier: quarantined
-    owner: realcodywburns
-    issue: 1402
-    promote_by: 2026-12-31
-    covers: Legacy standalone Prague caller — does NOT use _hive-sim.yml.
-    status_note: >-
-      A parallel, unchecked code path with its own inline `exit 0`. Migrate to
-      _hive-sim.yml (inheriting its gates) or delete. Excluded from public
-      claims until then.
-
-  - id: hive-osaka
-    workflow: hive-osaka.yml
-    context: Hive Osaka Suite
-    tier: quarantined
-    owner: realcodywburns
-    issue: 1402
-    promote_by: 2026-12-31
-    covers: Legacy standalone Osaka caller — does NOT use _hive-sim.yml.
-    status_note: Same as hive-prague. Migrate to _hive-sim.yml or delete.
-
 # ---------------------------------------------------------------------------
 # #1402: the first required slice — declared with dates, not asserted as done.
 #
@@ -396,6 +418,7 @@ gates:
 first_required_slice:
   issue: 1402
   target: 2026-12-31
+  # Met 2026-11-26 (B-550): all three members are `tier: required` with evidence.
   members:
     - gate: hive-sync
       item: geth<->fukuii sync, BOTH directions
@@ -433,6 +456,33 @@ first_required_slice:
 #   This is supersession, not suppression. Constitution V forbids deleting a
 #   failing test to get green; it does not require keeping a reference to a
 #   simulator that upstream removed. Nothing that could pass was switched off.
+#
+# hive-prague, hive-osaka (removed 2026-11-26, B-551, #1402, #1419)
+#   Both were standalone callers of ethereum/eels/consume-engine that bypassed
+#   _hive-sim.yml, so none of its gates applied: no min_tests, no hive_exit, no
+#   cut-off accounting. Both pinned execution-spec-tests fixtures stable@v5.4.0.
+#
+#   hive-osaka could not fail. stable@v5.4.0 holds no fork_Osaka test, so
+#   `--sim.limit '.*fork_Osaka.*'` selected nothing, and its threshold was 0:
+#   run 45763364501 (2026-11-26) ended `suites=0 tests=0 failed=0` and passed.
+#   It was nonetheless a required check in the live `main` ruleset
+#   (`Consume-engine Osaka sweep`) — the v0.8.0 defect, live.
+#
+#   hive-prague ran `.*fork_Prague.*` with a pass threshold of 400 and a 40m
+#   time limit that always ended the run part-way: run 45763364571 passed 831
+#   tests, whichever pytest collected first, then `simulation timed out`.
+#
+#   Coverage is not lost. Every fork_Prague and fork_Cancun test in
+#   stable@v5.4.0 belongs to exactly one shard of .github/hive-shards.json
+#   (consume-engine-01..13, an exact partition proven by
+#   scripts/hive/gen-shards.py). `Hive · consume-engine` (hive-consume-engine.yml)
+#   runs shard consume-engine-13 to completion on every PR into main, 874 tests
+#   of both forks with min_tests = 874, and `Hive · full pass` (hive-full.yml)
+#   runs all 13 shards to completion at release; both go through _hive-sim.yml.
+#   Osaka had no coverage to lose: it needs a fixture release with Osaka in it,
+#   which is #1419's remaining Hive item for consume-engine and consume-rlp.
+#   Until then no CI job runs fork_Osaka fixtures; `eest-amsterdam` (outside
+#   Hive) covers the Amsterdam and BPO2->Amsterdam ones.
 # ---------------------------------------------------------------------------
 
 # ---------------------------------------------------------------------------

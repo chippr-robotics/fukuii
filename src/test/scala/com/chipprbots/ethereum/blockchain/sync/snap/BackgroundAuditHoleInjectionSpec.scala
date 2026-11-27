@@ -5,6 +5,7 @@ import java.nio.file.Paths
 
 import org.apache.pekko.util.ByteString
 
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -27,16 +28,23 @@ import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.testing.TempDirs
 
 /** The tool that makes a hole for a live audit run: what it refuses, and that the hole is the one it says. */
-class BackgroundAuditHoleInjectionSpec extends AnyFlatSpec with Matchers:
+class BackgroundAuditHoleInjectionSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
+
+  // B-368: the datadirs the cases make go once the suite is done
+  private val tempDirs = new TempDirs
+  override protected def afterAll(): Unit =
+    try tempDirs.deleteAll()
+    finally super.afterAll()
 
   "HoleInjectionTool" should "name the directory it is limited to" taggedAs UnitTest in {
     HoleInjectionTool.Allowed shouldBe Paths.get("/home/dontpanic/mordor-scarcity")
   }
 
   it should "refuse a datadir outside it, or next to it, or that a symlink takes outside" taggedAs UnitTest in {
-    val base = Files.createTempDirectory("hole-tool")
+    val base = tempDirs.create("hole-tool")
     val allowed = Files.createDirectory(base.resolve("allowed"))
     val inside = Files.createDirectory(allowed.resolve("node"))
     val outside = Files.createDirectory(base.resolve("elsewhere"))
@@ -54,7 +62,7 @@ class BackgroundAuditHoleInjectionSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "find RocksDB where db.conf puts it, or refuse" taggedAs UnitTest in {
-    val dir = Files.createTempDirectory("hole-tool")
+    val dir = tempDirs.create("hole-tool")
     HoleInjectionTool.rocksDbUnder(dir).isLeft shouldBe true
     val rocks = Files.createDirectory(dir.resolve("rocksdb"))
     Files.createFile(rocks.resolve("CURRENT"))
@@ -140,7 +148,7 @@ class BackgroundAuditHoleInjectionSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "guard the datadir the same way in corrupt mode, and take no other mode" taggedAs UnitTest in {
-    val outside = Files.createTempDirectory("hole-tool")
+    val outside = tempDirs.create("hole-tool")
     val refused = the[IllegalArgumentException] thrownBy
       HoleInjectionTool.main(Array(outside.toString, "2", "corrupt"))
     refused.getMessage should include("Refusing")
@@ -159,7 +167,7 @@ class BackgroundAuditHoleInjectionSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "open a datadir that exists, and create none" taggedAs UnitTest in {
-    val dir = Files.createTempDirectory("hole-tool").resolve("rocksdb")
+    val dir = tempDirs.create("hole-tool").resolve("rocksdb")
     val config = HoleInjectionTool.rocksConfig(dir)
     an[Exception] should be thrownBy RocksDbDataSource(config, Namespaces.nsSeq)
     Files.exists(dir.resolve("CURRENT")) shouldBe false

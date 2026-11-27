@@ -351,7 +351,11 @@ def check_claims(gates: dict[str, dict]) -> None:
     required_ids = {gid for gid, g in gates.items() if g.get("tier") == "required"}
     # Suite nicknames that appear in prose, mapped to their gate id.
     suites = {gid.replace("hive-", ""): gid for gid in gates if gid.startswith("hive-")}
-    suites["hive"] = "hive-sync"  # a bare "Hive-verified" claim implicates the suite as a whole
+    # A bare "Hive-verified" claim implicates the suite as a whole: it holds only while every Hive gate is
+    # required. It used to map to hive-sync alone, which went quiet once hive-sync was promoted (B-550).
+    informational_hive = sorted(gid for gid in gates if gid.startswith("hive-") and gid not in required_ids)
+    if informational_hive:
+        suites["hive"] = informational_hive[0]
 
     targets = [README, REPO / "docs" / "index.md"]
     for path in targets:

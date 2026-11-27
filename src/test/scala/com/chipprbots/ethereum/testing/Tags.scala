@@ -100,6 +100,9 @@ object Tags:
     *   - State root calculation
     *   - RLP encoding/decoding
     *   - Network throughput
+    *
+    * A wall clock is not deterministic, so `testEssential` and `testStandard` exclude the tag (`-l BenchmarkTest` in
+    * build.sbt) and `testComprehensive` runs it (B-555). Keep a timed suite's untimed checks in an untagged case.
     */
   object BenchmarkTest extends Tag("BenchmarkTest")
 

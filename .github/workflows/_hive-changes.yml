@@ -1,0 +1,84 @@
+name: _hive-changes (reusable)
+
+# Decides whether a Hive suite has anything to test on this event.
+#
+# Why this exists: Hive suites that are required checks on `main` (`required_contexts` in
+# .github/gates.yml) hold a runner for 5-80 min, so they should not run on a PR that cannot affect
+# them. A `paths:` filter on the `pull_request` trigger did that, but a workflow that never starts
+# never reports, so a required check stayed "Expected" and blocked every docs or tooling PR. The
+# callers now start on every PR and ask this workflow first. When nothing relevant changed, they
+# pass `skip: true` to the reusable simulator workflow, whose `skipped` job reports the check as
+# passed under the suite's own name. The check therefore always reports.
+# A caller whose job has a literal name (eest-amsterdam.yml, `EEST Amsterdam`) skips that job by
+# `if:` instead: GitHub reports a job skipped that way under its literal name, and counts a skipped
+# required check as passed.
+#
+# Every event other than `pull_request` (workflow_dispatch, schedule, push) answers `run=true`.
+
+on:
+  workflow_call:
+    inputs:
+      paths:
+        description: |
+          Newline-separated paths the suite depends on. An entry ending in `/` matches everything
+          under that directory, one ending in `*` every path that starts with what precedes the `*`,
+          and any other entry that file exactly.
+        required: true
+        type: string
+    outputs:
+      run:
+        description: "'true' when the suite should run, 'false' when nothing it depends on changed"
+        value: ${{ jobs.detect.outputs.run }}
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      run: ${{ steps.d.outputs.run }}
+    steps:
+      - id: d
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          PATHS: ${{ inputs.paths }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Event $EVENT: the suite runs." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # The PR's own file list (merge-base diff, as GitHub shows it). The endpoint lists at most
+          # 3,000 files; a PR that large runs the suite rather than trust a truncated list.
+          gh api --paginate "repos/$REPO/pulls/$PR/files" --jq '.[].filename' > changed.txt
+          count=$(wc -l < changed.txt)
+          if (( count >= 3000 )); then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "$count files changed (the API's cap): the suite runs." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          run=false
+          hit=""
+          while IFS= read -r f; do
+            while IFS= read -r p; do
+              p="${p#"${p%%[![:space:]]*}"}"; p="${p%"${p##*[![:space:]]}"}"
+              [[ -z "$p" ]] && continue
+              if [[ "$p" == */ && "$f" == "$p"* ]] || [[ "$p" == *'*' && "$f" == "${p%'*'}"* ]] \
+                || [[ "$f" == "$p" ]]; then
+                run=true; hit="$f (matches $p)"; break 2
+              fi
+            done <<< "$PATHS"
+          done < changed.txt
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [[ "$run" == "true" ]]; then
+            echo "The suite runs: $hit." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "None of the $count changed files is one the suite depends on: the suite is skipped." >> "$GITHUB_STEP_SUMMARY"
+          fi

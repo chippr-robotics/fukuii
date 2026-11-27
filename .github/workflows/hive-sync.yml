@@ -1,16 +1,11 @@
 name: Hive · sync
 
 on:
+  # Starts on every PR, so a required check always reports; the `changes` job decides whether the
+  # suite has anything to test (.github/workflows/_hive-changes.yml). A path filter here left the
+  # check "Expected" on docs-only PRs and blocked their merge.
   pull_request:
     branches: [main, master, staging]
-    paths:
-      - 'src/**'
-      - 'build.sbt'
-      - 'version.sbt'
-      - 'project/**'
-      - 'hive/**'
-      - '.github/workflows/_hive-sim.yml'
-      - '.github/workflows/hive-sync.yml'
   workflow_dispatch:
     inputs:
       hive_ref:
@@ -30,9 +25,28 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  changes:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/_hive-changes.yml
+    with:
+      paths: |
+        src/
+        build.sbt
+        version.sbt
+        project/
+        hive/
+        .github/workflows/_hive-sim.yml
+        .github/workflows/hive-sync.yml
+
   run:
+    needs: changes
     uses: ./.github/workflows/_hive-sim.yml
     with:
+      # Skipped inside _hive-sim.yml, which runs a stand-in job under the same name, so the required
+      # check `run / sync` still reports.
+      skip: ${{ needs.changes.outputs.run != 'true' }}
       sim: ethereum/sync
       label: sync
       # Declared in .github/gates.yml (gate `hive-sync`). A run emitting fewer

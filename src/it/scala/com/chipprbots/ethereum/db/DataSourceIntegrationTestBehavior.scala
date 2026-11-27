@@ -29,12 +29,13 @@ trait DataSourceIntegrationTestBehavior extends ScalaCheckPropertyChecks with Ob
 
   val MaxIncreaseInLength = 10
 
+  /** A new temporary directory, given to `testCode` by its absolute path and removed afterwards. B-368: the bare file
+    * name it used to give named a directory in the working directory, so the temporary one was never removed.
+    */
   def withDir(testCode: String => Any): Unit =
-    val path = Files.createTempDirectory("testdb").getFileName.toString
-    try testCode(path)
-    finally
-      val dir = new File(path)
-      assert(!dir.exists() || dir.delete(), "File deletion failed")
+    val dir = Files.createTempDirectory("testdb").toFile
+    try testCode(dir.getAbsolutePath)
+    finally assert(!dir.exists() || dir.delete(), "File deletion failed")
 
   def prepareUpdate(
       namespace: Namespace = OtherNamespace,

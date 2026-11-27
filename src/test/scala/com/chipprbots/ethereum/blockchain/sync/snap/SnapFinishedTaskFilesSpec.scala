@@ -5,19 +5,27 @@ import java.nio.file.Path
 
 import scala.collection.mutable
 
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.testing.Tags.UnitTest
+import com.chipprbots.ethereum.testing.TempDirs
 
 /** B-523: the contract task files are deleted, and their AppState paths cleared, once `SnapSyncDone` is durable. */
-class SnapFinishedTaskFilesSpec extends AnyFlatSpec with Matchers:
+class SnapFinishedTaskFilesSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
+
+  // B-368: each fixture's directory goes once the suite is done
+  private val tempDirs = new TempDirs
+  override protected def afterAll(): Unit =
+    try tempDirs.deleteAll()
+    finally super.afterAll()
 
   private class Fixture:
     val appState = new AppStateStorage(EphemDataSource())
-    val dir: Path = Files.createTempDirectory("snap-b523-")
+    val dir: Path = tempDirs.create("snap-b523-")
     val storage: Path = Files.createFile(dir.resolve("fukuii-contract-storage-1.bin"))
     val code: Path = Files.createFile(dir.resolve("fukuii-unique-codehashes-1.bin"))
     val accounts: Path = Files.createFile(dir.resolve("fukuii-contract-accounts-1.bin"))

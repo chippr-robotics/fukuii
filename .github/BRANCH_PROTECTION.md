@@ -62,10 +62,16 @@ To ensure good project hygiene, configure the following branch protection rules 
    ☑️ **Require status checks to pass before merging**
    - Require branches to be up to date before merging
    - Status checks to require — **the authoritative list is `required_contexts`
-     in [`.github/gates.yml`](gates.yml)**; this section mirrors it:
-     - `Test and Build (JDK 25, Scala 3.9.0)` (from CI workflow)
-     - `Docker Build` (from Docker workflow)
-     - `Gate Integrity` (validates the gate matrix itself)
+     in [`.github/gates.yml`](gates.yml)**; this section mirrors it. The names are
+     the check-run names GitHub shows on a PR, not workflow names:
+     - `Test and Build (JDK 25, Scala 3.9.0)` (ci.yml)
+     - `Gate Integrity` (gate-integrity.yml; validates the gate matrix itself)
+     - `Build Main Docker Image`, `Build Dev Docker Image`, `Build Base Docker Image`,
+       `Build Mainnet Docker Image`, `Build Mordor Docker Image`,
+       `Build Bootnode Docker Image` (docker.yml; there is no check named `Docker Build`)
+     - `EEST Amsterdam` (eest-amsterdam.yml)
+     - `run / smoke-genesis`, `run / smoke-network`, `run / sync`, `run / engine`,
+       `run / consume-rlp` (the hive-*.yml callers of `_hive-sim.yml`)
 
    > GitHub branch-protection settings live outside the repository, so no check
    > can verify them. `.github/gates.yml` is the source of truth a reviewer can
@@ -76,9 +82,9 @@ To ensure good project hygiene, configure the following branch protection rules 
    ☑️ **Require conversation resolution before merging**
    - Ensures all review comments are addressed
 
-   ☑️ **Require linear history** — **ENABLED, not optional**
-   - Merge commits are rejected (`405 Merge commits are not allowed on this
-     repository`). Use squash or rebase.
+   ☑️ **Require linear history** — recommended. As of 2026-11-26 it is NOT set:
+   the `main` ruleset allows merge, squash and rebase, and the repository has
+   `allow_merge_commit: true` (it rejected merge commits on 2026-09-20).
 
    ☑️ **Do not allow bypassing the above settings**
    - Applies rules to administrators as well
@@ -96,7 +102,7 @@ If you have the GitHub CLI installed, you can configure branch protection with:
 
 gh api repos/{owner}/{repo}/branches/main/protection \
   --method PUT \
-  --field required_status_checks='{"strict":true,"contexts":["Test and Build (JDK 25, Scala 3.9.0)","Docker Build","Gate Integrity"]}' \
+  --field required_status_checks="$(python3 -c 'import json,yaml; print(json.dumps({"strict": True, "contexts": yaml.safe_load(open(".github/gates.yml"))["required_contexts"]}))')" \
   --field enforce_admins=true \
   --field required_pull_request_reviews='{"required_approving_review_count":1,"dismiss_stale_reviews":true}' \
   --field required_conversation_resolution=true \
@@ -238,19 +244,34 @@ which is why Constitution rule V.4 is labelled `aspirational` in
 **`required_contexts` in `.github/gates.yml` is the target, not an observation.**
 It has to be applied and verified by a maintainer with admin rights.
 
-### Reconciling
+### Reconciling (re-checked 2026-11-26, B-550)
 
-The Hive suites are not passable today — see #1407 for the measured per-suite
-state. Requiring them blocks every PR on unrelated protocol work, which is how
-a required check ends up waived into meaninglessness. Until #1407 makes them
-green, they belong in the informational tier:
+The live ruleset can be read by anyone with
+`gh api repos/chippr-robotics/fukuii/rules/branches/main`. On 2026-11-26 the `main`
+ruleset (`Main_Protection`, id 10604881) required six contexts:
+`Test and Build (JDK 25, Scala 3.9.0)`, `Coverage (JDK 25, Scala 3.9.0)`, `run / engine`,
+`run / consume-engine`, `Consume-engine Prague sweep` and `Consume-engine Osaka sweep`.
 
-1. **Settings → Rules → Rulesets** (or **Branches → branch protection**) for `main`.
-2. Under *Require status checks to pass*, remove the Hive contexts (`run / …`).
-3. Ensure the three contexts listed above are present — note `Gate Integrity`
-   is new, and `Docker Build` corrects the previously wrong `Build Docker Images`.
-4. Leave *Require linear history* enabled; squash or rebase, never a merge commit.
+What the admin must change, in **Settings → Rules → Rulesets → Main_Protection →
+Require status checks to pass**:
 
-Promote a Hive suite back to required only alongside its `tier: required`
-promotion in `.github/gates.yml`, which check C4 gates on an `evidence:` URL
-showing a green run on `main`.
+1. **Remove now, before the staging → main 0.13.0 PR merges:**
+   `Consume-engine Prague sweep` and `Consume-engine Osaka sweep`. Their workflows
+   (`hive-prague.yml`, `hive-osaka.yml`) were deleted (B-551), so those checks never
+   report and the release PR would wait on them forever. The Osaka one ran zero tests
+   and passed; see REMOVED GATES in `.github/gates.yml`.
+2. **Add once 0.13.0 is on main:** `Gate Integrity`, `EEST Amsterdam`,
+   `run / smoke-genesis`, `run / smoke-network`, `run / sync`, `run / consume-rlp`, and
+   the six `Build * Docker Image` checks. Not earlier: until the promotion lands, main's
+   smoke, sync, consume-rlp and EEST workflows still use a `paths:` filter, so a docs-only
+   PR would never get those checks. On 0.13.0 every required suite starts on each PR and
+   skips through its `changes` job (`_hive-changes.yml`), which still reports the check.
+3. **Keep:** `Test and Build (JDK 25, Scala 3.9.0)` and `run / engine`.
+4. **Decide:** `run / consume-engine` and `Coverage (JDK 25, Scala 3.9.0)` are required by
+   the ruleset but are not required gates in the matrix. `hive-consume-engine` is
+   informational (no main-branch evidence yet), and ci.yml calls the Coverage job
+   informational. Promote them in `.github/gates.yml` with evidence, or remove them here.
+
+A Hive suite is made required only alongside its `tier: required` promotion in
+`.github/gates.yml`, which check C4 gates on an `evidence:` URL showing a green run on
+`main`.

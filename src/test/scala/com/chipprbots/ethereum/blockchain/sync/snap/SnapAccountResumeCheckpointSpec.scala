@@ -15,6 +15,7 @@ import org.scalatest.matchers.should.Matchers
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.testing.TempDirs
 
 /** #1597: how the controller reads the account resume checkpoint at the start of the account phase.
   *
@@ -27,6 +28,12 @@ class SnapAccountResumeCheckpointSpec
     extends ScalaTestWithActorTestKit(SnapControllerFixture.config)
     with AnyFlatSpecLike
     with Matchers:
+
+  // B-368: the task-file directories of the resume cases go once the suite is done
+  private val tempDirs = new TempDirs
+  override protected def afterAll(): Unit =
+    try super.afterAll() // the test kit first: no actor is left writing to a directory
+    finally tempDirs.deleteAll()
 
   private val Height = 1_000
   private val ExpectedPivot: BigInt = BigInt(Height) - SNAPSyncConfig().pivotBlockOffset
@@ -48,7 +55,7 @@ class SnapAccountResumeCheckpointSpec
 
   "The account resume checkpoint reader (#1597)" should "complete a 15-of-16 record to the full layout and resume from it with its task files" taggedAs UnitTest in {
     val f = new SnapControllerFixture(testKit)
-    val dir = Files.createTempDirectory("snap-1597-fill-")
+    val dir = tempDirs.create("snap-1597-fill-")
     val files = taskFiles(dir, 3)
     val layout = AccountTask.createInitialTasks(ByteString.empty, 16)
     val missing = layout(4)
@@ -67,7 +74,7 @@ class SnapAccountResumeCheckpointSpec
 
   it should "ignore an 8-range record at concurrency 16 but keep the record, its task files and the completion markers" taggedAs UnitTest in {
     val f = new SnapControllerFixture(testKit)
-    val dir = Files.createTempDirectory("snap-1597-held-")
+    val dir = tempDirs.create("snap-1597-held-")
     val files = taskFiles(dir, 3)
     val layout8 = AccountTask.createInitialTasks(ByteString.empty, 8).map(t => t.last -> t.next).toMap
     val json = seedCheckpoint(f, layout8, files)
@@ -102,7 +109,7 @@ class SnapAccountResumeCheckpointSpec
 
   it should "still drop a record that is unusable for other reasons (a missing task file)" taggedAs UnitTest in {
     val f = new SnapControllerFixture(testKit)
-    val dir = Files.createTempDirectory("snap-1597-drop-")
+    val dir = tempDirs.create("snap-1597-drop-")
     val files = taskFiles(dir, 3)
     val full = AccountTask.createInitialTasks(ByteString.empty, 16).map(t => t.last -> t.next).toMap
     seedCheckpoint(f, full, files)
@@ -116,7 +123,7 @@ class SnapAccountResumeCheckpointSpec
 
   it should "hold, not fill, 15 of the 16-range cursors at concurrency 32 (they fit the 16-range layout)" taggedAs UnitTest in {
     val f = new SnapControllerFixture(testKit)
-    val dir = Files.createTempDirectory("snap-1597-refine-")
+    val dir = tempDirs.create("snap-1597-refine-")
     val files = taskFiles(dir, 3)
     val layout16 = AccountTask.createInitialTasks(ByteString.empty, 16)
     val fifteen = layout16.map(t => t.last -> t.next).toMap - layout16(4).last
@@ -133,7 +140,7 @@ class SnapAccountResumeCheckpointSpec
 
   it should "keep a held record when this run's own cursors drift past the cap, while the record itself is within it" taggedAs UnitTest in {
     val f = new SnapControllerFixture(testKit)
-    val dir = Files.createTempDirectory("snap-1597-held-drift-")
+    val dir = tempDirs.create("snap-1597-held-drift-")
     val files = taskFiles(dir, 3)
     val layout8 = AccountTask.createInitialTasks(ByteString.empty, 8).map(t => t.last -> t.next).toMap
     // Held record at pivot 30,000: within the cap of both this run's first pivot (936) and the next one (51,000).
