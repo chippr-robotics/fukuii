@@ -1,0 +1,144 @@
+name: Discord Announce
+
+# Posts a committed announcement (marketing/announcements/<tag>/discord.md, or marketing/blog/<slug>/discord.md for a
+# blog note) to Discord, with its release card rendered to PNG from card.json.
+#
+# The webhook URLs are secrets of the DISCORD environment:
+#   DISCORD_WEBHOOK_URL       the announcements channel
+#   DISCORD_WEBHOOK_URL_BLOG  the blog channel (optional; the announcements channel is used when it is unset)
+# Give the environment a required reviewer and restrict it to the main branch (Settings → Environments → DISCORD).
+# The `post` job then waits for that reviewer, so a post is approved twice: in the conversation that drafted it,
+# and in GitHub against the exact text and PNG that the `check` job puts in the run summary and artifact.
+#
+# The text and card come from this run's ref, and only main can post, so only reviewed, merged content goes out.
+# Run by hand, or by the crier agent (.claude/agents/crier.md) through the fukuii-release-announcement and
+# fukuii-spec-blog-post skills.
+
+on:
+  workflow_dispatch:
+    inputs:
+      post:
+        description: "The post: marketing/announcements/<tag>/discord.md or marketing/blog/<slug>/discord.md"
+        required: true
+      channel:
+        description: "Which webhook to post through"
+        type: choice
+        options: [announcements, blog]
+        default: announcements
+      image:
+        description: "Attach the card rendered from card.json in the post's directory"
+        type: boolean
+        default: true
+      send:
+        description: "Post to Discord (false: render and check only)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: discord-announce
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Render and check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check the post's path
+        id: paths
+        env:
+          POST: ${{ inputs.post }}
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          # The path is an input: allow only the two layouts the skills write, and no traversal.
+          if ! [[ "$POST" =~ ^marketing/(announcements|blog)/[A-Za-z0-9._-]+/discord\.md$ ]] || [[ "$POST" == *..* ]]; then
+            echo "::error::post must be marketing/announcements/<tag>/discord.md or marketing/blog/<slug>/discord.md"
+            exit 1
+          fi
+          test -f "$POST" || { echo "::error::$POST is not in this ref"; exit 1; }
+          dir="$(dirname "$POST")"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+          if [[ "$IMAGE" == "true" ]]; then
+            test -f "$dir/card.json" || { echo "::error::image requested but $dir/card.json is not in this ref"; exit 1; }
+          fi
+
+      - name: Render the card
+        if: inputs.image
+        env:
+          DIR: ${{ steps.paths.outputs.dir }}
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq librsvg2-bin fonts-dejavu-core python3-pil >/dev/null
+          python3 -I scripts/marketing/render_card.py "$DIR/card.json" --png
+
+      - name: Check the post (dry run)
+        env:
+          CHANNEL: ${{ inputs.channel }}
+          SEND: ${{ inputs.send }}
+          POST: ${{ inputs.post }}
+          DIR: ${{ steps.paths.outputs.dir }}
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -euo pipefail
+          args=("$POST")
+          [[ "$IMAGE" == "true" ]] && args+=(--image "$DIR/card.png")
+          python3 -I scripts/marketing/post_discord.py "${args[@]}"
+          {
+            echo "### The post, as it will be sent"
+            echo
+            echo "Channel: \`$CHANNEL\` · ref: \`$GITHUB_REF_NAME\` · send: \`$SEND\`"
+            echo
+            echo '````markdown'
+            cat "$POST"
+            echo '````'
+            [[ "$IMAGE" == "true" ]] && echo && echo "The card is the \`discord-post\` artifact of this run."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep what will be posted
+        uses: actions/upload-artifact@v6
+        with:
+          name: discord-post
+          path: |
+            ${{ inputs.post }}
+            ${{ steps.paths.outputs.dir }}/card.png
+          if-no-files-found: error
+          retention-days: 30
+
+  post:
+    name: Post to Discord
+    needs: check
+    if: inputs.send && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    environment: DISCORD
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          sparse-checkout: scripts/marketing
+
+      - name: Fetch what was checked
+        uses: actions/download-artifact@v7
+        with:
+          name: discord-post
+          path: post
+
+      - name: Post
+        env:
+          IMAGE: ${{ inputs.image }}
+          CHANNEL: ${{ inputs.channel }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL_BLOG: ${{ secrets.DISCORD_WEBHOOK_URL_BLOG }}
+        run: |
+          set -euo pipefail
+          # upload-artifact strips the common prefix of its paths, so the files sit directly under post/.
+          args=("post/discord.md" --send)
+          [[ "$IMAGE" == "true" ]] && args+=(--image post/card.png)
+          if [[ "$CHANNEL" == "blog" && -n "$DISCORD_WEBHOOK_URL_BLOG" ]]; then
+            args+=(--webhook-env DISCORD_WEBHOOK_URL_BLOG)
+          fi
+          python3 -I scripts/marketing/post_discord.py "${args[@]}" | tee -a "$GITHUB_STEP_SUMMARY"

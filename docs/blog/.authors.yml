@@ -1,0 +1,6 @@
+# Blog authors (mkdocs-material blog plugin). A post names its author by key in its front matter.
+authors:
+  chippr:
+    name: Chippr Robotics
+    description: fukuii maintainers
+    avatar: https://avatars.githubusercontent.com/u/53840404?v=4

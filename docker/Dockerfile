@@ -109,6 +109,12 @@ USER fukuii
 WORKDIR /app
 
 # Set up environment
+# Read by conf/base/fukuii.conf (datadir). A datadir set in a mounted conf still wins.
+# JSON-RPC stays on the container's loopback: a plaintext listener on 0.0.0.0 refuses the start unless it
+# has tls.enabled or allow-insecure-bind (spec 030, docs/runbooks/tls-operations.md). To publish RPC, set
+# FUKUII_RPC_INTERFACE=0.0.0.0 (read by network.conf) together with one of those in the conf.
+ENV FUKUII_DATADIR=/app/data
+# Not read by fukuii; kept for scripts that may reference it.
 ENV FUKUII_DATA_DIR=/app/data
 ENV FUKUII_CONF_DIR=/app/conf
 # JDK-8385993: C2 ReduceAllocationMerges can silently miscompile field reads on
@@ -125,11 +131,11 @@ ENV FUKUII_CONF_DIR=/app/conf
 # image's JDK is 25; JDK 22 and older would refuse the flag.
 ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:DisableIntrinsic=_base64_decodeBlock --sun-misc-unsafe-memory-access=allow"
 
-# Expose default ports
-# 8545: HTTP RPC
-# 8546: WebSocket RPC  
-# 30303: P2P networking (TCP/UDP)
-EXPOSE 8545 8546 30303
+# Expose default ports (conf/base/network.conf)
+# 8546: JSON-RPC HTTP (also /health, /readiness, /buildinfo)
+# 8552: JSON-RPC WebSocket (off unless network.rpc.ws.enabled = true)
+# 30303: P2P (TCP) and discovery (UDP)
+EXPOSE 8546 8552 30303/tcp 30303/udp
 
 # Configure volumes for persistent data
 VOLUME ["/app/data", "/app/conf"]

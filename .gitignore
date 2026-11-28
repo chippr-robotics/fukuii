@@ -123,3 +123,5 @@ run-*.sh
 !.claude/looping/bin/run-loop.sh
 !scripts/etc-mainnet-sync/run-eg12.sh
 
+# Release cards: card.json and card.svg are committed; the PNG for Discord is rendered from them (render_card.py --png)
+marketing/**/card.png

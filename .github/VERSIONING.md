@@ -37,6 +37,10 @@ Versions follow semantic versioning: `MAJOR.MINOR.PATCH`
 
 ## Releasing a minor version (checklist)
 
+0. Bring every commit that is only on `main` back to staging first (a PR from a branch cut at `main`), and confirm
+   `git merge-base --is-ancestor origin/main origin/staging`. The minor bump in step 2 tags and builds the release from
+   staging, so a fix that exists only on main is left out of it, even though the promotion merge carries it to main
+   (0.13.0: #2144's Docker `/app/data` fix missed the release and shipped in 0.13.1).
 1. In the release-prep PR to staging (with the release notes, `docs/releases/X.Y.0.md`), assemble the changelog.
    PRs add their entries as fragments under `changelog.d/` (`changelog.d/README.md`), not to `CHANGELOG.md`:
    ```bash
@@ -52,8 +56,14 @@ Versions follow semantic versioning: `MAJOR.MINOR.PATCH`
    X.Y.1 (0.13.0 release, 2026-11-28).
 3. Open the promotion PR `staging` → `main` (label `hive-full` for the full hive pass) and merge it
    with **"Create a merge commit"** once the required checks pass.
-4. `tag-release` tags `vX.Y.0` on the merge commit and dispatches the full release. Verify the
-   release assets.
+4. The release is already out: the minor bump in step 2 tagged `vX.Y.0` on staging and dispatched the full-tier
+   `release.yml` (Docker, signing, SBOM). `tag-release` on main finds the tag and does nothing. Verify the release
+   assets and images after step 2, not after the merge. The promotion merge must therefore add nothing that is not
+   already on staging (step 0); a merge-conflict resolution or a docs fix made on the promotion branch is on main
+   but not in the release.
+5. For a patch release after a minor one (X.Y.1), the push to staging bumps and tags it at the patch tier (JAR and
+   zip only). To publish Docker images for it, dispatch `release.yml` on staging with `version=X.Y.1` and
+   `release_tier=full`, then promote.
 
 ## Manual Version Updates
 

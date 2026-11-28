@@ -58,6 +58,11 @@ RUN cd target/universal && \
     DIST_DIR=$(ls -d fukuii-*/ | head -1) && \
     mv "$DIST_DIR" /fukuii-dist
 
+# Mount points for the runtime image. Distroless has no shell to mkdir them there, and a fresh volume at a path the
+# image does not contain is created root-owned, which the nonroot user cannot write (the node creates <datadir>/tmp
+# at startup). Copying them in with --chown gives fresh volumes nonroot ownership.
+RUN mkdir -p /fukuii-volumes/data /fukuii-volumes/conf
+
 # Stage 2: Runtime stage using distroless
 FROM gcr.io/distroless/java25-debian13:nonroot
 
@@ -71,11 +76,20 @@ LABEL org.opencontainers.image.documentation="https://github.com/chippr-robotics
 
 # Copy application from builder (distroless already has nonroot user)
 COPY --from=builder --chown=nonroot:nonroot /fukuii-dist /app/fukuii
+COPY --from=builder --chown=nonroot:nonroot /fukuii-volumes/ /app/
 
 # Set working directory
 WORKDIR /app
 
 # Set up environment
+# Read by conf/base/fukuii.conf (datadir). A datadir in the conf the node runs still wins. With no arguments
+# that is the bundled /app/fukuii/conf/etc.conf (see ENTRYPOINT), not /app/conf; pass a network argument
+# (e.g. `etc`) to load a /app/conf/<network>.conf mounted in FUKUII_CONF_DIR (without one, the bundled conf
+# is used). JSON-RPC stays on the container's loopback: a
+# plaintext listener on 0.0.0.0 refuses the start unless it has tls.enabled or allow-insecure-bind (spec 030).
+# To publish RPC, set FUKUII_RPC_INTERFACE=0.0.0.0 (read by network.conf) together with one of those in the conf.
+ENV FUKUII_DATADIR=/app/data
+# Not read by fukuii; kept for scripts that may reference it.
 ENV FUKUII_DATA_DIR=/app/data
 ENV FUKUII_CONF_DIR=/app/conf
 # JDK-8385993: C2 ReduceAllocationMerges can silently miscompile field reads on
@@ -92,11 +106,11 @@ ENV FUKUII_CONF_DIR=/app/conf
 # image's JDK is 25; JDK 22 and older would refuse the flag.
 ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:DisableIntrinsic=_base64_decodeBlock --sun-misc-unsafe-memory-access=allow"
 
-# Expose default ports
-# 8545: HTTP RPC
-# 8546: WebSocket RPC
-# 30303: P2P networking (TCP/UDP)
-EXPOSE 8545 8546 30303
+# Expose default ports (conf/base/network.conf)
+# 8546: JSON-RPC HTTP (also /health, /readiness, /buildinfo)
+# 8552: JSON-RPC WebSocket (off unless network.rpc.ws.enabled = true)
+# 30303: P2P (TCP) and discovery (UDP)
+EXPOSE 8546 8552 30303/tcp 30303/udp
 
 # Configure volumes for persistent data
 VOLUME ["/app/data", "/app/conf"]
@@ -105,14 +119,26 @@ VOLUME ["/app/data", "/app/conf"]
 # Health checks should be performed externally (e.g., by orchestration platform)
 # For Kubernetes, use liveness/readiness probes with exec command checking process
 
-# Set environment variables for Java
-ENV JAVA_OPTS="-Xms2g -Xmx4g"
-
 # Set entrypoint to Java with the main class
 # Distroless images don't have bash, so we must invoke Java directly
 # The classpath includes all jars from the lib directory and the main application jar
 # Uses etc.conf for Ethereum Classic mainnet by default
+#
+# JVM flags: `java` reads neither JAVA_OPTS nor the launcher's conf/application.ini, so the heap and memory
+# envelope of src/universal/conf/application.ini (the other images' bin/fukuii applies it) is repeated here.
+# Keep the two in step. The ReduceAllocationMerges and Base64 flags come from JDK_JAVA_OPTIONS above. These
+# arguments follow JDK_JAVA_OPTIONS and JAVA_TOOL_OPTIONS, so they take precedence over both; to change the
+# heap, override the entrypoint.
 ENTRYPOINT ["java", \
+    "-Xmx3g", \
+    "-Xms1g", \
+    "-Xss1M", \
+    "-XX:MaxDirectMemorySize=512M", \
+    "-XX:+UseG1GC", \
+    "-XX:MaxGCPauseMillis=200", \
+    "-XX:+HeapDumpOnOutOfMemoryError", \
+    "-XX:HeapDumpPath=/app/data/logs/heapdump.hprof", \
+    "-XX:+ExitOnOutOfMemoryError", \
     "-Dconfig.file=/app/fukuii/conf/etc.conf", \
     "-Dlogback.configurationFile=/app/fukuii/conf/logback.xml", \
     "-cp", "/app/fukuii/lib/*", \

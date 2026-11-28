@@ -173,7 +173,11 @@ class JsonRpcHttpServerLifecycleSpec extends AnyFlatSpec with Matchers with Befo
       Await.result(second, Wait).localAddress shouldBe binding.localAddress
       Await.result(lifecycle.start(), Wait).localAddress shouldBe binding.localAddress
       binds.get shouldBe 1
-    finally Await.result(lifecycle.stop(), Wait)
+    finally
+      // Settle the bind first, so a failed assertion above is reported instead of `stop` refusing a server starting.
+      release.trySuccess(())
+      Await.ready(lifecycle.start(), Wait)
+      Await.result(lifecycle.stop(), Wait)
   }
 
   "A bind that fails" should "leave the server stopped, not listening, and able to stop and start again" taggedAs (

@@ -2,13 +2,13 @@
 # Using MkDocs Material for enhanced features including Mermaid diagrams, search, and audience tabs
 
 site_name: Fukuii Documentation
-site_description: Comprehensive documentation for the Fukuii Ethereum Classic client
+site_description: Documentation for Fukuii, the EVM execution client for Ethereum Classic and Ethereum
 site_url: https://docs.fukuii.com/
 site_author: Chippr Robotics LLC
 
 repo_name: chippr-robotics/fukuii
 repo_url: https://github.com/chippr-robotics/fukuii
-edit_uri: edit/develop/docs/
+edit_uri: edit/main/docs/
 
 # Theme configuration
 theme:
@@ -97,6 +97,14 @@ plugins:
   - search:
       separator: '[\s\-,:!=\[\]()"/]+|(?!\b)(?=[A-Z][a-z])|\.(?!\d)|&[lg]t;'
   - swagger-ui-tag
+  # Blog (docs/blog/): release posts and spec write-ups, written by the `crier` agent
+  # (.claude/agents/crier.md) through the fukuii-spec-blog-post and fukuii-release-announcement skills.
+  - blog:
+      blog_dir: blog
+      post_url_format: "{date}/{slug}"
+      post_excerpt: required
+      archive_name: Archive
+      categories_name: Categories
 
 # Hooks for version injection
 hooks:
@@ -123,6 +131,8 @@ extra_javascript:
 nav:
   - Home: index.md
   - Verification Status: STATUS.md
+  - Blog:
+    - blog/index.md
   
   - Getting Started:
     - getting-started/index.md

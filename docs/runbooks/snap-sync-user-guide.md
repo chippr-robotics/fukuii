@@ -587,7 +587,7 @@ from an empty database avoids that.
 For issues or questions:
 - **GitHub Issues**: https://github.com/chippr-robotics/fukuii/issues
 - **Community Chat**: Join our Discord/Telegram
-- **Documentation**: https://chippr-robotics.github.io/fukuii/
+- **Documentation**: https://docs.fukuii.com/
 
 ---
 

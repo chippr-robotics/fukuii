@@ -360,5 +360,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing to Fukuii.
 - [Model Context Protocol Specification](https://github.com/modelcontextprotocol)
 - [MCP Introduction](https://modelcontextprotocol.io/docs/2026-07-28/getting-started/intro)
 - [JSON-RPC 2.0 Specification](https://www.jsonrpc.org/specification)
-- [Fukuii Documentation](https://chippr-robotics.github.io/fukuii/)
+- [Fukuii Documentation](https://docs.fukuii.com/)
 

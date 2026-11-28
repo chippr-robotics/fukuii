@@ -130,6 +130,7 @@ session is the orchestrator** — subagents cannot spawn other subagents, so you
 | `vault`   | RocksDB / storage layer: DataSource contract, iterator lifecycle, WriteBatch, WAL, cache tuning (`db/`) | On storage bugs / config changes |
 | `conduit` | JSON-RPC, HTTP, WebSocket, IPC, GraphQL: method compliance, codec, subscriptions (`jsonrpc/`) | On API / transport bugs |
 | `flow`    | Pekko Streams: Source/Sink/Flow graphs, materialization, backpressure, `preMaterialize` anti-patterns, stream test synchronization | On streaming graph bugs / silent element drops |
+| `crier`   | Communications: release announcements (Discord post + card), blog posts for releases and specs on the docs site (`docs/blog/`), Discord posting on approval | **After** a release is cut; when a spec closes |
 
 ### Consensus-Critical Change Protocol (mandatory)
 

@@ -69,6 +69,16 @@ pairing; they do **not** apply to ETC/Mordor (PoW, no CL).
 | :--- | :--- | :--- |
 | `fukuii-sprint-retro` | At each minor/patch release: review the sprint's PRs, turn them into an agent eval suite with gold answers, propose agent-file edits, and keep only the ones that win a blind A/B test against this and every earlier sprint's suite | `.claude/evals/` (suites, ledger), `.claude/agents/` |
 
+## Communications
+
+Run by the `crier` agent (`.claude/agents/crier.md`). Drafts are local files; posting to Discord is outward-facing and
+needs the maintainer's explicit approval of the exact text and image.
+
+| Skill | Workflow | Tools |
+| :--- | :--- | :--- |
+| `fukuii-release-announcement` | After a release: Discord post, release card (SVG + PNG), release blog post, then post on approval | `scripts/marketing/render_card.py`, `scripts/marketing/post_discord.py` |
+| `fukuii-spec-blog-post`       | A spec closed or a track landed: blog post on the docs site, then a Discord note linking to it | same; posts under `docs/blog/posts/` |
+
 ## Spec Kit — Bug triage
 
 Three-step structured bug triage. Artifacts land in `.specify/bugs/<slug>/`

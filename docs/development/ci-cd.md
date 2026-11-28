@@ -10,7 +10,7 @@ This directory contains the GitHub Actions workflows for continuous integration,
 
 **Purpose:** Deploys documentation from the `docs/` folder to GitHub Pages
 
-**URL:** [https://chippr-robotics.github.io/fukuii/](https://chippr-robotics.github.io/fukuii/)
+**URL:** [https://docs.fukuii.com/](https://docs.fukuii.com/)
 
 **Steps:**
 1. Checks out code

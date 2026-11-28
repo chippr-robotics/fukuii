@@ -8,8 +8,8 @@
 git clone https://github.com/chippr-robotics/fukuii.git
 cd fukuii
 git submodule update --init --recursive
-sbt compile
-sbt test
+sbt compile-all
+sbt "testOnly *Foo*"
 ```
 
 ## Key Resources
@@ -33,21 +33,25 @@ sbt test
 ## Development Commands
 
 ```bash
-sbt compile           # Compile all modules
-sbt test              # Unit tests (~5 min)
-sbt it:test           # Integration tests
-sbt formatAll         # Format all code (every module)
-sbt pp                # Pre-PR: scalafmt + tests (run formatCheck too)
-sbt assembly          # Build fat JAR
+sbt compile-all       # Compile every module and its test sources (after every change)
+sbt "testOnly *Foo*"  # One test class, in seconds
+sbt formatAll         # scalafix + scalafmt on every module (rewrites files)
+sbt formatCheck       # The read-only check CI runs
+sbt pp                # Pre-PR gate: compile-all, scalafmt, rlp tests, testQuick, IntegrationTest
+sbt dist              # Build the distribution zip under target/universal/
+sbt assembly          # Build the standalone JAR
 ```
 
 ## Test Tiers
 
 | Tier | Command | Duration | When |
 |------|---------|----------|------|
-| Essential | `sbt test` | < 5 min | Every change |
-| Standard | `sbt it:test` | < 30 min | Before PR |
-| Comprehensive | `sbt pp` | < 3 hr | Pre-merge |
+| Essential | `sbt testEssential` | about 25 min | Once at the end of a change; gates every merge in CI |
+| Standard | `sbt testStandard` | < 30 min | Before opening a PR; runs in CI with coverage |
+| Comprehensive | `sbt testComprehensive` | < 3 hr | Release gate |
+| Integration | `sbt "IntegrationTest / test"` | varies | After protocol-level changes |
+
+What CI enforces, and what only reports, is published in [Verification Status](../STATUS.md).
 
 ## ADR Categories
 
@@ -68,15 +72,15 @@ All code uses the package prefix `com.chipprbots.ethereum`.
 | `bytes` | Byte array utilities |
 | `crypto` | Cryptographic operations |
 | `rlp` | RLP encoding/decoding |
-| `scalanet` | P2P networking |
-| `src` | Main Fukuii application |
+| `scalanet` | P2P networking (RLPx) |
+| `scalanetDiscovery` | Peer discovery (discv4, discv5, ENR) |
+| root (`src/`) | Main Fukuii application; `IntegrationTest`, `Evm`, `RpcTest` and `Benchmark` are configurations of it |
 
 ## Before Submitting a PR
 
 ```bash
-sbt formatCheck         # Format and scalafix check (what CI runs)
-sbt compile-all        # Compilation
-sbt test               # All tests pass
+sbt formatCheck        # scalafmt and scalafix check (what CI runs)
+sbt pp                 # compile-all, formatting, rlp tests, testQuick, IntegrationTest
 ```
 
 See [Contributing Guide](../development/contributing.md) for full details.
