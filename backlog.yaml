@@ -6231,18 +6231,14 @@ items:
   - id: B-561
     title: Open spec tasks still say to write CHANGELOG [Unreleased] entries; switch them to changelog.d fragments
     priority: P3
-    status: review
+    status: done
     area: docs
     size: S
     opened: 2026-11-26
+    closed: 2026-11-28
     refs: [B-144 follow-up]
     links:
       prs: [2161]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-27T23:33:26Z
-      heartbeat: 2026-11-28T00:05:58Z
     notes: e.g. specs/023-fleet-topology/tasks.md T082 and ~line 234. Set In flight before editing a held spec.
   - id: B-562
     title: External IP detection fails on dev-node and GCE; node then advertises loopback (127.0.0.1) to the network
