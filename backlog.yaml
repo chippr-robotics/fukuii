@@ -6472,10 +6472,15 @@ items:
   - id: B-586
     title: "Ship 0.13.1: v0.13.0 artifacts were built from staging before main's Docker fixes (#2144) were back-merged"
     priority: P1
-    status: open
+    status: claimed
     area: ops
     size: S
     opened: 2026-11-28
     refs: ["#2166"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-28T13:15:47Z
+      heartbeat: 2026-11-28T13:15:47Z
     notes: The minor bump on staging auto-dispatched release.yml at 01:43; tag-release on main found v0.13.0 tagged and skipped. Back-merge main into staging, bump to 0.13.1, promote.
