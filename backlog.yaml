@@ -6466,3 +6466,13 @@ items:
     opened: 2026-11-28
     refs: ["PR #2161"]
     links: {}
+  - id: B-581
+    title: src/evmTest does not compile (GasAmount, CodeHash, circe-generic-extras) and Evm's sourceDirectory/solidity settings are dead bare expressions in build.sbt
+    priority: P3
+    status: open
+    area: build
+    size: M
+    opened: 2026-11-28
+    refs: [PR for ci/b576-ci-tooling (B-082)]
+    links: {}
+    notes: The two settings inside lazy val node = {...} never applied since Mantis; Evm/compile compiles nothing. Fix the 5 errors, then wire the settings. Also update CLAUDE.md's format-alias table (evmTest/rpcTest/benchmark are now formatted).
