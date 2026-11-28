@@ -15,6 +15,8 @@ import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkTimestamps
 import com.chipprbots.ethereum.utils.NetworkType
+import com.chipprbots.ethereum.vm.AmsterdamGas
+import com.chipprbots.ethereum.vm.EvmConfig
 
 /** #1727 PR 4 (B-130): `TxResult.maxUsedGas` is go-ethereum's `ExecutionResult.MaxUsedGas` (core/state_transition.go
   * `settleGas`, v1.17.9): the gas used before the refund, raised to the EIP-7623 calldata floor where one is in force.
@@ -131,7 +133,7 @@ class TxResultMaxUsedGasSpec extends AnyFlatSpec with Matchers with AmsterdamFix
     results(preAmsterdamHeader(46, 300), amsterdamConfig).map(gas) shouldBe WithFloor
   }
 
-  "TxResult.maxUsedGas on ETH Amsterdam" should "follow the EIP-8037 pre-refund figure and never fall below gasUsed" taggedAs (
+  "TxResult.maxUsedGas on ETH Amsterdam" should "follow the EIP-8037 pre-refund figure and never fall below gasUsed, at zero state gas" taggedAs (
     UnitTest,
     StateTest
   ) in {
@@ -152,7 +154,92 @@ class TxResultMaxUsedGasSpec extends AnyFlatSpec with Matchers with AmsterdamFix
       r.executionGasUsed should be <= r.maxUsedGas
       r.stateGasUsed should be <= r.maxUsedGas
     }
+    // THIS HOLDS AT ZERO STATE GAS ONLY (B-162). None of the seven transactions creates state, so the execution
+    // dimension is the whole peak. With state gas the two do not add up to the peak in general: execution is
+    // max(before - state, floor) and the peak is max(before, floor), and max(before - state, floor) + state exceeds
+    // max(before, floor) whenever the floor lands between before - state and before. See the cases below.
+    rs.foreach(_.stateGasUsed shouldBe BigInt(0))
     rs.map(r => r.executionGasUsed + r.stateGasUsed) shouldBe rs.map(_.maxUsedGas)
+  }
+
+  // ── ETH Amsterdam with state gas (EIP-8037) ─────────────────────────────────────────────────────────────────────
+  //
+  // BlockPreparator: gasUsedBeforeRefund = gasLimit - gasRemaining - stateGasReservoir, and
+  //   executionGasUsed = max(gasUsedBeforeRefund - stateGas, floor)
+  //   maxUsedGas       = max(gasUsedBeforeRefund, floor)
+  // so exec + state == maxUsedGas holds exactly while the floor is below before - state, and no longer once it is not.
+
+  private val SlotStateGas: BigInt = AmsterdamGas.StateBytesPerStorageSet * AmsterdamGas.Cpsb
+
+  private def emitTx(payload: ByteString, gasLimit: BigInt): SignedTransaction =
+    legacyTx(Some(Emit), value = 2, gasLimit = gasLimit, payload = payload, config = amsterdamConfig)
+
+  private val Block45Payload: ByteString = ByteString(Hex.decode("580abd8a903ed7d3656d6974"))
+
+  "TxResult.maxUsedGas on ETH Amsterdam with state gas" should "be the whole peak, state gas included, while the floor is below the execution gas" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    // Block 45 tx-emit-legacy at a gas limit that affords it: its first SSTORE creates a slot, 64 x 1,530 = 97,920 of
+    // state gas, and the measured total is 144,888 (AmsterdamGasAccountingSpec). The floor for its 12 bytes is far
+    // below the 46,968 that is left for execution.
+    val r = execute(emitTx(Block45Payload, 200000), amsterdamHeader(45, 450), block45World, amsterdamConfig)
+    r.vmError shouldBe None
+    r.stateGasUsed shouldBe BigInt(97920)
+    r.stateGasUsed shouldBe SlotStateGas
+    r.maxUsedGas shouldBe BigInt(144888)
+    r.executionGasUsed shouldBe BigInt(144888) - BigInt(97920)
+    r.executionGasUsed + r.stateGasUsed shouldBe r.maxUsedGas
+    // Nothing is refunded, so what the sender pays is the peak
+    r.gasUsed shouldBe r.maxUsedGas
+  }
+
+  it should "also be the whole peak for block 41, whose CREATE costs 120 x 1,530 of state gas" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val stx = dynamicFeeTx(Some(CallTree), value = 0, gasLimit = 600000, config = amsterdamConfig)
+    val r = execute(stx, amsterdamHeader(41, 410), block41World, amsterdamConfig)
+    r.vmError shouldBe None
+    r.stateGasUsed shouldBe AmsterdamGas.StateBytesPerNewAccount * AmsterdamGas.Cpsb
+    // The measured receipt figure, which is the pre-refund total here, and the 143,347 left once the 183,600 is out
+    r.maxUsedGas shouldBe BigInt(326947)
+    r.executionGasUsed shouldBe BigInt(326947) - BigInt(183600)
+    r.executionGasUsed + r.stateGasUsed shouldBe r.maxUsedGas
+  }
+
+  it should "not be exec + state once the calldata floor lands between before - state and before" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    // The block 45 transaction with 1,000 non-zero calldata bytes instead of 12. What 988 more bytes add to the
+    // measured 144,888: 16 gas each of calldata, and in the contract the memory (3 per word plus words squared over
+    // 512: 98 for the 32 words, 3 for the one), the CALLDATACOPY words (3 each) and the KECCAK256 words (6 each).
+    val extraBytes = BigInt(988)
+    val beforeRefund = BigInt(144888) + extraBytes * 16 + (BigInt(98) - 3) + (BigInt(32) - 1) * 3 + (BigInt(32) - 1) * 6
+    beforeRefund shouldBe BigInt(161070)
+    val payload = ByteString(Array.fill[Byte](1000)(0x01))
+    val header = amsterdamHeader(45, 450)
+    val r = execute(emitTx(payload, 300000), header, block45World, amsterdamConfig)
+    r.vmError shouldBe None
+
+    val floor = EvmConfig
+      .forBlock(header.number.value, header.unixTimestamp, amsterdamConfig)
+      .calcAmsterdamCalldataFloorGas(payload, Nil, Some(Emit), UInt256(2), senderAddress)
+    // The case is the one the note is about: the floor is above what is left for execution, and below the peak
+    floor should be > beforeRefund - SlotStateGas
+    floor should be < beforeRefund
+
+    r.stateGasUsed shouldBe SlotStateGas
+    // Execution is lifted to the floor; the peak is the gas actually used, since the floor is below it
+    r.executionGasUsed shouldBe floor
+    r.maxUsedGas shouldBe beforeRefund
+    r.gasUsed shouldBe beforeRefund
+    // So the two dimensions add up to more than the peak, by exactly how far the floor lifted execution
+    (r.executionGasUsed + r.stateGasUsed) should be > r.maxUsedGas
+    (r.executionGasUsed + r.stateGasUsed) - r.maxUsedGas shouldBe floor - (beforeRefund - SlotStateGas)
+    // Block gas is the larger of the two, as for any block
+    r.executionGasUsed.max(r.stateGasUsed) should be <= r.maxUsedGas
   }
 
   // ── ETC: Olympia at block 1,000 (ECIP-1121), Spiral at 900 ──────────────────────────────────────────────────────
