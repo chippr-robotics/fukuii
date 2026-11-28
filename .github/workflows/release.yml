@@ -21,6 +21,14 @@ on:
         options:
           - patch
           - full
+      images_only:
+        description: >-
+          Build and push only the Docker images for an existing tag (full tier). For a version whose
+          release is already published: Immutable Releases forbid changing its assets, so the
+          create-release job is skipped (B-587).
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: release-${{ inputs.version }}
@@ -33,6 +41,7 @@ env:
 
 jobs:
   create-release:
+    if: ${{ !inputs.images_only }}
     name: Create Release
     runs-on: ubuntu-latest
     permissions:
@@ -299,7 +308,11 @@ jobs:
 
   build-and-push-image:
     name: Build and Push Container Image
-    if: inputs.release_tier == 'full'
+    # With images_only the release job is skipped on purpose; otherwise it must have succeeded.
+    if: >-
+      inputs.release_tier == 'full' && !cancelled() &&
+      (needs.create-release.result == 'success' ||
+       (inputs.images_only && needs.create-release.result == 'skipped'))
     runs-on: ubuntu-latest
     needs: create-release
     permissions:
