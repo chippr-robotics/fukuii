@@ -6358,18 +6358,14 @@ items:
   - id: B-572
     title: "Release-hygiene follow-ups: AccountTrieAssembly stale scaladoc, ops logback <if condition=>, PeerActor.props dead code"
     priority: P3
-    status: review
+    status: done
     area: docs
     size: S
     opened: 2026-11-27
+    closed: 2026-11-28
     refs: [wave 9D]
     links:
       prs: [2161]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-27T23:33:30Z
-      heartbeat: 2026-11-28T00:06:06Z
     notes: |-
       AccountTrieAssembly.scala:358 (spec 016 module, needs fix/ or refactor/snap-016 branch); cirith-ungol/barad-dur/gorgoroth/spec020 logback files; PeerActor.props: dead-code review.
       2026-11-28 review: (a)(b) in #2161, (c) in #2162
