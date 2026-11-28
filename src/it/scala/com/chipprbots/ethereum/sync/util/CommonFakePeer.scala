@@ -17,6 +17,7 @@ import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
 import cats.effect.IO
+import cats.syntax.all.*
 
 import scala.concurrent.duration.*
 
@@ -81,8 +82,12 @@ import com.chipprbots.ethereum.utils.*
 import com.chipprbots.ethereum.utils.ServerStatus.Listening
 import com.chipprbots.ethereum.vm.EvmConfig
 
-abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCustomConfig)
-    extends SecureRandomBuilder
+abstract class CommonFakePeer(
+    peerName: String,
+    fakePeerCustomConfig: FakePeerCustomConfig,
+    // The directory of a peer this one restarts (see [[stop]]); a fresh temporary one when none.
+    existingDataDir: Option[Path] = None
+) extends SecureRandomBuilder
     with TestSyncConfig
     with BlockchainConfigBuilder:
   // Use longer timeout in CI environment to accommodate slower I/O and network operations
@@ -110,7 +115,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       discoveryStatus = ServerStatus.NotListening
     )
 
-  lazy val tempDir: Path = Files.createTempDirectory("temp-fake-peer")
+  lazy val tempDir: Path = existingDataDir.getOrElse(Files.createTempDirectory("temp-fake-peer"))
 
   def getRockDbTestConfig(dbPath: String): RocksDbConfig =
     new RocksDbConfig:
@@ -174,7 +179,8 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
   )
   val genesisWeight: ChainWeight = ChainWeight.zero.increase(genesis.header)
 
-  blockchainWriter.save(genesis, Seq(), genesisWeight, saveAsBestBlock = true)
+  // A restarted peer finds its chain on disk: saving the genesis again would make it the best block again.
+  if existingDataDir.isEmpty then blockchainWriter.save(genesis, Seq(), genesisWeight, saveAsBestBlock = true)
 
   lazy val nh = nodeStatusHolder
 
@@ -370,10 +376,26 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       }
     yield ()
 
+  // Set by [[stop]]: the data directory then belongs to the peer that restarts on it.
+  @volatile private var dataDirHandedOver = false
+
   def shutdown(): IO[Unit] =
     for
       _ <- IO.fromFuture(IO(system.terminate()))
-      _ <- IO(storagesInstance.dataSource.destroy())
+      _ <- IO(if !dataDirHandedOver then storagesInstance.dataSource.destroy())
+    yield ()
+
+  /** Stop this peer the way a process exit does: its actors end and its database closes, with everything on disk kept.
+    * A [[FakePeer]] restarted on [[tempDir]] reads that chain back. [[shutdown]] after this leaves the directory to the
+    * peer that took it over.
+    */
+  def stop(): IO[Unit] =
+    for
+      _ <- IO.fromFuture(IO(system.terminate()))
+      _ <- IO {
+        storagesInstance.dataSource.close()
+        dataDirHandedOver = true
+      }
     yield ()
 
   private val askScheduler = system.toTyped.scheduler
@@ -417,6 +439,22 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
             .map(p => s"${p.id.value.take(8)} incoming=${p.incomingConnection} ${p.remoteAddress}")
             .mkString("; ")
       )
+    }
+
+  /** Ask the PeerManager to drop the connection with every handshaked peer, as `admin_removePeer` does. */
+  def disconnectAllPeers(): IO[Unit] =
+    handshakedPeers().flatMap { peers =>
+      peers.toList.traverse_ { peer =>
+        IO.fromFuture(
+          IO(
+            peerManager.ask[PeerManagerActor.DisconnectPeerResponse](
+              PeerManagerActor.DisconnectPeerByIdCmd(peer.id, _)
+            )(using akkaTimeout, askScheduler)
+          )
+        ).flatMap(response =>
+          IO.raiseUnless(response.disconnected)(new IllegalStateException(s"${peer.id} was not connected"))
+        )
+      }
     }
 
   /** Ask the PeerManager to dial the given nodes and block until every requested node has been persisted as a known

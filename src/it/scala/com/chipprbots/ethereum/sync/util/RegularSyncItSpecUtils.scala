@@ -64,8 +64,26 @@ object RegularSyncItSpecUtils:
 
   object ValidatorsExecutorAlwaysSucceed extends ValidatorsExecutorAlwaysSucceed
 
-  class FakePeer(peerName: String, fakePeerCustomConfig: FakePeerCustomConfig)
-      extends CommonFakePeer(peerName, fakePeerCustomConfig):
+  /** The harness validators with the one check that import's real validator makes after executing a block: the header's
+    * state root and gas used against what this peer's own execution of the block gave. It is the real
+    * `ValidatorsExecutor.validateBlockAfterExecution` (the receipts check inside it still reads the always-valid block
+    * validator, as the rest of the harness does), so a peer built with this rejects a block whose root its execution
+    * does not reproduce.
+    */
+  class ValidatorsExecutorChecksStateRoot extends ValidatorsExecutorAlwaysSucceed:
+    override def validateBlockAfterExecution(
+        block: Block,
+        stateRootHash: ByteString,
+        receipts: Seq[Receipt],
+        gasUsed: BigInt
+    )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockExecutionSuccess] =
+      ValidatorsExecutor.validateBlockAfterExecution(this, block, stateRootHash, receipts, gasUsed)
+
+  class FakePeer(
+      peerName: String,
+      fakePeerCustomConfig: FakePeerCustomConfig,
+      existingDataDir: Option[java.nio.file.Path] = None
+  ) extends CommonFakePeer(peerName, fakePeerCustomConfig, existingDataDir):
 
     def buildEthashMining(): pow.PoWMining =
       val miningConfig: MiningConfig = MiningConfig(Config.config)
@@ -79,7 +97,8 @@ object RegularSyncItSpecUtils:
           bl,
           blockchainReader,
           fullConfig,
-          ValidatorsExecutorAlwaysSucceed,
+          if fakePeerCustomConfig.validateStateRoots then new ValidatorsExecutorChecksStateRoot
+          else ValidatorsExecutorAlwaysSucceed,
           NoAdditionalPoWData
         )
       mining
@@ -337,6 +356,24 @@ object RegularSyncItSpecUtils:
           }.flatMap(_ => importExecutedBlocksUntil(n, beneficiary)(plansFor))
       }
 
+    /** Extends this peer's chain by one executed block whose header `forge` then alters, and saves and broadcasts it as
+      * the best block. The block's own transactions run as in [[sealChild]], so the peer that gets it executes them,
+      * and gets a state root and gas used that differ from what `forge` left in the header.
+      */
+    def importForgedBlock(plans: Seq[ExecutedChain.TxPlan], beneficiary: Address = ExecutedChain.Miner)(
+        forge: BlockHeader => BlockHeader
+    ): IO[Block] =
+      IO {
+        val best = blockchainReader.getBestBlock.get
+        val weight = blockchainReader.getChainWeightByHash(best.hash).get
+        val (honest, receipts) = sealChild(best, plans, beneficiary)
+        val forged = honest.copy(header = forge(honest.header))
+        val forgedWeight = weight.increase(forged.header)
+        blockchainWriter.save(forged, receipts, forgedWeight, saveAsBestBlock = true)
+        broadcastBlock(forged, forgedWeight)
+        forged
+      }
+
     /** Mines `count` executed blocks on top of the best block through this peer's running regular sync, one at a time:
       * each is handed to the importer, and the next is built only once the importer has made it the best block. Regular
       * sync must already be started, or the importer does not exist and the block is dropped; the wait then times out.
@@ -451,3 +488,19 @@ object RegularSyncItSpecUtils:
         peer2 <- start1FakePeerRes(fakePeerCustomConfig2, "Peer2")
         peer3 <- start1FakePeerRes(fakePeerCustomConfig3, "Peer3")
       yield (peer1, peer2, peer3)
+
+    /** `stopped`, which must have been [[CommonFakePeer.stop]]ped, started again on its data directory: the same
+      * database, with a new node key, a new listen address and no running actors of the old one. The peer is shut down
+      * (its directory destroyed) when the resource is released.
+      */
+    def restartedRes(
+        stopped: FakePeer,
+        peerName: String,
+        fakePeerCustomConfig: FakePeerCustomConfig = defaultConfig
+    ): Resource[IO, FakePeer] =
+      Resource.make {
+        for
+          peer <- IO(new FakePeer(peerName, fakePeerCustomConfig, Some(stopped.tempDir)))
+          _ <- peer.startPeer()
+        yield peer
+      }(_.shutdown())
