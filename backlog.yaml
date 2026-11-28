@@ -6488,15 +6488,14 @@ items:
   - id: B-587
     title: "release.yml: an images-only full-tier path for a version whose patch release is already published (immutable)"
     priority: P1
-    status: claimed
+    status: done
     area: ci
     size: S
     opened: 2026-11-28
+    closed: 2026-11-28
     refs: ["#2168 r4727332388"]
-    links: {}
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-28T14:09:43Z
-      heartbeat: 2026-11-28T14:09:43Z
-    notes: "0.13.1 full re-run failed: Cannot delete asset from an immutable release; Docker skipped."
+    links:
+      prs: [2169]
+    notes: |-
+      0.13.1 full re-run failed: Cannot delete asset from an immutable release; Docker skipped.
+      2026-11-28 done: images_only dispatch run 46155619540 pushed ghcr.io/chippr-robotics/fukuii:0.13.1 and chipprbots/fukuii:0.13.1 (sha256:d4235cc2...), signed. The OCI revision label reads the workflow ref (ce86de8e), not the tag; cosmetic.
