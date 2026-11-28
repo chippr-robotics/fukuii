@@ -6440,3 +6440,13 @@ items:
     refs: [B-559 commit c8ac7475e0]
     links: {}
     notes: "Two fake peers (both 127.0.0.1) dialing one listener: after the second dial all three PeerManagers were empty, including the first dialer's connection. Possibly a same-host/IP dedupe rule in PeerManager. herald: reproduce in the IT harness, decide if it affects real peers behind one NAT/IP."
+  - id: B-583
+    title: eth_mining reads a JVM-wide miner-running flag (PoWMiningMetrics); keep it per PoWMining instance
+    priority: P3
+    status: open
+    area: rpc
+    size: S
+    opened: 2026-11-28
+    refs: ["#2166 r4725013052"]
+    links: {}
+    notes: Copilot on the 0.13.0 promotion. Only multi-node-per-JVM (tests) is affected; production runs one node.
