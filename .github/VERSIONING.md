@@ -37,8 +37,7 @@ Versions follow semantic versioning: `MAJOR.MINOR.PATCH`
 
 ## Releasing a minor version (checklist)
 
-1. Dispatch the minor bump on staging (rule 2 above) and wait for the bump commit.
-2. In the release-prep PR to staging (with the release notes, `docs/releases/X.Y.0.md`), assemble the changelog.
+1. In the release-prep PR to staging (with the release notes, `docs/releases/X.Y.0.md`), assemble the changelog.
    PRs add their entries as fragments under `changelog.d/` (`changelog.d/README.md`), not to `CHANGELOG.md`:
    ```bash
    python3 -I scripts/changelog/assemble.py --dry-run                  # review the merge
@@ -47,6 +46,10 @@ Versions follow semantic versioning: `MAJOR.MINOR.PATCH`
    This merges every fragment into `[Unreleased]`, turns it into `## [X.Y.0] - <date>` under a new, empty
    `[Unreleased]`, and deletes the fragments; commit `CHANGELOG.md` and the deletions. `release.yml` does not touch
    `CHANGELOG.md` (it builds from the tag, and main takes no bot commits), so this step is by hand.
+2. Once that PR has merged, dispatch the minor bump on staging (rule 2 above) and wait for the bump commit. It must be
+   staging's last commit before the promotion: the release-prep merge deletes `changelog.d/*.md` files, which
+   `auto-version`'s `paths-ignore` does not cover, so a bump made before it would be followed by a patch bump to
+   X.Y.1 (0.13.0 release, 2026-11-28).
 3. Open the promotion PR `staging` → `main` (label `hive-full` for the full hive pass) and merge it
    with **"Create a merge commit"** once the required checks pass.
 4. `tag-release` tags `vX.Y.0` on the merge commit and dispatches the full release. Verify the
