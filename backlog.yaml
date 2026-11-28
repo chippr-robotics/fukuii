@@ -4832,19 +4832,20 @@ items:
   - id: B-457
     title: "Ephemery: map genesis bpo3Time..bpo5Time and blobSchedule.bpo3..5 (ChainConfRenderer/EphemeryRelease still refuse them)"
     priority: P3
-    status: claimed
+    status: review
     area: ops
     size: S
     opened: 2026-11-24
     refs: []
     links:
+      prs: [2161]
       spec: specs/028-ephemery
     depends_on: [B-443]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T23:33:42Z
-      heartbeat: 2026-11-27T23:33:42Z
+      heartbeat: 2026-11-28T00:05:54Z
     notes: Renderer output is golden-tested; adding keys changes the committed ephemery-16x fixtures.
   - id: B-458
     title: "eth_simulateV1 on pending reads the pending header's state from the store, where a PoW build left none: State node doesn't exist"
