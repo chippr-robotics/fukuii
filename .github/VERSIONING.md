@@ -61,9 +61,11 @@ Versions follow semantic versioning: `MAJOR.MINOR.PATCH`
    assets and images after step 2, not after the merge. The promotion merge must therefore add nothing that is not
    already on staging (step 0); a merge-conflict resolution or a docs fix made on the promotion branch is on main
    but not in the release.
-5. For a patch release after a minor one (X.Y.1), the push to staging bumps and tags it at the patch tier (JAR and
-   zip only). To publish Docker images for it, dispatch `release.yml` on staging with `version=X.Y.1` and
-   `release_tier=full`, then promote.
+5. For a patch release after a minor one (X.Y.1), the push to staging bumps, tags and publishes it at the patch tier
+   (JAR and zip only). Its release is immutable once published, so a full-tier re-run cannot change it (0.13.1: the
+   re-run failed with "Cannot delete asset from an immutable release" and skipped Docker). To publish Docker images
+   for it, dispatch `release.yml` with `version=X.Y.1`, `release_tier=full` and `images_only=true`, which skips the
+   release job and builds the images from the tag; then promote.
 
 ## Manual Version Updates
 
