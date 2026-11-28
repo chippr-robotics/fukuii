@@ -31,8 +31,13 @@ import com.chipprbots.ethereum.utils.NetworkType
   * `FUKUII_LEGACY_TESTS_DIRS` at one or more (colon-separated) `LegacyTests/<Era>/BlockchainTests` checkouts of
   * https://github.com/ethereum/legacytests; the spec cancels when none is present.
   *
+  * CI runs it nightly (`.github/workflows/ethereum-tests-nightly.yml`, job `legacy-blockchain-tests`) over a sparse
+  * checkout of legacytests pinned by commit, with `FUKUII_LEGACY_TESTS_REQUIRED=1`.
+  *
   * Optional: `FUKUII_LEGACY_TESTS_FILTER` (regex on the test name), `FUKUII_LEGACY_TESTS_REPORT` (file receiving one
-  * line per failing test) and `FUKUII_LEGACY_TESTS_NETWORK_TYPE=ETC`.
+  * line per failing test), `FUKUII_LEGACY_TESTS_VECTORS` (file appended with one `network, name, file, PASS|FAIL` line
+  * per vector run, by both slices, the file relative to the legacytests root; spec 018 T007's per-vector diff) and
+  * `FUKUII_LEGACY_TESTS_NETWORK_TYPE=ETC`.
   *
   * Blocks that the fixture marks invalid (`expectException*`, or carrying only raw `rlp`) are not imported: they are
   * never part of the canonical chain, so the valid blocks around them still determine the expected state. This runner
@@ -59,6 +64,12 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
     * apply), so such runs are report-only; compare their report with the ETH run's.
     */
   private val etcNetworkType: Boolean = sys.env.get("FUKUII_LEGACY_TESTS_NETWORK_TYPE").contains("ETC")
+
+  /** `FUKUII_LEGACY_TESTS_REQUIRED=1`, as the nightly CI job sets it (B-429): a root of `FUKUII_LEGACY_TESTS_DIRS` that
+    * is not a directory, no root at all, or a slice that runs no vector FAILS the slice instead of cancelling it, so a
+    * checkout that went missing cannot pass as a green run.
+    */
+  private val required: Boolean = sys.env.get("FUKUII_LEGACY_TESTS_REQUIRED").contains("1")
 
   private def configFor(network: String, fixtureChainId: Option[BigInt]): BlockchainConfig =
     val cfg = TestConverter.networkToConfig(network, baseBlockchainConfig)
@@ -112,20 +123,31 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
   private def runSlice(defaultSlice: Set[String], knownFailures: Set[String]): Unit =
     val sliceNetworks = networksOverride.getOrElse(defaultSlice)
     val enforce = networksOverride.isEmpty && !etcNetworkType
-    val roots = sys.env
+    val listed = sys.env
       .get("FUKUII_LEGACY_TESTS_DIRS")
       .toSeq
       .flatMap(_.split(":").toSeq)
+      .filter(_.nonEmpty)
       .map(new File(_))
-      .filter(_.isDirectory)
+    val roots = listed.filter(_.isDirectory)
+    if required then
+      // CI (B-429): a missing or partial checkout fails, it does not cancel
+      withClue("FUKUII_LEGACY_TESTS_REQUIRED is set: every root of FUKUII_LEGACY_TESTS_DIRS must be a directory: ") {
+        listed should not be empty
+        listed.filterNot(_.isDirectory).map(_.getPath) shouldBe empty
+      }
     assume(roots.nonEmpty, "FUKUII_LEGACY_TESTS_DIRS not set or not a directory")
     val nameFilter = sys.env.get("FUKUII_LEGACY_TESTS_FILTER").map(_.r)
 
     // Failures stream to the report as they happen, so a crashed fork still leaves evidence.
     val report = sys.env.get("FUKUII_LEGACY_TESTS_REPORT").map(path => new PrintWriter(path))
+    val vectors =
+      sys.env.get("FUKUII_LEGACY_TESTS_VECTORS").map(path => new PrintWriter(new java.io.FileWriter(path, true)))
     val counts = scala.collection.mutable.Map.empty[String, (Int, Int)].withDefaultValue((0, 0))
     val failures = scala.collection.mutable.ArrayBuffer.empty[String]
     val ran = scala.collection.mutable.Set.empty[String]
+    var mirroredFixtures, mirroredUnits = 0
+    var mirroredReads = 0L
 
     for
       root <- roots
@@ -148,10 +170,15 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
               val expectedHead = raw.hcursor.downField("lastblockhash").as[String].toOption.map(_.stripPrefix("0x"))
               // A Throwable escaping execution (e.g. OutOfMemoryError on a memory-expansion fixture) is recorded as
               // this test's failure — it still fails the ratchet — instead of aborting the remaining fixtures.
-              onLargeStack(
-                new ReceiptValidatingHelper(using configFor(network, fixtureChainId(raw)))
-                  .setupAndExecuteTest(test.pre, test.blocks, test.genesisBlockHeader)
-              ).left.map(t => s"uncaught ${t.getClass.getName}: ${t.getMessage}").flatten.flatMap { _ =>
+              val helper = new ReceiptValidatingHelper(using configFor(network, fixtureChainId(raw)))
+              val executed = onLargeStack(helper.setupAndExecuteTest(test.pre, test.blocks, test.genesisBlockHeader))
+              // Spec 018 T026: the fixtures the position mirror ran on, and what it saw.
+              helper.mirrorFigures.foreach { (units, reads) =>
+                mirroredFixtures += 1
+                mirroredUnits += units
+                mirroredReads += reads
+              }
+              executed.left.map(t => s"uncaught ${t.getClass.getName}: ${t.getMessage}").flatten.flatMap { _ =>
                 val headers = (test.genesisBlockHeader.toSeq ++ test.blocks.map(_.blockHeader))
                   .map(TestConverter.toBlockHeader)
                 // Fork-choice fixtures (side chains, reorgs) import non-canonical blocks too; their head is decided
@@ -162,6 +189,11 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
                 else Left(s"head ${head.getOrElse("none")} != lastblockhash ${expectedHead.get}")
               }
           ran += name
+          vectors.foreach { out =>
+            val relative = root.getParentFile.getParentFile.toPath.relativize(file.toPath).toString
+            out.println(s"$network\t$name\t$relative\t${if result.isRight then "PASS" else "FAIL"}")
+            out.flush()
+          }
           val (p, f) = counts(network)
           result match
             case Right(_) => counts(network) = (p + 1, f)
@@ -178,7 +210,13 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
       info(s"$n: ${p + f} run, $p passed, $f failed")
     }
     val (tp, tf) = counts.values.foldLeft((0, 0)) { case ((a, b), (p, f)) => (a + p, b + f) }
+    if required then
+      withClue("FUKUII_LEGACY_TESTS_REQUIRED is set, and the slice ran no vector: ")(tp + tf should be > 0)
     info(s"TOTAL: ${tp + tf} run, $tp passed, $tf failed")
+    info(
+      s"POSITION MIRROR: $mirroredFixtures fixtures mirrored (the rest are not one chain), $mirroredUnits units kept, " +
+        s"$mirroredReads reads checked"
+    )
     report.foreach { out =>
       try
         sliceNetworks.toSeq.sorted.foreach { n =>
@@ -186,6 +224,7 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
         }
       finally out.close()
     }
+    vectors.foreach(_.close())
     failures.take(50).foreach(f => info(s"FAIL $f"))
 
     // Ratchet: no failure outside the known list, and a known failure that starts passing must be removed from it.
@@ -216,9 +255,6 @@ class LegacyPreByzantiumBlockchainTestsSpec extends EthereumTestsSpec:
 
 object LegacyPreByzantiumBlockchainTestsSpec:
 
-  /** Pre-existing divergences in this slice, each a separate consensus fix (measured against legacytests
-    * 1f581b8ccdc4c63acf5f2c5c1b155c690c32a8eb, LegacyTests/Cancun/BlockchainTests). All fail on gasUsed.
-    */
   /** Fixtures whose outcome depends on the test JVM's heap, not on consensus logic: exempt from both ratchet checks.
     * randomStatetest94 expands EVM memory to ~1.5 GB (header gasUsed 0x0449e8c0a3dd); with `Memory`'s ByteString
     * representation it passes under -Xmx4g in-process and exhausts the heap below that (hive runs it under a smaller
@@ -227,29 +263,17 @@ object LegacyPreByzantiumBlockchainTestsSpec:
   val HeapBound: Set[String] =
     Seq("Homestead", "Byzantium", "Constantinople", "ConstantinopleFix").map(n => s"randomStatetest94_$n").toSet
 
-  /** Byzantium..Berlin slice (legacytests 1f581b8c, Constantinople + Cancun BlockchainTests): 63 pre-existing failures,
-    * all the EIP-2681 CREATE/CREATE2 nonce-cap class (see KnownFailures) — being fixed separately.
+  /** Pre-existing divergences of the Byzantium..Berlin slice (legacytests 1f581b8c, Constantinople + Cancun
+    * BlockchainTests). Empty: the 63 it held, the EIP-2681 CREATE/CREATE2 nonce-cap class, pass now that `VM.create`
+    * applies the cap on every fork; spec 018 C0 recorded every vector of both slices passing (B-432).
     */
-  val KnownFailuresPostByzantium: Set[String] =
-    val create2Forks = Seq("Constantinople", "ConstantinopleFix", "Istanbul", "Berlin")
-    Seq("Byzantium", "Constantinople", "ConstantinopleFix", "Istanbul", "Berlin")
-      .map(n => s"CREATE_HighNonce_d0g0v0_$n")
-      .toSet ++
-      create2Forks.map(n => s"CREATE2_HighNonce_d0g0v0_$n").toSet ++
-      Seq(5, 6, 7, 8, 9, 11).map(d => s"CREATE2_HighNonceDelegatecall_d${d}g0v0_Byzantium").toSet ++
-      (for
-        d <- Seq(5, 6, 7, 8, 9, 11, 17, 18, 19, 20, 21, 23)
-        n <- create2Forks
-      yield s"CREATE2_HighNonceDelegatecall_d${d}g0v0_$n").toSet
+  val KnownFailuresPostByzantium: Set[String] = Set.empty
 
-  val KnownFailures: Set[String] =
-    // EIP-2681 nonce cap (2^64-1) on CREATE/CREATE2 from an account at max nonce: CreateOp applies the cap only
-    // inside the Amsterdam charge decision, so pre-Amsterdam the create proceeds and the gas differs.
-    Seq("Frontier", "Homestead", "EIP150", "EIP158").map(n => s"CREATE_HighNonce_d0g0v0_$n").toSet ++
-      (for
-        d <- Seq(5, 6, 7, 8, 9, 11)
-        n <- Seq("Homestead", "EIP150", "EIP158")
-      yield s"CREATE2_HighNonceDelegatecall_d${d}g0v0_$n").toSet
+  /** Pre-existing divergences of the Frontier/Homestead/EIP150/EIP158 slice (legacytests 1f581b8c). Empty: the 22 it
+    * held, the same EIP-2681 class, pass (B-432). A new divergence is added here by name, each a separate consensus
+    * fix.
+    */
+  val KnownFailures: Set[String] = Set.empty
 
   /** `EthereumTestHelper` inherits `MockValidatorsAlwaysSucceed`, under which `executeAndValidateBlock` checks only
     * gasUsed and the state root: the receipts root and logs bloom are never compared, so a wrong intermediate state

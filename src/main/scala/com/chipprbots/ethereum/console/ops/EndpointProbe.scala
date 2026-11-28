@@ -14,10 +14,19 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLEngine
+import javax.net.ssl.X509ExtendedKeyManager
 import javax.net.ssl.X509ExtendedTrustManager
 
 import scala.util.Try
 import scala.util.control.NonFatal
+
+import com.typesafe.config.Config
+
+import com.chipprbots.ethereum.tls.ClientAuth
+import com.chipprbots.ethereum.tls.OutboundTls
+import com.chipprbots.ethereum.tls.RedirectPolicy
+import com.chipprbots.ethereum.tls.TlsConfig
+import com.chipprbots.ethereum.tls.TlsMaterialLoader
 
 /** `test-rpc` (spec 029 FR-054, contracts/actions.md): a client on the node's own listeners. For each enabled transport
   * it asks `web3_clientVersion` and reports the answer and the time; for the Engine API it sends a request with no
@@ -40,7 +49,47 @@ object EndpointProbe:
     * @param path
     *   the socket file, for IPC
     */
-  final case class Endpoint(kind: Kind, host: String, port: Int, path: String = "")
+  final case class Endpoint(
+      kind: Kind,
+      host: String,
+      port: Int,
+      path: String = "",
+      tls: ProbeTls = ProbeTls.Unverified()
+  )
+
+  /** How the probe makes its TLS connection to an HTTPS listener (spec 030 FR-046, contracts/config.md
+    * `tui.probe.tls-profile`).
+    */
+  enum ProbeTls:
+    /** The recording trust manager: the certificate is reported, not verified; `key` is presented to a listener that
+      * needs a client certificate.
+      */
+    case Unverified(key: Option[X509ExtendedKeyManager] = None)
+
+    /** A client of the outbound factory, on the profile `tui.probe.tls-profile` names: trust and host name checked. */
+    case Verified(profile: String, context: SSLContext)
+
+    /** The profile could not be loaded; the probe says why instead of calling. */
+    case Unavailable(why: String)
+
+  /** The probe's TLS for the HTTPS listener of `config` (the `fukuii` section): the profile `tui.probe.tls-profile`
+    * names, verified, where it is set; otherwise unverified, presenting the listener's own keystore where the listener
+    * is `need`, since it would refuse a probe without a certificate (FR-046).
+    */
+  def tlsFor(config: Config, secureRandom: java.security.SecureRandom): ProbeTls =
+    val key = "tui.probe.tls-profile"
+    if config.hasPath(key) && !config.getIsNull(key) then
+      OutboundTls
+        .forSite(config, key, secureRandom)
+        .fold(e => ProbeTls.Unavailable(e.message), ProbeTls.Verified(OutboundTls.profileAt(config, key), _))
+    else
+      TlsConfig.rpcHttp(config) match
+        case Right(Some(resolved)) if resolved.listener.clientAuth == ClientAuth.Need =>
+          TlsMaterialLoader
+            .load(resolved.profile, ClientAuth.None, resolved.configPath)
+            .fold(e => ProbeTls.Unavailable(e.message), m => ProbeTls.Unverified(m.keyManager))
+        case Right(_) => ProbeTls.Unverified()
+        case Left(e)  => ProbeTls.Unavailable(e.message)
 
   val ConnectTimeout: Duration = Duration.ofSeconds(2)
   val AnswerTimeout: Duration = Duration.ofSeconds(3)
@@ -94,11 +143,14 @@ object EndpointProbe:
     def checkServerTrusted(chain: Array[X509Certificate], authType: String, engine: SSLEngine): Unit = keep(chain)
     def getAcceptedIssuers: Array[X509Certificate] = Array.empty
 
-  private def client(tls: Option[Recording]): HttpClient =
+  /** A plain client, or one whose TLS reports the certificate it sees (`trust`) and presents `key`, if any. This
+    * context, which verifies nothing, is the one the outbound-TLS ratchet allows outside the factory (PROBE).
+    */
+  private def client(tls: Option[(Recording, Option[X509ExtendedKeyManager])]): HttpClient =
     val builder = HttpClient.newBuilder().connectTimeout(ConnectTimeout)
-    tls.foreach { trust =>
+    tls.foreach { (trust, key) =>
       val context = SSLContext.getInstance("TLS")
-      context.init(null, Array(trust), null)
+      context.init(key.toArray, Array(trust), null)
       builder.sslContext(context)
     }
     builder.build()
@@ -115,21 +167,32 @@ object EndpointProbe:
     )
 
   private def http(e: Endpoint, tls: Boolean): String =
-    val trust = Option.when(tls)(new Recording)
-    val c = client(trust)
-    val started = System.nanoTime()
-    try
-      val answer = post(c, s"${if tls then "https" else "http"}://${dialled(e.host)}:${e.port}/")
-      val certificate = trust
-        .flatMap(_.seen.get)
-        .fold("")(cert =>
-          s"; TLS, certificate not verified by this test: ${cert.getSubjectX500Principal.getName}, " +
-            s"valid until ${cert.getNotAfter.toInstant.toString.take(10)}" +
-            (if cert.getSubjectX500Principal == cert.getIssuerX500Principal then ", self-signed" else "")
-        )
-      s"${verdict(answer.statusCode(), answer.body())} in ${millis(started)}$certificate"
-    catch case NonFatal(failed) => s"FAILED: ${why(failed)}"
-    finally Try(c.close())
+    val probeTls = Option.when(tls)(e.tls)
+    probeTls match
+      case Some(ProbeTls.Unavailable(reason)) => s"FAILED: not called: $reason"
+      case _ =>
+        val trust = probeTls.collect { case ProbeTls.Unverified(key) => (new Recording, key) }
+        val c = probeTls match
+          case Some(ProbeTls.Verified(_, context)) =>
+            OutboundTls.jdkHttpClientBuilder(context, RedirectPolicy.Never).connectTimeout(ConnectTimeout).build()
+          case _ => client(trust)
+        val started = System.nanoTime()
+        try
+          val answer = post(c, s"${if tls then "https" else "http"}://${dialled(e.host)}:${e.port}/")
+          val certificate = probeTls match
+            case Some(ProbeTls.Verified(profile, _)) => s"; TLS, certificate verified on profile $profile"
+            case _ =>
+              trust
+                .flatMap(_._1.seen.get)
+                .fold("")(cert =>
+                  s"; TLS, certificate not verified by this test: ${cert.getSubjectX500Principal.getName}, " +
+                    s"valid until ${cert.getNotAfter.toInstant.toString.take(10)}" +
+                    (if cert.getSubjectX500Principal == cert.getIssuerX500Principal then ", self-signed" else "") +
+                    trust.flatMap(_._2).fold("")(_ => "; the listener's own certificate presented")
+                )
+          s"${verdict(answer.statusCode(), answer.body())} in ${millis(started)}$certificate"
+        catch case NonFatal(failed) => s"FAILED: ${why(failed)}"
+        finally Try(c.close())
 
   private def ws(e: Endpoint): String =
     val c = client(None)

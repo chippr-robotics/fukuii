@@ -41,9 +41,10 @@ object V5DemuxResponder extends LazyLogging:
     val result = inner(sender, bits)
 
     val isV5 = result match
-      case StaticUDPPeerGroup.SyncResult.Reply(_) => true
-      case StaticUDPPeerGroup.SyncResult.Stop     => true
-      case StaticUDPPeerGroup.SyncResult.Pass     => false
+      case StaticUDPPeerGroup.SyncResult.Reply(_)        => true
+      case StaticUDPPeerGroup.SyncResult.Stop            => true
+      case StaticUDPPeerGroup.SyncResult.Pass            => false
+      case StaticUDPPeerGroup.SyncResult.ClaimedReply(_) => true
 
     if isV5 then
       try

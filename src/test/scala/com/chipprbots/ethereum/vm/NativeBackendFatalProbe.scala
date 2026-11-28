@@ -24,7 +24,9 @@ import com.chipprbots.ethereum.FatalErrors
 object NativeBackendFatalProbe:
 
   private object MissingBls extends NativeBackends.BlsNative:
+    def name: String = "missing"
     def enabled: Boolean = false
+    def unavailableDetail: String = "the native library did not load (LibEthPairings.ENABLED is false)"
     def perform(operation: Byte, input: Array[Byte]): Option[Array[Byte]] = None
 
   def main(args: Array[String]): Unit =

@@ -23,3 +23,8 @@ two-space indentation. The differential's seeded large-k MSMs (k up to 256) cove
 
 The `mul_*` and `blsG*Mul` files hold the pre-final G1MUL/G2MUL vectors. They are run as MSMs at
 k = 1, the same way go-ethereum's `contracts_test.go` runs them.
+
+`oracle-outcomes.txt` (B-151) is generated here, not upstream: per op, a SHA-256 over every corpus
+input and the outcome eth_pairings and gnark compute for it. `BlstEip2537Spec` holds the blst backend
+to it on Windows, where neither oracle has a build; `Eip2537DifferentialSpec` checks it against both
+oracles and prints the new lines when the corpus changes.

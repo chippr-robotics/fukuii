@@ -17,10 +17,6 @@ case class PendingTransactionsManagerAutoPilot(pendingTransactions: Set[PendingT
 
   def run(sender: ActorRef, msg: Any): AutoPilot =
     msg match
-      case AddUncheckedTransactions(transactions) =>
-        val validTxs = SignedTransactionWithSender.getSignedTransactions(transactions, Timestamp.Zero)
-        this.addTransactions(validTxs.toSet)
-
       case AddTransactions(signedTransactions) =>
         this.addTransactions(signedTransactions)
 
@@ -50,6 +46,11 @@ case class PendingTransactionsManagerAutoPilot(pendingTransactions: Set[PendingT
 
       case RemoveTransactions(signedTransactions) =>
         this.removeTransactions(signedTransactions.map(_.hash.value).toSet)
+
+      case HeadReset(included, reinject) =>
+        this
+          .removeTransactions(included.flatten.map(_.hash.value).toSet)
+          .addTransactions(SignedTransactionWithSender.getSignedTransactions(reinject, Timestamp.Zero).toSet)
 
       case ProperSignedTransactions(transactions, _) =>
         this.addTransactions(transactions)

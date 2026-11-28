@@ -1599,9 +1599,9 @@ object StorageRangeCoordinator:
   private[actors] case class StorageRequestTimedOut(requestId: BigInt) extends Command
   case object StorageCheckIdle extends WorkerMessage
 
-  /** Behavior factory (Group S3). SSC and StorageRecoveryActor are still Classic / Classic-spawned at S3 time, so they
-    * spawn this via `PropsAdapter` and hold a Classic `ActorRef`; their `!` routes Command-typed messages. SRC spawns
-    * no child workers — it dispatches GetStorageRanges directly to `networkPeerManager` (still Classic).
+  /** Behavior factory (Group S3). SNAPSyncController (through `ChildFactories`) and StorageRecoveryActor, both Typed,
+    * spawn this as a child with `ctx.spawn` and hold a typed `ActorRef[Command]`. SRC spawns no child workers — it
+    * dispatches GetStorageRanges directly to `networkPeerManager` (the Typed NetworkPeerManagerActor).
     */
   def apply(
       stateRoot: ByteString,

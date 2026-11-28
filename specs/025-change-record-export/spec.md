@@ -4,7 +4,10 @@
 
 **Created**: 2026-10-30
 
-**Status**: Planned (2026-11-03). Clarified 2026-10-31; plan with the GT-2 hook-point table, record schema (with block body), topic and golden-vector contracts, 91 tasks. Phase A: schema freeze with `vault` (018 F2) and `forge`/`beacon` hook sign-off; code in phase C.
+**Status**: Planned (2026-11-03). Clarified 2026-10-31; plan with the GT-2 hook-point table, record schema (with block body), topic and golden-vector contracts, 114 tasks (23 from the 2026-11-24 amendment: pool, safe-head and chain-start records). Phase A: schema freeze with `vault` (018 F2) and `forge`/`beacon` hook sign-off; code in phase C.
+Amendment 2026-11-24: transaction-pool records on a second topic, a safe-head watermark, and a chain-start record for
+chains that reset (US-4, US-5; DC-10, DC-11; FR-013 to FR-019). v1 is not frozen yet (GT-1 open), so the new types
+join v1.
 
 **Input**: Spec 023 Goal "define the change-record contract on Kafka that replicas, the archive role, the indexer and
 history tables all consume, with reorg and finality semantics". User decisions D-3 (Kafka) and D-6 (ETC finality is
@@ -33,16 +36,51 @@ genesis only).
   withdrawals), and the decoded diff type is `domain/statediff/StateDiff` (shared with spec 026 and 018 F2), whose
   entries carry the `address` and `slotKey` preimages beside the hashed keys.
 
+### Session 2026-11-24 (amendment)
+
+- Q: Does the export carry the transaction pool? → A: **Yes, as two record types, `poolAdd` and `poolRemove`, on a
+  second topic per chain**, `fukuii.<chainKey>.txpool.v1`. The pool lives in memory and is not part of any canonical
+  commit, so pool records are **best-effort**: they skip the durable buffer, never wait on the broker, never slow
+  admission or import, and carry a per-node sequence so a consumer sees exactly where it missed some (DC-10).
+- Q: What does a pool record carry? → A: The transaction **exactly as a block body carries it** (so every field:
+  type, chain ID, nonce, gas, fee fields, recipient, value, input, access list, blob versioned hashes, authorization
+  list, signature), its hash, the recovered sender, how it arrived (peer, local submission, back from a reorg), and
+  for a removal, why it left (included, replaced and by what, evicted, expired, dropped).
+- Q: Chains that reset (Ephemery, spec 028)? → A: Keep **one record topic per `chainKey`**. Every chain instance
+  opens with a **`chainStart` record** naming its chain ID and genesis; block numbers may restart only after one
+  (DC-11). Spec 028's clean shutdown at a reset drains the exporter first, like a fence.
+- Q: Safe head? → A: The ETH family emits a **`safe` watermark record** on every change of the applied
+  `safeBlockHash`. It is advisory, unlike finality: a consumer may use it as a stronger depth signal, never as a
+  promise. The ETC family never emits one.
+- Q: New schema version? → A: No. GT-1 has not frozen `0x01` (T018 open), so the four types join v1 and the golden
+  vectors cover them before the freeze.
+- Q: Pool defaults (OQ-8, OQ-9)? → A: **Accepted**: one partition and 24 hours retention for the pool topic, the
+  first 8 bytes of the node ID as the default `nodeId`, and best-effort delivery for pool records (DC-10).
+
 ## Problem
 
 Four consumers need the same per-block facts and none can get them today:
 
 - **Followers** (026) need, per canonical block, every state change with enough information to apply it and verify
   the resulting root.
-- **The Chain Intelligence indexer** (separate service, Scala 3 on Kafka/Flink) needs headers, receipts, logs and
+- **Downstream consumers** (separate services, such as an indexer) need headers, receipts, logs and
   state diffs with explicit reorg and finality semantics, so derived tables (historical balances) are exact.
 - **The `archive` role** (026) needs the same stream to retain every block's state.
 - **Rollback** inside the node (018 FR-010) needs the previous value of every key a block changed.
+
+A fifth needs what happens **before** a block (amendment 2026-11-24):
+
+- **Mempool observers** (downstream consumers that follow a transaction from submission to inclusion, wallets and
+  relayers that track their own submissions, fee estimators, mempool analytics) need every transaction the pool
+  admits, with all its fields, and every removal with its cause. Today the only push source is
+  `eth_subscribe newPendingTransactions` over WebSocket: one node at a time, no delivery guarantee, a full-transaction
+  form without type, chain ID, fee caps or access list, and nothing at all when a transaction leaves the pool. The pool
+  already knows each of those moments (`PendingTransactionsManager`: `admit`, `addOrOverride`, `HeadReset`, and one
+  cache removal listener that every exit passes through).
+
+Two gaps in the canonical stream itself: a chain that **resets** (Ephemery, spec 028) restarts block numbers at 0
+under a new chain ID while its `chainKey` stays the same, which DC-3's total order by `blockNumber` forbids as first
+written; and the ETH family's **safe head**, which the node already receives in every forkchoice update, is dropped.
 
 What exists: a Pekko pub-sub topic `NewBlockImported` that fires on *import* (not canonical commit), carries the
 block only, and is fire-and-forget (`NodeBuilder.scala:135-139`, `BlockImporter.scala:172`); the per-block write set in
@@ -50,7 +88,7 @@ execution's in-memory world (`InMemoryWorldStateProxy.scala:184-196`: pending ac
 codes, touched accounts), which is discarded after persist; and 018's planned changeset store, which records
 **previous** values of trie nodes and flat keys for rollback, without `chainKey` or a schema version. Spec 018 Track H
 also plans a `ColdStore` whose first adapter writes ClickHouse directly from the node, which would make the node a
-second writer to the analytics schema.
+writer to an external analytics store.
 
 The write set is the record. Because it exists on today's storage layout, the exporter does not wait for spec 018's
 engine or flat-layout work (alignment review §2).
@@ -65,15 +103,24 @@ engine or flat-layout work (alignment review §2).
 3. **Export never blocks import** (DC-6).
 4. **Kafka** as the transport (D-3) behind a seam with a file implementation for tests.
 5. The node writes **no analytics store** (DC-7; 018 amendment request 3).
+6. **The transaction pool is observable** from the export: every admission with full fields, every removal with its
+   cause, without a WebSocket bridge (DC-10; amendment 2026-11-24).
+7. **Chain instances are explicit**: a reset is a record, never inferred from a chain ID change or a block number
+   going backwards (DC-11).
 
 ## Non-goals
 
-- The indexer's schemas, tables and correlation logic.
-- Historical balance tables (derived by the indexer from these records).
+- Downstream consumers' schemas, tables and processing.
+- Historical balance tables (derived by downstream consumers from these records).
 - Transport-level multi-tenancy, ACLs or encryption policy on the broker (deployment; Orbita or the platform).
 - Changing any consensus output. The exporter is an observer of committed state.
 - Exporting pre-sync history on first start (backfill of blocks the node imported before the exporter existed is
   OQ-5; the default is "from the export position forward").
+- Durable pool records. The pool is lost on restart, so a pool record lost to a broker outage is reported as a gap,
+  never buffered (DC-10). A consumer that needs the pool's current contents after a gap reads `txpool_content`.
+- Blob sidecars in pool records. A blob transaction is exported in its block-body form (versioned hashes, no blobs).
+- Pool records from a node that is not synced: the pool drops peer transactions then (`SignedTransactionsFilterActor`),
+  so there is nothing to export.
 
 ---
 
@@ -90,6 +137,14 @@ engine or flat-layout work (alignment review §2).
 - **Finality watermark**: `(chainKey, finalizedNumber, finalizedHash)`; advances independently of block records.
 - **Export position**: the last `(blockNumber, blockHash)` the exporter has durably handed to the transport, stored in
   the node's own store.
+- **Pool record** (amendment 2026-11-24): `poolAdd` (a transaction entered this node's pool) or `poolRemove` (it
+  left, with a reason). Per node, not per chain: two nodes' pools differ.
+- **Pool stream position**: `(nodeId, session, seq)`. `session` is the node process's start time; `seq` counts pool
+  records from 0 within a session. A consumer that sees a jump in `seq`, or a new `session` for a `nodeId`, knows
+  what it missed: the records between, or the whole earlier pool.
+- **Safe watermark**: `(chainKey, safeNumber, safeHash)` on the ETH family; advisory.
+- **Chain-start record**: opens one chain instance on the record topic: its chain ID and genesis hash, and for a chain
+  that iterates, its iteration number.
 - **Canonical commit**: the moment a block becomes part of the chain the node reports as best. ETC: the block is
   imported as the new best block (or a reorg installs it). ETH family: the block is referenced by `headBlockHash` in
   an `engine_forkchoiceUpdated` the node has applied; `engine_newPayload` alone is **not** a canonical commit.
@@ -114,9 +169,11 @@ engine or flat-layout work (alignment review §2).
 ## Design constraints *(mandatory)*
 
 **DC-1: Record identity.** Every record carries `schemaVersion`, `chainKey`, `chainId`, `blockNumber`, `blockHash`,
-`parentHash`, and a record type (`block`, `retraction`, `finality`, and the reserved optional `witness`). Records are
-RLP-encoded with the schema version as the leading byte. `chainKey` is the partitioning identity;
-`chainId` is informational (024 DC-3).
+`parentHash`, and a record type (`block`, `retraction`, `finality`, the reserved optional `witness`, and since the
+2026-11-24 amendment `poolAdd`, `poolRemove`, `safe` and `chainStart`). Records are RLP-encoded with the schema
+version as the leading byte. `chainKey` is the partitioning identity; `chainId` is informational (024 DC-3), except
+that it tells one chain instance from the next after a `chainStart` (DC-11). In a pool record the block fields name
+the node's canonical head when the pool event happened.
 
 **DC-2: The block record is complete, self-contained and layout-independent.** It contains the header, the **block
 body** (transactions in order; uncle headers on the ETC family; withdrawals on the ETH family where the fork defines
@@ -129,7 +186,8 @@ with no other input than the pre-state. The record MUST NOT contain trie nodes o
 namespace; a record produced on the Hash scheme, the Path scheme or the 018 unified layout is byte-identical.
 
 **DC-3: Idempotent and ordered per chain.** Records for one `chainKey` are totally ordered by `blockNumber` and
-consumers never infer order from arrival time. A duplicate record (same `blockNumber`, `blockHash`, type) is a no-op
+consumers never infer order from arrival time. `blockNumber` restarts only immediately after a `chainStart` record
+(DC-11). Pool records are outside this order (DC-10). A duplicate record (same `blockNumber`, `blockHash`, type) is a no-op
 for every consumer. The exporter MAY re-send after a restart; it MUST NOT skip.
 
 **DC-4: Reorgs are explicit.** A reorg is expressed as **retraction records** for every abandoned block, newest
@@ -143,6 +201,10 @@ record type carrying `(chainKey, finalizedNumber, finalizedHash)`.
 - **ETC family**: **only block 0 is final** (D-6). fukuii emits one watermark at genesis on first start and never
   advances it. Consumers that want a confirmation-depth policy apply it themselves and own the consequences; fukuii
   declares none, and MESS (024 DC-2) does not change this.
+- **Safe head (amendment 2026-11-24)**: the ETH family also emits a `safe` record on every change of the applied
+  `safeBlockHash`. It is the consensus client's justified head, passed on as received: a consumer MAY treat blocks at
+  or below it as unlikely to be retracted, MUST NOT treat them as irrevocable, and the retraction rule of FR-007 stays
+  tied to finality alone. The ETC family emits none; there is no safe head on proof of work.
 
 **DC-6: Export never blocks import.** The exporter observes canonical commits through a bounded queue; a slow consumer
 or an unavailable broker produces **lag** (a metric) and durable buffering (FR-005), never backpressure into
@@ -150,11 +212,28 @@ or an unavailable broker produces **lag** (a metric) and durable buffering (FR-0
 health signal (023 FR-004 `sourceLag` on the consumer side; an `exportLag` gauge here); import continues.
 
 **DC-7: The node writes no analytics store.** The only sink the node writes is the record topic (and the file sink in
-tests). ClickHouse or any other analytics database is written by the indexer from the records (018 amendment request
+tests). Any analytics database is written by downstream consumers from the records (018 amendment request
 3). 018's `ColdStore` *read* adapter is unaffected.
 
 **DC-8: Consensus-neutral.** The exporter reads committed state and committed changesets. It adds no step to block
 validation and changes no output. GT-2 confirms the hook points with `forge` and `beacon`.
+
+**DC-10: Pool records are best-effort and never wait (amendment 2026-11-24).** Pool records go to their own topic
+(`contracts/topic.md` §8), not to the record topic, and never through the FR-005 buffer: the pool is in memory, so a
+record kept across a broker outage would describe a pool that a restart has already lost. The pool hands each record
+to a bounded in-memory queue with a non-blocking offer; a full queue, a broker error or a fenced or halted exporter
+drops the record and counts it. Every pool record carries `(nodeId, session, seq)` so the drop is visible to the
+consumer as a gap. Admission, removal, gossip and import never wait on the export. Pool records keep a per-sender order
+(key = sender), and no order against the record topic: a consumer may see a block record before the `poolRemove`
+for a transaction it includes, or the reverse.
+
+**DC-11: Chain instances are explicit (amendment 2026-11-24).** The first record the exporter publishes for a datadir
+is a `chainStart` record (chain ID, genesis hash, iteration). A chain that resets (Ephemery: spec 028 exits with code
+75 and restarts on the next iteration in a new datadir) therefore opens every iteration with one on the **same** topic,
+and block numbers restart after it. A consumer that sees a `chainStart` whose chain ID or genesis hash differs from
+the last one closes the earlier instance: its blocks, its finality and every pending transaction of it are gone.
+Before the exit at a reset the node drains the exporter as on a fence (023 FR-005 edge case below); if the broker is
+down then, the old instance's tail is lost and the `chainStart` still tells the consumer it ended.
 
 **DC-9: One schema, three uses.** The record 018 F2 writes for rollback, the record followers replay, and the record
 the indexer consumes are the same bytes with the same version byte (GT-1). A second schema is a defect.
@@ -197,6 +276,44 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
 1. **Given** the record stream for a block range, **When** a consumer folds state diffs forward from a known
    pre-state, **Then** every account balance at every block equals `eth_getBalance` at that block on an archive node.
 
+### User Story 4 — Pending transactions are observable without a bridge (Priority: P2; amendment 2026-11-24)
+
+A downstream consumer follows a transaction from the moment a node's pool accepts it to inclusion, replacement or
+loss, with every field of the transaction, from the export alone.
+
+**Independent Test**: SC-006.
+
+**Acceptance Scenarios**:
+1. **Given** a typed (`0x02`) transaction submitted over RPC, **When** the pool admits it, **Then** one `poolAdd`
+   with `source = local` appears on the pool topic, and decoding its `tx` item yields the same type, chain ID, nonce,
+   fee caps and access list as `eth_getTransactionByHash`.
+2. **Given** a pooled transaction and a replacement at the same sender and nonce that meets the price bump, **When**
+   the replacement is admitted, **Then** a `poolRemove` with reason `replaced` names the new hash, and a `poolAdd` for
+   the new one follows on the same key.
+3. **Given** a pooled transaction, **When** a block that includes it becomes canonical, **Then** a `poolRemove` with
+   reason `included` appears; **when** that block is retracted and the transaction goes back into the pool, **Then**
+   a `poolAdd` with `source = reorg` appears.
+4. **Given** the pool at its size limit, or a transaction past its timeout, **When** it leaves, **Then** the
+   `poolRemove` reason is `evicted` or `expired`.
+5. **Given** the broker down for a minute, **When** it returns, **Then** pool records resume with a `seq` jump equal
+   to the number dropped, `fukuii_export_pool_dropped_total` says the same, and import p99 and admission were
+   unaffected.
+
+### User Story 5 — A chain reset is a record (Priority: P2; amendment 2026-11-24)
+
+An Ephemery node runs across a reset under a supervisor; consumers of `fukuii.ephemery.records.v1` see the old
+iteration end and the new one start, with no fault.
+
+**Independent Test**: SC-007.
+
+**Acceptance Scenarios**:
+1. **Given** an exporting Ephemery node on iteration N, **When** the reset time passes, **Then** the exporter drains
+   to the broker before the exit with code 75, and after the supervisor restart the first record on the same topic is
+   a `chainStart` for iteration N+1 (chain ID `39438000 + N + 1`, the published genesis hash), followed by block
+   records from the new genesis.
+2. **Given** a consumer of that topic, **When** it reads across the reset, **Then** block numbers going back to 0
+   after the `chainStart` is not a gap or a reorg (DC-4), and a block number going back anywhere else still is.
+
 ### Edge cases
 
 - A record for a block whose parent the consumer has not seen: the consumer waits (026 FR-008); the exporter never
@@ -210,6 +327,16 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
   empty and the root check still passes.
 - Receipts with `eth/70` partial receipts in flight: the record carries full receipts from the node's own execution,
   never the partial form.
+- A transaction moved off the chain by a reorg that the pool does not take back (its nonce was spent on the new
+  chain, or a pooled transaction holds its nonce): no `poolAdd`, because it never re-enters the pool. The replacement
+  chain's block records say what happened to that nonce.
+- The same transaction re-sent over RPC while pooled replaces itself in place: no record (nothing entered or left).
+- A pool removal the cache reports without a cause the pool set (a cleanup it did not ask for) is exported with reason
+  `dropped`; `included`, `replaced`, `evicted` and `expired` are only used where the pool knows them.
+- Several nodes publish pool records for one chain: each carries its own `nodeId` and sequence, and the same
+  transaction appears once per node that admitted it. First-seen is per node.
+- A node restarts: its pool is empty and its `session` changes. It emits no `poolRemove` for what it held; the new
+  `session` is the signal.
 
 ---
 
@@ -252,6 +379,26 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
   guess. The schema and its golden-bytes vectors live in `contracts/` and are shared with 018 `data-model.md`.
 - **FR-012** The schema MUST reserve a `witness` record type carrying spec 017's `ExecutionWitness` for a block,
   published only when the operator enables it (default off); 017's plan decides which role produces it.
+- **FR-013** *(amendment 2026-11-24)* When `fukuii.export.pool.enabled` is on, the node MUST publish a `poolAdd` for
+  every transaction its pool admits (peer delivery, local submission, re-admission after a reorg) and a `poolRemove`
+  for every transaction that leaves it, on `fukuii.<chainKey>.txpool.v1` (`contracts/topic.md` §8). Off by default.
+- **FR-014** A `poolAdd` MUST carry the transaction item exactly as a block body carries it
+  (`contracts/record-schema.md` §3 `transactions`), its hash, the recovered sender and its `source`
+  (`peer` | `local` | `reorg`). Every field of the transaction is recoverable from that item; no field is dropped or
+  re-encoded.
+- **FR-015** A `poolRemove` MUST carry the hash, sender, nonce and a `reason`: `included` (a canonical block took it),
+  `replaced` (with the replacing hash), `evicted` (the pool's size limit or the blob-sidecar byte budget), `expired`
+  (the pool's transaction timeout), or `dropped` (any other removal: an explicit remove, a pool clear). The reason is
+  set where the pool decides the removal, not guessed in the removal listener.
+- **FR-016** Pool records MUST NOT block or slow admission, gossip or import (DC-10): a bounded queue with a
+  non-blocking offer, and a drop counted in `fukuii_export_pool_dropped_total`. Every pool record carries
+  `(nodeId, session, seq)` with `seq` contiguous within a session, so drops are visible to consumers.
+- **FR-017** The exporter MUST publish a `chainStart` record as the first record for a datadir (DC-11), before the ETC
+  genesis finality record, and MUST drain to the transport before the spec 028 exit at a reset as it does on a fence.
+- **FR-018** On the ETH family the exporter MUST publish a `safe` record on every change of the applied
+  `safeBlockHash` (DC-5), through the same emission log as finality; never on the ETC family.
+- **FR-019** The quickstart and the operator docs MUST show how to create the pool topic and how a consumer detects
+  and recovers from a pool gap (`txpool_content`).
 
 ### Success criteria
 
@@ -265,6 +412,13 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
   `eth_getBalance` on an archive reference at every sampled block.
 - **SC-005** One golden-bytes vector set is consumed by 018's changeset tests and by this spec's codec tests; the
   vectors are identical files.
+- **SC-006** *(amendment)* On a pool fixture (admit, local submit, replace, include, retract and re-admit, evict,
+  expire), the pool topic carries exactly the expected records in per-sender order with contiguous `seq`; with the
+  broker down, the `seq` jump equals the drop counter; and import p99 and admission latency with pool export on are
+  within the 023 GT-3 noise band of export off.
+- **SC-007** *(amendment)* Across a simulated Ephemery reset in the 023 harness, the record topic carries the old
+  iteration's records up to its last exported block, then one `chainStart` for the new iteration, then its blocks;
+  the reference consumer (FR-010) treats it as a new chain and reports no fault.
 
 ---
 
@@ -280,6 +434,11 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
 - **OQ-6** *(resolved 2026-10-31)*: reserved optional `witness` record type, off by default (FR-012).
 - **OQ-7 (new)**: the concrete buffer bounds per chain (blocks and bytes) and the retention figure per chain, to be set
   from the 023 harness's outage tests in `plan.md`.
+- **OQ-8** *(resolved 2026-11-24)*: pool topic sizing: 1 partition and 24 hours retention by default (any partition
+  count still keeps per-sender order, because the key is the sender). The queue bound keeps its 65,536-record default
+  until a mainnet-scale gossip measurement says otherwise (DC-10, FR-016).
+- **OQ-9** *(resolved 2026-11-24)*: the default `nodeId` is the first 8 bytes of the node ID (stable across restarts),
+  overridable by an operator label in `fukuii.export.node-id`.
 
 ---
 
@@ -290,7 +449,11 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
 - **023 fleet-topology**: fence (FR-005 there) stops export; health shape carries FR-006 fields.
 - **024 chain-registry**: `finalityRule`, `chainKey`, `chainId`.
 - **026 follower-roles**: the primary in-house consumer; DC-2's root check is 026 DC-1.
-- **Chain Intelligence** (separate service): the primary external consumer.
+- **028 built-in Ephemery**: the reset exit (FR-016 there) is where FR-017's drain runs; each iteration's datadir has
+  its own export state, so each opens with a `chainStart` (DC-11).
+- **029 TUI command center**: FR-034 there counts pool evictions and expiries; FR-015's `evicted` and `expired` are
+  the same events.
+- **Downstream consumers** (separate services): the external consumers of the records.
 
 ## Known tasks (seed for `/speckit-tasks`)
 
@@ -301,3 +464,7 @@ A reorg on the source chain reaches followers and the indexer as retractions plu
 - **T-005** Export position, durable buffer and bound (FR-004, FR-005; OQ-2); `vault` reviews the store writes.
 - **T-006** Reorg fixture set (FR-009) and SC-001; `forge` for the deep ETC reorg semantics.
 - **T-007** Metrics and health fields (FR-006); SC-002/SC-003 in the 023 harness.
+- **T-008** *(amendment)* Codec and vectors for `poolAdd`, `poolRemove`, `safe`, `chainStart` (before GT-1 freezes).
+- **T-009** *(amendment)* Pool hooks in `PendingTransactionsManager`, the pool queue and the pool topic (FR-013 to
+  FR-016, SC-006).
+- **T-010** *(amendment)* `chainStart`, the reset drain and the `safe` watermark (FR-017, FR-018, SC-007).

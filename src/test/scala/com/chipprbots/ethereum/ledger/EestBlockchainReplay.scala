@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.consensus.mining.Protocol
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
 import com.chipprbots.ethereum.consensus.validators.Validators
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
@@ -40,10 +41,26 @@ import com.chipprbots.ethereum.utils.NetworkType
   */
 object EestBlockchainReplay:
 
-  /** Timestamp forks in activation order. A fixture network is a prefix of this list, all active at genesis, or an
-    * `XToYAtTime15k` transition in which the last fork of the prefix activates at timestamp 15,000.
+  /** Each timestamp fork's parent in execution-specs' fork tree. A fixture network is a fork with all its ancestors
+    * active at genesis, or an `XToYAtTime15k` transition from a fork to its child, the child activating at timestamp
+    * 15,000. BPO2 has two children: Amsterdam, and the BPO3 -> BPO4 line (tests@v21.0.0 `BPO2ToBPO3AtTime15k`,
+    * `BPO3ToBPO4AtTime15k`), which has no Amsterdam.
     */
-  private val TimestampForks: Seq[String] = Seq("Shanghai", "Cancun", "Prague", "Osaka", "BPO1", "BPO2", "Amsterdam")
+  private val Parent: Map[String, String] = Map(
+    "Shanghai" -> "Paris",
+    "Cancun" -> "Shanghai",
+    "Prague" -> "Cancun",
+    "Osaka" -> "Prague",
+    "BPO1" -> "Osaka",
+    "BPO2" -> "BPO1",
+    "Amsterdam" -> "BPO2",
+    "BPO3" -> "BPO2",
+    "BPO4" -> "BPO3"
+  )
+
+  /** `fork`'s timestamp forks, oldest first, `fork` included (Paris has none). */
+  private def lineage(fork: String): List[String] =
+    Parent.get(fork).fold(List.empty[String])(parent => lineage(parent) :+ fork)
 
   private val Transition = "(\\w+)To(\\w+)AtTime15k".r
 
@@ -55,7 +72,9 @@ object EestBlockchainReplay:
       osakaTimestamp = active.get("Osaka"),
       amsterdamTimestamp = active.get("Amsterdam"),
       bpo1Timestamp = active.get("BPO1"),
-      bpo2Timestamp = active.get("BPO2")
+      bpo2Timestamp = active.get("BPO2"),
+      bpo3Timestamp = active.get("BPO3"),
+      bpo4Timestamp = active.get("BPO4")
     )
 
   /** The fork schedule a fixture `network` name denotes, or `None` for a name this replay does not model. Paris is the
@@ -64,13 +83,10 @@ object EestBlockchainReplay:
   def forkTimestamps(network: String): Option[ForkTimestamps] =
     network match
       case "Paris" => Some(ForkTimestamps())
-      case Transition(from, to)
-          if TimestampForks.contains(to) && TimestampForks.indexOf(to) == TimestampForks.indexOf(from) + 1 =>
-        val before = TimestampForks.take(TimestampForks.indexOf(to))
-        Some(schedule(before.map(_ -> 0L).toMap + (to -> 15000L)))
-      case fork if TimestampForks.contains(fork) =>
-        Some(schedule(TimestampForks.take(TimestampForks.indexOf(fork) + 1).map(_ -> 0L).toMap))
-      case _ => None
+      case Transition(from, to) if Parent.get(to).contains(from) =>
+        Some(schedule(lineage(from).map(_ -> 0L).toMap + (to -> 15000L)))
+      case fork if Parent.contains(fork) => Some(schedule(lineage(fork).map(_ -> 0L).toMap))
+      case _                             => None
 
   /** hive's post-merge ETH shape: every block fork at 0, ETC-only forks off, TTD 0, the fixture's timestamp forks. */
   def configFor(base: BlockchainConfig, network: String, chainId: BigInt): Either[String, BlockchainConfig] =
@@ -110,8 +126,8 @@ object EestBlockchainReplay:
     }
 
   /** The fixture's own `config.blobSchedule` (EIP-7840, fork names capitalised, values hex), put through the chain-conf
-    * loader exactly as a `blob-schedule` block (#1637): an Osaka or Amsterdam entry must equal the one it inherits, an
-    * entry is required for every scheduled blob fork, and BPO3+ is refused. A fixture without one keeps `config`'s.
+    * loader exactly as a `blob-schedule` block (#1637): an Osaka or Amsterdam entry must equal the one it inherits, and
+    * an entry is required for every scheduled blob fork. A fixture without one keeps `config`'s.
     */
   def withFixtureBlobSchedule(config: BlockchainConfig, t: JValue): Either[String, BlockchainConfig] =
     t \ "config" \ "blobSchedule" match
@@ -513,6 +529,39 @@ object EestBlockchainReplay:
             tombstones
           )
 
+  /** A [[BlockExecution]] whose every world is built over the storage the production method picks, decoded-node cache
+    * included, with `observer`'s in front of it. The world itself is built by the production method. Shared by every
+    * harness that runs a mirror: this replay and `it/ethtest/EthereumTestHelper`.
+    */
+  def observedBlockExecution(
+      observer: StorageObserver,
+      blockchain: BlockchainImpl,
+      blockchainReader: BlockchainReader,
+      blockchainWriter: BlockchainWriter,
+      evmCodeStorage: EvmCodeStorage,
+      blockPreparator: BlockPreparator,
+      blockValidation: BlockValidation
+  ): BlockExecution =
+    new BlockExecution(
+      blockchain,
+      blockchainReader,
+      blockchainWriter,
+      evmCodeStorage,
+      blockPreparator,
+      blockValidation
+    ):
+      override protected def buildInitialWorld(
+          block: Block,
+          parentHeader: BlockHeader,
+          isProposer: Boolean,
+          staged: Option[StagedBlockState]
+      )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
+        val storage =
+          staged.fold(blockchain.getBackingMptStorage(block.header.number.value))(_.storage) match
+            case serializing: SerializingMptStorage => serializing.cachedForExecution
+            case other                              => other
+        super.buildInitialWorld(block, parentHeader, isProposer, Some(StagedBlockState.direct(observer.wrap(storage))))
+
   /** [[replay]] with `observer` on the storage of the genesis load and of every block's execution. Each world is still
     * built by the production code, over the storage it would have used with the observer's in front.
     */
@@ -557,32 +606,15 @@ object EestBlockchainReplay:
                 blockValidation
               )
             else
-              new BlockExecution(
+              observedBlockExecution(
+                observer,
                 blockchain,
                 blockchainReader,
                 blockchainWriter,
                 storagesInstance.storages.evmCodeStorage,
                 mining.blockPreparator,
                 blockValidation
-              ):
-                // The storage is the one the production method picks, decoded-node cache included, with the
-                // observer's in front of it. The world itself is built by the production method.
-                override protected def buildInitialWorld(
-                    block: Block,
-                    parentHeader: BlockHeader,
-                    isProposer: Boolean,
-                    staged: Option[StagedBlockState]
-                )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
-                  val storage =
-                    staged.fold(blockchain.getBackingMptStorage(block.header.number.value))(_.storage) match
-                      case serializing: SerializingMptStorage => serializing.cachedForExecution
-                      case other                              => other
-                  super.buildInitialWorld(
-                    block,
-                    parentHeader,
-                    isProposer,
-                    Some(StagedBlockState.direct(observer.wrap(storage)))
-                  )
+              )
           val JArray(blocks) = t \ "blocks": @unchecked
           val blockDivergences = blocks.zipWithIndex.flatMap { case (b, i) =>
             val expectException = (b \ "expectException").toOption.map(str)

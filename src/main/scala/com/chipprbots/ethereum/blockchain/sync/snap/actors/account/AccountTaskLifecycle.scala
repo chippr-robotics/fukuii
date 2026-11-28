@@ -49,6 +49,15 @@ private[actors] trait AccountTaskLifecycleState:
 private[actors] trait AccountProgressApi:
   def sendProgressSnapshot(durableRequested: Boolean = false): Unit
 
+/** What `AccountTaskLifecycle` calls in the trie assembly: the commit of a range's StackTrie when the range completes
+  * without a final store (B-525).
+  */
+private[actors] trait AccountTrieCommitApi:
+  /** Commit and drop the range's StackTrie, if it has one. False when the commit failed (the run is stopped and the
+    * range is left with work), true otherwise, including when there was nothing to commit.
+    */
+  def commitCompletedTaskTrie(task: AccountTask): Boolean
+
 /** What `AccountTaskLifecycle` calls in the contract carry: identifying the contract accounts of a response for the
   * storage and bytecode task files. The coordinator core provides it until C-A4 moves it into `ContractWorkCarry`.
   */
@@ -63,7 +72,7 @@ private[actors] trait ContractWorkCarryApi:
   */
 private[actors] trait AccountTaskLifecycle extends AccountTaskLifecycleApi:
   self: AccountTaskLifecycleState & AccountRangeEnv & AccountPeerDispatchApi & AccountProgressApi &
-    ContractWorkCarryApi =>
+    ContractWorkCarryApi & AccountTrieCommitApi =>
 
   /** Drain stale in-flight requests back to the pending queue (#1184). Sends `WorkerRequestCancelled` to each affected
     * worker — the worker is responsible for cancelling its own `SNAPRequestTracker` entry and resetting `currentTask`,
@@ -271,14 +280,19 @@ private[actors] trait AccountTaskLifecycle extends AccountTaskLifecycleApi:
 
   private def completeEmptyTaskRange(task: AccountTask, proofNodes: Int): Unit =
     val range = task.rangeString
-    consumedKeyspace += task.remainingKeyspace
-    completedTasks += task.copy(next = task.last, done = true)
-    log.info(
-      s"Account range COMPLETE: $range by empty proof-of-absence " +
-        s"(proofNodes=$proofNodes, ${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total)"
-    )
-    sendProgressSnapshot(durableRequested = true)
-    ctx.self ! CheckCompletion
+    // B-525: an earlier response of this range may have stored accounts, so its StackTrie is open and holds the
+    // range's right boundary and an unflushed batch. This range's last response carried no accounts, so nothing else
+    // commits it (`handleStoreAccountChunk` commits only after a response with accounts). Commit before the range is
+    // marked complete; a range whose final flush fails is not complete.
+    if commitCompletedTaskTrie(task) then
+      consumedKeyspace += task.remainingKeyspace
+      completedTasks += task.copy(next = task.last, done = true)
+      log.info(
+        s"Account range COMPLETE: $range by empty proof-of-absence " +
+          s"(proofNodes=$proofNodes, ${completedTasks.size}/$concurrency ranges done, $accountsDownloaded accounts total)"
+      )
+      sendProgressSnapshot(durableRequested = true)
+      ctx.self ! CheckCompletion
 
   def handleTaskFailed(requestId: BigInt, reason: String): Unit =
     activeTasks.remove(requestId) match
@@ -321,11 +335,6 @@ private[actors] trait AccountTaskLifecycle extends AccountTaskLifecycleApi:
     val newCount = task.requeueCount + 1
     com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics.incrementRequestRetry()
     if newCount > AccountRangeCoordinator.MaxRequeuesPerTask then
-      log.error(
-        s"Account task ${task.rangeString} exhausted requeue budget " +
-          s"($newCount > ${AccountRangeCoordinator.MaxRequeuesPerTask}, last reason: $reason). " +
-          s"Escalating PivotStateUnservable to controller; task will be retried on the next root."
-      )
       // Reset the counter so the next pivot has a fresh budget; preserve task position.
       pendingTasks.enqueue(task.copy(requeueCount = 0))
       // Gate the escalation on pivotRefreshRequested so only the FIRST task to exhaust its
@@ -333,7 +342,16 @@ private[actors] trait AccountTaskLifecycle extends AccountTaskLifecycleApi:
       // serve window expires, producing a PivotStateUnservable burst (observed ~50 in one log).
       // pivotRefreshRequested is cleared in the PivotRefreshed handler, so each fresh pivot
       // gets a fresh escalation.
+      // B-031: the exhaustion is logged once per pivot cycle, at WARN, with the escalation: the root aged out of the
+      // peers' serve window and the controller moves it, which is recovered from without operator action. It was an
+      // ERROR per exhaustion, 338 lines in the 4 minutes T063 (2026-11-05) took to move its root.
       if !pivotRefreshRequested then
+        log.warn(
+          s"Account task ${task.rangeString} exhausted requeue budget " +
+            s"($newCount > ${AccountRangeCoordinator.MaxRequeuesPerTask}, last reason: $reason). " +
+            s"Escalating PivotStateUnservable to controller; tasks will be retried on the next root " +
+            s"(further exhaustions on this root are logged at DEBUG)."
+        )
         pivotRefreshRequested = true
         // Requeues come from timeouts (scarcity) as well as empty-without-proof answers (stateless). Count toward
         // restart only when the pool holds actual stateless/snapless evidence.
@@ -346,6 +364,12 @@ private[actors] trait AccountTaskLifecycle extends AccountTaskLifecycleApi:
           reason = s"task ${task.rangeString} hit MaxRequeuesPerTask: $reason",
           consecutiveEmptyResponses = AccountRangeCoordinator.MaxRequeuesPerTask,
           cause = cause
+        )
+      else
+        log.debug(
+          s"Account task ${task.rangeString} exhausted requeue budget " +
+            s"($newCount > ${AccountRangeCoordinator.MaxRequeuesPerTask}, last reason: $reason); " +
+            s"PivotStateUnservable already escalated for this root, task will be retried on the next root."
         )
     else
       log.info(

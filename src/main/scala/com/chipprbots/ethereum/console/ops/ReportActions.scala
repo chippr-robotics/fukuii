@@ -48,6 +48,9 @@ object ReportActions:
     *   `automatic`, `configured` or `off`
     * @param inbound
     *   the peers that dialled this node: the evidence that it can be reached
+    * @param upnp
+    *   whether a UPnP port mapping was asked for, and what the gateway did
+    *   ([[com.chipprbots.ethereum.network.PortMappingState.describe]], B-287)
     */
   final case class NetInfo(
       listening: String,
@@ -57,7 +60,8 @@ object ReportActions:
       detection: String,
       inbound: Int,
       connected: Int,
-      peersUnread: Option[String] = None
+      peersUnread: Option[String] = None,
+      upnp: String = "not reported by this node"
   )
 
   def net(read: () => NetInfo): ActionHandler =
@@ -70,7 +74,7 @@ object ReportActions:
             s"Listening   ${n.listening}${if n.isListening then "" else "  (NOT listening)"}",
             s"Advertised  ${n.advertised.getOrElse("none yet: peers are told no address")}",
             s"Detection   ${n.detection}${n.detected.fold("")(how => s": $how")}",
-            "UPnP        port mapping is not reported by this node (it is in the log at start)",
+            s"UPnP        ${n.upnp}",
             n.peersUnread.fold(
               s"Inbound     ${n.inbound} of ${n.connected} connected peers dialled this node" +
                 (if n.inbound > 0 then ": it can be reached from outside"

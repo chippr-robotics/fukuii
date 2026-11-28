@@ -1,0 +1,97 @@
+name: Windows BLS12-381
+
+# B-151 (ADR VM-008): the EIP-2537 BLS12-381 precompiles (0x0b-0x11) on Windows, where eth_pairings has no build and
+# the node runs them on supranational blst (tech.pegasys:jblst). Linux CI cannot load blst.dll, so this job runs the
+# BLS specs on windows-latest with the blst backend forced:
+#   - BlstEip2537Spec: blst loads, and its outcomes on the whole EIP-2537 differential corpus hash to the digests of
+#     eth_pairings' and gnark's outcomes (src/test/resources/eip2537/oracle-outcomes.txt), published vectors included;
+#     and with FUKUII_BLS12381_BACKEND=blst the precompiles do run on blst;
+#   - BLS12381PrecompileSpec: the precompile objects on blst, against the EIP-2537 vectors;
+#   - BlsMsmGasSpec: MSM gas (no native code; it runs anywhere);
+#   - NativeBackendsSpec: backend selection and the B-135 refusal.
+# Eip2537DifferentialSpec, which compares blst with both oracles case by case, runs in the Linux test job.
+#
+# Informational (.github/gates.yml, `windows-bls`) until it has a green history.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "src/main/scala/com/chipprbots/ethereum/vm/BlstNative.scala"
+      - "src/main/scala/com/chipprbots/ethereum/vm/Bls12381MapToCurve.scala"
+      - "src/main/scala/com/chipprbots/ethereum/vm/NativeBackends.scala"
+      - "src/main/scala/com/chipprbots/ethereum/vm/PrecompiledContracts.scala"
+      - "src/test/scala/com/chipprbots/ethereum/vm/BLS12381PrecompileSpec.scala"
+      - "src/test/scala/com/chipprbots/ethereum/vm/BlsMsmGasSpec.scala"
+      - "src/test/scala/com/chipprbots/ethereum/vm/BlstEip2537Spec.scala"
+      - "src/test/scala/com/chipprbots/ethereum/vm/Eip2537*.scala"
+      - "src/test/scala/com/chipprbots/ethereum/vm/NativeBackendsSpec.scala"
+      - "src/test/resources/eip2537/**"
+      - "project/Dependencies.scala"
+      - ".github/workflows/windows-bls.yml"
+
+concurrency:
+  group: windows-bls-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows-bls:
+    name: Windows BLS12-381 (blst)
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      FUKUII_BLS12381_BACKEND: blst
+      SBT_VERSION: "1.13.0"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+
+      - name: Cache Coursier
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~\AppData\Local\Coursier\Cache
+            ~\.ivy2\cache
+            ~\.sbt
+          key: ${{ runner.os }}-sbt-25-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          restore-keys: |
+            ${{ runner.os }}-sbt-25-
+
+      # The repository's setup-sbt action is for Linux runners (sudo, apt); this is the same pinned launcher.
+      - name: Install sbt
+        shell: pwsh
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP "sbt.zip"
+          Invoke-WebRequest -Uri "https://github.com/sbt/sbt/releases/download/v$env:SBT_VERSION/sbt-$env:SBT_VERSION.zip" `
+            -OutFile $zip -MaximumRetryCount 5 -RetryIntervalSec 5
+          Expand-Archive -Path $zip -DestinationPath $env:RUNNER_TEMP -Force
+          Join-Path $env:RUNNER_TEMP "sbt\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Platform
+        shell: pwsh
+        run: |
+          java -version
+          where.exe sbt
+
+      - name: BLS12-381 specs on blst
+        shell: pwsh
+        run: >-
+          sbt -batch
+          "testOnly com.chipprbots.ethereum.vm.BlstEip2537Spec com.chipprbots.ethereum.vm.BLS12381PrecompileSpec com.chipprbots.ethereum.vm.BlsMsmGasSpec com.chipprbots.ethereum.vm.NativeBackendsSpec"
+
+      - name: Upload test reports
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: windows-bls-test-reports
+          path: target/test-reports/
+          if-no-files-found: warn

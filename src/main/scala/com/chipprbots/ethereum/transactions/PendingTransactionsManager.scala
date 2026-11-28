@@ -16,6 +16,7 @@ import com.google.common.cache.CacheBuilder
 import com.google.common.cache.RemovalCause
 import com.google.common.cache.RemovalNotification
 
+import com.chipprbots.ethereum.db.storage.pathstate.ReadScope
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -49,21 +50,17 @@ object PendingTransactionsManager:
   /** How far a delivered tx's size may differ from its announced size before the peer counts as lying about it. */
   private[transactions] val AnnouncedSizeSlackBytes: Int = 8
 
-  /** The most hashes one GetPooledTransactions asks for: go-ethereum's `maxTxRetrievals` (eth/fetcher/tx_fetcher.go,
-    * 256 at c6e3a0d7, 2026-09-23), "a failsafe against malicious announces which might cause us to request more data
-    * than we'd expect". The hashes a peer has announced (at most [[MaxTxAnnounces]] tracked at once) are all requested,
-    * in batches of at most this many, so a reply (and the per-tx work on it) is bounded by our request.
-    */
-  private[transactions] val MaxTxRetrievals: Int = 256
+  /** The most hashes one GetPooledTransactions asks for: [[PendingAnnouncements.MaxTxRetrievals]]. */
+  private[transactions] val MaxTxRetrievals: Int = PendingAnnouncements.MaxTxRetrievals
 
   /** The most announced hashes tracked for one peer at a time: go-ethereum's `maxTxAnnounces`
     * (eth/fetcher/tx_fetcher.go, 4096 at c6e3a0d7), "the maximum number of unique transaction a peer can announce in a
     * short time". The excess of an announcement is dropped before it is tracked or requested.
     *
     * Without it, one announcement is bounded only by the message size (`MessageCodec.MaxDecompressedLength`, 16 MiB:
-    * hundreds of thousands of hashes), not by `announcement-max-entries`: [[PendingAnnouncements.announce]] asks for
-    * every new hash, including those a later hash of the same announcement then evicts. Counted as go-ethereum's `used`
-    * does ([[PendingAnnouncements.announcedBy]]): hashes requested from the peer and hashes it is an alternate for.
+    * hundreds of thousands of hashes), not by `announcement-max-entries`: every new hash is tracked, including those a
+    * later hash of the same announcement then evicts. Counted as go-ethereum's `used` does
+    * ([[PendingAnnouncements.announcedBy]]): hashes requested from the peer and hashes it is an alternate for.
     */
   private[transactions] val MaxTxAnnounces: Int = 4096
 
@@ -72,8 +69,6 @@ object PendingTransactionsManager:
   case class AddTransactions(signedTransactions: Set[SignedTransactionWithSender]) extends Command
   object AddTransactions:
     def apply(txs: SignedTransactionWithSender*): AddTransactions = AddTransactions(txs.toSet)
-
-  case class AddUncheckedTransactions(signedTransactions: Seq[SignedTransaction]) extends Command
 
   case class AnnounceTransactions(signedTransactions: Seq[SignedTransaction], peerId: PeerId) extends Command
 
@@ -135,6 +130,14 @@ object PendingTransactionsManager:
 
   case class RemoveTransactions(signedTransactions: Seq[SignedTransaction]) extends Command
 
+  /** The head moved (B-253, [[TxPoolReset]]): go-ethereum's `LegacyPool.reset`, as one step of the pool so that no
+    * other message sees half of it. The transactions of the blocks moved onto (`included`, one entry per block) leave
+    * the pool; the nonce gate of every sender concerned is rebuilt from what the pool still holds, as go-ethereum
+    * rebuilds its noncer from the new head's state; then `reinject`, the moved-off transactions the new chain does not
+    * include, is admitted against the new head's state, as a peer's transactions are.
+    */
+  case class HeadReset(included: Seq[Seq[SignedTransaction]], reinject: Seq[SignedTransaction]) extends Command
+
   case class PendingTransaction(
       stx: SignedTransactionWithSender,
       addTimestamp: Long,
@@ -160,7 +163,10 @@ object PendingTransactionsManager:
       stateStorage: com.chipprbots.ethereum.db.storage.StateStorage = null,
       chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig,
       txGossipGate: TxGossipGate = TxGossipGate.alwaysOpen,
-      metrics: TxPoolMetrics = TxPoolMetrics.Node
+      metrics: TxPoolMetrics = TxPoolMetrics.Node,
+      // The clock the announcement tracker reads, in epoch milliseconds: when a request was sent, and so when it times
+      // out. A spec moves it by hand, so that a request times out when the spec says and not when a thread gets to it.
+      clock: () => Long = () => System.currentTimeMillis()
   ): Behavior[Command] = Behaviors.setup { context =>
 
     given blockchainConfig: BlockchainConfig = chainConfig
@@ -347,8 +353,9 @@ object PendingTransactionsManager:
     var connectedPeerCapabilities: Map[PeerId, Capability] = Map.empty
 
     /** High-water mark of the next expected nonce per sender address. Once nonce N is accepted, pendingNonces(sender) =
-      * max(current, N+1). Never decremented on removal — only cleared on ClearPendingTransactions. Applied before MPT
-      * state validation so it works even when state trie is unavailable.
+      * max(current, N+1). Never decremented on removal; cleared on ClearPendingTransactions, and rebuilt for the
+      * senders of a [[HeadReset]] from what the pool holds of them. Applied before MPT state validation so it works
+      * even when state trie is unavailable.
       */
     var pendingNonces: Map[Address, BigInt] = Map.empty
 
@@ -360,8 +367,14 @@ object PendingTransactionsManager:
       new PendingAnnouncements(
         txPoolConfig.announcementMaxEntries,
         txPoolConfig.announcementTimeout,
-        txPoolConfig.announcementFetchTimeout
+        txPoolConfig.announcementFetchTimeout,
+        clock
       )
+
+    /** Peers that answered while tx gossip was off: the requests they would have been sent next, asked for once gossip
+      * is back (the next fetch-timeout tick after it reopens), never while it is off.
+      */
+    var fetchWhenGossipResumes: Set[PeerId] = Set.empty
 
     /** Announce transaction hashes to connected peers via NewPooledTransactionHashes. */
     def notifyPeersOfTransactions(txs: Seq[SignedTransaction], peers: Seq[Peer]): Unit =
@@ -439,28 +452,24 @@ object PendingTransactionsManager:
           used,
           MaxTxAnnounces
         )
-      val toRequest = tracked.collect {
-        case (hash, txType, size) if pendingAnnouncements.announce(hash, txType, size, peerId) => hash
-      }
-      if toRequest.nonEmpty then requestPooledTransactions(peerId, toRequest)
+      tracked.foreach { case (hash, txType, size) => pendingAnnouncements.announce(hash, txType, size, peerId) }
+      fetchFrom(Seq(peerId), "announced")
 
-    /** Ask `peerId` for `hashes`, at most [[MaxTxRetrievals]] per request. Every hash is already recorded as requested
-      * from `peerId` ([[PendingAnnouncements.announce]]), so none may be left out: the excess goes in further requests.
+    /** Send each of `peers` its next GetPooledTransactions, if it has none in flight and something to fetch
+      * ([[PendingAnnouncements.schedule]]: one request per peer, at most [[MaxTxRetrievals]] hashes and 128 KiB of
+      * announced txs, B-028).
       */
-    def requestPooledTransactions(peerId: PeerId, hashes: Seq[ByteString]): Unit =
-      metrics.fetchRequested(hashes.size)
-      hashes.grouped(MaxTxRetrievals).foreach { batch =>
-        networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
-          ETHPackets.GetPooledTransactions(ETHPackets.nextRequestId, batch),
-          peerId
-        )
-      }
-
-    /** Send the requests that moved to another announcer (its predecessor timed out, was dropped or disconnected). */
-    def requestFromAlternates(reassigned: Map[PeerId, Seq[ByteString]], why: String): Unit =
-      reassigned.foreach { case (peerId, hashes) =>
-        context.log.debug("Requesting {} announced tx(s) from alternate peer {} ({})", hashes.size, peerId, why)
-        requestPooledTransactions(peerId, hashes)
+    def fetchFrom(peers: Iterable[PeerId], why: String): Unit =
+      peers.foreach { peerId =>
+        val requestId = ETHPackets.nextRequestId
+        val hashes = pendingAnnouncements.schedule(peerId, requestId)
+        if hashes.nonEmpty then
+          context.log.debug("Requesting {} announced tx(s) from peer {} ({})", hashes.size, peerId, why)
+          metrics.fetchRequested(hashes.size)
+          networkPeerManager ! NetworkPeerManagerActor.SendMessageCmd(
+            ETHPackets.GetPooledTransactions(requestId, hashes),
+            peerId
+          )
       }
 
     /** Update pendingNonces high-water mark for accepted transactions. */
@@ -515,8 +524,10 @@ object PendingTransactionsManager:
           import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
           import MerklePatriciaTrie.defaultByteArraySerializable
 
-          val bestBlockOpt = blockchainReader.getBestBlock
-          bestBlockOpt match
+          // One scope of reads for the whole check (spec 018, B-238): the best block read here may be one the disk has
+          // moved past by the time its state is taken, and a block behind the head is handed out only inside a scope.
+          // Without one its state is not held, and the fallback below drops every transaction of an unseen sender.
+          ReadScope.run(blockchainReader.getBestBlock match
             case Some(bestBlock) =>
               // The account trie of the best block, in that block's state (spec 018 Track C, C2b): any failure to read
               // it, a state that is not held included, is the fallback below.
@@ -557,6 +568,7 @@ object PendingTransactionsManager:
             case None =>
               // No best block — only accept txs from senders we've already seen
               StateChecked(afterTipAndTypeCheck.filter(stx => pendingNonces.contains(stx.senderAddress)))
+          )
         catch
           case _: Exception =>
             // MPT failed — only accept txs from senders with established pending nonces
@@ -611,6 +623,8 @@ object PendingTransactionsManager:
           val hash = t.tx.hash.value
           if poolAdmits(t, checked, senderIndex) then
             putPooled(PendingTransaction(t, timestamp))
+            // Held now: no announcement of it is fetched again, whoever announced it (B-028 review).
+            if pool.containsKey(hash) then pendingAnnouncements.remove(hash)
             // Not built yet: the build will read this tx from the pool.
             if pool.containsKey(hash) then senderIndex.flatMap(_.built).foreach(_.add(t.senderAddress, hash, t.tx.tx))
             blobSidecars.get(hash).foreach(storeSidecar(hash, _))
@@ -653,6 +667,49 @@ object PendingTransactionsManager:
                 case None => true
             case _ => true
 
+    /** The reinjected txs of a [[HeadReset]] that are to be admitted, against the txs the pool holds at their sender
+      * and nonce. With the nonce gate lifted, [[admit]] would pool a reinjected tx beside a pooled one at the same
+      * sender and nonce: it never evicts by nonce. go-ethereum's `list.Add`: where the pool-state rules apply (ETH), a
+      * reinjected tx that meets the replacement price bump replaces the pooled one, and one that does not is dropped.
+      * On ETC no such rule applies, and the pooled tx is kept: it is the one this node took last, and a reinjected tx
+      * that would replace it with no rule to say so is the conservative one to drop.
+      */
+    def replacing(reinjected: Seq[SignedTransactionWithSender]): Set[SignedTransactionWithSender] =
+      val pooledAt: Map[(Address, BigInt), PendingTransaction] =
+        pendingTransactions
+          .asMap()
+          .values()
+          .asScala
+          .map(ptx => (ptx.stx.senderAddress, ptx.stx.tx.tx.nonce) -> ptx)
+          .toMap
+      reinjected.iterator.flatMap { r =>
+        pooledAt.get((r.senderAddress, r.tx.tx.nonce)).filterNot(_.stx.tx.hash == r.tx.hash) match
+          case None => Some(r)
+          case Some(pooled) =>
+            val replaces = TxAdmission.poolStateRulesApply &&
+              TxAdmission
+                .replacementRejection(
+                  r.tx.tx,
+                  Seq(pooled.stx.tx.tx),
+                  txPoolConfig.priceBump,
+                  txPoolConfig.blobPriceBump
+                )
+                .isEmpty
+            if replaces then
+              remove(Seq(pooled.stx.tx))
+              metrics.replaced(1)
+              Some(r)
+            else None
+      }.toSet
+
+    /** Drop `signedTransactions` from the pool, with whatever is kept beside each. */
+    def remove(signedTransactions: Seq[SignedTransaction]): Unit =
+      pendingTransactions.invalidateAll(signedTransactions.map(_.hash.value).asJava)
+      context.log.debug("Removing transactions: {}", signedTransactions.map(_.hash.toHex))
+      // The removal listener has dropped what was pooled; a hash that was not pooled may still have an entry.
+      knownTransactions.removeAll(signedTransactions.map(_.hash.value))
+      signedTransactions.foreach(stx => dropSidecar(stx.hash.value))
+
     /** Put a local tx in the pool, first dropping any pooled tx from the same sender with the same nonce. */
     def addOrOverride(newStx: SignedTransaction, newStxSender: Address, blobRawBytesOpt: Option[ByteString]): Unit =
       pendingTransactions.cleanUp()
@@ -671,6 +728,7 @@ object PendingTransactionsManager:
       val timestamp = System.currentTimeMillis()
       val newPendingTx = SignedTransactionWithSender(newStx, newStxSender)
       putPooled(PendingTransaction(newPendingTx, timestamp, receivedFromLocalSource = true))
+      pendingAnnouncements.remove(newStx.hash.value)
       blobRawBytesOpt.foreach(raw => storeSidecar(newStx.hash.value, raw))
       updatePendingNonces(Seq(newPendingTx))
       pendingTxTopic ! Topic.Publish(NewPendingTransaction(newPendingTx))
@@ -692,8 +750,9 @@ object PendingTransactionsManager:
       case WrappedPeerEvent(PeerEvent.PeerDisconnected(peerId)) =>
         connectedPeers -= peerId
         connectedPeerCapabilities -= peerId
+        fetchWhenGossipResumes -= peerId
         // Its outstanding requests will never be answered: ask the peers that also announced those txs.
-        requestFromAlternates(pendingAnnouncements.removePeer(peerId), "requester disconnected")
+        fetchFrom(pendingAnnouncements.removePeer(peerId), "requester disconnected")
         Behaviors.same
 
       case FetchTimeoutTick =>
@@ -702,12 +761,10 @@ object PendingTransactionsManager:
         val unansweredBefore = pendingAnnouncements.unansweredRequests
         val timedOut = pendingAnnouncements.timedOut()
         metrics.fetchTimedOut((pendingAnnouncements.unansweredRequests - unansweredBefore).toInt)
-        requestFromAlternates(timedOut, "request timed out")
-        Behaviors.same
-
-      case AddUncheckedTransactions(transactions) =>
-        val validTxs = SignedTransactionWithSender.getSignedTransactions(transactions, headTimestamp())
-        context.self ! AddTransactions(validTxs.toSet)
+        fetchFrom(timedOut, "request timed out")
+        if fetchWhenGossipResumes.nonEmpty && txGossipGate.acceptTxs then
+          fetchFrom(fetchWhenGossipResumes, "tx gossip resumed")
+          fetchWhenGossipResumes = Set.empty
         Behaviors.same
 
       case AnnounceTransactions(signedTransactions, peerId) =>
@@ -837,14 +894,28 @@ object PendingTransactionsManager:
             peerManager ! PeerManagerActor.DisconnectPeerFireAndForgetCmd(peerId)
             // Nothing it sent is taken, so the txs are still wanted: ask the other announcers now rather than when its
             // PeerDisconnected arrives (only after the disconnect-poison-pill-timeout).
-            requestFromAlternates(pendingAnnouncements.removePeer(peerId), "requester dropped")
+            fetchFrom(pendingAnnouncements.removePeer(peerId), "requester dropped")
           case None =>
-            msg.txs.foreach(stx => pendingAnnouncements.remove(stx.hash.value))
+            // Its one request is answered: what it left out it does not have, and it may be asked for more (B-028).
+            fetchFrom(
+              pendingAnnouncements.delivered(peerId, msg.requestId, msg.txs.map(_.hash.value)),
+              "request answered"
+            )
             // Sidecars travel with the txs and are kept only for those admitted (see `blobTxNetworkBytes`).
             val validTxs = SignedTransactionWithSender.getSignedTransactions(msg.txs, headTimestamp())
             if validTxs.nonEmpty then
               admit(validTxs.toSet, msg.blobTxRawBytes)
               setPooledTxsKnown(validTxs, peerId)
+        Behaviors.same
+
+      // A reply while the node is not taking peer txs: nothing in it is taken, but it answers the peer's one request in
+      // flight, which must not keep the peer busy for good (B-028). What it was asked for is given up; the peers that
+      // could be asked next are asked once gossip is back, never while it is off.
+      case WrappedPeerEvent(
+            com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
+              .MessageFromPeer(msg: ETHPackets.PooledTransactions, peerId)
+          ) =>
+        fetchWhenGossipResumes ++= pendingAnnouncements.delivered(peerId, msg.requestId, Nil)
         Behaviors.same
 
       // The pool's size without a copy of it (B-196): what a once-a-second watcher needs.
@@ -862,11 +933,50 @@ object PendingTransactionsManager:
         Behaviors.same
 
       case RemoveTransactions(signedTransactions) =>
-        pendingTransactions.invalidateAll(signedTransactions.map(_.hash.value).asJava)
-        context.log.debug("Removing transactions: {}", signedTransactions.map(_.hash.toHex))
-        // The removal listener has dropped what was pooled; a hash that was not pooled may still have an entry.
-        knownTransactions.removeAll(signedTransactions.map(_.hash.value))
-        signedTransactions.foreach(stx => dropSidecar(stx.hash.value))
+        remove(signedTransactions)
+        Behaviors.same
+
+      case HeadReset(included, reinject) =>
+        val removed = included.flatten
+        pendingTransactions.cleanUp()
+        val pool = pendingTransactions.asMap()
+        // read before the removal, which empties what they are read from
+        val removedSenders: Set[Address] =
+          removed.iterator.flatMap(tx => Option(pool.get(tx.hash.value))).map(_.stx.senderAddress).toSet
+        remove(removed)
+        val reinjected = SignedTransactionWithSender.getSignedTransactions(reinject, headTimestamp())
+        val senders = removedSenders ++ reinjected.map(_.senderAddress)
+        // The gate is the high-water mark of every nonce the pool ever took, which a tx moved back off the chain is
+        // below: lifted for these senders, so that the state check alone (nonce not below the account's at the new
+        // head) decides on their reinjected txs, as go-ethereum's reset decides on them against its new noncer
+        pendingNonces = pendingNonces -- senders
+        val admitted = admit(replacing(reinjected), Map.empty)
+        // and set again from what the pool now holds of them: the next nonce after the highest
+        updatePendingNonces(
+          pendingTransactions
+            .asMap()
+            .values()
+            .asScala
+            .iterator
+            .map(_.stx)
+            .filter(stx => senders(stx.senderAddress))
+            .toSeq
+        )
+        context.log.debug(
+          "Head reset: {} txs of {} blocks removed, {} of {} reinjected",
+          removed.size,
+          included.size,
+          admitted.size,
+          reinject.size
+        )
+        // a tx the reset could not take back is said: a nonce the new chain spent, a pooled tx at its nonce, or the new
+        // head's state not read (the pool then takes back no tx of a sender whose gate the reset lifted)
+        if admitted.size < reinject.size then
+          context.log.info(
+            "Head reset: {} of {} txs moved off the chain not taken back into the pool",
+            reinject.size - admitted.size,
+            reinject.size
+          )
         Behaviors.same
 
       // From SignedTransactionsFilterActor, which drops peer Transactions messages itself while the node is not synced.

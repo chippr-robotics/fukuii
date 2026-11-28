@@ -220,6 +220,13 @@ A hit rate below 80% during sync suggests the block cache is undersized.
 
 ### WAL behavior
 
+- **Recovery mode is `kPointInTimeRecovery`, set explicitly** (`RocksDbDataSource.WalRecoveryMode`, B-078). A crash
+  recovers a prefix of the writes in the order they were made, never a later write without an earlier one, and a batch
+  (one log record, across column families) whole or not at all. Children-before-parent (spec 022), "state that must
+  survive a restart is in the batch of what it describes" and a synced write making the log before it durable all rest
+  on it. Do not switch to `kTolerateCorruptedTailRecords` or `kSkipAnyCorruptedRecords` (they keep records past a bad
+  one) or `kAbsoluteConsistency` (it refuses to open after the torn tail a power loss leaves). Test:
+  `RocksDbDataSourceSpec`.
 - WAL is enabled by default — provides crash recovery
 - Do NOT disable WAL permanently in production
 - WAL can be temporarily disabled for bulk import operations (snapshot restore), then re-enabled

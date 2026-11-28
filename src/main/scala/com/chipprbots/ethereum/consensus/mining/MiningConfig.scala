@@ -37,6 +37,11 @@ final case class MiningConfig(
 )
 
 object MiningConfig extends Logger:
+
+  /** The coinbase `conf/base/mining.conf` ships, `0x0011…99`: no one's address, the coinbase of a node whose operator
+    * set none ([[CoinbaseProvider.of]]). It must be the value that file sets (CoinbaseProviderSpec reads it).
+    */
+  val DefaultCoinbase: Address = Address("0x0011223344556677889900112233445566778899")
   object Keys:
     final val Mining = "mining"
     final val Protocol = "protocol"

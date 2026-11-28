@@ -229,7 +229,8 @@ private[console] object MempoolPanels:
     else
       val room = (n - TableHead).max(0)
       val selected = c.state.selectedTxIndex
-      val from = selected.fold(0)(at => (at - room + 1).max(0))
+      // The page that holds the selection (B-267): the cursor moves within it.
+      val from = ObservatoryPanels.pageStart(selected, room)
       // hash, from, nonce, fee, age, fee cap, kind
       val names =
         Vector("hash", "from", "nonce", if hasBaseFee(c) then "tip" else "gas price", "age", "fee cap", "kind")

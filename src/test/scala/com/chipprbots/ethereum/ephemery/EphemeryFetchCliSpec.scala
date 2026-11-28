@@ -201,7 +201,7 @@ class EphemeryFetchCliSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
   it should "exit with the class of a refusal: 78, writing nothing" taggedAs (UnitTest) in {
     val bad = tmp.resolve("bad")
     Files.createDirectories(bad)
-    val broken = raw(165).editConfig(_.set("bpo3Time", num(1795114800L)))
+    val broken = raw(165).editConfig(_.set("verkleTime", num(1795114800L)))
     Files.write(bad.resolve("genesis.json"), broken.genesisJson.getBytes(StandardCharsets.UTF_8))
     List("retention.vars", "deposit_contract_block_hash.txt").foreach(f =>
       Files.copy(releaseDir(165).resolve(f), bad.resolve(f))
@@ -209,7 +209,7 @@ class EphemeryFetchCliSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
     val out = tmp.resolve("out")
     val r = run("--from-dir", bad.toString, "--out", out.toString)
     r.code shouldBe 78
-    r.err should include("genesis config declares keys fukuii cannot map: bpo3Time")
+    r.err should include("genesis config declares keys fukuii cannot map: verkleTime")
     Files.exists(out.resolve("ephemery-165")) shouldBe false
   }
 

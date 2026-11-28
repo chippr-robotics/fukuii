@@ -63,6 +63,28 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
     config.maxSnapSyncFailures should be > 0
   }
 
+  // spec 018 C6: the code's default of min-snap-peers was 3 where the shipped config says 2. The config value is the one
+  // that runs; the constructor's default, and fromConfig's when the key is absent, now equal it.
+  it should "default min-snap-peers to the shipped sync.conf value, in the constructor and with the key absent" taggedAs UnitTest in {
+    val shipped = com.typesafe.config.ConfigFactory.load().getConfig("fukuii.sync")
+    val fromShipped = SNAPSyncConfig.fromConfig(shipped)
+    fromShipped.minSnapPeers shouldBe 2
+    SNAPSyncConfig().minSnapPeers shouldBe fromShipped.minSnapPeers
+    val absent = shipped.withoutPath("snap-sync.min-snap-peers")
+    SNAPSyncConfig.fromConfig(absent).minSnapPeers shouldBe fromShipped.minSnapPeers
+  }
+
+  it should "read pow-snap-peer-wait, 10 minutes as shipped and when the key is absent" taggedAs UnitTest in {
+    val shipped = com.typesafe.config.ConfigFactory.load().getConfig("fukuii.sync")
+    SNAPSyncConfig.fromConfig(shipped).powSnapPeerWait shouldBe 10.minutes
+    SNAPSyncConfig.fromConfig(shipped.withoutPath("snap-sync.pow-snap-peer-wait")).powSnapPeerWait shouldBe 10.minutes
+    SNAPSyncConfig().powSnapPeerWait shouldBe 10.minutes
+    val set = com.typesafe.config.ConfigFactory
+      .parseString("snap-sync.pow-snap-peer-wait = 90 seconds")
+      .withFallback(shipped)
+    SNAPSyncConfig.fromConfig(set).powSnapPeerWait shouldBe 90.seconds
+  }
+
   // Regression for #1162: chain backfill is decoupled from SNAP completion. The new
   // `chainBackfillConcurrentRequests` budget controls how many in-flight ETH requests background
   // backfill is allowed once regular sync has taken over. Default must be small (yield to regular sync).
@@ -1383,7 +1405,6 @@ class SNAPSyncControllerSpec extends AnyFlatSpec with Matchers:
       firstEraBlockReward = BigInt(0),
       firstEraReducedBlockReward = BigInt(0)
     ),
-    gasTieBreaker = false,
     ethCompatibleStorage = true,
     bootstrapNodes = Set.empty,
     networkType = NetworkType.ETH,

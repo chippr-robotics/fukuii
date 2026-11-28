@@ -13,6 +13,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
 import scala.concurrent.duration.*
+import scala.util.Using
 
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -21,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.AccountTask
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SnapIntakeBudget
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapLogCapture
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinator.StoreAccountChunk
@@ -52,7 +54,8 @@ private[actors] class StubAccountTaskLifecycleState(
     with AccountRangeEnv
     with AccountPeerDispatchApi
     with AccountProgressApi
-    with ContractWorkCarryApi:
+    with ContractWorkCarryApi
+    with AccountTrieCommitApi:
 
   // AccountTaskLifecycleState
   var stateRoot: ByteString = ByteString(Array.fill[Byte](32)(7))
@@ -116,6 +119,13 @@ private[actors] class StubAccountTaskLifecycleState(
   // AccountProgressApi
   val snapshots: mutable.ArrayBuffer[Boolean] = mutable.ArrayBuffer.empty
   def sendProgressSnapshot(durableRequested: Boolean = false): Unit = snapshots += durableRequested
+
+  // AccountTrieCommitApi
+  val trieCommits: mutable.ArrayBuffer[ByteString] = mutable.ArrayBuffer.empty
+  var trieCommitSucceeds: Boolean = true
+  def commitCompletedTaskTrie(task: AccountTask): Boolean =
+    trieCommits += task.last
+    trieCommitSucceeds
 
   // ContractWorkCarryApi
   val identified: mutable.ArrayBuffer[Int] = mutable.ArrayBuffer.empty
@@ -203,12 +213,33 @@ class AccountTaskLifecycleSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
 
     h.call(_.handleTaskComplete(BigInt(1), Right((0, Seq.empty, Seq(ByteString(Array[Byte](1, 2, 3)))))))
 
+    withClue("the range's open StackTrie is committed before it is marked complete (B-525): ")(
+      m.trieCommits.toSeq shouldBe Seq(t.last)
+    )
     m.completedTasks.toSeq shouldBe Seq(t.copy(next = t.last, done = true))
     m.consumedKeyspace shouldBe t.remainingKeyspace
     m.snapshots.toSeq shouldBe Seq(true)
     m.successes.toSeq shouldBe Seq(p.id)
     m.pendingTasks shouldBe empty
     h.selfMessages() shouldBe Seq(AccountRangeCoordinator.CheckCompletion)
+  }
+
+  it should "not complete a range whose trie commit fails on an empty response (B-525)" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    val p = peer("p1")
+    val w = TestInbox[AccountRangeWorker.Command]()
+    val t = wholeRange(m)
+    m.activeTasks(BigInt(1)) = (t.copy(pending = true), w.ref, p)
+    m.trieCommitSucceeds = false
+
+    h.call(_.handleTaskComplete(BigInt(1), Right((0, Seq.empty, Seq(ByteString(Array[Byte](1, 2, 3)))))))
+
+    m.trieCommits.toSeq shouldBe Seq(t.last)
+    m.completedTasks shouldBe empty
+    m.consumedKeyspace shouldBe BigInt(0)
+    m.snapshots shouldBe empty
+    h.selfMessages() shouldBe empty
   }
 
   it should "cool the peer and requeue on an empty response without proof or an error, and ignore an unknown request" taggedAs UnitTest in {
@@ -296,6 +327,30 @@ class AccountTaskLifecycleSpec extends ScalaTestWithActorTestKit with AnyFlatSpe
     m.activeTasks(BigInt(3)) = (exhausted, w.ref, p)
     h.call(_.handleTaskFailed(BigInt(3), "Peer disconnected"))
     h.controller.receiveAll() shouldBe Seq(unservable(SNAPSyncController.UnservableCause.Stateless))
+  }
+
+  // B-031: T063 logged an ERROR for every exhaustion, 338 in the 4 minutes its root took to move. The exhaustion is
+  // logged once per pivot cycle, at WARN, with the escalation; the rest of the cycle's are at DEBUG.
+  it should "log a requeue-budget exhaustion once per pivot cycle at WARN, the rest at DEBUG, never at ERROR" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    val p = peer("p1")
+    val w = TestInbox[AccountRangeWorker.Command]()
+    val exhausted = wholeRange(m).copy(pending = true, requeueCount = AccountRangeCoordinator.MaxRequeuesPerTask)
+    val line = "exhausted requeue budget"
+
+    Using.resource(new SnapLogCapture) { log =>
+      (1 to 3).foreach { i =>
+        m.activeTasks(BigInt(i)) = (exhausted, w.ref, p)
+        h.call(_.handleTaskFailed(BigInt(i), "Missing proof for empty account range"))
+      }
+      log.events.collect { case (level, text) if text.contains(line) => level } shouldBe Seq(
+        ch.qos.logback.classic.Level.WARN,
+        ch.qos.logback.classic.Level.DEBUG,
+        ch.qos.logback.classic.Level.DEBUG
+      )
+      h.controller.receiveAll() should have size 1
+    }
   }
 
   it should "redispatch to eligible peers, least loaded first, and revive the soonest cooling peer when none is eligible" taggedAs UnitTest in {

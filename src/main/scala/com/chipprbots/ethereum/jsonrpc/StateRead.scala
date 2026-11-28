@@ -1,12 +1,15 @@
 package com.chipprbots.ethereum.jsonrpc
 
 import cats.effect.IO
+import cats.effect.SyncIO
+import cats.effect.std.Semaphore
 
 import scala.annotation.tailrec
 
 import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.pathstate.ReadScope
 import com.chipprbots.ethereum.db.storage.pathstate.StaleStateViewException
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -39,6 +42,15 @@ object StateRead extends Logger:
   def at[A](reader: BlockchainReader, header: BlockHeader)(read: MptStorage => A): Either[JsonRpcError, A] =
     retrying(() => reader.stateAt(header))(read)
 
+  /** `read` on the state of the block `resolved` names. The pending block's state is in its build's own buffer and
+    * nowhere else, so it is read from the pending block's world (B-210, as B-230 does for its code): read over the
+    * stores by the pending header, the nodes its build wrote are not there. Any other block's through [[at]].
+    */
+  def of[A](reader: BlockchainReader, resolved: ResolvedHeader)(read: MptStorage => A): Either[JsonRpcError, A] =
+    resolved.pendingState match
+      case Some(world) => Right(read(world.stateStorage))
+      case None        => at(reader, resolved.header)(read)
+
   /** `read` on the state of `header`'s block, for an execution that commits nothing: each attempt gets a scratch state
     * of its own, so what a stale attempt persisted is dropped with it.
     */
@@ -53,12 +65,22 @@ object StateRead extends Logger:
     * state moved under it.
     */
   def attempting[A](read: => A): Either[JsonRpcError, A] =
-    @tailrec def attempt(left: Int): Either[JsonRpcError, A] =
-      val outcome: Option[Either[JsonRpcError, A]] =
+    attemptingFor(read).left.map((fault, attempts) => unavailable(fault, attempts))
+
+  /** [[attempting]], for a read whose answer is a value and not an `Either` (inside the `map` of an `IO`): what still
+    * cannot be read after the retries is thrown, and the controllers answer it as [[unavailable]] says.
+    */
+  def attemptingOrThrow[A](read: => A): A =
+    attemptingFor(read).fold((fault, _) => throw fault, identity)
+
+  /** `read` in a scope, run again on a stale view; the fault it ends on, with the number of attempts made. */
+  private def attemptingFor[A](read: => A): Either[(StateFault, Int), A] =
+    @tailrec def attempt(left: Int): Either[(StateFault, Int), A] =
+      val outcome: Option[Either[(StateFault, Int), A]] =
         try Some(Right(scoped(read)))
         catch
           case _: StaleStateViewException if left > 1 => None
-          case fault: StateFault                      => Some(Left(unavailable(fault, Attempts - left + 1)))
+          case fault: StateFault                      => Some(Left((fault, Attempts - left + 1)))
       outcome match
         case Some(answer) => answer
         case None         => attempt(left - 1)
@@ -72,8 +94,22 @@ object StateRead extends Logger:
     */
   def scoped[A](body: => A): A = ReadScope.run(body)
 
-  /** `IO { scoped { body } }`: for the synchronous body of a method that takes a block's state and executes on it. */
-  def reading[A](body: => A): IO[A] = IO(scoped(body))
+  /** How many [[reading]] bodies run at once: one per core. A trace or a simulation runs for seconds, and on the
+    * blocking pool, which has no bound of its own; a body beyond these waits for a permit, and is not refused.
+    */
+  val ReadingPermits: Int = math.max(2, Runtime.getRuntime.availableProcessors)
+
+  private lazy val readingPermits: Semaphore[IO] = Semaphore.in[SyncIO, IO](ReadingPermits.toLong).unsafeRunSync()
+
+  /** The permits free, or, when negative, how many bodies wait for one: for a test. */
+  private[jsonrpc] def readingPermitsCount: IO[Long] = readingPermits.count
+
+  /** `scoped { body }` on a thread of the blocking pool, holding one of [[ReadingPermits]] permits: for the synchronous
+    * body of a method that takes a block's state and executes on it. The body runs for as long as an execution or a
+    * trace does, which on the compute pool would hold back block import; all of it runs on one thread, which the scope
+    * is ([[scoped]]).
+    */
+  def reading[A](body: => A): IO[A] = readingPermits.permit.surround(IO.blocking(scoped(body)))
 
   /** A whole request that executes on a block's state and changes nothing but its answer (`eth_call`, a simulation, a
     * trace). It builds a world and holds it across many reads, so no single read can be run again on its own: when the
@@ -89,22 +125,25 @@ object StateRead extends Logger:
       }
     attempt(Attempts)
 
-  /** What a client is told when the state it asked about cannot be read. Three answers, since a client does three
-    * different things with them: a state that is not held is not asked for again ([[JsonRpcError.StateNotHeld]]); one
-    * that is not handed out right now, and one that moved under every view of it, are ([[JsonRpcError.StateBusy]],
-    * [[JsonRpcError.StateMoved]]). None of them is the execution error a client takes for a revert. The backstop of the
-    * controllers answers a [[StateFault]] that escapes a method with these too.
+  /** What a client is told when the state it asked about cannot be read. A state that is not held is not asked for
+    * again ([[JsonRpcError.StateNotHeld]]); one that is not handed out right now, one that moved under every view of
+    * it, and a head that another thread's adoption is moving are ([[JsonRpcError.StateBusy]],
+    * [[JsonRpcError.StateMoved]], [[JsonRpcError.HeadBusy]]). None of them is the execution error a client takes for a
+    * revert. The backstop of the controllers answers a [[StateFault]] that escapes a method with these too.
     */
-  /** Whether `error` is one of the three answers of [[unavailable]]: for a caller that gives a default for any other
-    * error of a method, and must not give it for a state that could not be read.
+  /** Whether `error` is one of the answers of [[unavailable]]: for a caller that gives a default for any other error of
+    * a method, and must not give it for a state that could not be read.
     */
   def isStateError(error: JsonRpcError): Boolean =
-    error == JsonRpcError.StateNotHeld || error == JsonRpcError.StateBusy || error == JsonRpcError.StateMoved
+    error == JsonRpcError.StateNotHeld || error == JsonRpcError.StateBusy || error == JsonRpcError.StateMoved ||
+      error == JsonRpcError.HeadBusy
 
   def unavailable(fault: StateFault, attempts: Int = 1): JsonRpcError =
-    // the client is told which of the three; why is said here
+    // the client is told which; why is said here
     log.debug(s"A read of the state is answered as unavailable after $attempts attempt(s): ${fault.getMessage}")
     fault match
-      case _: StaleStateViewException                    => JsonRpcError.StateMoved
+      case _: StaleStateViewException => JsonRpcError.StateMoved
+      // another thread's adoption is moving the head (B-462): nothing was written, ask again
+      case _: StateBusy                                  => JsonRpcError.HeadBusy
       case refused: StateUnavailable if refused.askAgain => JsonRpcError.StateBusy
       case _                                             => JsonRpcError.StateNotHeld

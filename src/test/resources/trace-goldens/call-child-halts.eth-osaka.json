@@ -61,6 +61,13 @@
       "depth":1,
       "stack":["0x20","0x0","0x0","0x0","0x0","0xc002"]
     },{
+      "pc":34,
+      "op":"CALL",
+      "gas":199979,
+      "gasCost":68138,
+      "depth":1,
+      "stack":["0x20","0x0","0x0","0x0","0x0","0xc002","0xffff"]
+    },{
       "pc":0,
       "op":"PUSH1",
       "gas":65535,
@@ -88,14 +95,7 @@
       "gasCost":0,
       "depth":2,
       "stack":[],
-      "error":"InvalidOpCode(0xfe)"
-    },{
-      "pc":34,
-      "op":"CALL",
-      "gas":199979,
-      "gasCost":68138,
-      "depth":1,
-      "stack":["0x20","0x0","0x0","0x0","0x0","0xc002","0xffff"]
+      "error":"invalid opcode: INVALID"
     },{
       "pc":35,
       "op":"PUSH1",
@@ -194,6 +194,14 @@
       "stack":["0x20","0x0","0x0","0x0","0x0","0xc002"],
       "memory":[]
     },{
+      "pc":34,
+      "op":"CALL",
+      "gas":199979,
+      "gasCost":68138,
+      "depth":1,
+      "stack":["0x20","0x0","0x0","0x0","0x0","0xc002","0xffff"],
+      "memory":[]
+    },{
       "pc":0,
       "op":"PUSH1",
       "gas":65535,
@@ -225,15 +233,7 @@
       "depth":2,
       "stack":[],
       "memory":["0x00000000000000000000000000000000000000000000000000000000000000aa"],
-      "error":"InvalidOpCode(0xfe)"
-    },{
-      "pc":34,
-      "op":"CALL",
-      "gas":199979,
-      "gasCost":68138,
-      "depth":1,
-      "stack":["0x20","0x0","0x0","0x0","0x0","0xc002","0xffff"],
-      "memory":[]
+      "error":"invalid opcode: INVALID"
     },{
       "pc":35,
       "op":"PUSH1",
@@ -294,7 +294,7 @@
       "value":"0x0",
       "input":"0x",
       "output":"0x",
-      "error":"InvalidOpCode(0xfe)"
+      "error":"invalid opcode: INVALID"
     }]
   },
   "prestateTracer":{

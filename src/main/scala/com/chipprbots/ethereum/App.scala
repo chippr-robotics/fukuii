@@ -12,6 +12,7 @@ import com.chipprbots.ethereum.ephemery.EphemeryFetchCli
 import com.chipprbots.ethereum.ephemery.EphemeryResolver
 import com.chipprbots.ethereum.ephemery.StartupDeps
 import com.chipprbots.ethereum.faucet.Faucet
+import com.chipprbots.ethereum.network.discovery.DiscoveryConfig
 import com.chipprbots.ethereum.utils.JvmFlagGuard
 import com.chipprbots.ethereum.utils.LogbackReload
 import com.chipprbots.ethereum.utils.Logger
@@ -108,6 +109,13 @@ object App extends Logger:
       case Some(network) if isNetwork(network) => Some(network)
       case _                                   => None
 
+  /** Whether the operator's config (the config file chosen, or a -D property) sets `path`: built-in defaults do not
+    * define the keys asked about here, so a value present at all is the operator's.
+    */
+  private def operatorSets(path: String): Boolean =
+    ConfigFactory.invalidateCaches()
+    ConfigFactory.load().hasPath(path)
+
   /** Apply modifiers to system configuration */
   private def applyModifiers(modifiers: Set[String]): Unit =
     if modifiers.contains("public") then
@@ -129,21 +137,26 @@ object App extends Logger:
       // Use known nodes from configuration/bootstrap only
       System.setProperty("fukuii.network.discovery.reuse-known-nodes", "true")
 
-      // Enterprise mode: ignore bootstrap nodes, use only static-nodes.json
-      System.setProperty("fukuii.network.discovery.use-bootstrap-nodes", "false")
+      // Enterprise mode: ignore bootstrap nodes, use only static-nodes.json, unless the operator's config says
+      // otherwise (B-401: a system property overrides every config file, so setting it unconditionally overrode an
+      // operator's explicit setting, contrary to the template).
+      val bootstrapByOperator = operatorSets(DiscoveryConfig.UseBootstrapNodesPath)
+      if !bootstrapByOperator then System.setProperty(DiscoveryConfig.UseBootstrapNodesPath, "false")
 
       // Disable sync blacklisting to allow retry in controlled environments
       System.setProperty("fukuii.sync.blacklist-duration", "0.seconds")
 
-      // Set RPC interface to localhost by default for security
-      // Can be overridden with explicit config if needed
-      System.setProperty("fukuii.network.rpc.http.interface", "localhost")
+      // The RPC interface is not set here (B-401): its built-in default is already localhost, and a system property
+      // would override the operator's `fukuii.network.rpc.http.interface`, contrary to the template.
+      ConfigFactory.invalidateCaches()
 
       log.info("Enterprise mode enabled: configured for private/permissioned network")
       log.info("- Public discovery disabled")
-      log.info("- Using ONLY static-nodes.json (bootstrap nodes ignored)")
+      if bootstrapByOperator then
+        log.info(s"- Bootstrap nodes as the config sets ${DiscoveryConfig.UseBootstrapNodesPath}")
+      else log.info("- Using ONLY static-nodes.json (bootstrap nodes ignored)")
       log.info("- Automatic port forwarding disabled")
-      log.info("- RPC bound to localhost (override with config if needed)")
+      log.info("- RPC interface as configured (localhost unless fukuii.network.rpc.http.interface says otherwise)")
 
   private def showHelp(): Unit =
     log.info(
@@ -251,16 +264,17 @@ object App extends Logger:
     val modifiers = args.filter(isModifier).toSet
     val argsWithoutModifiers = args.filterNot(isModifier)
 
+    // A `cli` command is a one-shot tool, not a node: its log belongs on the console, not in a node's datadir
+    // (`cli ephemery-fetch` writes into the directory it is given, spec 028 S3; every other subcommand, B-241). So the
+    // file appenders are dropped first, before `setNetworkConfig` logs, and it logs to the console only. BEST EFFORT:
+    // the launcher's logger was set up when `App` was initialised, before any argument was read, and its file appender
+    // has already opened (and created) the default network's log file; nothing is written to it. A caller can also
+    // pass `-Dlogging.logs-dir` (fetch-genesis.sh and update-bundled.sh do).
+    if isCli(argsWithoutModifiers) then LogbackReload.consoleOnly()
+
     // Configure network before any logging (required for logback property definers)
     val network = determineNetworkArg(argsWithoutModifiers)
     network.foreach(setNetworkConfig)
-
-    // `cli ephemery-fetch` writes into the directory it is given (or a node's root): its log should not go to a node's
-    // datadir, so the file appenders are dropped and it logs to the console only. BEST EFFORT: the launcher's logger was set up when `App` was
-    // initialised, before any argument was read, and its file appender has already opened (and created) the default
-    // network's log file. Moving that is App-init logging, which is B-241 and the user's call; this only stops further
-    // writes to it. A caller can also pass `-Dlogging.logs-dir` (fetch-genesis.sh and update-bundled.sh do).
-    if isEphemeryFetch(argsWithoutModifiers) then LogbackReload.consoleOnly()
 
     // Ephemery needs no preparation step (spec 028): choose its iteration now, after the network is set and before
     // anything reads `utils.Config`, which reads its properties once. A refusal ends the process with its code.
@@ -278,8 +292,7 @@ object App extends Logger:
         try dispatch(argsWithoutModifiers, modifiers, deps)
         finally EphemeryResolver.flushReport()
 
-  private def isEphemeryFetch(args: Array[String]): Boolean =
-    args.headOption.contains(cli) && args.tail.headOption.contains(EphemeryFetchCli.CommandName)
+  private def isCli(args: Array[String]): Boolean = args.headOption.contains(cli)
 
   private def dispatch(argsWithoutModifiers: Array[String], modifiers: Set[String], deps: StartupDeps): Unit =
 
@@ -310,9 +323,13 @@ object App extends Logger:
         JvmFlagGuard.check() // this path bypasses Fukuii.main, which runs the same check
         val rootConfig = com.typesafe.config.ConfigFactory.load()
         val runtime = com.chipprbots.ethereum.runtime.FukuiiRuntime.fromConfig(rootConfig)
-        runtime.startAll()
-        // Block until shutdown
+        // Registered first, so the instances that did start are stopped on any exit, the one below included.
         Runtime.getRuntime.addShutdownHook(new Thread(() => runtime.stopAll()))
+        // An instance that fails to start is shut down and the others run on; with none running, the process has
+        // nothing to do and exits non-zero rather than idle (B-274).
+        if runtime.startAll().isEmpty && runtime.instances.nonEmpty then
+          log.error("No chain instance started; exiting")
+          deps.exit(com.chipprbots.ethereum.nodebuilder.NodeStartup.FailedExitCode)
       case Some(`faucet`)       => Faucet.main(argsWithoutModifiers.tail)
       case Some(`sigValidator`) => SignatureValidator.main(argsWithoutModifiers.tail)
       case Some(`cli`)          => CliLauncher.main(argsWithoutModifiers.tail)

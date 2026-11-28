@@ -62,7 +62,8 @@ final class PathStagedBlock(
   override def prefetchReader(budgetBytes: Long, onLoaded: ByteString => Unit): Option[PrefetchNodeReader] =
     parent().flatMap(state.prefetchReader(_, None, budgetBytes, onLoaded))
 
-  /** Commits the block as the block whose state the disk holds, with `extra` in the same batch.
+  /** Commits the block as the block whose state the disk holds, with `extra` and the block's code
+    * ([[StagedBlockState.stageCode]]) in the same batch.
     *
     * @throws StateUnavailable
     *   when the block does not extend the state the disk holds, or `extra` is missing: a block's state is not committed
@@ -82,13 +83,18 @@ final class PathStagedBlock(
       layer = None
       taken
     }
-    state.commitCanonical(staged, block, extra)
+    state.commitCanonical(staged, block, withStagedCode(extra))
     ()
 
   /** The block's state kept as a forward layer beside the state the disk holds ([[PathStateStorage.commitOverlay]]):
     * the head does not move, and only a fork choice moves it there (spec 018 C4d part 2a). A layer that is not kept
     * (too large, or no room) leaves nothing wrong with the block: whoever needs its state executes it again. A block
     * whose storage was never asked for (one the disk holds already) has nothing to keep.
+    *
+    * The block's code is written to the code store first, in a write of its own (B-454): a forward layer is held in
+    * memory, not written in a batch, so there is no batch for the code to join. The code is keyed by its hash and a
+    * later block on this layer reads it from the store; a layer that is not kept, or a stop before it is, leaves code
+    * that nothing refers to, which is harmless.
     *
     * @throws StateUnavailable
     *   when the parent's state is not held any more
@@ -103,6 +109,7 @@ final class PathStagedBlock(
       layer = None
       taken
     }
+    takeStagedCode().foreach(_.commit())
     staged.foreach(state.commitOverlay(_, block, pin))
 
   /** The block's state is in force: it is the anchor, or, for a block staged apart, its forward layer is kept. So a

@@ -1,0 +1,69 @@
+name: Hive · upstream definition
+
+# Guards the fukuii client definition that hive itself builds (B-569). hive's clients/fukuii/
+# builds FROM chipprbots/fukuii:latest, the head of main, so a fukuii change the definition does
+# not handle breaks hive for everyone the next time `latest` moves, and nothing here would notice:
+# every other hive workflow copies this repository's hive/fukuii/ over hive's copy.
+#
+#   drift   hive/fukuii/ must be identical to hive's clients/fukuii/ (one source).
+#   smoke   smoke/genesis with hive's own clients/fukuii/ (adapter: upstream), FROM this
+#           checkout's build: the release candidate, before it becomes `latest`.
+#
+# Until ethereum/hive#1677 merges, hive's copy lives on its pull request branch, so the default
+# repository and ref point there. Switch the two defaults to ethereum/hive / master once it merges.
+on:
+  # Every promotion to main, and any change to staging that could break or desynchronise the
+  # definition (an informational gate, so the path filter cannot leave a required check waiting;
+  # GitHub applies `paths` to both branches, and promotions to main always touch src/).
+  pull_request:
+    branches: [main, staging]
+    paths:
+      - 'hive/**'
+      - 'src/**'
+      - 'scripts/hive/**'
+      - '.github/workflows/_hive-sim.yml'
+      - '.github/workflows/hive-upstream-definition.yml'
+  schedule:
+    - cron: '30 5 * * *'
+  workflow_dispatch:
+    inputs:
+      hive_repo:
+        description: 'hive repository holding the upstream clients/fukuii'
+        required: false
+        default: 'chippr-robotics/hive'
+      hive_ref:
+        description: 'ref of that repository'
+        required: false
+        default: 'add-fukuii-client'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hive-upstream-definition-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  drift:
+    name: upstream-definition-drift
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: hive/fukuii/ is identical to hive's clients/fukuii/
+        env:
+          HIVE_REPO: ${{ github.event.inputs.hive_repo || 'chippr-robotics/hive' }}
+          HIVE_REF: ${{ github.event.inputs.hive_ref || 'add-fukuii-client' }}
+        run: scripts/hive/check-upstream-adapter.sh --repo "$HIVE_REPO" --ref "$HIVE_REF"
+
+  run:
+    uses: ./.github/workflows/_hive-sim.yml
+    with:
+      sim: smoke/genesis
+      label: upstream-definition
+      adapter: upstream
+      hive_repo: ${{ github.event.inputs.hive_repo || 'chippr-robotics/hive' }}
+      hive_ref: ${{ github.event.inputs.hive_ref || 'add-fukuii-client' }}
+      # Declared in .github/gates.yml (gate `hive-upstream-definition`).
+      min_tests: 1
+      sim_timelimit: '20m'

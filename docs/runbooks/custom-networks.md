@@ -105,9 +105,6 @@ Create a file named `<network-name>-chain.conf` in your chains directory. For ex
     reward-reduction-rate = 0.2
   }
   
-  # Gas tie breaker (usually false)
-  gas-tie-breaker = false
-  
   # Storage format
   eth-compatible-storage = true
   
@@ -118,6 +115,10 @@ Create a file named `<network-name>-chain.conf` in your chains directory. For ex
   ]
 }
 ```
+
+`gas-tie-breaker` is no longer a chain key. No fork choice has read it since 2020: branches of equal total difficulty
+are decided by core-geth's rule (the lower block first; at the same height this node's miner's block, else a coin).
+A chain file that still sets it loads as before, and the key is ignored.
 
 ### Step 3: Create Genesis File (Optional)
 
@@ -316,7 +317,6 @@ For a simple private network, this minimal configuration is sufficient:
     reward-reduction-rate = 0
   }
   
-  gas-tie-breaker = false
   eth-compatible-storage = true
   bootstrap-nodes = []
 }
@@ -470,8 +470,8 @@ All fork parameters are strings (decimal numbers):
 ### Timestamp Forks and Blob Schedule (ETH-family, post-merge)
 
 ETH-family chains (`network-type = "eth"`) activate post-merge forks by timestamp (Unix seconds, integers):
-`shanghai-timestamp`, `cancun-timestamp`, `prague-timestamp`, `osaka-timestamp`, `bpo1-timestamp`,
-`bpo2-timestamp`, `amsterdam-timestamp`. Each is go-ethereum's genesis `config.<fork>Time`. ETC-family chains
+`shanghai-timestamp`, `cancun-timestamp`, `prague-timestamp`, `osaka-timestamp`, `bpo1-timestamp` ..
+`bpo5-timestamp`, `amsterdam-timestamp`. Each is go-ethereum's genesis `config.<fork>Time`. ETC-family chains
 declare none of them.
 
 Blob parameters (EIP-7840 `blobSchedule`, EIP-7892 BPO forks) are per chain, in `blob-schedule`, one entry per
@@ -496,11 +496,13 @@ validation, block building), `BLOBBASEFEE`, `eth_blobBaseFee`, `eth_feeHistory`,
 blob limit (6, EIP-7594) is a protocol constant, not part of the schedule.
 
 The node refuses to load a chain config that:
-- declares `cancun-`, `prague-`, `bpo1-` or `bpo2-timestamp` without a `blob-schedule` entry for that fork;
+- declares `cancun-`, `prague-` or a `bpo1-` .. `bpo5-timestamp` without a `blob-schedule` entry for that fork;
 - has an entry with `target` <= 0, `max` < `target`, or `base-fee-update-fraction` <= 0, or an unknown key;
-- orders the blob-fork timestamps other than cancun <= prague <= osaka <= bpo1 <= bpo2 <= amsterdam;
-- declares `bpo3-timestamp` or later (not supported yet), or an `osaka` / `amsterdam` entry that differs from the
-  entry it inherits (go-ethereum ignores such an entry, so honouring it would split from it).
+- orders the declared fork timestamps other than cancun <= prague <= osaka <= bpo1 <= bpo2 <= amsterdam <= bpo3
+  <= bpo4 <= bpo5 (go-ethereum's fork order, which puts BPO3..BPO5 after Amsterdam);
+- declares `bpo6-timestamp` or later (go-ethereum schedules at most five BPO forks), or an `osaka` / `amsterdam`
+  entry that differs from the entry it inherits (go-ethereum ignores such an entry, so honouring it would split
+  from it).
 
 A custom chain config that fails to load is logged at ERROR and the node then reports the network as not
 configured.
@@ -578,7 +580,6 @@ Perfect for local testing with all modern features enabled:
     reward-reduction-rate = 0
   }
   
-  gas-tie-breaker = false
   eth-compatible-storage = true
   
   # Single local node for development
@@ -650,7 +651,6 @@ Configuration for a permissioned consortium network:
     reward-reduction-rate = 0
   }
   
-  gas-tie-breaker = false
   eth-compatible-storage = true
   
   # Bootstrap nodes for consortium members
@@ -734,7 +734,6 @@ Configuration for a test network with planned fork activations:
     reward-reduction-rate = 0.2
   }
   
-  gas-tie-breaker = false
   eth-compatible-storage = true
   
   bootstrap-nodes = [

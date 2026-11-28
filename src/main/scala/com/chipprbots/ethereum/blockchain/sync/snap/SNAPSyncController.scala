@@ -415,7 +415,9 @@ private class SNAPSyncControllerImpl(
   // Proactive pivot rolling: keep pivot within core-geth's 128-block snapshot window.
   // ETC network is predominantly core-geth peers; once the pivot ages beyond 128 blocks,
   // all external peers respond with accounts=[], proof=[] and only local Besu can serve.
-  // Rolling proactively at 100 blocks preserves all downloaded state (unlike go-ethereum).
+  // Rolling proactively at 96 blocks (PivotPolicy.RootRollAgeBlocks, 3/4 of the window; B-031)
+  // preserves all downloaded state (unlike go-ethereum) and leaves the header fetch and the
+  // readiness probe a quarter of the window.
   var lastProactivePivotBlock: Option[BigInt] = None
 
   // Roll target margin: a proactive/reactive roll picks networkBest - max(pivotBlockOffset,
@@ -423,8 +425,8 @@ private class SNAPSyncControllerImpl(
   // Rolling to the live tip (pivot-block-offset=0) probes a root core-geth peers haven't
   // indexed yet (their snapshot lags head by ~128 blocks) → readiness probe returns
   // "not indexed" forever → the pivot freezes (observed 2026-06-01: ETC stalled 70+ min
-  // at 16.8M accounts). Margin ≈ half the serve window keeps the new pivot servable with
-  // ~50 blocks of runway before it ages past the 100-block roll trigger.
+  // at 16.8M accounts). The roll lands max(pivotBlockOffset, margin) = 64 blocks below the
+  // head by default, which leaves 32 blocks of runway before the 96-block roll trigger.
   val SnapServeWindowMargin: BigInt = BigInt(50)
 
   // Pivot readiness probe: before committing a proactive pivot roll, we probe one peer with
@@ -686,8 +688,10 @@ private class SNAPSyncControllerImpl(
           ctx.log.debug("Dropping stale ChainDownloaderRewound in idle"); Behaviors.same
 
         // ── Syncing-state retry timers (stale after sync stops) ───────────────────────
-        case RetrySnapSyncStart       => ctx.log.debug("Dropping stale RetrySnapSyncStart in idle"); Behaviors.same
-        case RetryPivotRefresh        => ctx.log.debug("Dropping stale RetryPivotRefresh in idle"); Behaviors.same
+        case RetrySnapSyncStart => ctx.log.debug("Dropping stale RetrySnapSyncStart in idle"); Behaviors.same
+        case RetryPivotRefresh  => ctx.log.debug("Dropping stale RetryPivotRefresh in idle"); Behaviors.same
+        case _: RecoveredPivotDriftRecheck =>
+          ctx.log.debug("Dropping stale RecoveredPivotDriftRecheck in idle"); Behaviors.same
         case _: RetryBootstrapAtBlock => ctx.log.debug("Dropping stale RetryBootstrapAtBlock in idle"); Behaviors.same
         case CheckSnapCapability      => ctx.log.debug("Dropping stale CheckSnapCapability in idle"); Behaviors.same
         case TuneRateTracker          => ctx.log.debug("Dropping stale TuneRateTracker in idle"); Behaviors.same
@@ -777,6 +781,9 @@ private class SNAPSyncControllerImpl(
         case _: AccountTrieFinalized => ctx.log.debug("Dropping stale AccountTrieFinalized in idle"); Behaviors.same
         case _: AccountTrieFinalizationFailed =>
           ctx.log.warn("Unexpected AccountTrieFinalizationFailed in idle — dropped")
+          Behaviors.same
+        case SnapStoreFaulted(where, error) =>
+          ctx.log.warn(s"Store fault ($where: $error) reported in idle, after its run ended — dropped")
           Behaviors.same
         case _: ProgressBytecodesDownloaded => Behaviors.same
         case _: ProgressStorageSlotsSynced  => Behaviors.same
@@ -1045,6 +1052,10 @@ private class SNAPSyncControllerImpl(
       case msg if retryPivotRefreshArms.isDefinedAt(msg) =>
         retryPivotRefreshArms(msg)
 
+      // recoveredPivotDriftArms (B-547): the staleness re-check of a recovery that resumed before any peer height.
+      case msg if recoveredPivotDriftArms.isDefinedAt(msg) =>
+        recoveredPivotDriftArms(msg)
+
       // retryBootstrapAtBlockArms (spec 016 restructure): delegated here, at its original position.
       case msg if retryBootstrapAtBlockArms.isDefinedAt(msg) =>
         retryBootstrapAtBlockArms(msg)
@@ -1261,6 +1272,14 @@ object SNAPSyncController:
   private[snap] case object FlushPeerDisconnects
       extends Command // Debounce flush: forward batched PeerUnavailable to coordinators
   private[snap] case object RetryPivotRefresh extends Command
+
+  /** B-547: re-check, once a snap peer has a height, the saved pivot an accounts-complete recovery resumed on while
+    * `networkBest` was 0. `pivot` is the pivot the recovery resumed on; the timer is `RecoveredPivotDriftKey`.
+    */
+  final private[snap] case class RecoveredPivotDriftRecheck(pivot: BigInt) extends Command
+  private[snap] val RecoveredPivotDriftKey = "recovered-pivot-drift-recheck"
+  private[snap] val RecoveredPivotDriftPollInterval: scala.concurrent.duration.FiniteDuration =
+    scala.concurrent.duration.DurationInt(30).seconds
   final private[snap] case class RetryBootstrapAtBlock(blockNumber: BigInt) extends Command
   private[snap] case object CheckSnapCapability extends Command
   private[snap] case object TuneRateTracker extends Command
@@ -1439,7 +1458,8 @@ object SNAPSyncController:
   private[snap] def sweepTaskFiles(
       dir: java.nio.file.Path,
       keep: Set[String],
-      onError: (java.nio.file.Path, String) => Unit = (_, _) => ()
+      onError: (java.nio.file.Path, String) => Unit = (_, _) => (),
+      prefixes: Seq[String] = SweepableTaskFilePrefixes
   ): Seq[java.nio.file.Path] =
     import scala.jdk.CollectionConverters.*
     def norm(p: java.nio.file.Path): String = p.toAbsolutePath.normalize.toString
@@ -1451,7 +1471,7 @@ object SNAPSyncController:
         stream.iterator.asScala.toList
           .filter { p =>
             val name = p.getFileName.toString
-            java.nio.file.Files.isRegularFile(p) && SweepableTaskFilePrefixes.exists(name.startsWith) &&
+            java.nio.file.Files.isRegularFile(p) && prefixes.exists(name.startsWith) &&
             !keepNorm.contains(norm(p))
           }
           .filter { p =>
@@ -1472,6 +1492,12 @@ object SNAPSyncController:
   case object ProgressAccountsTrieFinalized extends Command
   final case class AccountTrieFinalized(finalizedRoot: ByteString) extends Command
   final case class AccountTrieFinalizationFailed(error: String) extends Command
+
+  /** A local write of downloaded state failed (an account range's trie nodes, bytecode): a fault of this node's store,
+    * not of a peer (B-488). The controller counts it as a critical failure: it restarts SNAP on a fresh pivot until
+    * `maxSnapSyncFailures`, then enters dormant mode, so a full or read-only disk does not restart SNAP without end.
+    */
+  final case class SnapStoreFaulted(where: String, error: String) extends Command
   final case class ProgressBytecodesDownloaded(count: Long) extends Command
   final case class ProgressStorageSlotsSynced(count: Long) extends Command
   final case class ProgressNodesHealed(count: Long) extends Command
@@ -1507,7 +1533,7 @@ object SNAPSyncController:
   export controller.PivotPolicy.{clPivotNotYetAdvanced, MaxPeerTipLead}
   export controller.PivotPolicy.{healPivotAfterExcluded, pivotPassesFreshnessFloor, unservablePivotTarget}
   export controller.HealPolicy.{bytecodeRecoveryComplete, healRepegSuppressedByLocalWalk}
-  export controller.HealPolicy.{lastHealingServeRootBlockToRecord, shouldSkipHealingAfterDownloads, staleReferenceHead}
+  export controller.HealPolicy.{healRootStale, shouldSkipHealingAfterDownloads, staleReferenceHead}
   export controller.ResumePolicy.{checkResumable, fillResumeLayout, taskFilePaths}
   export controller.SnapPeerPolicy.{servesSnapState, snapExclusionReason, SnapExclusionAtGenesis}
   export controller.SnapPeerPolicy.{SnapExclusionLogIntervalMs, SnapExclusionMinLogIntervalMs}
@@ -1669,7 +1695,9 @@ case class SNAPSyncConfig(
     // downloader have no header cursor to wait for, and SNAPDeferredBackfillSpec covers the hold.
     deferChainBackfillUntilStateComplete: Boolean = false,
     chainDownloadTimeout: FiniteDuration = 10.seconds,
-    minSnapPeers: Int = 3,
+    // The shipped `sync.snap-sync.min-snap-peers` (base/sync.conf), here and when the key is absent: the config value is
+    // the one that runs, and a default that differed from it ran only in tests and in SyncController's fallback.
+    minSnapPeers: Int = 2,
     snapPeerEvictionInterval: FiniteDuration = 15.seconds,
     maxEvictionsPerCycle: Int = 3,
     deferredMerkleization: Boolean = true,
@@ -1684,12 +1712,10 @@ case class SNAPSyncConfig(
     // because trie nodes are content-addressed. This bounds the number of rolls so a peerless or
     // hot-only residue still terminates into the abandon path instead of rolling forever.
     storageRecoveryMaxRootRolls: Int = 8,
-    // Post-SNAP recovery scan: when true (default), one combined parallel single-pass scan
-    // (CombinedRecoveryScanner) walks the trie checking BOTH bytecode and storage per account, sharded
-    // across `recoveryScanConcurrency` workers, persisting per-shard progress so a crash resumes from the
-    // last completed shard. Replaces the two legacy single-threaded full-trie walks. Set false to fall
-    // back to the legacy per-phase scan actors.
-    parallelRecoveryScan: Boolean = true,
+    // Post-SNAP recovery scan: one combined parallel single-pass scan (CombinedRecoveryScanner) walks the
+    // trie checking BOTH bytecode and storage per account, sharded across `recoveryScanConcurrency` workers,
+    // persisting per-shard progress so a crash resumes from the last completed shard. The two legacy
+    // per-phase walks and their flag, `parallel-recovery-scan`, were retired (B-217).
     // Worker count for the combined scan. Default 3 — reserve a core + memory for the live node/GC on a
     // 4-core box (the scan runs read-only against the on-disk trie; the node is otherwise idle during it).
     recoveryScanConcurrency: Int = 3,
@@ -1744,7 +1770,13 @@ case class SNAPSyncConfig(
       * threshold by non-SNAP memory cannot stall SNAP forever. 0 = never. Key:
       * `sync.snap-sync.heap-watchdog-max-pause`.
       */
-    heapWatchdogMaxPause: FiniteDuration = 5.minutes
+    heapWatchdogMaxPause: FiniteDuration = 5.minutes,
+    /** On the unified state layout, on proof of work, how long a node that holds only its genesis state waits at SNAP's
+      * start for `minSnapPeers` snap-capable peers (spec 018 C6; the user's decision of 2026-11-18). With some at the
+      * end it begins SNAP with them; with none it regular-syncs from its genesis. Read on the guard alone. Key:
+      * `sync.snap-sync.pow-snap-peer-wait`.
+      */
+    powSnapPeerWait: FiniteDuration = 10.minutes
 )
 
 object SNAPSyncConfig:
@@ -1864,7 +1896,7 @@ object SNAPSyncConfig:
         else 10.seconds,
       minSnapPeers =
         if snapConfig.hasPath("min-snap-peers") then snapConfig.getInt("min-snap-peers")
-        else 3,
+        else 2,
       snapPeerEvictionInterval =
         if snapConfig.hasPath("snap-peer-eviction-interval") then
           snapConfig.getDuration("snap-peer-eviction-interval").toMillis.millis
@@ -1883,9 +1915,6 @@ object SNAPSyncConfig:
         if snapConfig.hasPath("storage-recovery-max-root-rolls") then
           snapConfig.getInt("storage-recovery-max-root-rolls")
         else 8,
-      parallelRecoveryScan =
-        if snapConfig.hasPath("parallel-recovery-scan") then snapConfig.getBoolean("parallel-recovery-scan")
-        else true,
       recoveryScanConcurrency =
         if snapConfig.hasPath("recovery-scan-concurrency") then snapConfig.getInt("recovery-scan-concurrency")
         else 3,
@@ -1937,7 +1966,10 @@ object SNAPSyncConfig:
       heapWatchdogMaxPause =
         if snapConfig.hasPath("heap-watchdog-max-pause") then
           snapConfig.getDuration("heap-watchdog-max-pause").toMillis.millis
-        else 5.minutes
+        else 5.minutes,
+      powSnapPeerWait =
+        if snapConfig.hasPath("pow-snap-peer-wait") then snapConfig.getDuration("pow-snap-peer-wait").toMillis.millis
+        else 10.minutes
     )
 
 // StateValidator has been extracted to StateValidator.scala

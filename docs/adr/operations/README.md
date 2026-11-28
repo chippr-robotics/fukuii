@@ -10,6 +10,7 @@ Examples:
 - `OPS-001-console-ui.md`
 - `OPS-002-logging-level-categorization.md`
 - `OPS-004-tui-operator-actions.md`
+- `OPS-005-zero-trust-listeners.md`
 
 ## Current ADRs
 
@@ -17,6 +18,7 @@ Examples:
 - [OPS-002: Logging Level Categorization Standards](OPS-002-logging-level-categorization.md) - Accepted
 - [OPS-003: Migration from CLI Tools to Claude Code Skills](OPS-003-skill-based-operations.md) - Accepted
 - [OPS-004: Operator Actions in the Terminal Dashboard](OPS-004-tui-operator-actions.md) - Accepted
+- [OPS-005: Zero-Trust Listeners](OPS-005-zero-trust-listeners.md) - Accepted
 
 ## Creating a New Operations ADR
 

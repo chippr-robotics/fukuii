@@ -4,15 +4,23 @@ import java.nio.charset.StandardCharsets
 
 import org.apache.pekko.util.ByteString
 
+import scala.jdk.CollectionConverters.*
+
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger as LogbackLogger
+import ch.qos.logback.classic.spi.ILoggingEvent
+import ch.qos.logback.core.read.ListAppender
 import org.bouncycastle.util.encoders.Hex
 import org.json4s.*
 import org.json4s.native.JsonMethods.*
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.Fixtures.Blocks as BlockFixtures
 import com.chipprbots.ethereum.crypto.KzgTestSetup
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.crypto.sha256
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -94,8 +102,11 @@ class PrecompileFailureReasonSpec extends AnyFlatSpec with Matchers with BeforeA
       case Some(OutOfGas) => "out of gas"
       case other          => fail(s"not a precompile's failure: $other")
 
-  private def check(failing: Failing): Unit =
-    for chain <- Seq(etcOlympia, ethOsaka) do
+  private def check(failing: Failing): Unit = checkOn(Seq(etcOlympia, ethOsaka))(failing)
+
+  /** KZG point evaluation is an ETH precompile only: ECIP-1121 defers EIP-4844, so ETC Olympia has no 0x0a (B-548). */
+  private def checkOn(chains: Seq[Chain])(failing: Failing): Unit =
+    for chain <- chains do
       withClue(s"${chain.name} ${failing.name}: ") {
         val (context, result) = run(chain, failing.address, failing.input, failing.gas)
         result.gasRemaining shouldBe 0
@@ -445,7 +456,7 @@ class PrecompileFailureReasonSpec extends AnyFlatSpec with Matchers with BeforeA
         Plenty,
         Kzg + "can't verify opening proof"
       )
-    ).foreach(check)
+    ).foreach(checkOn(Seq(ethOsaka)))
   }
 
   // ── BLS12-381 (0x0b - 0x11) ──────────────────────────────────────────────────────────────────────────────────
@@ -612,6 +623,42 @@ class PrecompileFailureReasonSpec extends AnyFlatSpec with Matchers with BeforeA
   }
 
   // ── An input go-ethereum would run ───────────────────────────────────────────────────────────────────────────
+
+  // B-176: where failureReason finds no go-ethereum reason, fukuii failed an input go-ethereum runs. The message stays
+  // the fallback; the operator gets one WARN (contract, input length and hash, never the input) and a counter.
+  "ProgramErrorText.vmErrorMessage" should "count and log a precompile failure with no go-ethereum reason" taggedAs (
+    VMTest,
+    OlympiaTest
+  ) in {
+    val appender = new ListAppender[ILoggingEvent]()
+    appender.start()
+    val logger = LoggerFactory.getLogger(PrecompileDivergence.getClass).asInstanceOf[LogbackLogger]
+    val level = logger.getLevel
+    logger.setLevel(Level.WARN) // as logback.xml sets it; the tests' ROOT is ERROR
+    logger.addAppender(appender)
+    try
+      val counter = PrecompileDivergence.UnexplainedCounter
+      val before = counter.count()
+      // the generator: BN254 ADD runs it, so a failure of it has no go-ethereum reason
+      val input = word(1) ++ word(2)
+      val unexplained = PreCompiledContractFail(PrecompiledContracts.Bn128Add, input)
+      ProgramErrorText.vmErrorMessage(unexplained) shouldBe PrecompiledContracts.UnexplainedFailure
+      counter.count() shouldBe before + 1
+      val warned = appender.list.asScala.filter(_.getLevel == Level.WARN).map(_.getFormattedMessage)
+      warned should have size 1
+      warned.head should include("contract=Bn128Add inputLength=64")
+      warned.head should include("inputKeccak=0x" + Hex.toHexString(kec256(input.toArray)))
+
+      // a reason go-ethereum gives is no divergence: no count, no WARN
+      ProgramErrorText.vmErrorMessage(
+        PreCompiledContractFail(PrecompiledContracts.Bn128Add, word(1) ++ word(1))
+      ) shouldBe NotOnCurve
+      counter.count() shouldBe before + 1
+      appender.list.asScala.count(_.getLevel == Level.WARN) shouldBe 1
+    finally
+      logger.detachAppender(appender)
+      logger.setLevel(level)
+  }
 
   "failureReason" should "name none of go-ethereum's errors for an input go-ethereum runs" taggedAs (
     VMTest,

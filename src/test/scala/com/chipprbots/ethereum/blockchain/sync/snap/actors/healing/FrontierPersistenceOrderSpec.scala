@@ -10,8 +10,6 @@ import scala.concurrent.ExecutionContext
 import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -121,12 +119,10 @@ class FrontierPersistenceOrderSpec extends AnyFlatSpec with Matchers:
   /** The (level, message) lines `run` logs through the stub's own logger, at INFO. */
   private def logLines(s: StubFrontierOrderState)(run: => Unit): Seq[(Level, String)] =
     val logger = s.log.asInstanceOf[ch.qos.logback.classic.Logger]
-    val appender = new ListAppender[ILoggingEvent]
-    appender.start()
     logger.setLevel(Level.INFO)
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     try run
-    finally logger.detachAppender(appender)
+    finally appender.close()
     appender.list.asScala.toSeq.map(e => e.getLevel -> e.getFormattedMessage)
 
   "FrontierPersistence's drain wait" should "not wait or log below the high-water mark" taggedAs UnitTest in {

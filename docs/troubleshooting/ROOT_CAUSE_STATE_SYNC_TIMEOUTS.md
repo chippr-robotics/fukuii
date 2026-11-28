@@ -1,224 +1,99 @@
-# Root Cause Investigation: Category 1 State Sync Timeout Failures
+# Root Cause Investigation: E2E Sync Integration Test Timeouts
 
-## Investigation Date
-December 19-20, 2025
+**Status**: Resolved (B-018). This page replaces the December 2025 write-up, whose diagnosis was wrong.
 
-## Issue Summary
-28 out of 37 test failures (76%) in the nightly run are state synchronization timeouts. Tests consistently fail with:
+## What the December 2025 write-up claimed
+
+It put the nightly "state sync timeout" failures down to a 5 s Pekko ask timeout in `CommonFakePeer` and a missing
+`sync.peer-response-timeout` in `src/it/resources/application.conf`, citing `PEER_REQUEST_TIMEOUT ... GetNodeData`, and
+it expected the 30 s overrides to fix them. They did not. Sixteen tests (15 in `E2EStateTestSpec`, 1 in `E2ESyncSpec`)
+kept failing, and the 30 s overrides are not what failed them:
+
+- Regular sync never sends `GetNodeData`. It fetches headers and bodies and executes each block. These tests never
+  produce a state-node request, so no peer-response timeout can apply to them.
+- A rerun on 2026-11-25 against `origin/staging` produced no `PEER_REQUEST_TIMEOUT` line. Each failing test ran for
+  about 95 s and failed with `java.util.concurrent.TimeoutException: Task time out after all retries`. That is
+  `waitForRegularSyncLoadLastBlock` giving up after its own 90 retries at 1 s, and the number is its own, not a network
+  timeout's.
+
+The 30 s settings are harmless and stay. They were never the fix.
+
+## Real causes
+
+### A. State injected into headers with no transactions (15 `E2EStateTestSpec` tests)
+
+The tests built the chain with `importBlocksUntil(n)(updater)`, where the updater wrote an account straight into a
+world-state proxy. The block header then named the resulting state root, but the block carried no transaction that
+could produce it.
+
+The syncing peer does not copy state. It executes each block on the state of its parent. Executing block 100 gave it
+its own root, which is not the root the header names. When it came to block 101 it looked for its parent's state under
+the header's root, and that root was never in its store:
+
 ```
-PEER_REQUEST_TIMEOUT: peer=PeerId(...), reqType=GetNodeData, elapsed=5019ms (timeout=5000ms)
-java.util.concurrent.TimeoutException: Task time out after all retries
-```
-
-## Root Cause Analysis
-
-### Primary Issue: Hardcoded 5-Second Timeout in Integration Tests
-
-**File**: `src/it/scala/com/chipprbots/ethereum/sync/util/CommonFakePeer.scala`  
-**Line**: 77  
-**Problem**: `implicit val akkaTimeout: Timeout = Timeout(5.second)`
-
-This 5-second timeout is used for all Pekko actor interactions in integration tests, including peer requests for state data. In CI environments (GitHub Actions), this timeout is insufficient due to:
-
-1. **Shared Resources**: CI runners share CPU, memory, and I/O with other jobs
-2. **Higher Latency**: Network operations and disk I/O are slower in containerized CI environments
-3. **State Data Size**: GetNodeData requests for MPT nodes can be large and take time to serialize/deserialize
-4. **Concurrent Operations**: Multiple test peers requesting data simultaneously increase contention
-
-### Secondary Issue: Integration Test Configuration Missing Sync Timeout Override
-
-**File**: `src/it/resources/application.conf`  
-**Problem**: Missing `sync.peer-response-timeout` configuration override
-
-The integration test configuration only overrides the data directory but doesn't adjust sync timeouts for the CI environment. This means tests rely on either:
-- Base configuration timeout (45 seconds) - but Pekko timeout (5 seconds) triggers first
-- Test configuration timeout (3 seconds in `src/test/resources/application.conf`)
-
-### Evidence from Logs
-
-From the nightly run log analysis:
-- 28 tests timeout at exactly 5000ms (5 seconds)
-- Most are in `E2EStateTestSpec` (15), `FastSyncItSpec` (8), and related suites
-- All show `PEER_REQUEST_TIMEOUT` for `GetNodeData` requests
-- Tests that pass locally take 1-3 seconds, suggesting CI is 2-3x slower
-- Timeout occurs before the retry mechanism in `SyncCommonItSpecUtils` can complete
-
-### Why This Affects State Sync Tests Specifically
-
-1. **MPT Node Retrieval**: State sync tests require downloading Merkle Patricia Trie nodes via `GetNodeData` requests
-2. **Large Payloads**: State nodes can be large, especially for accounts with storage
-3. **Sequential Dependencies**: Each missing node blocks progress, requiring another request
-4. **Test Complexity**: E2E state tests create full blockchain scenarios with multiple peers
-
-## Solution Implemented
-
-### Fix 1: Dynamic Timeout Based on Environment
-
-**File**: `src/it/scala/com/chipprbots/ethereum/sync/util/CommonFakePeer.scala`
-
-```scala
-// Before (Line 77):
-implicit val akkaTimeout: Timeout = Timeout(5.second)
-
-// After (Lines 77-81):
-// Use longer timeout in CI environment to accommodate slower I/O and network operations
-// CI environments (GitHub Actions, etc.) often have higher latency due to shared resources
-private val baseTimeout = 5.seconds
-private val ciMultiplier = sys.env.get("CI").map(_ => 6).getOrElse(1) // 30 seconds in CI, 5 seconds locally
-implicit val akkaTimeout: Timeout = Timeout(baseTimeout * ciMultiplier)
+Block import error ...MerklePatriciaTrie$MissingAccountNodeException:
+  Account trie node not found <header state root> while accessing account 0000...0000
 ```
 
-**Rationale**:
-- Detects CI environment via `CI` environment variable (set by GitHub Actions)
-- Uses 6x multiplier (30 seconds) in CI, maintaining 5 seconds locally
-- Preserves fast local test execution while accommodating CI latency
-- 30 seconds aligns with other sync timeouts and allows time for retries
+The import failed, the best block stalled at 99 or below, and the test waited out its retries. The harness's
+validators accept any post-execution state root, so nothing reported the mismatch except the next block's failure to
+find its parent's state.
 
-### Fix 2: Integration Test Configuration Override
+The one test of the 16 that did not stall, "should detect and reject invalid state roots", never synced: it builds the
+same chain on both peers and compares headers. It passed before this change and is unchanged.
 
-**File**: `src/it/resources/application.conf`
+### B. Reorg tests mined before regular sync started (`E2ESyncSpec` reorg, and the two reorg tests in `E2EStateTestSpec`)
 
-```hocon
-sync {
-  # Increase timeout for integration tests to accommodate CI environment latency
-  # CI environments have slower I/O and shared resources causing longer response times
-  peer-response-timeout = 30.seconds
-}
-```
+`mineNewBlocks` hands each block to the peer's regular-sync actor as `SyncProtocol.MinedBlock`. That actor builds the
+block importer when it receives `Start`. The tests mined first and sent `Start` afterwards, so the importer did not
+exist and `RegularSync` dropped the block ("Mined block ... not imported: regular sync's pipeline is not running").
+Peer1 never extended its chain, and peer2 waited for a block that did not exist.
 
-**Rationale**:
-- Overrides the base configuration peer-response-timeout for integration tests
-- 30 seconds matches the CI-adjusted Pekko timeout
-- Consistent with production sync timeout (45 seconds) scaled for test scenarios
-- Prevents premature timeout in `PeerRequestHandler`
+The tests were also not reorgs. Both peers held the identical chain and peer1 added blocks on top, so peer2 only caught
+up.
 
-## Expected Impact
+### C. `getMptForBlock` started from the empty root (mined blocks)
 
-### Tests Expected to Pass After Fix
+`FakePeer` in `RegularSyncItSpecUtils` shadowed `CommonFakePeer.getMptForBlock` with a version that always began at
+`MerklePatriciaTrie.EmptyRootHash` and ignored the parent block's `stateRoot`. Any mined block carrying state was built
+on an empty world and named a root unrelated to its parent. Harmless for `IdentityUpdate`, whose root is the empty root
+anyway.
 
-**Definite (28 tests - all timeouts)**:
-1. E2EStateTestSpec (15 tests) - All state sync scenarios
-2. FastSyncItSpec (8 tests) - All fast sync with state node tests
-3. E2ESyncSpec (2 tests) - Blockchain reorganization and reconnection
-4. SNAPSyncIntegrationSpec (2 tests) - SNAP sync coordinator tests
-5. E2EFastSyncSpec (1 test) - State sync from multiple peers
+## What the tests do now
 
-**Probable (3-5 additional tests - cascading failures)**:
-6. E2EFastSyncSpec (2-3 tests) - "None was not defined" errors likely caused by incomplete sync due to timeouts
-7. ForksTest (1 test) - Missing MPT root node likely from timeout during state setup
-8. E2EHandshakeSpec (0-2 tests) - May still need separate investigation if not timeout-related
+- `FakePeer.sealChild` builds a block that carries real signed transactions (transfers and contract creations that
+  write storage), executes it with `BlockExecution`, and seals the header with the state root, gas used and receipts
+  execution gives. The sender is the block beneficiary, so block rewards fund it and its transactions start at block 2.
+  Nonces come from the parent state.
+- `importExecutedBlocksUntil` extends a peer's chain with such blocks. `mineExecutedBlocks` hands them to the importer
+  of a running regular sync one at a time, and waits (a condition wait, not a sleep) until each is the best block.
+- The shadowing `getMptForBlock` is gone. `CommonFakePeer.getMptForBlock` reads the parent header's own `stateRoot`.
+- The reorg tests give peer2 a chain of its own (a different beneficiary), start regular sync on both peers, mine on
+  peer1 until its chain is the heavier one, and only then connect. They check that peer2 left its fork: the fork tip is
+  no longer canonical, and an account only the fork touched is gone from peer2's best state.
+- Assertions read the syncing peer's own state back (`accountAtBest`, `storageAtBest`): balances, sender nonce and
+  contract storage slots. A header comparison alone could not tell a synced state from a missing one.
+- The `IO.sleep(1.second)` in the "missing peers" test is gone. `connectToPeers` already returns only after the
+  handshake.
 
-**Total Expected Resolution**: 28-33 of 37 failures (76-89%)
+## Results
 
-### Remaining Work
+| | Before | After |
+|---|---|---|
+| `E2EStateTestSpec` | 1 passed, 15 failed (each about 95 s) | 16 passed, 0 failed |
+| `E2ESyncSpec` | 15 passed, 1 failed | 16 passed, 0 failed |
+| `RegularSyncItSpec` | passed | passed |
 
-After this fix is validated, the following issues should be investigated separately:
+Run with:
 
-1. **MESS Consensus Issues** (3 tests, P1) - Chain selection logic
-2. **VM Test Data Decoding** (1 test, P2) - JSON format compatibility
-3. **E2EHandshakeSpec Issues** (0-2 tests, P2) - If not resolved by timeout fix
-
-## Validation Plan
-
-### Local Testing (Optional)
 ```bash
-# Run single failing test locally
-sbt "IntegrationTest/testOnly com.chipprbots.ethereum.sync.E2EStateTestSpec -- -z \"synchronize state trie between peers\""
-
-# Run all state sync tests
-sbt "IntegrationTest/testOnly com.chipprbots.ethereum.sync.E2EStateTestSpec"
-
-# Run fast sync tests
-sbt "IntegrationTest/testOnly com.chipprbots.ethereum.sync.FastSyncItSpec"
+sbt "IntegrationTest / testOnly com.chipprbots.ethereum.sync.E2EStateTestSpec com.chipprbots.ethereum.sync.E2ESyncSpec"
 ```
 
-### CI Testing (Required)
-```bash
-# Run full integration test suite
-sbt "IntegrationTest/test"
+## Lessons
 
-# Or run comprehensive suite (includes all integration tests)
-sbt testComprehensive
-```
-
-### Success Criteria
-- [ ] E2EStateTestSpec: 15/15 tests pass
-- [ ] FastSyncItSpec: 8/8 tests pass
-- [ ] E2ESyncSpec: 2/2 tests pass (or identify as separate issue)
-- [ ] SNAPSyncIntegrationSpec: 2/2 tests pass
-- [ ] No new test failures introduced
-- [ ] Test execution time remains reasonable (< 2 hours for full suite)
-- [ ] Log shows successful peer requests within new timeout threshold
-
-## Technical Details
-
-### Timeout Flow in Tests
-
-1. **Test starts** → Creates `FakePeer` instances
-2. **FakePeer initialization** → Sets `akkaTimeout` from `CommonFakePeer`
-3. **Sync request sent** → Uses `PeerRequestHandler` with `syncConfig.peerResponseTimeout`
-4. **Both timeouts active**:
-   - Pekko actor timeout (Akka `ask` pattern): Now 30s in CI
-   - Peer response timeout (application level): Now 30s in CI
-5. **Whichever timeout triggers first** → Cancels the request
-
-Previously, Pekko timeout (5s) triggered before peer response timeout could complete, causing false failures.
-
-### Configuration Precedence
-
-```
-Integration Tests Configuration Cascade:
-1. Base configuration: conf/base.conf (45s timeout)
-2. Test overrides: src/test/resources/application.conf (3s timeout) 
-3. Integration test overrides: src/it/resources/application.conf (30s timeout) ✅ NEW
-4. System properties: -Dfukuii.sync.peer-response-timeout=X
-```
-
-The integration tests now use 30s from their specific configuration, overriding the base config.
-
-### Why 30 Seconds?
-
-Based on log analysis and best practices:
-- **Observed CI slowdown**: 2-3x slower than local (5s → 15s typical)
-- **Safety margin**: 2x additional buffer for variance (15s → 30s)
-- **Retry budget**: Allows ~2-3 retries within test timeout window
-- **Production alignment**: Scaled from production 45s timeout
-- **Test efficiency**: Short enough to fail fast on real issues
-
-## Monitoring and Validation
-
-After merging, monitor the following metrics in nightly runs:
-
-1. **Test Success Rate**: Should increase from 79.9% to ~95%+ (if remaining 6-9 issues persist)
-2. **Timeout Logs**: Should see fewer `PEER_REQUEST_TIMEOUT` errors
-3. **Test Duration**: E2E state tests may take slightly longer but within limits
-4. **False Positives**: Watch for tests that now timeout at 30s (indicates deeper issues)
-
-## References
-
-- **Issue**: Review Last Night Run and Troubleshoot 37 Failures
-- **Full Analysis**: `docs/troubleshooting/NIGHTLY_RUN_ANALYSIS_2025-12-19.md`
-- **Tracking Doc**: `docs/troubleshooting/FAILURE_TRACKING.md`
-- **Log Source**: Nightly workflow run #47, December 19, 2025
-
-## Changes Made
-
-### Modified Files
-1. `src/it/scala/com/chipprbots/ethereum/sync/util/CommonFakePeer.scala`
-   - Added CI environment detection
-   - Implemented dynamic timeout scaling (5s → 30s in CI)
-   
-2. `src/it/resources/application.conf`
-   - Added `sync.peer-response-timeout = 30.seconds` override
-
-### No Changes Required
-- Production configuration remains unchanged (45s is appropriate for production)
-- Unit tests remain unchanged (faster, simpler scenarios don't need longer timeouts)
-- Test retry logic remains unchanged (90 retries with 1s delay is sufficient)
-
----
-
-**Prepared by**: @copilot  
-**Date**: December 19-20, 2025  
-**Status**: Fix implemented, awaiting validation  
-**Next Action**: Run nightly workflow to validate fix
+- A timeout in a test names the wait that expired, not the fault. Read the first error in the log, here the
+  missing-node exception, not the last line.
+- A fixture that writes state into a header without the transaction that produces it cannot be synced by a peer that
+  executes blocks. Build test chains by executing them.
+- A message sent to an actor before `Start` can be dropped without any failure. Start the actor, then send.

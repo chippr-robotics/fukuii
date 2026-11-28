@@ -80,39 +80,31 @@ object ConfigValidator extends Logger:
     *
     * A SNAP sync runs on the guard since C5a part 10: it hands its state off onto the unified layout, and SNAP is
     * advertised. Mining runs on it since B-293: the miners read the head under its generation, and build again on the
-    * head a move leaves (`SettledHeadBuild`). What is still refused:
-    *
-    * Checkpoint sync. Its import writes the hash-keyed store and says the sync is done, with no anchor on this layout:
-    * the node would say it is synced and hold no state (until C5c).
+    * head a move leaves (`SettledHeadBuild`). A checkpoint import runs on it since C5c PR3: it writes the position rows
+    * and ends with the one synced batch that anchors them (`CheckpointImporter`). What is still refused:
     *
     * `sync.snap-sync.storage-scheme = hash`, asked for. A SNAP sync on the guard writes the position families, which
     * the hand-off samples and commits, with the path scheme on every network (ETC's and Mordor's fallback to hash
     * included); the hash scheme writes the hash-keyed store, which this layout never reads, so every hand-off would
     * stop.
     *
-    * The chain file imported at start is taken since C3c: block by block onto the head, with a block that is not built
-    * on the head refused until the overlay. So a file that ends on a side chain (the multi-chain and uncle-race vectors
-    * of ethereum/tests) ends on another head there: taking the key is not parity with the hash store on such files.
+    * The chain file imported at start is taken since C3c, and with parity since B-220: a block built on the head is
+    * committed in place, a block before the merge that is not goes through the node's fork choice (queued, executed on
+    * layers and moved to once its branch outweighs the head), and one after the merge is adopted as the head when it is
+    * valid, as on the hash store and in go-ethereum.
     *
-    * Test mode is taken since C3c too, and it is not parity either. A block beside the head is queued and never
-    * reorganised to (`test_importRawBlock` of the block that makes a branch the heavier one is answered with an error);
-    * `test_rewindToBlock` goes to the head or to the genesis and no block between them; and `debug_storageRangeAt` and
-    * `debug_accountRange` answer at the head alone. Each waits for the overlay and the head move (C4a, C4b).
+    * Test mode is taken since C3c too, and since C4b and B-220 with parity but for a fork deeper than the changeset
+    * records reach: a heavier branch is reorganised to on layers, `test_rewindToBlock` moves the head back to any block
+    * of its chain, and `debug_storageRangeAt` and `debug_accountRange` read a block behind the head from the records.
     * `test_setChainParams` destroys the state the chain before it left: a node in test mode is the only one whose
     * position store can do that.
     */
   def stateGuardErrors(config: TypesafeConfig): List[String] =
     def on(key: String): Boolean = config.hasPath(key) && config.getBoolean(key)
-    def set(key: String): Boolean = config.hasPath(key) && config.getString(key).trim.nonEmpty
     val guard = "fukuii.state.path-live = true (the in-development guard of the unified state layout) cannot run with "
     if !on("state.path-live") then Nil
     else
       List(
-        Option.when(set("sync.checkpoint-sync-file") || set("sync.checkpoint-sync-url"))(
-          guard + "fukuii.sync.checkpoint-sync-file or fukuii.sync.checkpoint-sync-url: a checkpoint is imported " +
-            "into the hash-keyed store, which this layout does not read, and the node would say it is synced with no " +
-            "state (spec 018 C5c). Leave both empty; a SNAP sync (fukuii.sync.do-snap-sync = true) syncs this node."
-        ),
         Option.when(
           config.hasPath("sync.snap-sync.storage-scheme") &&
             config.getString("sync.snap-sync.storage-scheme").trim.equalsIgnoreCase("hash")
@@ -124,12 +116,27 @@ object ConfigValidator extends Logger:
         )
       ).flatten
 
-  /** One warning for each removed fast-sync key that `config` (a `fukuii` block) still sets. */
+  /** One warning for each removed fast-sync key that `config` (a `fukuii` block) still sets, and one for
+    * [[LegacyRecoveryScanKey]] set to any value.
+    */
   def removedKeyWarnings(config: TypesafeConfig): List[String] =
     RemovedFastSyncKeys.filter(key => config.hasPath(s"sync.$key")).map {
       case "do-fast-sync" => doFastSyncWarning(config)
       case key            => s"fukuii.sync.$key is ignored: fast sync, the only reader of this key, was removed."
-    }
+    } ++ legacyRecoveryScanWarning(config)
+
+  /** `false` asked for the two legacy per-phase recovery scans. They were retired (B-217): they stopped at the first
+    * absent node and settled the recovery flags on that partial walk, where the combined scan counts the hole and walks
+    * the rest. No code reads the key, and the shipped `sync.conf` no longer sets it (B-493), so any value is reported:
+    * `true` is as dead as `false`.
+    */
+  val LegacyRecoveryScanKey: String = "sync.snap-sync.parallel-recovery-scan"
+
+  private def legacyRecoveryScanWarning(config: TypesafeConfig): Option[String] =
+    Option.when(config.hasPath(LegacyRecoveryScanKey))(
+      s"fukuii.$LegacyRecoveryScanKey is ignored: it was retired by B-217 with the legacy per-phase recovery scans, " +
+        "and the combined recovery scan always runs. Remove the key."
+    )
 
   /** `do-fast-sync = false` was the way to ask for a sync from genesis (archive nodes, for one). With SNAP on, that
     * request is no longer honoured, so say which sync this node will run and how to get the old behaviour.

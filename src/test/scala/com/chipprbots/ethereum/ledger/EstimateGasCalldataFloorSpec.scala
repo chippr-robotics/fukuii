@@ -74,7 +74,7 @@ class EstimateGasCalldataFloorSpec extends AnyFlatSpec with Matchers with Amster
     )
 
     def estimate(stx: SignedTransaction, header: BlockHeader): BigInt =
-      ledger.binarySearchGasEstimation(SignedTransactionWithSender(stx, senderAddress), header, Some(world))
+      ledger.binarySearchGasEstimation(SignedTransactionWithSender(stx, senderAddress), header, world)
 
     def lowerBound(stx: SignedTransaction, header: BlockHeader): BigInt =
       ledger.estimationLowerBound(SignedTransactionWithSender(stx, senderAddress), header)
@@ -179,7 +179,7 @@ class EstimateGasCalldataFloorSpec extends AnyFlatSpec with Matchers with Amster
     ledger.binarySearchGasEstimation(
       SignedTransactionWithSender(calldataCall(amsterdamConfig)(50000), senderAddress),
       atAmsterdam,
-      Some(world)
+      world
     ) shouldBe BigInt(50000)
 
   "eth_estimateGas on an ETH chain that schedules no Amsterdam" should "apply EIP-7623 past the Amsterdam time" taggedAs (

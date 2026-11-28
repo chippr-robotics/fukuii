@@ -322,7 +322,9 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
         // EIP-7928: an instruction whose full charge includes a state-dependent part may already have read its target
         // under execution-specs' ordering before that part ran out. Asked only while an Amsterdam block executes.
         if state.env.accessRecorder.isDefined then recordReadsBeforeOutOfGas(state)
-        state.copy(gas = 0).withError(OutOfGas)
+        // The cost goes on the halted state for a tracer's gasCost (go-ethereum logs the op's cost, not the gas left;
+        // B-026). opcodeGasCost is otherwise read only by CreateOp.exec, which a halted state never reaches.
+        state.copy(gas = 0, opcodeGasCost = gas).withError(OutOfGas)
       else
         // EIP-8037: state gas is metered at the END of a state-mutating opcode. The DECISION, though, is
         // made from the pre-execution state — the SSTORE table keys on the slot's original, current and
@@ -338,7 +340,7 @@ abstract class OpCode(val code: Byte, val delta: Int, val alpha: Int, val baseGa
           // A state charge that cannot be met is an EXCEPTIONAL HALT, not a partial charge. This is the
           // measured `tx-emit-*` case: the execution component is affordable, GAS_STORAGE_SET is not, and
           // the transaction consumes its whole limit having written nothing.
-          state.copy(gas = 0).withError(OutOfGas)
+          state.copy(gas = 0, opcodeGasCost = gas).withError(OutOfGas)
         else executed.chargeStateGas(stateGas)
 
   /** The stack is shallower than the `delta` items this instruction pops: go-ethereum's `ErrStackUnderflow{stackLen,
@@ -1295,7 +1297,7 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
     else if state.stack.size - delta + alpha > state.stack.maxSize then state.withError(stackOverflow(state.stack))
     else
       val gas: BigInt = calcGas(state)
-      if gas > state.gas then state.copy(gas = 0).withError(OutOfGas)
+      if gas > state.gas then state.copy(gas = 0, opcodeGasCost = gas).withError(OutOfGas)
       else exec(state.copy(opcodeGasCost = gas)).spendGas(gas)
 
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state0: ProgramState[W, S]): ProgramState[W, S] =
@@ -1346,7 +1348,8 @@ abstract class CreateOp(code: Int, delta: Int) extends OpCode(code, delta, 1, _.
 
       val stateGasShortfall = (newAccountStateGas - state0.stateGasReservoir).max(0)
       if stateGasShortfall > availableGas then
-        // EIP-8037: "a failed charge exceptionally halts the creating frame — exactly as for CALL*".
+        // EIP-8037: "a failed charge exceptionally halts the creating frame — exactly as for CALL*". The op's cost,
+        // which execute put on state0, stays on the halted state for a tracer (B-026).
         state0.copy(gas = 0).withError(OutOfGas)
       else
         // The charge lands in the CREATING frame, before 63/64 of the remaining gas is forwarded, so the
@@ -1530,7 +1533,7 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
       // EIP-7928: before any out-of-gas outcome below, which may come after execution-specs has read the target.
       if state0.env.accessRecorder.isDefined then recordCallTargets(state0)
       val executionCost: BigInt = calcGas(state0)
-      if executionCost > state0.gas then state0.copy(gas = 0).withError(OutOfGas)
+      if executionCost > state0.gas then state0.copy(gas = 0, opcodeGasCost = executionCost).withError(OutOfGas)
       else
         val (to, endowment) = callTarget(state0)
         val stateGas = newAccountStateGas(state0, to, endowment)
@@ -1544,7 +1547,7 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
         // condition, `0 > state0.gas - executionCost`, was false by the check above, so skipping it is the same.
         if stateGas.signum > 0 && state0.stateGasShortfall(stateGas) > state0.gas - ownExecutionCost(state0) then
           // EIP-8037: a failed state charge exceptionally halts the calling frame.
-          state0.copy(gas = 0).withError(OutOfGas)
+          state0.copy(gas = 0, opcodeGasCost = executionCost).withError(OutOfGas)
         else
           // Charge BEFORE the 63/64 split so the portion drawn from gas_left reduces what the child
           // receives. `calcGas` is recomputed on the charged state because `calcStartGas` inside `exec`
@@ -1553,7 +1556,7 @@ abstract class CallOp(code: Int, delta: Int, alpha: Int) extends OpCode(code, de
           // call's own charge in `state.gas`, so the recomputed charge always fits.
           val state = state0.chargeStateGas(stateGas)
           val gas: BigInt = calcGas(state)
-          if gas > state.gas then state.copy(gas = 0).withError(OutOfGas)
+          if gas > state.gas then state.copy(gas = 0, opcodeGasCost = gas).withError(OutOfGas)
           else exec(state).spendGas(gas)
 
   protected def exec[S <: Storage[S], W <: WorldStateProxy[W, S]](state: ProgramState[W, S]): ProgramState[W, S] =

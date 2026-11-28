@@ -47,6 +47,19 @@ ln -s /path/to/fukuii/hive/fukuii /path/to/hive/clients/fukuii
 ./hive --sim ethereum/engine --client fukuii --sim.loglevel 5 --docker.output
 ```
 
+### With the unified state layout guard (`fukuii.state.path-live`)
+
+The guard is off by default. To run fukuii with it on, build the client with the build arg
+`FUKUII_PATH_LIVE=1`. hive passes build args only through a client file:
+
+```bash
+/path/to/fukuii/scripts/hive/path-live-clients.sh fukuii > clients-pathlive.yaml
+./hive --sim ethereum/engine --client-file clients-pathlive.yaml --sim.limit '/re-?org'
+```
+
+The client is then named `fukuii_pathlive`. `scripts/hive/local.sh --path-live` does the same
+from a fukuii checkout. See `docs/testing/hive-local.md`.
+
 ### RPC Compatibility Tests
 
 ```bash
@@ -78,9 +91,10 @@ ln -s /path/to/fukuii/hive/fukuii /path/to/hive/clients/fukuii
 hive/fukuii/
 ├── Dockerfile       # Builds from chipprbots/fukuii:latest
 ├── fukuii.sh        # Entry point — translates HIVE_* env vars to fukuii config
+│                    #   (and FUKUII_PATH_LIVE, a build arg, to fukuii.state.path-live)
 ├── mapper.jq        # Converts geth-format genesis to fukuii format
 ├── enode.sh         # Returns enode:// URL for P2P discovery
-└── hive.yaml        # Declares roles: eth1, eth1_engine
+└── hive.yaml        # Declares the role eth1 (eth1_snap once a published image serves snap ranges geth accepts, #2154)
 ```
 
 ### Configuration Flow

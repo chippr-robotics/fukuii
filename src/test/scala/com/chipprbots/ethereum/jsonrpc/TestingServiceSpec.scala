@@ -201,6 +201,101 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       head.header.hash.value shouldBe second.blockHash
       head.header.parentHash.value shouldBe first.blockHash
 
+    // B-230: a build writes no code. On the hash store this commit keeps the build's own writes as the block's state,
+    // so it writes the code the build deployed, or the head refers to a contract with none.
+    "write the code the committed block deploys" taggedAs UnitTest in new Setup:
+      // PUSH4 0xdeadbeef PUSH1 0 MSTORE PUSH1 4 PUSH1 28 RETURN: deploys the 4 bytes deadbeef
+      val runtime: ByteString = ByteString(org.bouncycastle.util.encoders.Hex.decode("deadbeef"))
+      val runtimeHash: ByteString = crypto.kec256(runtime)
+      storagesInstance.storages.evmCodeStorage.get(runtimeHash) shouldBe None
+      service
+        .commitBlock(
+          CommitBlockRequest(
+            attrs(),
+            Some(Seq(rawTx(nonce = 0, to = None, gas = 100000, data = "63deadbeef6000526004601cf3"))),
+            Some(ByteString.empty)
+          )
+        )
+        .unsafeRunSync()
+        .getOrElse(fail("commit failed"))
+      blockchainReader.getBestBlockNumber shouldBe BigInt(1)
+      storagesInstance.storages.evmCodeStorage.get(runtimeHash) shouldBe Some(runtime)
+
+    // B-466: the code, the block and its receipts are one batch on the hash store: lost whole, none of them is left.
+    // (The access list goes in the same batch on an Amsterdam block; this chain's block has none.)
+    "write the block's code, the block and its receipts in one batch, and none of them when that batch is lost" taggedAs UnitTest in new RecordingSetup:
+      val runtime: ByteString = ByteString(org.bouncycastle.util.encoders.Hex.decode("deadbeef"))
+      val runtimeHash: ByteString = crypto.kec256(runtime)
+      val deploys: CommitBlockRequest = CommitBlockRequest(
+        attrs(),
+        Some(Seq(rawTx(nonce = 0, to = None, gas = 100000, data = "63deadbeef6000526004601cf3"))),
+        Some(ByteString.empty)
+      )
+      import com.chipprbots.ethereum.db.storage.Namespaces
+      val (code, header, body, receipts) =
+        (Namespaces.CodeNamespace, Namespaces.HeaderNamespace, Namespaces.BodyNamespace, Namespaces.ReceiptsNamespace)
+      recorder.batches.clear() // the setup's own writes (its genesis) are not the block's
+      // the block's write is lost, as a kill at it would lose it
+      recorder.refuse = _.contains(header)
+      a[RecordingDataSource.Refused] should be thrownBy service.commitBlock(deploys).unsafeRunSync()
+      storagesInstance.storages.evmCodeStorage.get(runtimeHash) shouldBe None
+      recorder.batches.filter(batch => Seq(code, header, body, receipts).exists(batch.contains)) shouldBe empty
+      blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+
+      // and written, it is one batch with all four in it
+      recorder.refuse = _ => false
+      val res: CommitBlockResponse = service.commitBlock(deploys).unsafeRunSync().getOrElse(fail("commit failed"))
+      val written: List[Set[IndexedSeq[Byte]]] =
+        recorder.batches.filter(batch => Seq(code, header, body, receipts).exists(batch.contains)).toList
+      written should have size 1
+      (written.head should contain).allOf(code, header, body, receipts)
+      storagesInstance.storages.evmCodeStorage.get(runtimeHash) shouldBe Some(runtime)
+      blockchainReader.getReceiptsByHash(BlockHash(res.blockHash)).isDefined shouldBe true
+      blockchainReader.getBestBlockNumber shouldBe BigInt(1)
+
+    // B-462: on the unified layout the import is refused, with nothing written, while another thread's adoption holds
+    // the head: answered as a state to ask for again, and not as a difference between the builder and the import
+    "answer a commit refused while another adoption holds the head as busy, and not move the head" taggedAs UnitTest in new Setup:
+      val busyService = new TestingService(
+        engineApi,
+        blockchainReader,
+        blockchainWriter,
+        forkChoiceManager,
+        blockTopic = None,
+        gasLimitTarget = GasLimitTarget,
+        importInPlace = Some(_ =>
+          throw new com.chipprbots.ethereum.db.storage.pathstate.StateBusy(
+            "the adoption on thread 'adopter'",
+            "the commit of block 1 was not made"
+          )
+        )
+      )(using blockchainConfig)
+      busyService
+        .commitBlock(CommitBlockRequest(attrs(), Some(Nil), Some(ByteString.empty)))
+        .unsafeRunSync() shouldBe Left(JsonRpcError.HeadBusy)
+      blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+
+    // B-498: the commit resets the pool as engine_forkchoiceUpdated does (B-253), from the node's one record of the
+    // pool's head (B-515), and records the block it committed there. A bare removal of the block's transactions left
+    // the record where it was, and the next fork choice or import reset the pool from a head the chain had left.
+    "reset the pool onto the committed head as a fork choice does, and record it as the pool's head" taggedAs UnitTest in new Setup:
+      txPoolHead.current shouldBe None
+      val res: CommitBlockResponse = service
+        .commitBlock(CommitBlockRequest(attrs(), Some(Seq(rawTx(nonce = 0))), Some(ByteString.empty)))
+        .unsafeRunSync()
+        .getOrElse(fail("commit failed"))
+      val committed: Block = blockchainReader.getBlockByHash(BlockHash(res.blockHash)).getOrElse(fail("not stored"))
+      committed.body.transactionList should have size 1
+
+      txPoolHead.current.map(_.hash.value) shouldBe Some(res.blockHash)
+      val deadline: Long = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(5)
+      while resetsTold.isEmpty && System.nanoTime() < deadline do Thread.onSpinWait()
+      resetsTold.peek() shouldBe
+        com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset(
+          Seq(committed.body.transactionList),
+          Nil
+        )
+
     "NOT move the head when a transaction cannot be applied" taggedAs UnitTest in new Setup:
       val res: Either[JsonRpcError, CommitBlockResponse] = service
         .commitBlock(CommitBlockRequest(attrs(), Some(Seq(rawTx(nonce = 999))), Some(ByteString.empty)))
@@ -398,6 +493,18 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
   /** Harness modelled on EngineApiGasLimitElasticitySpec: real VM, ephemeral storage, a funded genesis, and a stub
     * transaction pool that answers immediately.
     */
+  /** [[Setup]] over a data source that records the namespaces of each batch, and can lose one whole (B-466). */
+  private trait RecordingSetup extends Setup:
+    trait Recording extends com.chipprbots.ethereum.db.components.EphemDataSourceComponent:
+      override val dataSource: RecordingDataSource = new RecordingDataSource
+    override lazy val storagesInstance
+        : com.chipprbots.ethereum.db.components.EphemDataSourceComponent & LocalPruningConfigBuilder & com.chipprbots.ethereum.db.components.Storages.DefaultStorages =
+      new Recording
+        with LocalPruningConfigBuilder
+        with com.chipprbots.ethereum.db.components.Storages.DefaultStorages
+        with com.chipprbots.ethereum.TestInstanceConfigProvider
+    def recorder: RecordingDataSource = storagesInstance.dataSource.asInstanceOf[RecordingDataSource]
+
   private trait Setup extends EphemBlockchainTestSetup:
 
     implicit override def blockchainConfig: BlockchainConfig =
@@ -423,6 +530,13 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
     )
     lazy val forkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter)
 
+    // the pool's resets, as the stub was told them, and the node's one record of the pool's head (B-498)
+    val resetsTold: java.util.concurrent.ConcurrentLinkedQueue[
+      com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset
+    ] = new java.util.concurrent.ConcurrentLinkedQueue()
+    lazy val txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead =
+      new com.chipprbots.ethereum.transactions.TxPoolHead
+
     lazy val pendingTxManager: org.apache.pekko.actor.typed.ActorRef[
       com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command
     ] = classicSystem.spawn(
@@ -431,6 +545,9 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
           case com.chipprbots.ethereum.transactions.PendingTransactionsManager.GetPendingTransactionsReq(replyTo) =>
             replyTo ! com.chipprbots.ethereum.transactions.PendingTransactionsManager
               .PendingTransactionsResponse(Nil)
+            org.apache.pekko.actor.typed.scaladsl.Behaviors.same
+          case reset: com.chipprbots.ethereum.transactions.PendingTransactionsManager.HeadReset =>
+            resetsTold.add(reset)
             org.apache.pekko.actor.typed.scaladsl.Behaviors.same
           case _ => org.apache.pekko.actor.typed.scaladsl.Behaviors.same
         },
@@ -443,7 +560,8 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       blockchainWriter,
       blockExec,
       forkChoiceManager,
-      Some(pendingTxManager)
+      Some(pendingTxManager),
+      txPoolHead = txPoolHead
     )(using blockchainConfig, typedScheduler)
 
     lazy val service = new TestingService(
@@ -451,7 +569,6 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       blockchainReader,
       blockchainWriter,
       forkChoiceManager,
-      Some(pendingTxManager),
       blockTopic = None,
       gasLimitTarget = GasLimitTarget
     )(using blockchainConfig)
@@ -526,16 +643,21 @@ class TestingServiceSpec extends AnyWordSpec with Matchers:
       * y-parity signing schema sidesteps the legacy EIP-155 `v = chainId*2+35` encoding, which does not fit this
       * chain's id.
       */
-    def rawTx(nonce: BigInt): ByteString =
+    def rawTx(
+        nonce: BigInt,
+        to: Option[Address] = Some(Address(0x42)),
+        gas: BigInt = 21000,
+        data: String = ""
+    ): ByteString =
       val tx = TransactionWithDynamicFee(
         chainId = blockchainConfig.chainId.value,
         nonce = nonce,
         maxPriorityFeePerGas = BigInt(500),
         maxFeePerGas = BigInt(2_000_000_000L),
-        gasLimit = GasAmount(21000),
-        receivingAddress = Some(Address(0x42)),
+        gasLimit = GasAmount(gas),
+        receivingAddress = to,
         value = BigInt(1),
-        payload = ByteString.empty,
+        payload = ByteString(org.bouncycastle.util.encoders.Hex.decode(data)),
         accessList = Nil
       )
       val stx = SignedTransaction.sign(tx, senderKeys, Some(blockchainConfig.chainId.value))

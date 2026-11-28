@@ -26,8 +26,10 @@ import scala.util.Try
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.network.NodeAllowlist
 import com.chipprbots.ethereum.network.P2pTraffic
 import com.chipprbots.ethereum.network.PeerActor
+import com.chipprbots.ethereum.network.PeerChurnStats
 import com.chipprbots.ethereum.network.handshaker.HelloExchangeState
 import com.chipprbots.ethereum.network.p2p.EthereumMessageDecoder
 import com.chipprbots.ethereum.network.p2p.Message
@@ -117,6 +119,12 @@ object RLPxConnectionHandler:
     * tell a transient refusal (TooManyPeers, AlreadyConnected) from a permanent one.
     */
   final case class ConnectionRejected(reason: Long) extends PeerActor.Command
+
+  /** The `reason` of a [[ConnectionRejected]] this node raised itself: the authenticated remote key is not on the node
+    * allowlist (spec 030 FR-051). Outside the devp2p reason range (0x00-0xff), so it can never come from a peer, and it
+    * is never retried.
+    */
+  val NotOnAllowlist: Long = 0x100L
   final case class MessageReceived(message: Message) extends PeerActor.Command
   final case class InitialHelloReceived(message: Hello, capability: Capability) extends PeerActor.Command
 
@@ -328,7 +336,9 @@ object RLPxConnectionHandler:
       parent: ActorRef[PeerActor.Command],
       tcpManagerForTest: Option[ClassicActorRef] = None,
       // Where this connection's bytes and messages are counted for the dashboard (spec 029 FR-044): the node's own.
-      traffic: P2pTraffic = P2pTraffic.Node
+      traffic: P2pTraffic = P2pTraffic.Node,
+      // Spec 030 FR-051: the authenticated remote key is checked against it right after the auth handshake.
+      allowlist: NodeAllowlist = NodeAllowlist.Disabled
   ): Behavior[Command] = Behaviors.setup { context =>
     val peerId: String = parent.path.name
     val tcpManager: ClassicActorRef = tcpManagerForTest.getOrElse(IO(Tcp)(using context.system.classicSystem))
@@ -342,7 +352,8 @@ object RLPxConnectionHandler:
       peerId,
       tcpManager,
       context,
-      traffic
+      traffic,
+      allowlist
     ).waitingForCommand()
   }
 
@@ -367,7 +378,8 @@ object RLPxConnectionHandler:
       peerId: String,
       tcpManager: ClassicActorRef,
       context: ActorContext[Command],
-      traffic: P2pTraffic
+      traffic: P2pTraffic,
+      allowlist: NodeAllowlist
   ):
     import AuthHandshaker.{InitiatePacketLength, ResponsePacketLength}
 
@@ -588,8 +600,21 @@ object RLPxConnectionHandler:
     private def processHandshakeResult(
         result: AuthHandshakeResult,
         remainingData: ByteString,
-        bridge: ClassicActorRef
+        bridge: ClassicActorRef,
+        inbound: Boolean
     ): Behavior[Command] = result match
+      case AuthHandshakeSuccess(_, remotePubKey) if !allowlist.permits(remotePubKey) =>
+        // FR-051: refused before ConnectionEstablished and before any Hello, even one already in `remainingData`, is
+        // decoded. The remote key is authenticated by now (the handshake proved possession of it).
+        allowlist.recordRejection(inbound)
+        log.debug(
+          "[RLPx] Peer {} ({}) is not on the node allowlist, closing before Hello",
+          peerId,
+          if inbound then "inbound" else "outbound"
+        )
+        parent ! ConnectionRejected(NotOnAllowlist)
+        stopping()
+
       case AuthHandshakeSuccess(secrets, remotePubKey) =>
         log.debug("[RLPx] Auth handshake SUCCESS for peer {}, establishing secure connection", peerId)
         parent ! ConnectionEstablished(remotePubKey)
@@ -603,7 +628,7 @@ object RLPxConnectionHandler:
 
       case AuthHandshakeError =>
         authFailedCount.incrementAndGet()
-        log.warn("[Stopping Connection] Auth handshake FAILED for peer {}", peerId)
+        log.debug("[Stopping Connection] Auth handshake FAILED for peer {}", peerId)
         parent ! ConnectionFailed
         stopping()
 
@@ -624,7 +649,8 @@ object RLPxConnectionHandler:
         case Failure(PreHelloDisconnect(reason)) =>
           // The peer's Disconnect was a message decoded like any other.
           traffic.messageReceived()
-          log.info(
+          PeerChurnStats.global.recordClosedByDisconnect(reason)
+          log.debug(
             "[RLPx] Peer {} refused the connection before Hello: reason 0x{} ({})",
             peerId,
             reason.toHexString,
@@ -634,7 +660,7 @@ object RLPxConnectionHandler:
           stopping()
 
         case Failure(err) =>
-          log.warn("[RLPx] Malformed Hello from peer {}: {} — disconnecting", peerId, err.getMessage)
+          log.debug("[RLPx] Malformed Hello from peer {}: {} — disconnecting", peerId, err.getMessage)
           parent ! ConnectionFailed
           stopping()
 
@@ -729,14 +755,13 @@ object RLPxConnectionHandler:
 
         case TcpConnectFailed =>
           tcpFailedCount.incrementAndGet()
-          // TODO: drop the pre-auth TCP-connect/close INFO logs below back to DEBUG for non-maintained peers once the
-          // re-dial failures of the plataberget soak (2026-10-05) are diagnosed.
-          log.info("[Stopping Connection] TCP connect failed for peer {}", peerId)
+          // DEBUG: one per failed dial; the window's count is `+N tcp-fail` in the `Network [60s]` line.
+          log.debug("[Stopping Connection] TCP connect failed for peer {}", peerId)
           parent ! ConnectionFailed
           stopping()
 
         case TcpConnectionTerminated =>
-          log.info("[Stopping Connection] TCP connection terminated while connecting to peer {}", peerId)
+          log.debug("[Stopping Connection] TCP connection terminated while connecting to peer {}", peerId)
           parent ! ConnectionFailed
           stopping()
 
@@ -785,7 +810,7 @@ object RLPxConnectionHandler:
           case Success((responsePacket, result, remainingData)) =>
             log.debug("[RLPx] Auth handshake init processed for peer {}, sending response", peerId)
             bridgeWrite(bridge, responsePacket)
-            processHandshakeResult(result, remainingData, bridge)
+            processHandshakeResult(result, remainingData, bridge, inbound = true)
           case Failure(ex) =>
             log.debug(
               "[Stopping Connection] Auth decode failed for peer {} - both pre-EIP8 and EIP-8 failed: {}",
@@ -804,7 +829,7 @@ object RLPxConnectionHandler:
 
       case AuthHandshakeTimedOut() =>
         authTimeoutCount.incrementAndGet()
-        log.warn(
+        log.debug(
           "[Stopping Connection] Auth handshake timeout for peer {} after {}ms",
           peerId,
           rlpxConfiguration.waitForHandshakeTimeout.toMillis
@@ -852,7 +877,7 @@ object RLPxConnectionHandler:
         maybePreEIP8.orElse(maybePostEIP8) match
           case Success((result, remainingData)) =>
             log.debug("[RLPx] Auth handshake response processed for peer {}", peerId)
-            processHandshakeResult(result, remainingData, bridge)
+            processHandshakeResult(result, remainingData, bridge, inbound = false)
           case Failure(ex) =>
             log.debug(
               "[Stopping Connection] Response AuthHandshaker message handling failed for peer {}",
@@ -868,7 +893,7 @@ object RLPxConnectionHandler:
 
       case AuthHandshakeTimedOut() =>
         authTimeoutCount.incrementAndGet()
-        log.warn(
+        log.debug(
           "[Stopping Connection] Auth handshake timeout for peer {} after {}ms",
           peerId,
           rlpxConfiguration.waitForHandshakeTimeout.toMillis
@@ -877,7 +902,7 @@ object RLPxConnectionHandler:
         stopping()
 
       case TcpClosed(_) | TcpConnectionTerminated =>
-        log.info("[Stopping Connection] TCP connection closed by peer {} before its auth response arrived", peerId)
+        log.debug("[Stopping Connection] TCP connection closed by peer {} before its auth response arrived", peerId)
         parent ! ConnectionFailed
         stopping()
 
@@ -932,7 +957,7 @@ object RLPxConnectionHandler:
 
       case AckTimeout(n) if cancellableAckTimeout.exists(_.seqNumber == n) =>
         cancellableAckTimeout.foreach(_.cancellable.cancel())
-        log.warn("[Stopping Connection] Sending 'Hello' to {} failed", peerId)
+        log.debug("[Stopping Connection] Sending 'Hello' to {} failed", peerId)
         stopping()
 
       case TcpReceived(data) =>
@@ -951,7 +976,7 @@ object RLPxConnectionHandler:
         stopping()
 
       case TcpClosed(_) | TcpConnectionTerminated =>
-        log.info("[Stopping Connection] TCP connection closed by peer {} while awaiting Hello", peerId)
+        log.debug("[Stopping Connection] TCP connection closed by peer {} while awaiting Hello", peerId)
         stopping()
 
       case _ => Behaviors.unhandled
@@ -967,7 +992,10 @@ object RLPxConnectionHandler:
         bridge: ClassicActorRef,
         messagesNotSent: Queue[MessageSerializable] = Queue.empty,
         cancellableAckTimeout: Option[CancellableAckTimeout],
-        seqNumber: Int
+        seqNumber: Int,
+        // A Disconnect has been written (B-405): once everything queued is acknowledged, the connection closes, as
+        // go-ethereum closes right after writing its disconnect frame (p2p/rlpx, discWriteTimeout).
+        closeAfterFlush: Boolean = false
     ): Behavior[Command] = Behaviors.receiveMessage {
 
       case SendMessage(h: HelloEnc) =>
@@ -1000,7 +1028,8 @@ object RLPxConnectionHandler:
             bridge,
             messagesNotSent :+ sm.serializable,
             cancellableAckTimeout,
-            seqNumber
+            seqNumber,
+            closeAfterFlush
           )
 
       case TcpReceived(data) =>
@@ -1019,7 +1048,7 @@ object RLPxConnectionHandler:
                 msg.code.toHexString
               )
               if msg.code >= CanonicalSnapBase && msg.code < CanonicalSnapBase + CanonicalSnapSize then
-                log.info("RECV_SNAP_MSG: peer={}, msg[{}] {}", peerId, idx, msg.toShortString)
+                log.debug("RECV_SNAP_MSG: peer={}, msg[{}] {}", peerId, idx, msg.toShortString)
             case Left(err) =>
               log.debug("RECV_MSG: peer={}, msg[{}] DECODE_ERROR: {}", peerId, idx, err.getMessage)
         }
@@ -1030,12 +1059,27 @@ object RLPxConnectionHandler:
         log.debug("SEND_MSG_ACK: peer={}, seqNum={}", peerId, cancellableAckTimeout.map(_.seqNumber).getOrElse(-1))
         cancellableAckTimeout.foreach(_.cancellable.cancel())
         if messagesNotSent.nonEmpty then
-          sendMessage(messageCodec, inboundTranslator, bridge, messagesNotSent.head, seqNumber, messagesNotSent.tail)
+          sendMessage(
+            messageCodec,
+            inboundTranslator,
+            bridge,
+            messagesNotSent.head,
+            seqNumber,
+            messagesNotSent.tail,
+            closeAfterFlush
+          )
+        else if closeAfterFlush then
+          // B-405: the Disconnect frame is on the wire. Closing now lets the peer actor stop at once (it stops when
+          // this connection ends), instead of after its disconnect-poison-pill-timeout (15 s), which stays the bound
+          // for a write that is never acknowledged.
+          log.debug("[Stopping Connection] Disconnect sent and acknowledged: peer={}", peerId)
+          stopping()
         else handshaked(messageCodec, inboundTranslator, bridge, Queue.empty, None, seqNumber)
 
       case AckTimeout(n) if cancellableAckTimeout.exists(_.seqNumber == n) =>
         cancellableAckTimeout.foreach(_.cancellable.cancel())
-        log.warn("[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}", peerId, n)
+        PeerChurnStats.global.recordClosed("send-timeout")
+        log.debug("[Stopping Connection] SEND_MSG_TIMEOUT: peer={}, seqNum={}", peerId, n)
         stopping()
 
       case TcpWriteFailed =>
@@ -1059,7 +1103,8 @@ object RLPxConnectionHandler:
         bridge: ClassicActorRef,
         messageToSend: MessageSerializable,
         seqNumber: Int,
-        remainingMsgsToSend: Queue[MessageSerializable]
+        remainingMsgsToSend: Queue[MessageSerializable],
+        closeAfterFlush: Boolean = false
     ): Behavior[Command] =
       val canonicalCode = messageToSend.code
       val wireCode = inboundTranslator.toPeerWireType(canonicalCode)
@@ -1096,5 +1141,6 @@ object RLPxConnectionHandler:
         bridge,
         remainingMsgsToSend,
         Some(CancellableAckTimeout(seqNumber, timeout)),
-        increaseSeqNumber(seqNumber)
+        increaseSeqNumber(seqNumber),
+        closeAfterFlush || messageToSend.underlyingMsg.isInstanceOf[Disconnect]
       )

@@ -4,8 +4,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -37,16 +35,14 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     */
   private def withLoggedWarnings[A](f: => A): (A, List[String]) =
     val logger = LoggerFactory.getLogger(ConfigValidator.getClass).asInstanceOf[LogbackLogger]
-    val appender = new ListAppender[ILoggingEvent]
     val previousLevel = logger.getLevel
-    appender.start()
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.WARN)
     val result =
       try f
       finally
         logger.setLevel(previousLevel)
-        logger.detachAppender(appender)
+        appender.close()
     (result, appender.list.asScala.toList.filter(_.getLevel == Level.WARN).map(_.getFormattedMessage))
 
   "ConfigValidator" should "pass with valid default config" taggedAs UnitTest in {
@@ -101,6 +97,23 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
   it should "not mistake SNAP's pivot-block-offset for fast sync's" taggedAs UnitTest in {
     ConfigValidator.removedKeyWarnings(cfg("sync.snap-sync.pivot-block-offset = 64")) shouldBe empty
     ConfigValidator.removedKeyWarnings(cfg("sync.pivot-block-offset = 32")) should have size 1
+  }
+
+  // B-217 retired the legacy per-phase recovery scans, and the combined scan always runs; B-493 removed the key from
+  // the shipped sync.conf, so whatever value an operator's config sets is ignored and reported.
+  it should "warn that parallel-recovery-scan is ignored whatever its value, naming B-217" taggedAs UnitTest in {
+    for value <- Seq("false", "true", "\"yes\"") do
+      val warnings = ConfigValidator.removedKeyWarnings(cfg(s"sync.snap-sync.parallel-recovery-scan = $value"))
+      withClue(s"parallel-recovery-scan = $value: ") {
+        warnings should have size 1
+        warnings.head should include("fukuii.sync.snap-sync.parallel-recovery-scan is ignored")
+        warnings.head should include("retired by B-217")
+        warnings.head should include("combined recovery scan")
+      }
+  }
+
+  it should "say nothing of parallel-recovery-scan when the key is not set" taggedAs UnitTest in {
+    ConfigValidator.removedKeyWarnings(cfg("sync.snap-sync.recovery-scan-concurrency = 3")) shouldBe empty
   }
 
   it should "not warn about a config that sets no removed key" taggedAs UnitTest in {
@@ -187,16 +200,16 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     ConfigValidator.validate(cfg("state.path-live = true\nmining.mining-enabled = true")) shouldBe empty
   }
 
-  // forge: a checkpoint is imported into the hash-keyed store, and says the sync is done with no anchor
-  it should "refuse state.path-live with a checkpoint to sync from, by file or by URL" taggedAs UnitTest in {
+  // C5c PR3: the importer writes the position rows and anchors them in one synced batch, so the guard takes it
+  it should "take state.path-live with a checkpoint to sync from, by file or by URL" taggedAs UnitTest in {
     Seq("sync.checkpoint-sync-file = \"/data/cp.bin\"", "sync.checkpoint-sync-url = \"https://cp.example/cp\"")
       .foreach { key =>
-        val errors = ConfigValidator.stateGuardErrors(cfg(s"state.path-live = true\n$key"))
-        withClue(key)(errors should have size 1)
-        errors.head should include("checkpoint")
-        ConfigValidator.stateGuardErrors(cfg(s"state.path-live = false\n$key")) shouldBe empty
+        withClue(key) {
+          ConfigValidator.stateGuardErrors(cfg(s"state.path-live = true\n$key")) shouldBe empty
+          ConfigValidator.validate(cfg(s"state.path-live = true\n$key")) shouldBe empty
+          ConfigValidator.stateGuardErrors(cfg(s"state.path-live = false\n$key")) shouldBe empty
+        }
       }
-    // empty, as the shipped configuration has them, is no checkpoint
     ConfigValidator.stateGuardErrors(
       cfg("state.path-live = true\nsync.checkpoint-sync-file = \"\"\nsync.checkpoint-sync-url = \" \"")
     ) shouldBe empty
@@ -221,13 +234,6 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     }
     ConfigValidator.stateGuardErrors(cfg("state.path-live = false\nsync.snap-sync.storage-scheme = \"hash\"")) shouldBe
       empty
-    // each thing the guard refuses is said
-    ConfigValidator.stateGuardErrors(
-      cfg(
-        "state.path-live = true\nsync.snap-sync.storage-scheme = \"hash\"\n" +
-          "sync.checkpoint-sync-url = \"https://cp.example/cp\""
-      )
-    ) should have size 2
   }
 
   // Both are taken on the unified layout since C3c, in its linear subset: the chain file block by block onto the
@@ -245,7 +251,7 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
     ConfigValidator.stateGuardErrors(cfg("state.path-live = false\ntestmode = true")) shouldBe empty
     // what the guard still refuses is refused in test mode too
     ConfigValidator.stateGuardErrors(
-      cfg("state.path-live = true\ntestmode = true\nsync.checkpoint-sync-file = \"/data/cp.bin\"")
+      cfg("state.path-live = true\ntestmode = true\nsync.snap-sync.storage-scheme = \"hash\"")
     ) should have size 1
   }
 
@@ -259,7 +265,7 @@ class ConfigValidatorSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "refuse it for an instance of a multi-instance run too" taggedAs UnitTest in {
-    val instance = cfg("state.path-live = true\nsync.checkpoint-sync-file = \"/data/cp.bin\"")
+    val instance = cfg("state.path-live = true\nsync.snap-sync.storage-scheme = \"hash\"")
     val root = ConfigFactory.empty().withValue("fukuii-runtime.instances.guarded.fukuii", instance.root())
     val refused = the[IllegalArgumentException] thrownBy com.chipprbots.ethereum.runtime.FukuiiRuntime.fromConfig(root)
     refused.getMessage should (include("Instance guarded").and(include("fukuii.state.path-live")))

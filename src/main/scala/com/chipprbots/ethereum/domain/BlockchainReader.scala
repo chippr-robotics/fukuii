@@ -46,23 +46,33 @@ class BlockchainReader(
     *
     * With the in-development guard off, which is how the node ships, this is the read-only store every reader could
     * already take: a buffer over the hash store, so that a reader that persists by accident writes nowhere. With it on,
-    * a view of the position store: of the block the disk holds, for any caller; and of a canonical block '''behind'''
-    * it that the changeset records lead back to, for a caller that reads inside a
+    * a view of the position store: of the block the disk holds, for any caller; of a canonical block '''behind''' it
+    * that the changeset records lead back to, for a caller that reads inside a
     * [[com.chipprbots.ethereum.db.storage.pathstate.ReadScope]], which is how the reads behind the head that are in
-    * flight are counted and bounded. Never of an executed block that is kept beside the chain.
+    * flight are counted and bounded; and of an executed block that is kept beside the disk as a forward layer, through
+    * the layers that lead to it from the block the disk holds (B-210). That last is a block imported and not yet the
+    * head, such as one a consensus client's `newPayload` was answered VALID for: geth reads it by its hash from its
+    * state root (`StateAndHeaderByNumberOrHash`), and so is it read here, by its header. Such a view builds no index: a
+    * layer on a fork, which only an index could reach, is not held for a reader.
     *
     * @throws com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
     *   with the guard on, when that block's state is not held, or is behind the head and the caller is in no scope; and
     *   with `askAgain` when as many reads behind the head as may be are in flight
     */
   def stateAt(header: BlockHeader): MptStorage =
-    pathState.fold(stateStorage.getReadOnlyStorage)(_.readOnlyInScope(refOf(header)))
+    pathState.fold(stateStorage.getReadOnlyStorage) { state =>
+      val block = refOf(header)
+      if state.holdsLayer(block) then state.readOnly(block) else state.readOnlyInScope(block)
+    }
 
   /** The same state, for an execution that commits nothing (`eth_call`, a simulation, a trace): what it persists is
     * kept beside the state, read back by that execution, and dropped with the storage.
     */
   def scratchStateAt(header: BlockHeader): MptStorage =
-    pathState.fold(stateStorage.getReadOnlyStorage)(_.throwawayInScope(refOf(header)))
+    pathState.fold(stateStorage.getReadOnlyStorage) { state =>
+      val block = refOf(header)
+      if state.holdsLayer(block) then state.throwaway(block) else state.throwawayInScope(block)
+    }
 
   /** The state a block is BUILT on, when the unified layout holds it: `parent`'s state under a layer of this build's
     * own, which takes what the build persists, is read back by it, and is dropped with the storage. `None` with the
@@ -168,20 +178,20 @@ class BlockchainReader(
     accountsIn(stateAt(header), header).get(address)
 
   /** What a request about a block is answered with for the account at `address`: the account in `state`, the state of
-    * `header`'s block, and no account for a block above the best block. Such a block is the pending one, its state is
-    * not a state the node holds, and the read by block number that this replaces answered it so.
+    * `header`'s block, whatever its height (B-210). A block above the best block is one imported and not yet the head,
+    * or the pending block, and its state is read as any other: geth (`StateAndHeaderByNumberOrHash`) answers a block by
+    * its hash from its state root. Which block a number names is the caller's to settle, as geth's resolution of a
+    * number through the canonical chain does ([[com.chipprbots.ethereum.jsonrpc.ResolveBlock.resolveHeader]]).
     *
     * It takes the state so that a reader that goes on to the account's storage, or to its proof, reads all of it from
     * the one state.
     */
   def accountIn(state: MptStorage, header: BlockHeader, address: Address): Option[Account] =
-    if aboveBest(header) then None else accountsIn(state, header).get(address)
+    accountsIn(state, header).get(address)
 
-  /** The proof of that account, under the same rule and from the same state. */
+  /** The proof of that account, from the same state. */
   def accountProofIn(state: MptStorage, header: BlockHeader, address: Address): Option[Vector[MptNode]] =
-    if aboveBest(header) then None else accountsIn(state, header).getProof(address)
-
-  private def aboveBest(header: BlockHeader): Boolean = header.number.value > getBestBlockNumber
+    accountsIn(state, header).getProof(address)
 
   /** Allows to query a blockHeader by block hash
     *
@@ -301,6 +311,16 @@ class BlockchainReader(
 
   /** Whether this node's state came from a completed SNAP sync. */
   def isSnapSyncDone: Boolean = appStateStorage.isSnapSyncDone()
+
+  /** The backfill's three cursors (`AppStateStorage.getBackfillBestHeader`, `getBackfillBestBody`,
+    * `getBackfillBestReceipt`): how far below the SNAP pivot `ChainDownloader` has stored the chain (B-410).
+    */
+  def getBackfillCursors: BackfillCursors =
+    BackfillCursors(
+      header = appStateStorage.getBackfillBestHeader(),
+      body = appStateStorage.getBackfillBestBody(),
+      receipt = appStateStorage.getBackfillBestReceipt()
+    )
 
   /** Bulk bytecode recoveries that finished with the triggering code still missing (see SyncController). */
   def bulkBytecodeRecoveryFailures: Int = appStateStorage.bulkBytecodeRecoveryFailures()
@@ -524,6 +544,11 @@ class BlockchainReader(
         source = storage
       )
     }
+
+/** The backfill's cursors, as [[BlockchainReader.getBackfillCursors]] reads them: every block from 1 to `header` has
+  * its header stored by the backfill, and to `body` and `receipt` its body and its receipts. 0 where none is stored.
+  */
+final case class BackfillCursors(header: BigInt, body: BigInt, receipt: BigInt)
 
 object BlockchainReader:
 

@@ -8,23 +8,37 @@ import scala.util.Try
 
 import io.micrometer.core.instrument.*
 import io.micrometer.core.instrument.binder.logging.LogbackMetrics
+import io.micrometer.core.instrument.composite.CompositeMeterRegistry
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import io.prometheus.metrics.exporter.httpserver.HTTPServer as PrometheusHTTPServer
 import io.prometheus.metrics.instrumentation.jvm.JvmMetrics
 import kamon.Kamon
 import org.slf4j.LoggerFactory
 
-case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: Int = 0):
+/** @param serverInterface
+  *   the address the plaintext Prometheus server binds: loopback unless configured (spec 030 FR-016)
+  * @param plaintextServer
+  *   false where the endpoint is served over TLS by [[MetricsTlsServer]] instead
+  */
+case class Metrics(
+    metricsPrefix: String,
+    registry: MeterRegistry,
+    serverPort: Int = 0,
+    serverInterface: String = MetricsConfig.DefaultInterface,
+    plaintextServer: Boolean = true
+):
 
   private def mkName: String => String = MetricsUtils.mkNameWithPrefix(metricsPrefix)
 
-  private lazy val server: PrometheusHTTPServer =
-    PrometheusHTTPServer.builder().port(serverPort).buildAndStart()
+  private lazy val server: Option[PrometheusHTTPServer] =
+    Option.when(plaintextServer)(
+      PrometheusHTTPServer.builder().hostname(serverInterface).port(serverPort).buildAndStart()
+    )
 
   private var logbackMetricsBinder: Option[LogbackMetrics] = None
 
   def start(): Unit =
-    server // We need this to evaluate the lazy val!
+    val _ = server // We need this to evaluate the lazy val!
     JvmMetrics.builder().register()
     val lm = new LogbackMetrics()
     lm.bindTo(registry)
@@ -34,7 +48,7 @@ case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: I
   def close(): Unit =
     logbackMetricsBinder.foreach(_.close())
     registry.close()
-    server.close()
+    server.foreach(_.close())
 
   /** Returns a [[io.micrometer.core.instrument.Gauge Gauge]].
     * @param computeValue
@@ -47,6 +61,15 @@ case class Metrics(metricsPrefix: String, registry: MeterRegistry, serverPort: I
       //      So we just use a vanilla `this` but any other non-`null`
       //      value would also do.
       .builder(mkName(name), this, (_: Any) => computeValue()) // Any: Micrometer gauge state — library API
+      .register(registry)
+
+  /** Returns a [[io.micrometer.core.instrument.FunctionCounter FunctionCounter]]: a counter whose count is read from
+    * `computeValue` when scraped, for a count kept elsewhere that only goes up. Prometheus exports it as a counter
+    * (with `_total`), so `rate()` and `increase()` may be taken of it; a gauge holding the same count may not (B-200).
+    */
+  def functionCounter(name: String, computeValue: () => Double): FunctionCounter =
+    FunctionCounter
+      .builder(mkName(name), this, (_: Any) => computeValue()) // Any: Micrometer counter state — library API
       .register(registry)
 
   /** Returns a [[io.micrometer.core.instrument.Counter Counter]].
@@ -79,12 +102,80 @@ object Metrics:
   // Multi-instance registry: maps instanceId → Metrics
   private val instances = new ConcurrentHashMap[String, Metrics]()
 
+  /** The registry of the default instance before any is configured. It is a composite holding a throwaway
+    * `SimpleMeterRegistry` (so reads of what was recorded still work), and `configure` adds the exported registry to
+    * it. Micrometer registers the meters a composite already holds on a registry added to it, so a holder that was
+    * first touched before `configure` (every `MetricsContainer` object built with the storages or the actors, B-427; as
+    * B-400 for the allowlist, B-425 for the state layout) records into the exported registry too, with no change to the
+    * holder and no cost on its hot path. What was counted before `configure` is not carried over.
+    */
+  final private val defaultComposite: CompositeMeterRegistry =
+    val composite = new CompositeMeterRegistry()
+    composite.add(new SimpleMeterRegistry())
+    composite
+
   // Default/fallback instance for backward compatibility
-  final private val defaultMetrics = Metrics(MetricsPrefix, new SimpleMeterRegistry())
+  final private val defaultMetrics = Metrics(MetricsPrefix, defaultComposite)
   private val defaultRef = new AtomicReference[Metrics](defaultMetrics)
 
   /** Get the default metrics instance (backward compatible with single-instance mode). */
   def get(): Metrics = defaultRef.get()
+
+  /** Runs `body` with `metrics` as the default, then puts the previous default back. For tests of a holder that must
+    * follow `configure`, which would otherwise leave its registry installed for the rest of the JVM.
+    */
+  private[ethereum] def usingDefault[T](metrics: Metrics)(body: => T): T =
+    TestDefaultLock.synchronized {
+      val previous = defaultRef.getAndSet(metrics)
+      try body
+      finally defaultRef.set(previous)
+    }
+
+  /** Held by the test helpers that swap the default or add to it ([[usingDefault]], [[withDefaultForTest]],
+    * [[withRegistryAddedForTest]]), so that two specs running in parallel in one JVM do not install theirs over each
+    * other's.
+    */
+  final private val TestDefaultLock = new Object
+
+  /** Makes `metrics` the default if none was configured before, and has the meters already made on the default registry
+    * follow it (B-427, see [[defaultComposite]]). False when another instance is the default.
+    */
+  private def becomeDefault(metrics: Metrics): Boolean =
+    val became = defaultRef.compareAndSet(defaultMetrics, metrics)
+    if became then defaultComposite.add(metrics.registry)
+    became
+
+  /** The reverse of [[becomeDefault]], for a test that must not leave its registry installed for the rest of the JVM.
+    */
+  private[ethereum] def unseatDefault(metrics: Metrics): Unit =
+    val _ = defaultComposite.remove(metrics.registry)
+    val _ = defaultRef.compareAndSet(metrics, defaultMetrics)
+
+  /** Runs `body` with `metrics` as the default as `configure` makes it (the meters already made on the default registry
+    * follow it, B-427), then puts the previous default back, under the lock [[usingDefault]] takes; in place of
+    * `configure`, which starts servers and binds ports. Throws when another instance is the default.
+    */
+  private[ethereum] def withDefaultForTest[T](metrics: Metrics)(body: => T): T =
+    TestDefaultLock.synchronized {
+      if !becomeDefault(metrics) then throw new IllegalStateException("another Metrics instance is the default")
+      try body
+      finally unseatDefault(metrics)
+    }
+
+  /** Runs `body` with `registry` added to the default registry, as `configure` adds the exported one, without making
+    * another instance the default: every meter the holders made or make on the default registry is registered on
+    * `registry` too, and no holder first touched meanwhile is left holding an instance that goes away after (B-200).
+    * Under the lock [[usingDefault]] takes; throws when an instance was configured as the default.
+    */
+  private[ethereum] def withRegistryAddedForTest[T](registry: MeterRegistry)(body: => T): T =
+    TestDefaultLock.synchronized {
+      if !(defaultRef.get() eq defaultMetrics) then
+        throw new IllegalStateException("another Metrics instance is the default")
+      val _ = defaultComposite.add(registry)
+      try body
+      finally
+        val _ = defaultComposite.remove(registry)
+    }
 
   /** Get metrics for a specific instance. Falls back to default if not registered. */
   def forInstance(instanceId: String): Metrics =
@@ -108,12 +199,12 @@ object Metrics:
     Try {
       if config.enabled then
         val registry = MeterRegistryBuilder.build(MetricsPrefix)
-        val metrics = new Metrics(MetricsPrefix, registry, config.port)
+        val metrics = new Metrics(MetricsPrefix, registry, config.port, config.interface, !config.tlsEnabled)
         val existing = instances.putIfAbsent(instanceId, metrics)
         if existing == null then
           metrics.start()
           // First instance also becomes the default
-          val becameDefault = defaultRef.compareAndSet(defaultMetrics, metrics)
+          val becameDefault = becomeDefault(metrics)
           if !becameDefault then
             // Identify the owner of `defaultRef` — that's the instance whose writes the shared
             // registry actually reflects. `instances` may have other entries too (3+-way
@@ -139,4 +230,7 @@ object Metrics:
 
   /** Shut down metrics for a specific instance. */
   def closeInstance(instanceId: String): Unit =
-    Option(instances.remove(instanceId)).foreach(_.close())
+    Option(instances.remove(instanceId)).foreach { metrics =>
+      val _ = defaultComposite.remove(metrics.registry)
+      metrics.close()
+    }

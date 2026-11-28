@@ -123,6 +123,30 @@ class ForkIdEthMainnetSpec extends AnyWordSpec with Matchers:
       create(30000000, 1767747671L) shouldBe ForkId(0x07c9462eL, None)
     }
 
+    "add each scheduled BPO3, BPO4 and BPO5 timestamp to the checksum chain (B-443)" taggedAs (
+      UnitTest,
+      NetworkTest
+    ) in {
+      // Hypothetical schedule on top of mainnet's: no network schedules BPO3+ yet. go-ethereum's gatherForks takes
+      // every `*Time` field, BPO3Time..BPO5Time included. Expected hashes are CRC32(previous, uint64be(fork)) from
+      // 0x07c9462e (mainnet's BPO2 checksum), computed outside this implementation (Python zlib.crc32); the same
+      // computation reproduces 0xcba2a1c0 -> 0x07c9462e for BPO2 at 1767747671.
+      val withBpo3to5 = ethConf.copy(forkTimestamps =
+        ethConf.forkTimestamps.copy(
+          bpo3Timestamp = Some(2000000000L),
+          bpo4Timestamp = Some(2100000000L),
+          bpo5Timestamp = Some(2200000000L)
+        )
+      )
+      def at(ts: Long): ForkId = ForkId.create(mainnetGenesisHash, GenesisTimestamp, withBpo3to5)(30000000, ts)
+      at(1767747671L) shouldBe ForkId(0x07c9462eL, Some(2000000000L))
+      at(1999999999L) shouldBe ForkId(0x07c9462eL, Some(2000000000L))
+      at(2000000000L) shouldBe ForkId(0xeba78c62L, Some(2100000000L))
+      at(2100000000L) shouldBe ForkId(0x1c427342L, Some(2200000000L))
+      at(2200000000L) shouldBe ForkId(0x1e18ce7bL, None)
+      ForkId.gatherTimestampForks(withBpo3to5, GenesisTimestamp).takeRight(3) shouldBe
+        List[BigInt](2000000000L, 2100000000L, 2200000000L)
+    }
     "regress to the stale Prague checksum if Osaka, BPO1 and BPO2 are dropped" taggedAs (UnitTest, NetworkTest) in {
       // Negative control pinning the exact symptom: this is what fukuii announced at every
       // mainnet head after 2025-12-03 — the Prague hash, and no next fork at all.

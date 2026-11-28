@@ -2,11 +2,13 @@
 name: fukuii-peer-management
 description: >-
   Inspect and manage a Fukuii node's peer connections — list peers, add/remove
-  peers, mark trusted peers, tune max-peers, and configure static/bootstrap
-  nodes. Use when peer count is low, the node is isolated, you need to pin a
-  specific peer, connect to a private/consortium set, or troubleshoot P2P
-  connectivity. Listing is read-only; add/remove/trust/maxPeers are reversible
-  writes under the guarded-write protocol.
+  peers, mark trusted peers, tune max-peers, configure static/bootstrap nodes,
+  and manage the consortium node-ID allowlist (`network.peer.node-allowlist`,
+  `admin_addNodesToAllowlist` / `admin_removeNodesFromAllowlist` /
+  `admin_getNodesAllowlist`). Use when peer count is low, the node is isolated,
+  you need to pin a specific peer, admit or remove a consortium member, or
+  troubleshoot P2P connectivity. Listing is read-only; add/remove/trust/maxPeers
+  and allowlist edits are reversible writes under the guarded-write protocol.
 ---
 
 # Fukuii peer management
@@ -56,8 +58,40 @@ Network, RPC port, datadir. Target peer enode URI(s) for any write. CONVENTIONS 
 6. **Capacity** (🟡) — `admin_maxPeers(<n>)` to raise/lower the cap. Note effect on
    bandwidth/memory before raising.
 7. **Static / bootstrap nodes** (🔴 — config edit, restart) — for permanent
-   pinning set static nodes in `fukuii.conf`; see static-nodes runbook and the
-   `fukuii-cli sync-static-nodes` helper for multi-client test nets.
+   pinning list static nodes in `<datadir>/static-nodes.json`; see the static-nodes
+   runbook and the `fukuii-cli sync-static-nodes` helper for multi-client test nets.
+   `bootstrap-nodes` is a chain-config key; the `enterprise` modifier ignores it
+   and dials only `static-nodes.json`.
+
+## Consortium node allowlist (spec 030)
+`network.peer.node-allowlist { enabled = false, nodes = [], file = null,
+reload-interval = 1 minute }`. With `enabled = true`, only listed node IDs may
+connect (checked right after the RLPx auth handshake) or be dialled (every dial,
+including `admin_addPeer`, `admin_addTrustedPeer`, `net_connectToPeer`, which
+answer `node <id>... is not on the node allowlist` for an unlisted one), and
+discovery (discv4, discv5, DNS) is off whatever `discovery-enabled` says. Entries:
+`"enode://<128 hex>@host:port"` (also a dial candidate) or a bare 128-hex id.
+Every static node and chain bootstrap node must be listed or the node refuses to
+start. Enabling/disabling it is a config edit + restart (🔴).
+
+- **Read** (🟢) — `admin_getNodesAllowlist` → `{ enabled, file, nodes: [ { id,
+  enode, sources } ] }` (`sources` ⊂ `config`, `file`, `static`, `bootnode`).
+- **Add / remove** (🟡) — `admin_addNodesToAllowlist([["enode://…", …]])`,
+  `admin_removeNodesFromAllowlist([["<id or enode>", …]])`: one array of 1–256
+  entries, all-or-nothing, result `true`. They need `file` set (else `-32000 …
+  runtime edits need fukuii.network.peer.node-allowlist.file`) and the `admin`
+  namespace: IPC by default, or an mTLS identity rule granting `admin` (no HTTP/WS
+  default has it; without it `-32601`). The node re-reads the file if it changed,
+  writes it atomically (tmp + fsync + rename), then swaps the list; a removed node
+  is disconnected. Entries from `nodes`, static nodes or bootnodes cannot be
+  removed at runtime (the error names the source). State the enodes, confirm,
+  call, then re-read with `admin_getNodesAllowlist` and check the file.
+- **Hand edit** (🟡) — editing the file (JSON array, static-nodes.json format)
+  is picked up within `reload-interval`; an unparseable version is refused and
+  the last good list stays.
+- **Metrics** — `app_p2p_allowlist_rejections_total{direction}`,
+  `app_p2p_allowlist_size`, `app_p2p_allowlist_reload_failures_total`,
+  `app_p2p_allowlist_edits_total{op, result}`.
 
 ## Decision guide
 | Symptom | Action |
@@ -66,9 +100,12 @@ Network, RPC port, datadir. Target peer enode URI(s) for any write. CONVENTIONS 
 | Few peers, ports open | `admin_addPeer` known-good enodes; check bootstrap list |
 | Need a peer to never drop | `admin_addTrustedPeer` (🟡) or static node (🔴) |
 | Abusive/bad peer | `admin_removePeer` then consider `fukuii-security-hardening` blockIP |
+| Consortium: only members may connect | node allowlist (🔴 to enable; 🟡 `admin_` edits) |
+| Allowlist on, a member never connects | both sides list each other? `admin_getNodesAllowlist`; `app_p2p_allowlist_rejections_total` rising |
 
 ## Deep reference
-- `docs/runbooks/peering.md`, `docs/runbooks/network-management.md`
+- `docs/runbooks/peering.md` (incl. `#consortium-node-allowlist`), `docs/runbooks/network-management.md`
+- `specs/030-zero-trust-tls/contracts/admin-allowlist.md` (method contract and errors)
 - `docs/for-operators/static-nodes-configuration.md`
 
 ## Output

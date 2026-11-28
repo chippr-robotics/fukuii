@@ -46,11 +46,11 @@ class CheckpointExporterSpec
 
   "CheckpointExporter" should {
 
-    // Spec 018 Track C, C2b (T059): the export reads every node at its position. The archive is format v1 still, a list
-    // of nodes by hash, so on a hash store its bytes are what they were: frozen here from the code before the change,
+    // Spec 018 Track C: the export reads every node at its position, and writes format version 2 (C5c, data-model
+    // E.1): every occurrence of every stored node, so the storage trie two accounts hold is written twice. Frozen here
     // for a state with extensions 4 and 62 nibbles long, nodes embedded in their parents, and one storage trie that two
-    // accounts hold.
-    "write, for a state with long extensions, embedded nodes and a shared storage trie, the bytes it wrote before it read by position" taggedAs UnitTest in new Setup:
+    // accounts hold. Version 1 wrote 36 nodes for it (#1797, 2026-11-11); version 2 writes the shared trie's 11 again.
+    "write, for a state with long extensions, embedded nodes and a shared storage trie, the bytes pinned for format version 2" taggedAs UnitTest in new Setup:
       chosenAtBlock100()
       val archive: Path = tmpRoot.resolve("chosen.checkpoint")
       val result: ExportResult = sourceExporter.exportArchive(BigInt(100), archive).value
@@ -58,7 +58,7 @@ class CheckpointExporterSpec
       (result.nodesExported, sha256(Files.readAllBytes(archive))) shouldBe FrozenChosenArchive
 
     // The same state as rows of the position store, where each account has a storage trie of its own. The archive is
-    // of nodes by hash, so it is the same file: each distinct node once, the shared trie read under one account.
+    // the same file: the shared trie is read under each account, from its own rows.
     "write the same bytes from a position store" taggedAs UnitTest in new Setup:
       val chosen: ChosenState = chosenAtBlock100()
       val archive: Path = tmpRoot.resolve("chosen-positions.checkpoint")
@@ -79,10 +79,11 @@ class CheckpointExporterSpec
         .value shouldBe a[CheckpointExporter.StateNotHeld]
       Files.exists(archive) shouldBe false
 
-    // An account's storage trie is found, on a position store, by the hash the account is kept under: 32 bytes. An
-    // account with storage under any other key names no trie. The export says the account trie is corrupt, where the
-    // store would have thrown.
-    "say the account trie is corrupt when an account with storage is kept under a key that is not 32 bytes, on a position store" taggedAs UnitTest in new Setup:
+    // An account's storage trie is found, on a position store, by the hash the account is kept under: 32 bytes. Format
+    // version 2 takes a storage trie's owner from that key on every store (data-model E.1), so an account under any
+    // other key is a corrupt account trie, said, not thrown from the store, and not written into an archive no
+    // importer accepts.
+    "say the account trie is corrupt when an account with storage is kept under a key that is not 32 bytes, on either store" taggedAs UnitTest in new Setup:
       import com.chipprbots.ethereum.mpt.byteStringSerializer
       val chosen: ChosenState = chosenAtBlock100()
       val short: ByteString = com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit.chosenKey("ab", 1).take(31)
@@ -96,15 +97,21 @@ class CheckpointExporterSpec
       sourceWriter.storeChainWeight(header101.hash, ChainWeight.totalDifficultyOnly(chainTd(101))).commit()
       val onPositions: BlockchainReader = readerOnRows(root, chosen.load, BigInt(101), accountTrieOnly = true, identity)
       val refused: ExportError =
-        new CheckpointExporter(sourceStorages.storages.evmCodeStorage, onPositions, chainId = 1L)
+        new CheckpointExporter(
+          sourceStorages.storages.evmCodeStorage,
+          onPositions,
+          chainId = 1L,
+          terminalTotalDifficulty = None
+        )
           .exportArchive(BigInt(101), tmpRoot.resolve("short-key.checkpoint"))
           .left
           .value
       refused shouldBe CheckpointExporter.CorruptAccountKey(short)
-      // a hash store reads the trie by its root, as it always did
+      // a hash store could read the trie by its root, but the archive would name no owner for it
       sourceExporter
         .exportArchive(BigInt(101), tmpRoot.resolve("short-key-hashes.checkpoint"))
-        .value shouldBe a[ExportResult]
+        .left
+        .value shouldBe CheckpointExporter.CorruptAccountKey(short)
 
     // An export holds one view across every read. When import moves the disk on under it, a read says so. That is not
     // a trie node that is missing, which is what a damaged state would be reported as.
@@ -120,13 +127,18 @@ class CheckpointExporterSpec
             handed = Some(stale)
             stale
         )
-        val result = new CheckpointExporter(sourceStorages.storages.evmCodeStorage, reader, chainId = 1L)
+        val result = new CheckpointExporter(
+          sourceStorages.storages.evmCodeStorage,
+          reader,
+          chainId = 1L,
+          terminalTotalDifficulty = None
+        )
           .exportArchive(BigInt(100), tmpRoot.resolve(name))
         (result, handed.map(_.readsAsked).getOrElse(0))
 
       val (whole, reads) = exportWith(Int.MaxValue, "whole.checkpoint")
       whole.value.nodesExported shouldBe FrozenChosenArchive._1
-      // one read for each node written: a node is read once, and a trie another account also holds is not read again
+      // one read for each node written: every occurrence is read once, a trie another account also holds included
       reads shouldBe FrozenChosenArchive._1.toInt
       (0 until reads).foreach { healthy =>
         withClue(s"the state moved after $healthy of $reads reads: ") {
@@ -195,7 +207,8 @@ class CheckpointExporterSpec
       val exporter = new CheckpointExporter(
         sourceStorages.storages.evmCodeStorage,
         sourceReader,
-        chainId = 1337L
+        chainId = 1337L,
+        terminalTotalDifficulty = None
       )
       val exportResult: ExportResult = exporter.exportArchive(header.number.value, outputPath).value
       exportResult.nodesExported should be > 0L
@@ -206,9 +219,16 @@ class CheckpointExporterSpec
         targetWriter,
         targetStorages.storages.stateStorage,
         targetStorages.storages.evmCodeStorage,
-        targetStorages.storages.appStateStorage
+        targetStorages.storages.appStateStorage,
+        CheckpointImporter.Trust(
+          BigInt(1337),
+          sourceReader.genesisHeader.hash.value,
+          sourceReader.genesisHeader.difficulty.value,
+          None,
+          Some(header.hash.value)
+        )
       )
-      val importResult: ImportResult = importer.importFromFile(outputPath, Some(1337L)).value
+      val importResult: ImportResult = importer.importFromFile(outputPath).value
       importResult.blockNumber shouldBe header.number.value
       importResult.nodesImported shouldBe exportResult.nodesExported
       importResult.bytecodesImported shouldBe exportResult.bytecodesExported
@@ -247,7 +267,8 @@ class CheckpointExporterSpec
       val exporter = new CheckpointExporter(
         sourceStorages.storages.evmCodeStorage,
         sourceReader,
-        chainId = 1L
+        chainId = 1L,
+        terminalTotalDifficulty = None
       )
       val r: Either[ExportError, ExportResult] =
         exporter.exportArchive(blockNumber = 9999, output = tmpRoot.resolve("nope.checkpoint"))
@@ -284,7 +305,8 @@ class CheckpointExporterSpec
       val exporter = new CheckpointExporter(
         sourceStorages.storages.evmCodeStorage,
         sourceReader,
-        chainId = 1L
+        chainId = 1L,
+        terminalTotalDifficulty = None
       )
       val exportResult: ExportResult = exporter.exportArchive(header.number.value, outputPath).value
       exportResult.nodesExported should be > 0L
@@ -294,9 +316,16 @@ class CheckpointExporterSpec
         targetWriter,
         targetStorages.storages.stateStorage,
         targetStorages.storages.evmCodeStorage,
-        targetStorages.storages.appStateStorage
+        targetStorages.storages.appStateStorage,
+        CheckpointImporter.Trust(
+          BigInt(1),
+          sourceReader.genesisHeader.hash.value,
+          sourceReader.genesisHeader.difficulty.value,
+          None,
+          Some(header.hash.value)
+        )
       )
-      val importResult: ImportResult = importer.importFromFile(outputPath, Some(1L)).value
+      val importResult: ImportResult = importer.importFromFile(outputPath).value
       importResult.blockNumber shouldBe header.number.value
 
       val importedTrie: MerklePatriciaTrie[Array[Byte], Account] = MerklePatriciaTrie[Array[Byte], Account](
@@ -338,13 +367,14 @@ class CheckpointExporterSpec
         Left(CheckpointExporter.IncompleteHeaderChain(7, chain(8).parentHash.value))
       Files.exists(outputPath) shouldBe false
 
+    // The missing ancestor is below the window of 256 headers, which the archive carries and which must be whole.
     "export the stored weight when an ancestor is missing and allowEstimatedTd is set" taggedAs UnitTest in new Setup:
-      val header: BlockHeader = storeHeaderChain(sourceWriter, 20, oneAccountStateRoot, skip = Set(7)).last
-      val stored: ChainWeight = ChainWeight.totalDifficultyOnly(chainTd(20) - 1)
+      val header: BlockHeader = storeHeaderChain(sourceWriter, 300, oneAccountStateRoot, skip = Set(7)).last
+      val stored: ChainWeight = ChainWeight.totalDifficultyOnly(chainTd(300) - 1)
       sourceWriter.storeChainWeight(header.hash, stored).commit()
 
       val outputPath: Path = tmpRoot.resolve("estimated.checkpoint")
-      sourceExporter.exportArchive(20, outputPath, allowEstimatedTd = true).value
+      sourceExporter.exportArchive(300, outputPath, allowEstimatedTd = true).value
 
       readArchiveWeight(outputPath) shouldBe stored
 
@@ -408,11 +438,12 @@ class CheckpointExporterSpec
   private def sha256(bytes: Array[Byte]): String =
     java.security.MessageDigest.getInstance("SHA-256").digest(bytes).map("%02x".format(_)).mkString
 
-  /** The nodes exported and the SHA-256 of the archive, for `ChosenState` at block 100 of the spec's header chain: from
-    * the exporter as it was before it read by position (#1797, 2026-11-11).
+  /** The nodes exported and the SHA-256 of the archive, for `ChosenState` at block 100 of the spec's header chain:
+    * format version 2 (spec 018 C5c PR1, 2026-11-18). The TD-exact flag is set: the TD is summed from genesis (E.1,
+    * amended at the PR1 sign-off), though the node holds no chain-weight invariant.
     */
   private val FrozenChosenArchive: (Long, String) =
-    (36L, "d44625066f0491215d261d756ef310b54e1af7e826e96ae0fa56b828ab8c7c0b")
+    (47L, "84258000eb5f6076fa1df4cc24413fd453aafea430d205f41dd0165b07453293")
 
   private trait Setup extends EphemBlockchainTestSetup:
     val sourceStorages = getNewStorages
@@ -431,7 +462,8 @@ class CheckpointExporterSpec
     lazy val sourceExporter: CheckpointExporter = new CheckpointExporter(
       sourceStorages.storages.evmCodeStorage,
       sourceReader,
-      chainId = 1L
+      chainId = 1L,
+      terminalTotalDifficulty = None
     )
 
     /** `ChosenState` on the source's hash store, as the state of block 100 of a stored header chain. */
@@ -490,7 +522,12 @@ class CheckpointExporterSpec
         override def stateAt(of: BlockHeader): MptStorage = handing(super.stateAt(of))
 
     def exporterOnPositions(chosen: ChosenState): CheckpointExporter =
-      new CheckpointExporter(sourceStorages.storages.evmCodeStorage, readerOnPositions(chosen), chainId = 1L)
+      new CheckpointExporter(
+        sourceStorages.storages.evmCodeStorage,
+        readerOnPositions(chosen),
+        chainId = 1L,
+        terminalTotalDifficulty = None
+      )
 
   /** Source uses BasicPruning so trie nodes go through ReferenceCountNodeStorage's ref-count wrapping — the path that
     * exposed Bug 33. Target stays ArchivePruning (matches the default `Setup`).

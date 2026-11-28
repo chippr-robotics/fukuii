@@ -29,7 +29,8 @@ trait StdMiningBuilder extends MiningBuilder:
 
   private lazy val fukuiiConfig = instanceConfig.config
 
-  lazy val coinbaseProvider: CoinbaseProvider = new CoinbaseProvider(miningConfig.coinbase)
+  // the shipped default coinbase is not counted as chosen: no block is this node's own for it unless it mines (B-284)
+  lazy val coinbaseProvider: CoinbaseProvider = CoinbaseProvider.of(miningConfig)
 
   private def newConfig[C <: AnyRef](c: C): FullMiningConfig[C] =
     FullMiningConfig(miningConfig, c)

@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.consensus.engine.EngineApiService
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.consensus.engine.PayloadAttributes
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -25,7 +26,6 @@ import com.chipprbots.ethereum.domain.Receipt
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.Timestamp
 import com.chipprbots.ethereum.ledger.BlockExecutionError
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Logger
 
@@ -100,7 +100,6 @@ class TestingService(
     blockchainReader: BlockchainReader,
     blockchainWriter: BlockchainWriter,
     forkChoiceManager: ForkChoiceManager,
-    pendingTransactionsManager: Option[ActorRef[PendingTransactionsManager.Command]],
     blockTopic: Option[ActorRef[Topic.Command[NewBlockImported]]],
     gasLimitTarget: BigInt,
     // On the unified state layout a build writes no state, so a block that was built is committed by importing it:
@@ -150,25 +149,38 @@ class TestingService(
               // The unified state layout: the block, its receipts, its access list, the head and its state are one
               // batch, written by the import that executes it. A block the builder made and import refuses is a
               // difference between the two, which is this node's fault and never the caller's.
-              importBlock(block).left.map { refused =>
-                log.error(
-                  "testing_commitBlockV1: the block that was built ({}, number={}) was refused by import: {}",
-                  hex(hash.value),
-                  block.header.number,
-                  refused
-                )
-                JsonRpcError.LogicError(s"the block that was built was refused by import: $refused")
-              }
+              // Refused, with nothing written, because another thread's adoption holds the head (B-294): no fault
+              // of this node and no difference between builder and import. Answered as a state to ask for again
+              // (B-462); any other state fault is thrown, and answered by the controllers' backstop
+              try
+                importBlock(block).left.map { refused =>
+                  log.error(
+                    "testing_commitBlockV1: the block that was built ({}, number={}) was refused by import: {}",
+                    hex(hash.value),
+                    block.header.number,
+                    refused
+                  )
+                  JsonRpcError.LogicError(s"the block that was built was refused by import: $refused")
+                }
+              catch
+                case busy: StateBusy =>
+                  log.warn(
+                    "[STATE-BUSY] testing_commitBlockV1: the block that was built was not committed: {}",
+                    busy.getMessage
+                  )
+                  Left(JsonRpcError.HeadBusy)
             case None =>
-              // Same write sequence engine_newPayload + engine_forkchoiceUpdated perform for a
-              // canonical-extending payload: store block, store receipts, promote to canonical head.
-              // The world state is already persisted — buildBlockOnParent ran executeForProposer,
-              // which calls InMemoryWorldStateProxy.persistState against the writable backing.
-              blockchainWriter.storeBlock(block).commit()
-              blockchainWriter.storeReceipts(hash, built.receipts).commit()
-              // EIP-7928: keep the list the header commits to, as engine_newPayload does for an Amsterdam block, so
-              // engine_getPayloadBodies*V2 and eth/71 can serve the committed block. None before Amsterdam.
-              built.blockAccessList.foreach(bal => blockchainWriter.storeBlockAccessList(hash, bal).commit())
+              // The block and its receipts are stored, then the head is promoted, as engine_newPayload and
+              // engine_forkchoiceUpdated do for a canonical-extending payload. The world state is already persisted:
+              // buildBlockOnParent ran executeForProposer, which writes it straight through to the hash store. Its
+              // code it does not write (B-230): that goes in the ONE batch that stores the block, its receipts and,
+              // on an Amsterdam block, the access list the header commits to (EIP-7928; engine_getPayloadBodies*V2
+              // and eth/71 serve it), so a kill leaves all of them or none (B-466).
+              val records = blockchainWriter.storeBlock(block).and(blockchainWriter.storeReceipts(hash, built.receipts))
+              val withList = built.blockAccessList.fold(records)(bal =>
+                records.and(blockchainWriter.storeBlockAccessList(hash, bal))
+              )
+              engineApiService.builtCodeWrite(built).fold(withList)(_.and(withList)).commit()
               Right(())
           stored.map { _ =>
             forkChoiceManager.applyForkChoiceState(
@@ -181,16 +193,16 @@ class TestingService(
                 finalizedBlockHash = ForkChoiceManager.ZeroHash
               )
             ) match
-              case Left(err) => log.error("testing_commitBlockV1: fork choice rejected freshly stored head: {}", err)
+              case Left(err) =>
+                log.error("testing_commitBlockV1: fork choice rejected freshly stored head: {}", err.describe)
               case Right(()) => ()
 
-            // Drop the committed transactions from the pool so the next build does not re-queue
-            // them (they would fail with NONCE_MISMATCH_TOO_LOW). engine_forkchoiceUpdated does
-            // the same on head advance.
-            if block.body.transactionList.nonEmpty then
-              pendingTransactionsManager.foreach(
-                _ ! PendingTransactionsManager.RemoveTransactions(block.body.transactionList)
-              )
+            // The pool is reset onto the new head as engine_forkchoiceUpdated resets it (B-253, B-498): the committed
+            // transactions leave it, so the next build does not re-queue them (they would fail with
+            // NONCE_MISMATCH_TOO_LOW), and the head is recorded as the pool's in the node's one record of it (B-515).
+            // A bare removal left that record on the head before, and the next fork choice or import reset the pool
+            // from there, taking back the transactions of the blocks committed here.
+            engineApiService.resetThePoolOnto(hash.value)
 
             // "emit the same chain events it would for any new head" — BlockImporter publishes
             // NewBlockImported on the same topic; eth_subscribe newHeads/logs read it from there.
@@ -266,7 +278,7 @@ class TestingService(
   ): IO[Either[JsonRpcError, (Seq[SignedTransaction], Map[ByteString, ByteString])]] =
     rawTransactions match
       case None =>
-        engineApiService.selectMempoolTransactions(parent, Timestamp(attrs.timestamp)).map(Right(_))
+        engineApiService.selectMempoolTransactions(parent, Timestamp(attrs.timestamp), attrs.withdrawals).map(Right(_))
       case Some(raws) =>
         IO.pure(decodeTransactions(raws))
 

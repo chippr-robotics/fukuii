@@ -15,6 +15,11 @@ object WireProtocol:
 
   object Hello:
 
+    /** The longest Hello clientId kept, in bytes (B-199): longer ones are cut at decode. go-ethereum's own id is about
+      * 50 bytes; 256 leaves room for long build tags.
+      */
+    val MaxClientIdBytes: Int = 256
+
     val code = 0x00
 
     implicit class HelloEnc(val underlyingMsg: Hello)
@@ -47,7 +52,10 @@ object WireProtocol:
                 _*
               ) =>
             val p2pVersion = ByteUtils.bytesToBigInt(p2pVersionBytes).toLong
-            val clientId = new String(clientIdBytes, java.nio.charset.StandardCharsets.UTF_8)
+            // B-199: kept to MaxClientIdBytes. Every reader (the client classifier, admin_peers, the TUI, logs) takes it
+            // whole, and only the 16 MiB message cap bounded it; real client ids are well under 100 bytes.
+            val clientId =
+              new String(clientIdBytes.take(Hello.MaxClientIdBytes), java.nio.charset.StandardCharsets.UTF_8)
             val listenPort = ByteUtils.bytesToBigInt(listenPortBytes).toLong
             val nodeId = ByteString(nodeIdBytes)
             Hello(p2pVersion, clientId, capabilities.items.map(_.toCapability).flatten, listenPort, nodeId)

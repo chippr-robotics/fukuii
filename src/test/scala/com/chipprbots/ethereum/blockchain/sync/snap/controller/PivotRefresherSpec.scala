@@ -715,10 +715,12 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     h.module.networkBest = Some(best)
     h.call(_.maybeProactivePivotRoll())
 
-  it should "roll the pivot once it is more than 100 blocks behind the SNAP peers' best block" taggedAs UnitTest in {
+  // B-031: the roll comes at 3/4 of the 128-block serve window, 96 blocks, not at 100, so the header fetch and the
+  // readiness probe have a quarter of the window before the root is pruned.
+  it should "roll the pivot once it is more than 96 blocks (3/4 of the serve window) behind the SNAP peers' best block" taggedAs UnitTest in {
     val h = new Harness()
 
-    rollAt(h, BigInt(500))
+    rollAt(h, BigInt(496))
     h.module.proactiveRollNeedsProbe shouldBe false
     h.module.lastProbeAttemptMs shouldBe 0L
     h.module.pendingPivotRefresh shouldBe None
@@ -726,20 +728,22 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
 
     // Rolled: the probe flag is set, the cooldown clock is stamped, and the in-place refresh asks the parent for the
     // header of the roll target, the best block minus the 64-block pivot offset.
-    rollAt(h, BigInt(501))
+    rollAt(h, BigInt(497))
     h.module.proactiveRollNeedsProbe shouldBe true
     h.module.lastProbeAttemptMs should be > 0L
-    h.module.pendingPivotRefresh shouldBe Some((BigInt(501 - 64), "proactive pivot roll"))
-    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(501 - 64)))
+    h.module.pendingPivotRefresh shouldBe Some((BigInt(497 - 64), "proactive pivot roll"))
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(497 - 64)))
     h.module.stagnationResets shouldBe Seq(StagnationWatchdog.ResetReason.PivotRefreshHeaderFetch)
     h.module.pivotBlock shouldBe Some(BigInt(400))
   }
 
-  it should "not roll again inside 50 blocks of the last committed roll, nor without a SNAP peer's best block" taggedAs UnitTest in {
+  // B-031: the spacing after a committed roll is the 32 blocks from the 64-block roll depth to the 96-block roll age, not
+  // a fixed 50, which held every roll after the first back to an age of 115.
+  it should "not roll again inside 32 blocks of the last committed roll, nor without a SNAP peer's best block" taggedAs UnitTest in {
     val h = new Harness()
     h.module.lastProactivePivotBlock = Some(BigInt(551))
 
-    rollAt(h, BigInt(601))
+    rollAt(h, BigInt(583))
     h.module.proactiveRollNeedsProbe shouldBe false
     h.parent.hasMessages shouldBe false
 
@@ -748,10 +752,48 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     h.module.proactiveRollNeedsProbe shouldBe false
     h.parent.hasMessages shouldBe false
 
-    rollAt(h, BigInt(602))
+    rollAt(h, BigInt(584))
     h.module.proactiveRollNeedsProbe shouldBe true
-    h.module.pendingPivotRefresh shouldBe Some((BigInt(602 - 64), "proactive pivot roll"))
-    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(602 - 64)))
+    h.module.pendingPivotRefresh shouldBe Some((BigInt(584 - 64), "proactive pivot roll"))
+    h.parent.receiveAll() shouldBe Seq(StartRegularSyncBootstrap(BigInt(584 - 64)))
+  }
+
+  // B-031: on a proof-of-stake chain the roll's target is taken from the consensus layer's head, so the pivot's age is
+  // measured against it too. Peers' advertised heights lag the head after the merge (Sepolia 2026-05-15: ~1,146 blocks
+  // for 30 minutes); measured on them, the roll came after the root had left the serve window.
+  it should "measure the pivot's age against the CL head on a PoS chain, not the SNAP peers' lagging best block" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.clPivotHint = Some(CLPivotHint(rootB, Some(headerAt(496, rootB))))
+
+    // Peers far behind, the CL head 96 blocks above the pivot: not yet.
+    rollAt(h, BigInt(420))
+    h.module.proactiveRollNeedsProbe shouldBe false
+    h.parent.hasMessages shouldBe false
+
+    // The CL head 97 blocks above it: rolled, to the CL head's ancestor 64 blocks down, though the peers say age 20.
+    h.module.clPivotHint = Some(CLPivotHint(rootB, Some(headerAt(497, rootB))))
+    rollAt(h, BigInt(420))
+    h.module.proactiveRollNeedsProbe shouldBe true
+    h.module.pendingPivotRefresh shouldBe Some((BigInt(497 - 64), "proactive pivot roll"))
+    h.parent.receiveAll() shouldBe Seq(StartPivotAncestryBootstrap(rootB, 64))
+  }
+
+  it should "not roll on a PoS chain whose CL head is at the pivot, however far the SNAP peers' best block leads" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val h = new Harness()
+    h.module.posChain = true
+    h.module.clPivotHint = Some(CLPivotHint(rootB, Some(headerAt(464, rootB))))
+
+    rollAt(h, BigInt(5_000))
+    h.module.proactiveRollNeedsProbe shouldBe false
+    h.module.lastProbeAttemptMs shouldBe 0L
+    h.parent.hasMessages shouldBe false
   }
 
   it should "not roll while a readiness probe is in flight or its commit is deferred" taggedAs UnitTest in {
@@ -809,3 +851,47 @@ class PivotRefresherSpec extends AnyFlatSpec with Matchers:
     h.module.pendingPivotRefresh shouldBe None
     h.parent.hasMessages shouldBe false
   }
+
+  // B-547: the staleness re-check of a recovery that resumed before any snap peer had a height.
+  private def recheck(h: Harness, pivot: BigInt): Unit =
+    h.call(m => m.recoveredPivotDriftArms(RecoveredPivotDriftRecheck(pivot)): Unit)
+
+  it should "restart when the recovered pivot is past maxPivotStalenessBlocks once a peer height is known (B-547)" taggedAs
+    UnitTest in {
+      val h = new Harness()
+      h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+      h.module.networkBest = Some(BigInt(400 + 4096 + 1))
+      recheck(h, BigInt(400))
+      h.module.restarts.size shouldBe 1
+      h.module.restarts.head should include("recovered pivot 400")
+      h.scheduledTimers() shouldBe empty
+    }
+
+  it should "keep a recovered pivot exactly at the staleness bound, and one with no drift (B-547)" taggedAs UnitTest in {
+    val h = new Harness()
+    h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+    h.module.networkBest = Some(BigInt(400 + 4096))
+    recheck(h, BigInt(400))
+    h.module.networkBest = Some(BigInt(400))
+    recheck(h, BigInt(400))
+    h.module.restarts shouldBe empty
+    h.scheduledTimers() shouldBe empty
+  }
+
+  it should "poll again while no snap peer has a height, and drop a re-check for another pivot or phase (B-547)" taggedAs
+    UnitTest in {
+      val h = new Harness()
+      h.module.currentPhase = SyncPhase.ByteCodeAndStorageSync
+      h.module.networkBest = None
+      recheck(h, BigInt(400))
+      h.scheduledTimers() shouldBe Seq(
+        (RecoveredPivotDriftKey, RecoveredPivotDriftRecheck(BigInt(400)), RecoveredPivotDriftPollInterval)
+      )
+
+      h.module.networkBest = Some(BigInt(100_000))
+      recheck(h, BigInt(399)) // another pivot: a roll or restart moved it
+      h.module.currentPhase = SyncPhase.StateHealing
+      recheck(h, BigInt(400)) // the download phases are over
+      h.module.restarts shouldBe empty
+      h.scheduledTimers() shouldBe empty
+    }

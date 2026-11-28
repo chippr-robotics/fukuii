@@ -180,9 +180,9 @@
       "title": "newPayload status mix",
       "type": "timeseries",
       "targets": [
-        { "expr": "rate(app_engine_newpayload_valid{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "valid", "refId": "A" },
-        { "expr": "rate(app_engine_newpayload_syncing{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "syncing", "refId": "B" },
-        { "expr": "rate(app_engine_newpayload_invalid{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "invalid", "refId": "C" }
+        { "expr": "rate(app_engine_newpayload_valid_total{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "valid", "refId": "A" },
+        { "expr": "rate(app_engine_newpayload_syncing_total{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "syncing", "refId": "B" },
+        { "expr": "rate(app_engine_newpayload_invalid_total{instance=\"fukuii-sepolia\"}[1m])", "legendFormat": "invalid", "refId": "C" }
       ]
     },
     {

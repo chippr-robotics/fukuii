@@ -12,6 +12,9 @@ networks:
 services:
   fukuii-node1:
     image: ${FUKUII_IMAGE:-fukuii-etc:local}
+    # B-444: room for the bounded stop steps (up to ~119 s) and the RocksDB close after them; Docker's
+    # default 10 s SIGKILLs the node mid-close.
+    stop_grace_period: 180s
     container_name: gorgoroth-fukuii-node1
     hostname: fukuii-node1
     restart: unless-stopped
@@ -51,6 +54,9 @@ services:
 
   fukuii-node2:
     image: ${FUKUII_IMAGE:-fukuii-etc:local}
+    # B-444: room for the bounded stop steps (up to ~119 s) and the RocksDB close after them; Docker's
+    # default 10 s SIGKILLs the node mid-close.
+    stop_grace_period: 180s
     container_name: gorgoroth-fukuii-node2
     hostname: fukuii-node2
     restart: unless-stopped
@@ -91,6 +97,9 @@ services:
 
   fukuii-node3:
     image: ${FUKUII_IMAGE:-fukuii-etc:local}
+    # B-444: room for the bounded stop steps (up to ~119 s) and the RocksDB close after them; Docker's
+    # default 10 s SIGKILLs the node mid-close.
+    stop_grace_period: 180s
     container_name: gorgoroth-fukuii-node3
     hostname: fukuii-node3
     restart: unless-stopped

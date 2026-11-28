@@ -17,9 +17,9 @@ import com.chipprbots.ethereum.utils.Logger
   * @param snapshots
   *   the latest published snapshot, if any; a read that never blocks
   * @param onQuit
-  *   invoked once, on a fresh thread, when the user presses `q`. It must stop the node (e.g. `sys.exit`), and it may
-  *   call [[stop]] — it does not run on the updater thread, so stopping cannot join itself. An exit should restore the
-  *   terminal first: wrap it in [[TuiUpdater.restoreThenQuit]].
+  *   invoked once, on a fresh thread, when the user presses `q`. It must stop the node, then exit (`StdNode.tuiQuit`),
+  *   and it may call [[stop]] — it does not run on the updater thread, so stopping cannot join itself. An exit should
+  *   restore the terminal first: wrap it in [[TuiUpdater.restoreThenQuit]].
   */
 class TuiUpdater(
     tui: Tui,
@@ -83,7 +83,7 @@ class TuiUpdater(
         false
       case Some(TuiCommand.Quit) =>
         log.info("Quit requested via TUI")
-        // Off-thread: onQuit typically exits the JVM, whose shutdown hooks stop this updater and join its thread.
+        // Off-thread: onQuit stops the node, then exits, and the stop runs TuiUpdater.stop, which joins this thread.
         val quitter = new Thread(() => onQuit(), "TuiQuit")
         quitter.start()
         false

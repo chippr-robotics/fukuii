@@ -61,9 +61,7 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
   private def withTempDir(test: String => Unit): Unit =
     val dbPath = Files.createTempDirectory("rocksdb-stats-test").toAbsolutePath.toString
     try test(dbPath)
-    finally
-      val dir = new File(dbPath)
-      !dir.exists() || dir.delete()
+    finally com.chipprbots.ethereum.testing.TempDirs.deleteRecursively(new File(dbPath).toPath) // B-305
 
   "RocksDbDataSource with statistics enabled" should "advance the block-cache tickers on SST-served reads" taggedAs (
     UnitTest,
@@ -434,6 +432,182 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
     lockIsFree()
   }
 
+  "RocksDbDataSource.compactRange" should "not hold the database lock while the native compaction runs (B-281)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    try
+      var writtenDuringCompaction = false
+      var readDuringCompaction: Option[Value] = None
+      // The hook runs where the native call would: the compaction holds its own guard and no database lock.
+      ds.beforeNativeCompaction = () =>
+        onAnotherThread {
+          ds.update(Seq(DataSourceUpdate(Ns, Nil, Seq(key(250) -> value(7)))))
+          readDuringCompaction = ds.get(Ns, key(250))
+        }
+        writtenDuringCompaction = true
+      ds.compactRange(Ns, key(0).toArray, key(255).toArray)
+      writtenDuringCompaction shouldBe true
+      readDuringCompaction shouldBe Some(value(7))
+    finally ds.close()
+    lockIsFree()
+  }
+
+  it should "make close() wait for a running compaction, cancel it, and never free the handle under it (B-281)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    val inCompaction = new java.util.concurrent.CountDownLatch(1)
+    val closeMayEnd = new java.util.concurrent.CountDownLatch(1)
+    // Only the first compaction is held. The probes below may start before close() has (a loaded machine runs the
+    // closing future late): they must run as plain compactions, not wait on a latch only this thread can open.
+    val first = new java.util.concurrent.atomic.AtomicBoolean(true)
+    ds.beforeNativeCompaction = () =>
+      if first.getAndSet(false) then
+        inCompaction.countDown()
+        closeMayEnd.await(30, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+    val compacting = Future(ds.compactRange(Ns, key(0).toArray, key(255).toArray))(using ExecutionContext.global)
+    inCompaction.await(30, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+
+    val closing = Future(ds.close())(using ExecutionContext.global)
+    // close() has begun (new compactions are refused) but cannot finish: the compaction still holds the guard.
+    val deadline = System.nanoTime() + 30.seconds.toNanos
+    var refused = false
+    while !refused && System.nanoTime() < deadline do
+      try ds.compactRange(Ns, key(0).toArray, key(255).toArray)
+      catch case _: RocksDbDataSourceClosedException => refused = true
+    refused shouldBe true
+    closing.isCompleted shouldBe false
+
+    closeMayEnd.countDown()
+    // The compaction ends cancelled, as a closed data source, and only then does close() finish.
+    an[RocksDbDataSourceClosedException] should be thrownBy Await.result(compacting, 30.seconds)
+    Await.result(closing, 30.seconds)
+    an[RocksDbDataSourceClosedException] should be thrownBy ds.get(Ns, key(1))
+    lockIsFree()
+  }
+
+  "RocksDbDataSource.compactAll" should "compact every column family, the one with the most SST bytes first (B-371)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = RocksDbDataSource(config(dbPath, statisticsEnabled = false), Namespaces.nsSeq)
+    try
+      // Three families of three sizes, the smallest the first in the family list and the largest not the last.
+      def put(ns: DataSource.Namespace, n: Int): Unit =
+        // Distinct keys, and values that do not compress, so the SST bytes follow the count.
+        val random = new java.util.Random(n)
+        def distinct(i: Int): Key = ArraySeq.unsafeWrapArray(ByteBuffer.allocate(4).putInt(i).array())
+        def noise: Value = ArraySeq.unsafeWrapArray(Array.fill(256)(random.nextInt().toByte))
+        ds.update(Seq(DataSourceUpdate(ns, Nil, (0 until n).map(i => distinct(i) -> noise))))
+      put(Namespaces.ReceiptsNamespace, 20)
+      put(Namespaces.NodeNamespace, 2000)
+      put(Namespaces.BodyNamespace, 400)
+      ds.flushAll()
+      val told = scala.collection.mutable.Buffer.empty[(DataSource.Namespace, Int, Int)]
+      ds.compactAll((ns, at, of) => told += ((ns, at, of))) match
+        case RocksDbDataSource.CompactAllOutcome.Finished(compacted, notReached, cancelled, _) =>
+          cancelled shouldBe false
+          notReached shouldBe empty
+          compacted.map(_.namespace).take(3) shouldBe Seq(
+            Namespaces.NodeNamespace,
+            Namespaces.BodyNamespace,
+            Namespaces.ReceiptsNamespace
+          )
+          // Every family, once, and each told before it started, from 1.
+          compacted.size shouldBe ds.familyCount
+          Namespaces.nsSeq.toSet.diff(compacted.map(_.namespace).toSet) shouldBe empty
+          told.map(_._1) shouldBe compacted.map(_.namespace)
+          told.map(_._2) shouldBe (1 to ds.familyCount)
+          told.map(_._3).distinct shouldBe Seq(ds.familyCount)
+          compacted.head.sstBytesBefore.exists(_ > 0L) shouldBe true
+          compacted.head.sstBytesAfter should not be empty
+        case other => fail(s"expected a finished compaction, got $other")
+      // The data is intact: the last of the 2000 keys is still there.
+      ds.get(Ns, ArraySeq.unsafeWrapArray(ByteBuffer.allocate(4).putInt(1999).array())) should not be empty
+    finally ds.close()
+    lockIsFree()
+  }
+
+  it should "put the largest first, and a family of unknown size with the empty ones" taggedAs (UnitTest) in {
+    val a = IndexedSeq[Byte]('a'.toByte)
+    val b = IndexedSeq[Byte]('b'.toByte)
+    val c = IndexedSeq[Byte]('c'.toByte)
+    val d = IndexedSeq[Byte]('d'.toByte)
+    RocksDbDataSource.largestFirst(Seq(a -> Some(5L), b -> None, c -> Some(50L), d -> Some(0L))).map(_._1) shouldBe
+      Seq(c, a, b, d)
+  }
+
+  it should "stop between families when close() comes, and say which it did and which it left (B-371)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    // The callback runs between families, with no guard and no lock held: close() here cancels the rest.
+    val outcome = ds.compactAll((_, at, _) => if at == 2 then ds.close())
+    outcome match
+      case RocksDbDataSource.CompactAllOutcome.Finished(compacted, notReached, cancelled, _) =>
+        cancelled shouldBe true
+        compacted.map(_.namespace) shouldBe Seq(Namespaces.NodeNamespace)
+        notReached.size shouldBe ds.familyCount - 1
+        notReached should not contain Namespaces.NodeNamespace
+      case other => fail(s"expected a cancelled compaction, got $other")
+    an[RocksDbDataSourceClosedException] should be thrownBy ds.get(Ns, key(1))
+    // The guard is let go: a later request is not "already running" (it finds the database closed instead).
+    ds.compactAll() should not be RocksDbDataSource.CompactAllOutcome.AlreadyRunning
+    lockIsFree()
+  }
+
+  it should "stop on a failure other than the close, keeping the families done and naming the one that failed (B-371)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    try
+      var calls = 0
+      ds.beforeNativeCompaction = () =>
+        calls += 1
+        if calls == 2 then throw new IllegalStateException("disk full")
+      ds.compactAll() match
+        case RocksDbDataSource.CompactAllOutcome.Finished(compacted, notReached, cancelled, failure) =>
+          cancelled shouldBe false
+          compacted.size shouldBe 1
+          failure.map(_.namespace) shouldBe notReached.headOption
+          failure.exists(_.message.contains("compacting")) shouldBe true
+          notReached.size shouldBe ds.familyCount - 1
+        case other => fail(s"expected a finished compaction, got $other")
+      // The guard is let go: the next request runs.
+      ds.beforeNativeCompaction = () => ()
+      ds.compactAll() shouldBe a[RocksDbDataSource.CompactAllOutcome.Finished]
+    finally ds.close()
+    lockIsFree()
+  }
+
+  it should "answer 'already running' to a second request while one runs, and accept one after (B-371)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in withTempDir { dbPath =>
+    val ds = filled(dbPath)
+    try
+      var second: Option[RocksDbDataSource.CompactAllOutcome] = None
+      // Inside the first family's native call the first request is running: this is the second, on the same thread
+      // and on another.
+      val hook = () =>
+        if second.isEmpty then
+          second = Some(ds.compactAll())
+          onAnotherThread(ds.compactAll()) shouldBe RocksDbDataSource.CompactAllOutcome.AlreadyRunning
+      ds.beforeNativeCompaction = hook
+      ds.compactAll() shouldBe a[RocksDbDataSource.CompactAllOutcome.Finished]
+      second shouldBe Some(RocksDbDataSource.CompactAllOutcome.AlreadyRunning)
+      // It ended, so the flag is free.
+      ds.beforeNativeCompaction = () => ()
+      ds.compactAll() shouldBe a[RocksDbDataSource.CompactAllOutcome.Finished]
+    finally ds.close()
+    lockIsFree()
+  }
+
   "RocksDbDataSource.whileFree" should "let a point read through while a writer waits behind a long read" taggedAs (
     UnitTest,
     DatabaseTest
@@ -505,4 +679,20 @@ class RocksDbDataSourceSpec extends AnyFlatSpec with Matchers:
     noException should be thrownBy Await.result(reading, 30.seconds)
     ds.properties() shouldBe None
     lockIsFree()
+  }
+
+  "RocksDbDataSource" should "set the WAL recovery mode explicitly to point-in-time (B-078)" taggedAs (
+    UnitTest,
+    DatabaseTest
+  ) in {
+    RocksDbDataSource.WalRecoveryMode shouldBe org.rocksdb.WALRecoveryMode.PointInTimeRecovery
+    val dbPath = Files.createTempDirectory("rocksdb-wal-mode-test").toAbsolutePath.toString
+    val ds = RocksDbDataSource(config(dbPath, statisticsEnabled = false), Namespaces.nsSeq)
+    try ds.walRecoveryMode() shouldBe org.rocksdb.WALRecoveryMode.PointInTimeRecovery
+    finally
+      ds.close()
+      def rm(f: File): Unit =
+        Option(f.listFiles()).foreach(_.foreach(rm))
+        val _ = f.delete()
+      rm(new File(dbPath))
   }

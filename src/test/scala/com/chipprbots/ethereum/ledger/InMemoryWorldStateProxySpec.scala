@@ -8,6 +8,9 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.db.storage.MptStorage
+import com.chipprbots.ethereum.db.storage.MptStorageDecorator
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.UInt256
@@ -15,6 +18,9 @@ import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingAccountNodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingCodeException
+import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MissingStorageNodeException
+import com.chipprbots.ethereum.mpt.MptNode
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.vm.EvmConfig
 import com.chipprbots.ethereum.vm.Generators
@@ -131,6 +137,9 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers:
     val persistedWorldState: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(afterUpdatesWorldState)
     validateInitialWorld(persistedWorldState)
 
+    // Commit the code, as the path that commits a block's state does (persisting a world writes none, B-230)
+    InMemoryWorldStateProxy.deployedCodeWrite(persistedWorldState).foreach(_.commit())
+
     // Create a new WS instance based on storages and new root state and check
     val newWorldState: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
       storagesInstance.storages.evmCodeStorage,
@@ -157,6 +166,56 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers:
     persistedNewWorldState.getGuaranteedAccount(address1).balance shouldEqual account.balance
     persistedNewWorldState.getGuaranteedAccount(address2).balance shouldEqual 0
     persistedNewWorldState.getStorage(address1).load(addr) shouldEqual value
+
+  // B-230: a world that is thrown away (eth_call, an estimate, a simulation, a trace, a build, a block that fails) is
+  // persisted too, and used to write every contract it deployed to the code store.
+  it should "keep the code it persists out of the code store, and read it from the world" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup:
+    val code: ByteString = ByteString(Hex.decode("6001600055deadbeef"))
+    val codeHash: ByteString = kec256(code)
+    val persisted: InMemoryWorldStateProxy =
+      InMemoryWorldStateProxy.persistState(worldState.newEmptyAccount(address1).saveCode(address1, code))
+
+    storagesInstance.storages.evmCodeStorage.get(codeHash) shouldBe None
+    persisted.getGuaranteedAccount(address1).codeHash.value shouldEqual codeHash
+    persisted.getCode(address1) shouldEqual code
+    persisted.getCodeAndHash(address1) shouldEqual ((code, Some(codeHash)))
+    persisted.getCodeSize(address1) shouldEqual code.length
+    persisted.deployedCode shouldEqual Map(codeHash -> code)
+
+    // kept through a later transaction's persist, and through the deletion of the account (content-addressed)
+    val later: InMemoryWorldStateProxy =
+      InMemoryWorldStateProxy.persistState(persisted.deleteAccount(address1).newEmptyAccount(address2))
+    later.deployedCode shouldEqual Map(codeHash -> code)
+    storagesInstance.storages.evmCodeStorage.get(codeHash) shouldBe None
+
+  it should "write the code it persisted only through deployedCodeWrite, where a world over the store reads it" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup:
+    val code: ByteString = ByteString(Hex.decode("6002600155cafe"))
+    val codeHash: ByteString = kec256(code)
+    InMemoryWorldStateProxy.deployedCodeWrite(worldState) shouldBe None
+    val persisted: InMemoryWorldStateProxy =
+      InMemoryWorldStateProxy.persistState(worldState.newEmptyAccount(address1).saveCode(address1, code))
+    // a world read from the store without the code throws, as missing code must
+    val fresh: () => InMemoryWorldStateProxy = () =>
+      InMemoryWorldStateProxy(
+        storagesInstance.storages.evmCodeStorage,
+        blockchain.getBackingMptStorage(-1),
+        (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+        UInt256.Zero,
+        persisted.stateRootHash,
+        noEmptyAccounts = false,
+        ethCompatibleStorage = true
+      )
+    assertThrows[MissingCodeException](fresh().getCode(address1))
+
+    InMemoryWorldStateProxy.deployedCodeWrite(persisted).foreach(_.commit())
+    storagesInstance.storages.evmCodeStorage.get(codeHash) shouldBe Some(code)
+    fresh().getCode(address1) shouldEqual code
 
   it should "be able to do transfers with the same origin and destination" in new TestSetup:
     val account: Account = Account(0, 100)
@@ -334,6 +393,49 @@ class InMemoryWorldStateProxySpec extends AnyFlatSpec with Matchers:
         thrown.location shouldBe defined
       }
     }
+
+  // B-075: a write that meets a corrupt node of a storage trie said no account and no position, so the importer asked
+  // for the node by hash alone, which no peer serves.
+  it should "say a corrupt node met while persisting a storage trie as that account's, with its position" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new TestSetup:
+    val first: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(
+      worldState
+        .saveAccount(address1, Account(0, 100))
+        .saveStorage(address1, worldState.getStorage(address1).store(BigInt(1), BigInt(10)))
+    )
+    // The storage is told to replace a node of the trie, and cannot: its wrapper does not unwrap.
+    var replacedAt: Option[ByteString] = None
+    class FailingReplace(val underlying: MptStorage) extends MptStorageDecorator:
+      protected def decorate(scoped: MptStorage): MptStorage = new FailingReplace(scoped)
+      override protected def update(newRoot: Option[MptNode], removals: MptStorageDecorator.Removals): Option[MptNode] =
+        removals match
+          case MptStorageDecorator.Removals.Positioned(replaced, _) if replaced.nonEmpty =>
+            val (path, node) = replaced.last
+            replacedAt = Some(ByteString(path.toHexPrefix))
+            throw new MerklePatriciaTrie.CorruptNodeException(ByteString(node.hash), "wrapper does not unwrap")
+          case _ => super.update(newRoot, removals)
+    val failing: MptStorage = new FailingReplace(blockchain.getBackingMptStorage(-1))
+    val again: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
+      storagesInstance.storages.evmCodeStorage,
+      failing,
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+      UInt256.Zero,
+      first.stateRootHash,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+
+    val thrown: MissingStorageNodeException = intercept[MerklePatriciaTrie.MissingStorageNodeException](
+      InMemoryWorldStateProxy.persistState(
+        again.saveStorage(address1, again.getStorage(address1).store(BigInt(2), BigInt(20)))
+      )
+    )
+
+    thrown.accountAddress shouldBe address1.bytes
+    replacedAt shouldBe defined
+    thrown.location shouldBe replacedAt
 
   it should "properly handle address collision during initialisation" in new TestSetup:
     // This is a known test vector from Ethereum/ETC general state tests

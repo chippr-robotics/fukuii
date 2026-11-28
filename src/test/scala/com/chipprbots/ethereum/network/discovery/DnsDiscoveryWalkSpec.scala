@@ -334,3 +334,37 @@ class DnsDiscoveryWalkSpec extends AnyFlatSpec with Matchers with Eventually wit
 
     DnsDiscovery.concatenateTxtStrings(root) shouldBe root
   }
+
+  // B-035: go-ethereum fetches each tree's root again every recheckInterval (30 min) and picks up the nodes its
+  // operator rotated in. fukuii walked once, at start-up.
+  "DnsDiscovery.seedPeriodically" should "walk the trees again after the recheck interval and report the new nodes" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in {
+    val before = new Tree(domain, branches = 2, leavesPerBranch = 3)
+    val after = new Tree(domain, branches = 2, leavesPerBranch = 3, firstNode = 6, seq = 2L)
+    val records = new java.util.concurrent.atomic.AtomicReference(before.records)
+    val rootQueries = new AtomicInteger(0)
+    val lookup: DnsDiscovery.TxtLookup = name =>
+      if name == domain then rootQueries.incrementAndGet(): Unit
+      records.get.getOrElse(name, TxtResult.NotFound)
+    val seen = ConcurrentHashMap.newKeySet[com.chipprbots.ethereum.network.discovery.Node]()
+    def nodes(range: Range): Set[com.chipprbots.ethereum.network.discovery.Node] =
+      range.map(i => Node.fromUri(new java.net.URI(DnsTreeFixture.enode(i)))).toSet
+    val onNodes: Set[com.chipprbots.ethereum.network.discovery.Node] => IO[Unit] = found =>
+      IO {
+        found.foreach(seen.add)
+        // The operator rotates its nodes once the first walk has found all of the old ones.
+        if nodes(0 until 6).forall(seen.contains) then records.set(after.records)
+      }
+
+    val (_, cancel) = DnsDiscovery
+      .seedPeriodically(Seq(before.url), lookup, generous.copy(recheckInterval = 1.millis), None, onNodes)
+      .unsafeToFutureCancelable()
+    try
+      eventually {
+        seen.asScala.toSet shouldBe nodes(0 until 12)
+      }
+      rootQueries.get should be >= 2
+    finally Await.result(cancel(), 30.seconds)
+  }

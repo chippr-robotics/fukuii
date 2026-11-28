@@ -24,6 +24,7 @@ import com.chipprbots.ethereum.*
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.jsonrpc.EthTxService.*
 import com.chipprbots.ethereum.testing.Tags.*
@@ -181,9 +182,7 @@ class EthTxServiceSpec
     val response: Future[Either[JsonRpcError, RawTransactionResponse]] =
       ethTxService.getRawTransactionByHash(request).unsafeToFuture()
 
-    // then
-    replyPTM(PendingTransactionsResponse(Nil))
-
+    // then: answered from the chain, the pool is not asked (go-ethereum's order)
     response.futureValue shouldEqual Right(RawTransactionResponse(Some(txToRequest)))
 
   it should "return the oracle's 1 gwei start price when there are no transactions" taggedAs (
@@ -333,11 +332,90 @@ class EthTxServiceSpec
     val response: Future[Either[JsonRpcError, GetTransactionByHashResponse]] =
       ethTxService.getTransactionByHash(request).unsafeToFuture()
 
-    replyPTM(PendingTransactionsResponse(Nil))
-
+    // answered from the chain, the pool is not asked (go-ethereum's order)
     response.futureValue shouldEqual Right(
       GetTransactionByHashResponse(Some(TransactionResponse(txToRequest, Some(blockWithTx.header), Some(0))))
     )
+
+  /** The block holding the requested tx, stored and canonical at its number, with its tx lookup written. */
+  private def storeCanonicalWithLookup(setup: TestSetup, block: Block): Unit =
+    setup.blockchainWriter.storeBlock(block).commit()
+    setup.storagesInstance.storages.transactionMappingStorage
+      .put(setup.txToRequestHash, TransactionMappingStorage.TransactionLocation(block.header.hash.value, 0))
+      .commit()
+
+  /** A sibling at the same height: storing it moves the canonical number-to-hash entry off `block`, leaving the lookup
+    * (which names `block`) stale, as after a reorg.
+    */
+  private def reorgAwayFrom(setup: TestSetup, block: Block): Unit =
+    val sibling = Block(block.header.copy(extraData = ByteString("sibling")), BlockBody(Nil, Nil))
+    setup.blockchainWriter.storeBlock(sibling).commit()
+    setup.blockchainReader.getBlockHeaderByNumber(block.header.number.value).map(_.hash) shouldBe Some(
+      sibling.header.hash
+    )
+
+  it should "answer eth_getTransactionByHash with the tx while its block is canonical" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    storeCanonicalWithLookup(this, blockToRequest)
+    val response: Future[Either[JsonRpcError, GetTransactionByHashResponse]] =
+      ethTxService.getTransactionByHash(GetTransactionByHashRequest(txToRequestHash)).unsafeToFuture()
+    response.futureValue shouldEqual Right(
+      GetTransactionByHashResponse(Some(TransactionResponse(txToRequest, Some(blockToRequest.header), Some(0))))
+    )
+
+  it should "answer eth_getTransactionByHash with None when the lookup names a block that is no longer canonical" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    storeCanonicalWithLookup(this, blockToRequest)
+    reorgAwayFrom(this, blockToRequest)
+    val response: Future[Either[JsonRpcError, GetTransactionByHashResponse]] =
+      ethTxService.getTransactionByHash(GetTransactionByHashRequest(txToRequestHash)).unsafeToFuture()
+    replyPTM(PendingTransactionsResponse(Nil))
+    response.futureValue shouldEqual Right(GetTransactionByHashResponse(None))
+
+  it should "answer eth_getTransactionByHash with the pending tx when the lookup is stale and the tx is back in the pool" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    storeCanonicalWithLookup(this, blockToRequest)
+    reorgAwayFrom(this, blockToRequest)
+    val response: Future[Either[JsonRpcError, GetTransactionByHashResponse]] =
+      ethTxService.getTransactionByHash(GetTransactionByHashRequest(txToRequestHash)).unsafeToFuture()
+    replyPTM(PendingTransactionsResponse(Seq(PendingTransaction(txToRequestWithSender, System.currentTimeMillis))))
+    response.futureValue shouldEqual Right(GetTransactionByHashResponse(Some(TransactionResponse(txToRequest))))
+
+  it should "answer eth_getRawTransactionByHash with None when the lookup names a block that is no longer canonical" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    storeCanonicalWithLookup(this, blockToRequest)
+    reorgAwayFrom(this, blockToRequest)
+    val response: Future[Either[JsonRpcError, RawTransactionResponse]] =
+      ethTxService.getRawTransactionByHash(GetTransactionByHashRequest(txToRequestHash)).unsafeToFuture()
+    replyPTM(PendingTransactionsResponse(Nil))
+    response.futureValue shouldEqual Right(RawTransactionResponse(None))
+
+  it should "answer eth_getTransactionReceipt with None when the lookup names a block that is no longer canonical" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    storeCanonicalWithLookup(this, blockToRequest)
+    blockchainWriter.storeReceipts(blockToRequest.header.hash, Seq(fakeReceipt, fakeReceipt)).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+    // sanity: while canonical the receipt is served, so the None below is the canonical check's doing
+    ethTxService
+      .getTransactionReceipt(GetTransactionReceiptRequest(txToRequestHash))
+      .unsafeRunSync()
+      .toOption
+      .get
+      .txResponse should not be empty
+    reorgAwayFrom(this, blockToRequest)
+    ethTxService
+      .getTransactionReceipt(GetTransactionReceiptRequest(txToRequestHash))
+      .unsafeRunSync() shouldEqual Right(GetTransactionReceiptResponse(None))
 
   it should "calculate correct contract address for contract creating by transaction" taggedAs (
     UnitTest,

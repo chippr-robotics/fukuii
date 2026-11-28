@@ -12,6 +12,7 @@ import scala.concurrent.duration.*
 import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
+import scala.util.control.NonFatal
 
 import org.bouncycastle.util.encoders.Hex
 
@@ -23,6 +24,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportResult
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportStateFault
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.consensus.blocks.*
 import com.chipprbots.ethereum.consensus.mining.MiningConfig
 import com.chipprbots.ethereum.crypto
@@ -49,6 +51,8 @@ import com.chipprbots.ethereum.testmode.TestModeNode
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.GetPendingTransactionsReq
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager.PendingTransactionsResponse
+import com.chipprbots.ethereum.transactions.TxPoolHead
+import com.chipprbots.ethereum.transactions.TxPoolReset
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
 import com.chipprbots.ethereum.utils.Logger
@@ -145,13 +149,13 @@ object TestService:
   case class GetLogHashRequest(transactionHash: ByteString)
   case class GetLogHashResponse(logHash: ByteString)
 
-  /** What a test-mode request that needs the state of a block other than the head is answered with on the unified state
-    * layout, until the head can move to another branch (spec 018 C4b): a reorganisation to a branch that outweighs the
-    * head, above all. Test mode reads in no scope of reads, so it reads the head's state and no other.
+  /** What a test-mode request is answered with on the unified state layout when the state of the block it needs is not
+    * held: a block behind the head deeper than the changeset records reach, a head whose state is not the one the disk
+    * holds, a branch that leaves the chain below what the records reach. A refusal of this node's layout, made before
+    * anything was written, and no verdict on a block.
     */
   val HeadStateOnly: String =
-    "on the unified state layout (fukuii.state.path-live) test mode reads the state of its head alone, and this " +
-      "needs the state of another block"
+    "on the unified state layout (fukuii.state.path-live) the state this needs is not held"
 
   /** What `test_setChainParams` is answered with there when a write of it failed. */
   val ChainNotSet: String = "the chain was not set"
@@ -179,7 +183,10 @@ class TestService(
     testModeComponentsProvider: TestModeComponentsProvider,
     transactionMappingStorage: TransactionMappingStorage,
     node: TestModeNode,
-    scheduler: Scheduler
+    scheduler: Scheduler,
+    // The head the tx pool was last reset to (B-253, B-515): the node's one, shared with regular sync's importer and the
+    // Engine API's fork choice. Test mode's moves of the head reset the pool from it, as theirs do (B-498).
+    txPoolHead: TxPoolHead = new TxPoolHead
 )(implicit ioRuntime: IORuntime)
     extends Logger:
   import node.*
@@ -196,6 +203,30 @@ class TestService(
 
   /** The chain the last `test_setChainParams` set: what a rewind to the genesis sets again on the unified layout. */
   private var genesisOfThisChain: Option[GenesisData] = None
+
+  /** The tx pool reset onto the head as it is now, from the head it was last reset to, as regular sync's importer and
+    * the fork choice reset it (B-498): `TxPoolReset.between`, from the node's one record of the pool's head
+    * ([[TxPoolHead]], B-253, B-515). Test mode moves the head by mining, importing, rewinding and setting a chain.
+    * Before B-498 none of these told the record, which stayed on the head before; the importer's or a fork choice's
+    * next reset then started from a head the chain no longer had, and took back or dropped the transactions of the
+    * wrong blocks. Pool hygiene only: a reset that fails is logged, and the call is answered as it would have been.
+    */
+  private def resetThePool(): Unit =
+    try
+      blockchainReader.getBestBlockHeader.foreach { head =>
+        txPoolHead.resetOnto(head, pendingTransactionsManager)(from =>
+          TxPoolReset.between(from, head, blockchainReader)
+        )
+      }
+    catch case NonFatal(e) => log.error(s"Test mode: the tx pool was not reset onto the head: ${e.getMessage}", e)
+
+  /** The pool reset onto the head ([[resetThePool]]), then emptied, as test mode empties it after a block is mined and
+    * on a rewind (retesteth's API, which drops its pending transactions there). The reset goes first, so that the
+    * record of the pool's head follows the head, and nothing it takes back outlives the emptying.
+    */
+  private def clearedOnTheHead(): Unit =
+    resetThePool()
+    pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
 
   private val preimageCache: collection.concurrent.Map[ByteString, UInt256] =
     new collection.concurrent.TrieMap[ByteString, UInt256]()
@@ -254,6 +285,8 @@ class TestService(
         IO.pure(Left(failed))
       case Right(()) =>
         genesisOfThisChain = Some(genesisData)
+        // the new genesis is the head: the pool's record of its head follows it (B-498)
+        resetThePool()
         accountHashWithAdresses = (etherbase.toUnprefixedString :: genesisData.alloc.keys.toList)
           .map { hexAddress =>
             val address = Address(hexAddress)
@@ -358,9 +391,14 @@ class TestService(
             .getConsensus(preimageCache)
             .evaluateBranchBlock(blockForMining.block)
         }
+        // a partial import (B-338) is answered as it was before: the extension imported, a reorganisation failed
+        .map {
+          case partial: ImportedPartially => partial.answeredAsBefore
+          case other                      => other
+        }
         .map { res =>
           log.info("Block mining result: " + res)
-          pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
+          clearedOnTheHead()
           blockTimestamp += 1
           // On the unified state layout a block that is mined is committed with its state as the head, or it is not
           // there at all: an answer that says it was mined when it was only queued would be found out a call later.
@@ -403,17 +441,20 @@ class TestService(
     */
   private def rewindInPlace(blockNum: Long): ServiceResponse[RewindToBlockResponse] =
     if blockchainReader.getBestBlockNumber <= blockNum then
-      pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
+      clearedOnTheHead()
       RewindToBlockResponse().rightNow
     else if blockNum > 0 then IO.blocking(moveBackInPlace(blockNum)).recover(notOnTheUnifiedLayout)
     else
       genesisOfThisChain match
         case None => IO.pure(Left(JsonRpcError.LogicError("no chain was set: test_setChainParams comes first")))
         case Some(genesisData) =>
-          pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
           setGenesis(genesisData) match
-            case Left(refused) => IO.pure(Left(refused))
-            case Right(())     => RewindToBlockResponse().rightNow
+            case Left(refused) =>
+              pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
+              IO.pure(Left(refused))
+            case Right(()) =>
+              clearedOnTheHead()
+              RewindToBlockResponse().rightNow
 
   /** The head moved back to the block at `blockNum` of its own chain, found by the parent hashes of the block whose
     * state is held: never by the index of blocks by number, which is what the move rewrites.
@@ -430,21 +471,23 @@ class TestService(
       case Some(header) =>
         try
           blockchainWriter.moveHeadInPlace(header, blockchainReader)
-          pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
+          clearedOnTheHead()
           Right(RewindToBlockResponse())
         catch
+          // refused, with nothing written, while another thread's adoption holds the head: ask again (B-462)
+          case busy: com.chipprbots.ethereum.db.storage.pathstate.StateBusy => answeredBusy(busy)
           // a block on the way that is held nowhere: said as what it is, a rewind that could not be made
           case unavailable: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable =>
             log.warn("Test mode on the unified state layout: {}", unavailable.getMessage)
             Left(JsonRpcError.LogicError(s"${TestService.RewindRefused} (${unavailable.reason})"))
 
   private def rewindOnTheHashStore(request: RewindToBlockRequest): ServiceResponse[RewindToBlockResponse] =
-    pendingTransactionsManager ! PendingTransactionsManager.ClearPendingTransactions
     (blockchainReader.getBestBlockNumber until request.blockNum by -1).foreach { n =>
       blockchainReader.getBlockHeaderByNumber(n).foreach { header =>
         blockchain.removeBlock(header.hash)
       }
     }
+    clearedOnTheHead()
     RewindToBlockResponse().rightNow
 
   def importRawBlock(
@@ -457,16 +500,25 @@ class TestService(
         testModeComponentsProvider
           .getConsensus(preimageCache)
           .evaluateBranchBlock(value)
+          // the head the import left, whatever the answer: the pool is reset onto it (B-498)
+          .flatTap(_ => IO(resetThePool()))
+          .map {
+            case partial: ImportedPartially => partial.answeredAsBefore
+            case other                      => other
+          }
           .flatMap(handleResult(value))
           .recover(notOnTheUnifiedLayout)
 
-  /** What the unified state layout cannot do before its overlay, said as that and not as a fault of the block: the
-    * state of a block that is not the one held was asked for, and refused before anything was written (a branch that
-    * outweighs the head reaches a reorganisation; a block is to be mined on a head whose state is not the one the disk
-    * holds; a range of the state of a block below the head is read); and a mined block that was not made the head.
-    * Never met on the hash store.
+  /** What the unified state layout refuses, said as that and not as a fault of the block: the state of a block that is
+    * not held was asked for, and refused before anything was written (a heavier branch that leaves the chain below what
+    * the changeset records reach; a block is to be mined on a head whose state is not the one the disk holds; a range
+    * of the state of a block deeper than the records reach); a move of the head that was refused; and a mined block
+    * that was not made the head. Never met on the hash store.
     */
   private def notOnTheUnifiedLayout[A]: PartialFunction[Throwable, Either[JsonRpcError, A]] =
+    // refused, with nothing written, while another thread's adoption holds the head: no limit of the layout and no
+    // fault of the block, but a state to ask for again (B-462)
+    case busy: com.chipprbots.ethereum.db.storage.pathstate.StateBusy => answeredBusy(busy)
     case fault: com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable if blockchainReader.holdsStateInPlace =>
       log.warn("Test mode on the unified state layout: {}", fault.getMessage)
       Left(JsonRpcError.LogicError(s"${TestService.HeadStateOnly} (${fault.getMessage})"))
@@ -485,6 +537,10 @@ class TestService(
       log.warn("Test mode on the unified state layout: {}", notImported.getMessage)
       Left(JsonRpcError.LogicError(notImported.getMessage))
 
+  private def answeredBusy[A](busy: com.chipprbots.ethereum.db.storage.pathstate.StateBusy): Either[JsonRpcError, A] =
+    log.warn("[STATE-BUSY] Test mode: {}", busy.getMessage)
+    Left(JsonRpcError.HeadBusy)
+
   private def handleResult(
       block: Block
   )(blockImportResult: BlockImportResult): ServiceResponse[ImportRawBlockResponse] =
@@ -492,7 +548,7 @@ class TestService(
       case BlockImportedToTop(blockImportData) =>
         val blockHash = s"0x${ByteStringUtils.hash2string(blockImportData.head.block.header.hash.value)}"
         ImportRawBlockResponse(blockHash).rightNow
-      case BlockEnqueued | ChainReorganised(_, _, _) =>
+      case BlockEnqueued | ChainReorganised(_, _, _, _) =>
         val blockHash = s"0x${ByteStringUtils.hash2string(block.hash.value)}"
         ImportRawBlockResponse(blockHash).rightNow
       // Not a verdict on the block: answered as the state fault it is, as when it was thrown
@@ -563,12 +619,17 @@ class TestService(
   def getAccountsInRange(request: AccountsInRangeRequest): ServiceResponse[AccountsInRangeResponse] =
     ofAStateHeld(accountsInRange(request))
 
-  /** `answer`, which reads the state of a block. On the unified state layout that is the head's alone before the
-    * overlay: for another block the read is refused as it starts, and the refusal is answered as that. On the hash
-    * store `answer` is what it was.
+  /** `answer`, which reads the state of a block. On the unified state layout a block behind the head is read from the
+    * changeset records, as the JSON-RPC reads one ([[StateRead]]): in one scope of reads, run again on a fresh view
+    * when the state moved under it (B-220; geth answers `debug_storageRangeAt` and `debug_accountRange` at any block
+    * whose state it has). Every read `answer` makes is done before it returns its value, on a thread of the blocking
+    * pool: the reads go to disk and may be run again. A state that is not held is refused as the read starts, and
+    * answered as that. On the hash store `answer` is what it was.
     */
   private def ofAStateHeld[A](answer: => ServiceResponse[A]): ServiceResponse[A] =
-    if blockchainReader.holdsStateInPlace then IO.defer(answer).recover(notOnTheUnifiedLayout) else answer
+    if blockchainReader.holdsStateInPlace then
+      IO.blocking(StateRead.attemptingOrThrow(answer)).flatten.recover(notOnTheUnifiedLayout)
+    else answer
 
   private def accountsInRange(request: AccountsInRangeRequest): ServiceResponse[AccountsInRangeResponse] =
     // This implementation works by keeping a list of know account from the genesis state
@@ -663,10 +724,8 @@ class TestService(
     import com.chipprbots.ethereum.blockchain.sync.codec.ReceiptCodecs.*
 
     val result = for
-      transactionLocation <- transactionMappingStorage.get(request.transactionHash)
-      block <- blockchainReader.getBlockByHash(BlockHash(transactionLocation.blockHash))
-      _ <- block.body.transactionList.lift(transactionLocation.txIndex)
-      receipts <- blockchainReader.getReceiptsByHash(block.header.hash)
+      found <- CanonicalTxLookup(transactionMappingStorage, blockchainReader, request.transactionHash)
+      receipts <- blockchainReader.getReceiptsByHash(found.block.header.hash)
       logs = receipts.flatMap(receipt => receipt.logs)
       rlpList: RLPList = RLPList(logs.map(_.toRLPEncodable).toList*)
     yield ByteString(crypto.kec256(rlp.encode(rlpList)))

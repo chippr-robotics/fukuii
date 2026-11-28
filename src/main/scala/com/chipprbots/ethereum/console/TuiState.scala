@@ -86,6 +86,9 @@ enum Catchup:
   *   when the peer count, known, was last seen to become 0: the alert row's "0 peers for …" (§2.3)
   * @param logs
   *   the log ring's newest lines, oldest first ([[TuiLogRingAppender]]): the Logs view and the Recent strips
+  * @param logFloor
+  *   the root logger's level when it is above the log ring's threshold (B-265): the Logs view says that the levels in
+  *   between are never logged
   * @param logScroll
   *   how many lines the Logs view is scrolled back from the newest; 0 follows the tail
   * @param scores
@@ -126,6 +129,7 @@ case class TuiState(
     zeroPeersSince: Option[Instant] = None,
     logs: Vector[LogLine] = Vector.empty,
     logScroll: Int = 0,
+    logFloor: Option[String] = None,
     scores: ScoreHistory = ScoreHistory(),
     hashrateZeroSince: Option[Instant] = None,
     clSeenSince: Option[Instant] = None,
@@ -769,8 +773,16 @@ final case class TransportStatus(
     calls: Long = 0L,
     errors: Long = 0L,
     tls: Boolean = false,
-    stoppedHere: Boolean = false
+    stoppedHere: Boolean = false,
+    clientAuth: TransportClientAuth = TransportClientAuth.None,
+    insecureBind: Boolean = false
 )
+
+/** Whether a TLS transport asks its callers for a certificate (spec 030 FR-061): not at all, asks (`want`), or requires
+  * one (`need`).
+  */
+enum TransportClientAuth:
+  case None, Want, Need
 
 /** How a transport tells one caller from another: not at all, by the Engine API's JWT secret, or by who may open the
   * IPC socket's file. A type, so that the words for each are written once and no comparison of texts decides them.

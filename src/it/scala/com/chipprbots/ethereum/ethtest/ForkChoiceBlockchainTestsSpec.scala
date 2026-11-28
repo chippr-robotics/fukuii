@@ -23,6 +23,9 @@ import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.db.components.EphemDataSourceComponent
 import com.chipprbots.ethereum.db.components.Storages
+import com.chipprbots.ethereum.db.storage.pruning.ArchivePruning
+import com.chipprbots.ethereum.db.storage.pruning.BasicPruning
+import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -47,6 +50,12 @@ import com.chipprbots.ethereum.utils.Config
   * guard is on for a proof-of-work node). On the unified layout the pre-state is loaded as the node loads a genesis, as
   * rows, and the genesis block the loader builds must be the fixture's; a branch is executed on pinned layers and the
   * head is moved to it in place, with no rewind.
+  *
+  * Each layout runs under both pruning modes (spec 018 T007, B-432): `basic`, the shipped default
+  * (`conf/base/pruning.conf`: history 64), and `archive`. And on both layouts, under `basic`, the blocks are given once
+  * more as one chain file to the node's `ChainImporter`, the path hive's consensus simulator takes (B-220): there a
+  * failed block is counted, and the head and the post-state are judged as above. The spec runs only in the nightly
+  * ethereum/tests job.
   */
 class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
 
@@ -60,15 +69,48 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
 
   final private case class Outcome(name: String, error: Option[String], reorgs: Int)
 
-  private class FixtureNode(bc: BlockchainConfig, unified: Boolean) extends EphemBlockchainTestSetup:
+  /** The node a case runs on: its state layout and its pruning mode; and whether its blocks come one at a time through
+    * the block import, or as one chain file through the node's `ChainImporter`, as hive's consensus simulator gives
+    * them (B-220).
+    */
+  final private case class Variant(
+      layout: String,
+      unified: Boolean,
+      pruningName: String,
+      pruning: PruningMode,
+      chainFile: Boolean = false
+  ):
+    def name: String = s"$layout, $pruningName pruning${if chainFile then ", from a chain file" else ""}"
+
+  private val Variants: Seq[Variant] =
+    (for
+      (layout, unified) <- Seq("the hash layout" -> false, "the unified layout" -> true)
+      (pruningName, pruning) <- Seq("basic" -> BasicPruning(64), "archive" -> ArchivePruning)
+    yield Variant(layout, unified, pruningName, pruning)) ++
+      Seq("the hash layout" -> false, "the unified layout" -> true).map { (layout, unified) =>
+        Variant(layout, unified, "basic", BasicPruning(64), chainFile = true)
+      }
+
+  private class FixtureNode(bc: BlockchainConfig, variant: Variant) extends EphemBlockchainTestSetup:
     implicit override lazy val blockchainConfig: BlockchainConfig = bc
+
+    // Deterministic (forge W3): a tie of total difficulty keeps the head, and no coin is tossed. No vector here depends
+    // on how a tie is broken: none has a tie the lower block would win, and those with a tie at one height reach the
+    // same `lastblockhash` whichever block it goes to (as retesteth's test mode, `TestModeComponentsProvider`)
+    override lazy val powForkChoice: com.chipprbots.ethereum.consensus.PowForkChoice =
+      com.chipprbots.ethereum.consensus.PowForkChoice.HeavierOnly
+
+    // mixed in before Storages.DefaultStorages, so the storages are built with this mode
+    private trait VariantPruning extends LocalPruningConfigBuilder:
+      override val pruningMode: PruningMode = variant.pruning
+
     override lazy val storagesInstance
         : EphemDataSourceComponent & LocalPruningConfigBuilder & Storages.DefaultStorages =
       new EphemDataSourceComponent
-        with LocalPruningConfigBuilder
+        with VariantPruning
         with Storages.DefaultStorages
         with com.chipprbots.ethereum.TestInstanceConfigProvider:
-        override protected def statePathLive: Boolean = unified
+        override protected def statePathLive: Boolean = variant.unified
 
   private def quantity(value: BigInt): String = "0x" + value.toString(16)
 
@@ -78,15 +120,17 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
 
   private def big(s: String): BigInt = if s.startsWith("0x") then BigInt(1, hex(s)) else BigInt(s)
 
-  private def runOne(name: String, testJson: Json, unified: Boolean): Outcome =
+  private def runOne(name: String, testJson: Json, variant: Variant): Outcome =
+    val unified = variant.unified
     val test = testJson.as[BlockchainTest].fold(e => throw new RuntimeException(e.toString), identity)
     val lastBlockHash = testJson.hcursor.downField("lastblockhash").as[String].toOption.map(h => ByteString(hex(h)))
     val bc: BlockchainConfig = TestConverter.networkToConfig(test.network, Config.blockchains.blockchainConfig)
-    val node = new FixtureNode(bc, unified)
+    val node = new FixtureNode(bc, variant)
     import node.*
     val genesisHeader = TestConverter.toBlockHeader(test.genesisBlockHeader.get)
     // the node is on the layout the case is named for, or the two runs would be one
     require(storagesInstance.storages.pathStateStorage.isDefined == unified, s"$name: the node is not on its layout")
+    require(storagesInstance.pruningMode == variant.pruning, s"$name: the node is not on its pruning mode")
     if unified then
       // The pre-state as rows, by the loader a node starts with: the block it builds must be the fixture's genesis.
       val alloc = test.pre.map { case (addr, acc) =>
@@ -122,11 +166,11 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
         )
       notTheFixtures match
         case Some(why) => Outcome(name, Some(why), 0)
-        case None      => importAndJudge(name, test, lastBlockHash, bc, node)
+        case None      => importAndJudge(name, test, lastBlockHash, bc, node, variant.chainFile)
     else
       seedOnTheHashLayout(test, bc, node, genesisHeader) match
         case Some(why) => Outcome(name, Some(why), 0)
-        case None      => importAndJudge(name, test, lastBlockHash, bc, node)
+        case None      => importAndJudge(name, test, lastBlockHash, bc, node, variant.chainFile)
 
   /** The hash layout's genesis: the pre-state into the node's own storage, then the fixture's genesis header on it. */
   private def seedOnTheHashLayout(
@@ -156,7 +200,7 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
         ww.saveStorage(address, ww.getStorage(address).store(big(k), big(v)))
       }
     }
-    val genesisRoot = InMemoryWorldStateProxy.persistState(world1).stateRootHash
+    val genesisRoot = InMemoryWorldStateProxy.persistStateAndWriteCode(world1).stateRootHash
     if genesisHeader.stateRoot.value != genesisRoot then Some("genesis pre-state root mismatch")
     else
       blockchainWriter.save(
@@ -172,27 +216,46 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
       test: BlockchainTest,
       lastBlockHash: Option[ByteString],
       bc: BlockchainConfig,
-      node: FixtureNode
+      node: FixtureNode,
+      chainFile: Boolean
   ): Outcome =
     import node.*
-    val results = test.blocks.map { tb =>
-      val block = Block(
+    val blocks = test.blocks.map { tb =>
+      Block(
         TestConverter.toBlockHeader(tb.blockHeader),
         BlockBody(tb.transactions.map(TestConverter.toTransaction), tb.uncleHeaders.map(TestConverter.toBlockHeader))
       )
-      (
-        block,
-        consensusAdapter
-          .evaluateBranchBlock(block)(using IORuntime.global, bc)
-          .unsafeRunSync()(using IORuntime.global)
-      )
     }
-    val failures = results.collect {
-      case (block, BlockImportFailed(err)) => s"block ${block.number} ${block.header.hashAsHexString}: $err"
-      // An orphan is not a `BlockImportFailed` any more (B-007), but a vector block whose parent is missing is a failure.
-      case (block, UnknownParent) => s"block ${block.number} ${block.header.hashAsHexString}: parent not found"
-    }
-    val reorgs = results.count { case (_, r) => r.isInstanceOf[ChainReorganised] }
+    val (failures, reorgs) =
+      if chainFile then
+        // the node's own importer, as hive's consensus simulator feeds it: every block in one file
+        val file = java.nio.file.Files.createTempFile("fork-choice", ".rlp")
+        try
+          java.nio.file.Files.write(
+            file,
+            blocks.flatMap(b => com.chipprbots.ethereum.blockchain.data.ChainFile.encode(b).toSeq).toArray
+          )
+          val (_, _, failed) = chainImporter.importChainFile(file.toString)(using bc).counts
+          (Option.when(failed > 0)(s"the chain file import counted $failed failed block(s)").toSeq, 0)
+        finally java.nio.file.Files.delete(file)
+      else
+        val results = blocks.map { block =>
+          (
+            block,
+            consensusAdapter
+              .evaluateBranchBlock(block)(using IORuntime.global, bc)
+              .unsafeRunSync()(using IORuntime.global)
+          )
+        }
+        (
+          results.collect {
+            case (block, BlockImportFailed(err)) => s"block ${block.number} ${block.header.hashAsHexString}: $err"
+            // An orphan is not a `BlockImportFailed` any more (B-007), but a vector block whose parent is missing is a
+            // failure.
+            case (block, UnknownParent) => s"block ${block.number} ${block.header.hashAsHexString}: parent not found"
+          },
+          results.count { case (_, r) => r.isInstanceOf[ChainReorganised] }
+        )
 
     val head = blockchainReader.getBestBlock.map(_.header)
     val headError = (lastBlockHash, head) match
@@ -233,7 +296,7 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
       headError.orElse(postError).orElse(failures.headOption).map(e => (e +: failures.take(3)).mkString(" | "))
     Outcome(name, verdict, reorgs)
 
-  private def runCategory(category: String, unified: Boolean): Seq[Outcome] =
+  private def runCategory(category: String, variant: Variant): Seq[Outcome] =
     val dir = new File(s"$Base/$category")
     assume(dir.isDirectory, s"ethereum/tests fixtures not present at $dir")
     dir.listFiles().filter(_.getName.endsWith(".json")).sortBy(_.getName).toSeq.flatMap { f =>
@@ -243,12 +306,12 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
         finally src.close()
       json.asObject.get.toList.collect {
         case (name, t) if t.hcursor.downField("network").as[String].toOption.exists(Networks.contains) =>
-          runOne(s"${f.getName}/$name", t, unified)
+          runOne(s"${f.getName}/$name", t, variant)
       }
     }
 
-  private def check(category: String, unified: Boolean): Unit =
-    val outcomes = runCategory(category, unified)
+  private def check(category: String, variant: Variant): Unit =
+    val outcomes = runCategory(category, variant)
     val failed = outcomes.filter(_.error.isDefined)
     info(
       s"$category: ${outcomes.size - failed.size}/${outcomes.size} passed; " +
@@ -258,32 +321,32 @@ class ForkChoiceBlockchainTestsSpec extends AnyFlatSpec with Matchers:
     outcomes should not be empty
     failed.map(o => s"${o.name}: ${o.error.get}") shouldBe empty
 
-  for (layout, unified) <- Seq("the hash layout" -> false, "the unified layout" -> true) do
-    s"Fork-choice BlockchainTests on $layout" should "pass bcMultiChainTest" taggedAs (
+  for variant <- Variants do
+    s"Fork-choice BlockchainTests on ${variant.name}" should "pass bcMultiChainTest" taggedAs (
       IntegrationTest,
       EthereumTest,
       SlowTest
     ) in {
-      check("bcMultiChainTest", unified)
+      check("bcMultiChainTest", variant)
     }
 
     it should "pass bcTotalDifficultyTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
-      check("bcTotalDifficultyTest", unified)
+      check("bcTotalDifficultyTest", variant)
     }
 
     it should "pass bcForkStressTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
-      check("bcForkStressTest", unified)
+      check("bcForkStressTest", variant)
     }
 
     it should "pass bcRandomBlockhashTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
-      check("bcRandomBlockhashTest", unified)
+      check("bcRandomBlockhashTest", variant)
     }
 
     // uncles on side branches and uncle races between two chains
     it should "pass bcUncleTest" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
-      check("bcUncleTest", unified)
+      check("bcUncleTest", variant)
     }
 
     it should "pass bcUncleSpecialTests" taggedAs (IntegrationTest, EthereumTest, SlowTest) in {
-      check("bcUncleSpecialTests", unified)
+      check("bcUncleSpecialTests", variant)
     }

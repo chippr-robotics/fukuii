@@ -20,6 +20,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.SyncPhase.*
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapTaskFileCleanup
 import com.chipprbots.ethereum.db.storage.AncestorWindow
 import com.chipprbots.ethereum.db.storage.PathHandoffSample
 import com.chipprbots.ethereum.db.storage.RefCountTrust
@@ -222,7 +223,8 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       holdLastAdvanceMs = now
     if now - lastHeaderHoldWarnMs >= SNAPSyncController.HeaderHoldWarnIntervalMs then
       lastHeaderHoldWarnMs = now
-      ctx.log.warn(
+      // B-524: expected on a start from genesis (the state is ready before the headers reach the pivot): INFO, not WARN.
+      ctx.log.info(
         s"SNAP finalisation held for the header download: cursor=$cursor pivot=$pivot gap=${pivot - cursor} " +
           s"lastKnownPeers=${peersToDownloadFrom.size} (peer events are not processed during the hold)"
       )
@@ -388,6 +390,17 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     stateIngest.chainWriter.storeBlockHeader(pivotHeader).commit()
     applyPivotBodyCheck(pivotHeader)
 
+    // B-351: nothing of the index above the pivot is of the chain this node is on from here (on proof of work, where
+    // the index below it is the validated download's). After a re-SNAP for a heavier chain below the fork recovery's
+    // floor, the chain it left would otherwise still answer for those heights.
+    if !headerChainCheck.trustsPinnedPivot then
+      val cleared = PivotAnchor.clearIndexAbove(stateIngest, pivot)
+      if cleared > pivot then
+        ctx.log.warn(
+          s"SNAP finalize: the index of blocks by number above pivot $pivot named blocks up to $cleared that are of no " +
+            "chain this node is on; deleted"
+        )
+
     // Store a ChainWeight so fork choice can weigh new blocks; every block above the pivot inherits it (#1654).
     // REAL_DB_TD only when the stored weight is exact (HeadChainWeight.classify): the parent's weight clears the
     // plausibility floor and the pivot's is the parent's plus its difficulty. The hold above guarantees that: the
@@ -412,12 +425,15 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       .commit()
 
     // Set best block info with BOTH hash and number (putBestBlockNumber only
-    // sets the number, leaving getBestBlockInfo().hash empty).
-    stateIngest.appState
-      .putBestBlockInfo(
-        com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivot)
-      )
-      .commit()
+    // sets the number, leaving getBestBlockInfo().hash empty). Under the head's lock (B-511): a consensus client's fork
+    // choice may come as SNAP finishes; one write, so the hold is short.
+    com.chipprbots.ethereum.domain.CanonicalHeadLock.held(s"SNAP's best block at its finalised pivot $pivot") {
+      stateIngest.appState
+        .putBestBlockInfo(
+          com.chipprbots.ethereum.domain.appstate.BlockInfo(pivotHash.value, pivot)
+        )
+        .commit()
+    }
 
     // D4: snapSyncDone written AFTER pivot header and best-block info are stored.
     // Pivot data is written first so a crash between writes leaves the node in a
@@ -471,7 +487,15 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
       if completion.storageComplete then appState.storageRecoveryDone() else appState.clearStorageRecoveryDone()
     val codeFlag =
       if completion.bytecodeComplete then appState.bytecodeRecoveryDone() else appState.clearBytecodeRecoveryDone()
-    appState.snapSyncDone().and(storageFlag).and(codeFlag).and(appState.clearSnapCodeScanOwed()).commitSync()
+    appState
+      .snapSyncDone()
+      .and(storageFlag)
+      .and(codeFlag)
+      .and(appState.clearSnapCodeScanOwed())
+      // the sync took its pivot where it was held to (B-307, B-351): the next sync is bound by nothing, as at the
+      // unified layout's hand-off
+      .and(appState.removePivotOnBranch())
+      .commitSync()
 
     warnOfWhatIsWithheld(completion)
 
@@ -559,8 +583,8 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     * ([[SyncHandoff.commit]]). False when it holds for the window: the hold's tick comes back here.
     *
     * No block is executed above the pivot until the headers of the 256 blocks below it are stored, and on a
-    * proof-of-work chain the bodies of the pivot and the five below it ([[AncestorWindow]]): `BLOCKHASH` and the check
-    * of ommers read them, and a node that lacks them refuses a valid block.
+    * proof-of-work chain the bodies of the pivot and the four below it, where they have ommers ([[AncestorWindow]]):
+    * `BLOCKHASH` and the check of ommers read them, and a node that lacks them refuses a valid block.
     */
   private def handOffOnPositions(pivot: BigInt, pivotHeader: BlockHeader): Boolean =
     val ending = handoff.getOrElse(throw new IllegalStateException("handOffOnPositions on the hash layout"))
@@ -590,25 +614,49 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
         false
       else
         dropHealedCodeNowPresent()
-        val (accountsExcluded, codeExcluded) = excludedAtHandOff()
-        val completion = recoveryFlags(accountsExcluded, codeExcluded)
-        // One synced write. What the sync wrote before it is in the same log, and is on the disk with it. A hand-off
-        // with no clean decision on this root takes the heal's marker away in it (spec 022 T043).
-        val unmarked = ending.commit(
-          pivotHeader,
-          ChainWeight.totalDifficultyOnly(finalTD),
-          storageRecoveryDone = completion.storageComplete,
-          bytecodeRecoveryDone = completion.bytecodeComplete,
-          cleanDecision =
-            stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get())
-        )
-        if unmarked then ctx.log.warn("[HEAL-INVARIANT] Handed off with no clean decision on this root: marker removed")
-        warnOfWhatIsWithheld(completion)
-        ctx.log.info(
-          s"SNAP sync completed at block $pivot (hash=${pivotHash.value.take(8).toHex}) on the unified state layout: " +
-            "the rows the sync wrote are the state, and nothing was copied"
-        )
-        true
+        // B-074: the set was read before the sample and the window hold, and an entry may have come in since (a
+        // healing task that gave up an account's storage). The hand-off is one synced commit with the flags, and
+        // withholding them here would leave the node on a layout where nothing fetches that account's storage after the
+        // hand-off. So the re-read holds as `startHandoffSample` does: the parent restarts healing, and nothing is
+        // written. A set that cannot be read is held too, and told as that.
+        val (excludedNow, readFailed) = excludedRead() match
+          case Right((accounts, _)) => (accounts, false)
+          case Left(e) =>
+            ctx.log.error(
+              "[HEAL-EXCLUDED] Could not read the excluded set at the hand-off: taken as accounts left out",
+              e
+            )
+            (true, true)
+        if excludedNow then
+          ctx.log.warn(
+            s"[HEAL-EXCLUDED] the excluded set has accounts at the commit of the hand-off at pivot $pivot (one came in " +
+              "after the sample): holding the hand-off, healing restarts"
+          )
+          leaveHeaderHold()
+          sampledFor = None
+          syncController ! SyncProtocol.HandoffHeldForExcluded(pivot, readFailed)
+          false
+        else
+          val (accountsExcluded, codeExcluded) = excludedAtHandOff()
+          val completion = recoveryFlags(accountsExcluded, codeExcluded)
+          // One synced write. What the sync wrote before it is in the same log, and is on the disk with it. A hand-off
+          // with no clean decision on this root takes the heal's marker away in it (spec 022 T043).
+          val unmarked = ending.commit(
+            pivotHeader,
+            ChainWeight.totalDifficultyOnly(finalTD),
+            storageRecoveryDone = completion.storageComplete,
+            bytecodeRecoveryDone = completion.bytecodeComplete,
+            cleanDecision =
+              stateRoot.exists(r => r.value == healingCleanWalkRoot.get() || r.value == healingDecidedRoot.get())
+          )
+          if unmarked then
+            ctx.log.warn("[HEAL-INVARIANT] Handed off with no clean decision on this root: marker removed")
+          warnOfWhatIsWithheld(completion)
+          ctx.log.info(
+            s"SNAP sync completed at block $pivot (hash=${pivotHash.value.take(8).toHex}) on the unified state layout: " +
+              "the rows the sync wrote are the state, and nothing was copied"
+          )
+          true
 
   /** Holds the hand-off until the window below the pivot is stored: the header hold's tick runs finalisation again.
     *
@@ -755,7 +803,7 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     */
   private def finishedHandOff(pivot: BigInt): Behavior[Command] =
     progressMonitor.complete()
-    ctx.log.info(progressMonitor.currentProgress.toString)
+    ctx.log.info(progressMonitor.completionSummary)
     currentPhase = Completed
 
     // Cancel SNAP-only schedules before handing off so eviction tickers / stagnation checks stop
@@ -765,11 +813,18 @@ private[snap] trait SnapFinalization extends FinalizationApi with ChainDownloadS
     stopSnapOnlySchedules()
     stopStateSyncChildren()
 
-    // SNAP is done: no account resume can follow. Drop the checkpoint and every superseded contract task file,
-    // keeping only the files the accounts-complete recovery path was handed (conservative; they are not re-read).
-    stateIngest.appState.removeSnapAccountResumeCheckpoint().commit()
+    // SNAP is done and SnapSyncDone is durable (every route here committed it synced): no account resume can follow
+    // and nothing re-reads the task files. Drop the checkpoint, then every contract task file and its AppState path
+    // (B-523). The files go before the paths are cleared, and only a full success clears them; see
+    // `discardFinishedTaskFiles`. A start that finds the flag with paths still set finishes the job.
+    val appState = stateIngest.appState
+    appState.removeSnapAccountResumeCheckpoint().commit()
     releaseHeldResumeCheckpoint()
-    sweepSupersededTaskFiles(keep = accountsCompleteTaskFilePaths, reason = "SNAP complete")
+    SnapTaskFileCleanup.discardFinishedTaskFiles(
+      appState,
+      snapSyncConfig.taskFileDir,
+      (p, e) => ctx.log.warn(s"Could not delete $p: $e")
+    )
 
     // Phase 1 of the handshake: tell the parent that pivot/state is anchored. Parent starts RegularSync.
     syncController ! SnapSyncFinalized(pivot)

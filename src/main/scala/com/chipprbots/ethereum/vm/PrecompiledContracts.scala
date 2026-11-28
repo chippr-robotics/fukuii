@@ -73,8 +73,8 @@ object PrecompiledContracts:
     KzgPointEvalAddr -> KzgPointEvaluation
   )
 
-  /** BLS12-381 precompiles (EIP-2537). Active at ETH Prague and ETC Olympia base set. */
-  val olympiaContracts: Map[Address, PrecompiledContract] = cancunContracts ++ Map(
+  /** BLS12-381 precompiles (EIP-2537), 0x0b-0x11: ETH from Prague, ETC from Olympia. */
+  private val blsContracts: Map[Address, PrecompiledContract] = Map(
     BlsG1AddAddr -> BlsG1Add,
     BlsG1MultiExpAddr -> BlsG1MultiExp,
     BlsG2AddAddr -> BlsG2Add,
@@ -84,8 +84,21 @@ object PrecompiledContracts:
     BlsMapG2Addr -> BlsMapG2
   )
 
-  /** ETC Olympia (block-based) and ETH Osaka (timestamp-based): BLS12-381 + P256VERIFY (EIP-7951, ECIP-1121). */
-  val osakaContracts: Map[Address, PrecompiledContract] = olympiaContracts ++ Map(
+  /** ETH Prague (timestamp): the Cancun set plus BLS12-381 (EIP-2537). */
+  val pragueContracts: Map[Address, PrecompiledContract] = cancunContracts ++ blsContracts
+
+  /** ETH Osaka (timestamp): the Prague set plus P256VERIFY (EIP-7951). */
+  val osakaContracts: Map[Address, PrecompiledContract] = pragueContracts ++ Map(
+    P256VerifyAddr -> P256Verify
+  )
+
+  /** ETC Olympia (block number, ECIP-1121): the Phoenix set plus BLS12-381 (EIP-2537) and P256VERIFY (EIP-7951), and no
+    * KZG point evaluation. ECIP-1121 defers EIP-4844 ("ETC does not implement blobs"), so 0x0a stays an ordinary empty
+    * account on ETC: a CALL to it runs no code and it is not pre-warmed (EIP-2929). Besu's ETC Olympia registry
+    * (`MainnetPrecompiledContracts.populateForOlympia`: Istanbul, BLS12-381, MODEXP bounds, P256VERIFY) and core-geth
+    * (0x0a only on an EIP-4844 transition, which no ETC config sets) agree (#1444, B-548).
+    */
+  val olympiaContracts: Map[Address, PrecompiledContract] = istanbulPhoenixContracts ++ blsContracts ++ Map(
     P256VerifyAddr -> P256Verify
   )
 
@@ -181,20 +194,25 @@ object PrecompiledContracts:
   def getContracts(evmConfig: EvmConfig, blockHeader: BlockHeader): Map[Address, PrecompiledContract] =
     val ethFork = evmConfig.blockchainConfig.ethForkForBlockNumber(blockHeader.number.value)
     val etcFork = evmConfig.blockchainConfig.etcForkForBlockNumber(blockHeader.number.value)
-    // Post-Cancun detection: check if block header has blob gas fields
-    val isCancun = blockHeader.blobGasUsed.isDefined || blockHeader.excessBlobGas.isDefined
+    // EIP-4844 KZG point evaluation (0x0a) activates at the Cancun timestamp on ETH chains. Read from the fork config,
+    // as go-ethereum's `ActivePrecompiledContracts(rules)` does, never from the header's shape: a header built for an
+    // eth_call time override into Cancun has no blob fields, and geth still has 0x0a there (B-155, B-159).
+    val isCancun = evmConfig.blockchainConfig.isCancunTimestamp(blockHeader.unixTimestamp)
     // EIP-2537 BLS12-381 precompiles activate at Prague timestamp on ETH chains
     val isPrague = evmConfig.blockchainConfig.isPragueTimestamp(blockHeader.unixTimestamp)
     // EIP-7951 P256VERIFY activates at Osaka timestamp on ETH chains
     val isOsaka = evmConfig.blockchainConfig.isOsakaTimestamp(blockHeader.unixTimestamp)
+    val isEthereum = evmConfig.blockchainConfig.isEthereum
 
     if isOsaka then osakaContracts
-    else if etcFork >= EtcForks.Olympia then
-      // ETC Olympia activates BLS12-381 + P256VERIFY (ECIP-1121). Same set as ETH Osaka.
-      osakaContracts
+    else if etcFork >= EtcForks.Olympia && !isEthereum then
+      // ETC Olympia activates BLS12-381 + P256VERIFY (ECIP-1121), without KZG (EIP-4844 is deferred there). Never on an
+      // ETH chain, whose olympia-block-number is London (fukuii.sh, the shipped ETH configs): there these arrive at
+      // Prague and Osaka by timestamp, as ModExp's EIP-7823/7883 routing does (B-177).
+      olympiaContracts
     else if isPrague then
       // ETH Prague activates BLS12-381 (EIP-2537) but NOT P256VERIFY (that is Osaka-only).
-      olympiaContracts
+      pragueContracts
     else if isCancun then cancunContracts
     else if ethFork >= EthForks.Istanbul || etcFork >= EtcForks.Phoenix then istanbulPhoenixContracts
     else if ethFork >= EthForks.Byzantium || etcFork >= EtcForks.Atlantis then
@@ -741,15 +759,16 @@ object PrecompiledContracts:
     def failureReason(inputData: ByteString): String = UnexplainedFailure
 
   // ===== EIP-2537: BLS12-381 Precompiles (final spec: 7 precompiles at 0x0b-0x11) =====
-  // Uses org.hyperledger.besu:bls12-381 native library: Matter Labs' eth_pairings via JNA (not gnark or Constantine).
-  // G1MUL/G2MUL removed — MSM at k=1 covers single-point multiplication.
+  // Runs on NativeBackends.blsBackend: Matter Labs' eth_pairings via JNA (org.hyperledger.besu:bls12-381) where it loads,
+  // else supranational blst via jblst (Windows; ADR VM-008). G1MUL/G2MUL removed: MSM at k=1 covers single-point
+  // multiplication.
 
-  /** Executes a BLS12-381 operation on the Besu native library: `Some(result)` on success, `None` when the library
-    * rejects the input (invalid point, wrong input size, etc.). A library that did not load raises
+  /** Executes a BLS12-381 operation on the selected library: `Some(result)` on success, `None` when the library rejects
+    * the input (invalid point, wrong input size, etc.). A library that did not load raises
     * [[NativeBackends.NativeBackendUnavailable]] instead of failing the call (B-135).
     */
   private def blsNativeOp(opByte: Byte, inputData: ByteString): Option[ByteString] =
-    NativeBackends.blsOperation(NativeBackends.LibEthPairingsNative, opByte, inputData)
+    NativeBackends.blsOperation(NativeBackends.blsBackend, opByte, inputData)
 
   sealed trait BlsPrecompile extends PrecompiledContract
 
@@ -763,10 +782,10 @@ object PrecompiledContracts:
     * `decodeBLS12381FieldElement`, `decodePointG1` and `decodePointG2`, then the subgroup checks in the MSM and pairing
     * `Run`s). A coordinate's error is gnark-crypto's `fp.BigEndian.Element`.
     *
-    * The encoding and curve checks are pure. Subgroup membership is not a property of the bytes alone: Besu's library
-    * is asked, through [[NativeBackends.blsAccepts]], whether it accepts the point in a one-pair MSM with a zero
-    * scalar. EIP-2537 makes an MSM check every point's subgroup whatever its scalar, and the point already decodes, so
-    * a rejection can only be the subgroup. A library that cannot answer leaves the point reported outside the subgroup.
+    * The encoding and curve checks are pure. Subgroup membership is not a property of the bytes alone: the library is
+    * asked, through [[NativeBackends.blsAccepts]], whether it accepts the point in a one-pair MSM with a zero scalar.
+    * EIP-2537 makes an MSM check every point's subgroup whatever its scalar, and the point already decodes, so a
+    * rejection can only be the subgroup. A library that cannot answer leaves the point reported outside the subgroup.
     */
   private object Eip2537Reasons:
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
@@ -818,7 +837,7 @@ object PrecompiledContracts:
 
     private def inSubgroup(msm: Byte, point: ByteString): Boolean =
       point.forall(_ == 0) ||
-        NativeBackends.blsAccepts(NativeBackends.LibEthPairingsNative, msm, point ++ ZeroScalar).contains(true)
+        NativeBackends.blsAccepts(NativeBackends.blsBackend, msm, point ++ ZeroScalar).contains(true)
 
   object BlsG1Add extends BlsPrecompile:
     import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings

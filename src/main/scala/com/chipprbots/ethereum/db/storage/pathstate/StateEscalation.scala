@@ -198,3 +198,22 @@ object StateResetTrim:
 object StateResetPending:
   val Key: String = "state.reset-pending"
   def encode(atMillis: Long): String = s"v1:$atMillis"
+
+/** The mark that this datadir's state failed closed (`state.fault`, B-252): a caller found its changeset records
+  * corrupt, or a row read back after a write was not the row written. Written synced when the fault is found, so that a
+  * restart does not open the state again as if nothing had been found; removed with the state, by a clear or by the
+  * destruction for a new genesis, and by nothing else.
+  *
+  * The value is `v1:<millis>:<why>`. One this build cannot read is still a fault, and is given as it stands.
+  */
+object StateFaultMark:
+  val Key: String = "state.fault"
+
+  def encode(atMillis: Long, why: String): String = s"v1:$atMillis:$why"
+
+  /** Why the state failed closed, and when, as it is told at the next start. */
+  def describe(value: String): String =
+    value.split(":", 3) match
+      case Array("v1", millis, why) if millis.toLongOption.isDefined =>
+        s"$why (found at ${java.time.Instant.ofEpochMilli(millis.toLong)})"
+      case _ => s"a fault recorded as '$value'"

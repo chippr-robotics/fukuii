@@ -25,7 +25,6 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockFetcher.FetchedState
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.network.Peer
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes as SNAPByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
@@ -40,7 +39,8 @@ import com.chipprbots.ethereum.testing.Tags.*
   *   - In-flight de-dup: a second FetchStateNode for the same hash updates replyTo only — no parallel SNAP request gets
   *     fired.
   *   - Bytecode path: FetchStateNode with isByteCode=true routes to SNAP GetByteCodes (BestSnapPeerExcluding), not
-  *     GetNodeData. This unblocks contract bytecode recovery on ETH68-only peer sets where GetNodeData is unavailable.
+  *     GetNodeData (removed by EIP-4938). This unblocks contract bytecode recovery on ETH68+ peer sets.
+  *   - A trie node with no root or no position has no SNAP request to be asked with: exhausted at once, no peer asked.
   *   - Peer rotation: every SNAP request selects via BestSnapPeerExcluding(triedPeers); the first attempt excludes the
   *     empty set, and empty/wrong responses add the responding peer so each retry samples a different snap server.
   */
@@ -133,7 +133,14 @@ class StateNodeFetcherSpec
       val first = ByteString(Array.fill[Byte](32)(0xa1.toByte))
       val second = ByteString(Array.fill[Byte](32)(0xa2.toByte))
       def fetch(hash: ByteString, isByteCode: Boolean = false): Unit =
-        fetcher ! StateNodeFetcher.FetchStateNode(hash, replyTo.ref.toTyped[FetchResponse], isByteCode = isByteCode)
+        // a node is asked for at its position, by SNAP GetTrieNodes: with none there is nobody to ask
+        fetcher ! StateNodeFetcher.FetchStateNode(
+          hash,
+          replyTo.ref.toTyped[FetchResponse],
+          stateRoot = Some(ByteString(Array.fill[Byte](32)(0x11.toByte))),
+          paths = Some(Seq(Seq(ByteString(Array(0x00.toByte))))),
+          isByteCode = isByteCode
+        )
       // A new fetch sends a request, after it has counted. A de-dup sends nothing, so the next new fetch shows it passed.
       def requestSent(): Unit =
         peersClient.expectMsgClass(3.seconds, classOf[PeersClient.Request[?]]): Unit
@@ -170,9 +177,7 @@ class StateNodeFetcherSpec
       )
 
       // The peersClient receives a Request whose message is a GetByteCodes for our codeHash,
-      // targeting the BestSnapPeer selector. Earlier, this same input went through
-      // GetNodeData (BestNodeDataPeer) — which is unavailable on ETH68-only peer sets and
-      // is the failure mode Bug 30's bytecode-recovery layer fixes.
+      // targeting the BestSnapPeer selector.
       val req: Request[?] = peersClientProbe.expectMsgClass(3.seconds, classOf[PeersClient.Request[?]])
       req.message shouldBe a[GetByteCodes]
       req.message.asInstanceOf[GetByteCodes].hashes shouldBe Seq(targetHash)
@@ -196,6 +201,31 @@ class StateNodeFetcherSpec
       req.message shouldBe a[GetTrieNodes]
       req.message.asInstanceOf[GetTrieNodes].rootHash shouldBe stateRoot
       req.peerSelector shouldBe BestSnapPeerExcluding(Set.empty)
+
+    "with no root or no position for a trie node, asks no peer and answers as exhausted at once" taggedAs UnitTest in new TestSetup:
+      // A hash alone is no SNAP request, and GetNodeData is gone (EIP-4938): nothing could serve it, so the fetch does
+      // not wait out its retries (30 rotations of 5 s) on a request no peer answers.
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = targetHash,
+        originalSender = replyToProbe.ref,
+        stateRoot = None,
+        paths = None,
+        isByteCode = false
+      )
+
+      replyToProbe.expectMsg(3.seconds, FetchedStateNode(Seq.empty))
+      peersClientProbe.expectNoMessage(500.millis)
+
+      // and a root without paths, or paths without a root, is the same
+      fetcher ! StateNodeFetcher.FetchStateNode(
+        hash = ByteString(Array.fill[Byte](32)(0xab.toByte)),
+        originalSender = replyToProbe.ref,
+        stateRoot = Some(ByteString(Array.fill[Byte](32)(0x11.toByte))),
+        paths = None,
+        isByteCode = false
+      )
+      replyToProbe.expectMsg(3.seconds, FetchedStateNode(Seq.empty))
+      peersClientProbe.expectNoMessage(500.millis)
 
     "de-duplicates a second FetchStateNode for the in-flight hash (no parallel request)" taggedAs UnitTest in new TestSetup:
       // First fetch — fires a request.
@@ -255,7 +285,7 @@ class StateNodeFetcherSpec
         fetcher ! StateNodeFetcher.RetryStateNodeRequest
       }
 
-      replyToProbe.expectMsgPF(3.seconds) { case FetchedStateNode(NodeData(values)) =>
+      replyToProbe.expectMsgPF(3.seconds) { case FetchedStateNode(values) =>
         values shouldBe empty
       }
 
@@ -296,7 +326,7 @@ class StateNodeFetcherSpec
       )
       fetcher ! StateNodeFetcher.RetryStateNodeRequest
 
-      retriedBy.expectMsgPF(3.seconds) { case FetchedStateNode(NodeData(values)) =>
+      retriedBy.expectMsgPF(3.seconds) { case FetchedStateNode(values) =>
         values shouldBe empty
       }
 
@@ -330,7 +360,7 @@ class StateNodeFetcherSpec
         .foreach(_ should not be fallbackRoot)
       // Bounded: exhaustion still signals BlockImporter after the retry budget.
       (1 to StateNodeFetcher.MaxStateNodeFetchRetries).foreach(_ => fetcher ! StateNodeFetcher.RetryStateNodeRequest)
-      replyToProbe.expectMsgPF(3.seconds) { case FetchedStateNode(NodeData(values)) => values shouldBe empty }
+      replyToProbe.expectMsgPF(3.seconds) { case FetchedStateNode(values) => values shouldBe empty }
 
     "still switches to the fallback root for a non-root node (existing behaviour preserved)" taggedAs UnitTest in new TestSetup:
       val stateRoot: ByteString = ByteString(Array.fill[Byte](32)(0x46.toByte))
@@ -419,7 +449,7 @@ class StateNodeFetcherSpec
       // The third peer returns the genuine node: it is verified by hash and delivered.
       val p3: Peer = PeerTestHelpers.createTestPeer("p3", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p3, TrieNodes(1, Seq(goodNode)))
-      replyToProbe.expectMsg(FetchedStateNode(NodeData(Seq(goodNode))))
+      replyToProbe.expectMsg(FetchedStateNode(Seq(goodNode)))
 
     "backs off by BackoffInterval only once every snap peer has been tried (NoSuitablePeer)" taggedAs UnitTest in new ManualClockSetup:
       fetcher ! StateNodeFetcher.FetchStateNode(
@@ -451,7 +481,7 @@ class StateNodeFetcherSpec
       replyToProbe.expectNoMessage(100.millis)
       val p2: Peer = PeerTestHelpers.createTestPeer("p2", TestProbe().ref)
       fetcher ! StateNodeFetcher.AdaptedMessage(p2, SNAPByteCodes(2, Seq(code)))
-      replyToProbe.expectMsg(FetchedStateNode(NodeData(Seq(code))))
+      replyToProbe.expectMsg(FetchedStateNode(Seq(code)))
 
     "an EMPTY TrieNodes reply rotates immediately WITHOUT blacklisting the peer" taggedAs UnitTest in new ManualClockSetup:
       fetcher ! StateNodeFetcher.FetchStateNode(
@@ -522,7 +552,7 @@ class StateNodeFetcherSpec
 
       // The next peer still serves the node at that root: it is delivered.
       fetcher ! StateNodeFetcher.AdaptedMessage(p4, TrieNodes(4, Seq(goodNode)))
-      replyToProbe.expectMsg(FetchedStateNode(NodeData(Seq(goodNode))))
+      replyToProbe.expectMsg(FetchedStateNode(Seq(goodNode)))
       peersClientProbe.expectNoMessage(100.millis)
 
     "an EMPTY ByteCodes reply rotates immediately WITHOUT blacklisting the peer" taggedAs UnitTest in new ManualClockSetup:
@@ -547,5 +577,5 @@ class StateNodeFetcherSpec
       peersClientProbe.expectNoMessage(200.millis)
       // The live request is still answerable.
       fetcher ! StateNodeFetcher.AdaptedMessage(p1, SNAPByteCodes(999, Seq(otherCode)))
-      replyToProbe.expectMsg(FetchedStateNode(NodeData(Seq(otherCode))))
+      replyToProbe.expectMsg(FetchedStateNode(Seq(otherCode)))
   }

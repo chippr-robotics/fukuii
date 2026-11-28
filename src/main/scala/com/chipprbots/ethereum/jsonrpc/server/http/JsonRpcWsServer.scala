@@ -9,6 +9,7 @@ import org.apache.pekko.actor.typed.Scheduler
 import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.http.scaladsl.Http
+import org.apache.pekko.http.scaladsl.model.AttributeKeys
 import org.apache.pekko.http.scaladsl.model.StatusCodes
 import org.apache.pekko.http.scaladsl.model.ws.Message
 import org.apache.pekko.http.scaladsl.model.ws.TextMessage
@@ -38,10 +39,15 @@ import org.json4s.native.Serialization
 import com.chipprbots.ethereum.jsonrpc.JsonRpcError
 import com.chipprbots.ethereum.jsonrpc.JsonRpcRequest
 import com.chipprbots.ethereum.jsonrpc.RpcCallStats
+import com.chipprbots.ethereum.jsonrpc.RpcNamespaceDenials
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager
 import com.chipprbots.ethereum.jsonrpc.SubscriptionManager.*
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
+import com.chipprbots.ethereum.tls.ListenerId
+import com.chipprbots.ethereum.tls.TlsConfigError
+import com.chipprbots.ethereum.tls.TlsServerContext
+import com.chipprbots.ethereum.tls.TlsServerEngine
 import com.chipprbots.ethereum.utils.Logger
 
 /** WebSocket JSON-RPC server.
@@ -66,7 +72,9 @@ import com.chipprbots.ethereum.utils.Logger
 class JsonRpcWsServer(
     jsonRpcController: JsonRpcBaseController,
     subscriptionManager: ActorRef[SubscriptionManager.Command],
-    config: JsonRpcWsServer.JsonRpcWsServerConfig
+    config: JsonRpcWsServer.JsonRpcWsServerConfig,
+    tlsContext: () => Either[TlsConfigError, Option[TlsServerContext]] = () => Right(None),
+    tlsCallers: Option[RpcCallers] = None
 )(implicit system: ActorSystem)
     extends Logger:
 
@@ -80,6 +88,11 @@ class JsonRpcWsServer(
 
   private val originPolicy: WsOriginPolicy = WsOriginPolicy(config.allowedOrigins)
 
+  /** Who is served by which controller (spec 030 FR-020, FR-026): resolved once, at the upgrade, and kept for every
+    * message and subscription of the connection.
+    */
+  private val callers: RpcCallers = tlsCallers.getOrElse(RpcCallers.none(jsonRpcController))
+
   /** The upgrade is refused with 403 when the request carries an `Origin` header that is not on the allow-list; the
     * connection is not registered with the SubscriptionManager. A request with no `Origin` header is not from a browser
     * and goes through. See [[WsOriginPolicy]]. A request that is not a WebSocket upgrade is answered with 400 and
@@ -90,8 +103,9 @@ class JsonRpcWsServer(
       extractRequest { request =>
         val origins = request.headers.filter(_.is("origin")).map(_.value)
         if originPolicy.permits(origins) then
-          extractWebSocketUpgrade { upgrade =>
-            complete(upgrade.handleMessages(buildWsFlow()))
+          (extractWebSocketUpgrade & optionalAttribute(AttributeKeys.sslSession)) { (upgrade, session) =>
+            val controller = callers.forSession(session.map(_.session)).controller
+            complete(upgrade.handleMessages(buildWsFlow(controller)))
           }
         else
           log.warn(
@@ -134,13 +148,34 @@ class JsonRpcWsServer(
     // The outcome is logged, and said to the RPC view, by the lifecycle.
     val _ = lifecycle.start()
 
-  private def bind(): Future[Http.ServerBinding] =
-    connections = KillSwitches.shared("json-rpc-ws-connections")
-    val bindingF = Http(system).newServerAt(config.interface, config.port).bind(route)
-    bindingF.foreach(b => log.info(s"JSON RPC WS server listening on ${b.localAddress}"))
-    bindingF
+  /** Whether the listener speaks TLS (WSS), from its `tls` block (spec 030 FR-014). */
+  def isTls: Boolean = config.tlsEnabled
 
-  private def buildWsFlow(): Flow[Message, Message, Any] =
+  private def bind(): Future[Http.ServerBinding] =
+    // Read on every bind, so `rpc start ws` from the dashboard takes the material as it is now. A TLS context that
+    // cannot be built is a failed bind, never a plaintext listener (FR-012).
+    tlsContext() match
+      case Left(error) => Future.failed(new IllegalStateException(error.message))
+      case Right(tls) =>
+        connections = KillSwitches.shared("json-rpc-ws-connections")
+        val server = Http(system).newServerAt(config.interface, config.port)
+        val bindingF = tls match
+          case None         => server.bind(route)
+          case Some(secure) =>
+            // As on the HTTP listener: the TLS session on the upgrade request, which the connection keeps for its
+            // life, and a refused handshake counted and logged with its address (FR-017, FR-026).
+            val settings = TlsServerEngine.serverSettings(system)
+            server
+              .enableHttps(TlsServerEngine.connectionContext(secure))
+              .withSettings(settings)
+              .bindFlow(
+                TlsServerEngine.observeHandshakes(ListenerId.RpcWs, TlsServerEngine.routeHandler(route, settings))
+              )
+        val scheme = if tls.isDefined then "WSS" else "WS"
+        bindingF.foreach(b => log.info(s"JSON RPC $scheme server listening on ${b.localAddress}"))
+        bindingF
+
+  private def buildWsFlow(controller: JsonRpcBaseController): Flow[Message, Message, Any] =
     val connId = UUID.randomUUID().toString
 
     // Outbound queue: SubscriptionManager pushes JSON strings here
@@ -156,9 +191,9 @@ class JsonRpcWsServer(
     // Inbound sink: parse JSON-RPC, route, push response to queue
     val inboundSink: Sink[Message, Any] = Sink.foreach[Message] {
       case TextMessage.Strict(text) =>
-        handleWsMessage(text, connId, queue)
+        handleWsMessage(text, connId, queue, controller)
       case TextMessage.Streamed(stream) =>
-        stream.runFold("")(_ + _).foreach(text => handleWsMessage(text, connId, queue))
+        stream.runFold("")(_ + _).foreach(text => handleWsMessage(text, connId, queue, controller))
       case _ => ()
     }
 
@@ -182,7 +217,8 @@ class JsonRpcWsServer(
   private def handleWsMessage(
       text: String,
       connId: String,
-      queue: org.apache.pekko.stream.scaladsl.SourceQueueWithComplete[String]
+      queue: org.apache.pekko.stream.scaladsl.SourceQueueWithComplete[String],
+      controller: JsonRpcBaseController
   ): Unit =
     def sendResponse(json: String): Unit = queue.offer(json)
 
@@ -211,7 +247,9 @@ class JsonRpcWsServer(
         method match
           // eth_subscribe and eth_unsubscribe are in the `eth` namespace, as in go-ethereum: a WebSocket endpoint that
           // does not serve `eth` answers them like any other method it does not serve.
-          case "eth_subscribe" | "eth_unsubscribe" if !jsonRpcController.enabledApis.contains("eth") =>
+          case "eth_subscribe" | "eth_unsubscribe" if !controller.enabledApis.contains("eth") =>
+            // answered here, before the controller, so the denial is counted here too (spec 030 FR-024)
+            controller.identityRule.foreach(rule => RpcNamespaceDenials.record(rule, "eth", method, "ws"))
             sendResponse(errorResponse(id, JsonRpcError.MethodNotFound.code, JsonRpcError.MethodNotFound.message))
 
           case "eth_subscribe" =>
@@ -286,7 +324,7 @@ class JsonRpcWsServer(
               case None =>
                 sendResponse(errorResponse(id, -32600, "Invalid request"))
               case Some(req) =>
-                jsonRpcController.handleRequest(req).unsafeToFuture().foreach { resp =>
+                controller.handleRequest(req).unsafeToFuture().foreach { resp =>
                   sendResponse(Serialization.write(resp))
                 }
 
@@ -302,6 +340,9 @@ object JsonRpcWsServer:
       */
     val allowedOrigins: Seq[String] = Seq.empty
 
+    /** `network.rpc.ws.tls.enabled` (spec 030); false where a configuration does not carry the block. */
+    val tlsEnabled: Boolean = false
+
   object JsonRpcWsServerConfig:
     def apply(fukuiiConfig: com.typesafe.config.Config): JsonRpcWsServerConfig =
       val wsConfig = fukuiiConfig.getConfig("network.rpc.ws")
@@ -310,6 +351,7 @@ object JsonRpcWsServer:
         override val interface: String = wsConfig.getString("interface")
         override val port: Int = wsConfig.getInt("port")
         override val allowedOrigins: Seq[String] = parseAllowedOrigins(wsConfig)
+        override val tlsEnabled: Boolean = wsConfig.hasPath("tls.enabled") && wsConfig.getBoolean("tls.enabled")
 
     /** Reads the optional `allowed-origins` key of the `ws` block: a list of strings, or one comma-separated string.
       * Absent (or null) gives an empty list, which selects the default.

@@ -50,6 +50,29 @@ object ProposerTxSelection:
       case _                  => true
     )
 
+  /** go-ethereum's `maxBlockSizeBufferZone` (miner/worker.go, quoted from memory: 1,000,000 bytes): how far below
+    * EIP-7934's MAX_RLP_BLOCK_SIZE the proposer stops adding transactions. It covers what the running size does not
+    * count exactly: here, the child header (estimated by its parent's, see [[SizeBudget]]) and the list-length prefixes
+    * that grow with the body.
+    */
+  val BlockSizeBufferZone: Long = 1_000_000L
+
+  /** EIP-7934 accounting for one payload (Osaka on): `initialSize` is the encoded size of the block before any
+    * transaction (header and withdrawals); a transaction goes in only while the running size plus its own stays below
+    * `limit`, go-ethereum's `env.size+tx.Size() < params.MaxBlockSize-maxBlockSizeBufferZone` (`txFitsSize`).
+    */
+  final case class SizeBudget(initialSize: Long, limit: Long)
+
+  /** The bytes `stx` adds to a block's RLP (`Block.toRLPEncodable`): a legacy transaction is its RLP list, a typed one
+    * (EIP-2718) its `type || payload` envelope wrapped as an RLP string. Never a blob sidecar: the block carries none.
+    */
+  def blockItemSize(stx: SignedTransaction): Long =
+    import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.SignedTransactionEnc
+    import com.chipprbots.ethereum.rlp
+    SignedTransactionEnc(stx).toRLPEncodable match
+      case p: rlp.PrefixedRLPEncodable => rlp.encode(rlp.RLPValue(rlp.encode(p))).length.toLong
+      case other                       => rlp.encode(other).length.toLong
+
   /** Select and order `candidates` for one payload.
     *
     * @param candidates
@@ -70,12 +93,18 @@ object ProposerTxSelection:
     *      arrival, then the lower hash so the order is total;
     *   1. a blob transaction that no longer fits `maxBlobGas` is dropped together with the rest of its sender's run
     *      (go-ethereum `txs.Pop()`); everyone else carries on.
+    *   1. with a `sizeBudget` (EIP-7934, Osaka on), the first transaction that would take the block to or past the
+    *      budget's limit ends the selection: no later transaction goes in, however small. go-ethereum's
+    *      `commitTransactions` does the same, `if !env.txFitsSize(tx) { break }`, after its gas and blob-space checks.
+    *      Dropping transactions later (a lenient build leaving out a failed one) only shrinks the block, so the payload
+    *      built from this selection stays under the cap.
     */
   def select(
       candidates: Seq[Candidate],
       baseFee: BigInt,
       blobBaseFee: Option[BigInt],
-      maxBlobGas: BigInt
+      maxBlobGas: BigInt,
+      sizeBudget: Option[SizeBudget] = None
   ): Seq[SignedTransaction] =
     val runs: Map[Address, Vector[Candidate]] =
       candidates
@@ -109,14 +138,20 @@ object ProposerTxSelection:
 
     val selected = Vector.newBuilder[SignedTransaction]
     var blobGasUsed = BigInt(0)
-    while heap.nonEmpty do
+    var blockSize = sizeBudget.fold(0L)(_.initialSize)
+    var full = false
+    while heap.nonEmpty && !full do
       val head = heap.dequeue()
       val run = runs(head.candidate.sender)
       val blobGas = BlobGasUtils.GAS_PER_BLOB * blobCount(head.candidate.stx.tx)
       if blobGasUsed + blobGas <= maxBlobGas || blobGas == 0 then
-        selected += head.candidate.stx
-        blobGasUsed += blobGas
-        val next = head.index + 1
-        if next < run.size then heap.enqueue(Head(run(next), next))
+        val txSize = sizeBudget.fold(0L)(_ => blockItemSize(head.candidate.stx))
+        if sizeBudget.exists(budget => blockSize + txSize >= budget.limit) then full = true
+        else
+          selected += head.candidate.stx
+          blobGasUsed += blobGas
+          blockSize += txSize
+          val next = head.index + 1
+          if next < run.size then heap.enqueue(Head(run(next), next))
       // else: the blob transaction does not fit what is left; its sender is done for this payload.
     selected.result()

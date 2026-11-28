@@ -84,7 +84,6 @@ class ActionsContractSpec extends AnyFlatSpec with Matchers with OptionValues:
   it should "name each action once, and find it by its name" taggedAs (UnitTest) in {
     Actions.all.map(_.name).distinct shouldBe Actions.all.map(_.name)
     for spec <- Actions.all do Actions.named(spec.name).value shouldBe spec
-    Actions.named("compact") shouldBe None
     Actions.named("") shouldBe None
   }
 
@@ -106,22 +105,21 @@ class ActionsContractSpec extends AnyFlatSpec with Matchers with OptionValues:
     Actions.HaltWord shouldBe "stop"
   }
 
-  "What is not offered" should "be as many rows in the contract as in the registry, compaction among them" taggedAs (
+  "What is not offered" should "be as many rows in the contract as in the registry, and compaction no longer among them" taggedAs (
     UnitTest
   ) in {
     notOffered should have size Actions.NotOffered.size.toLong
-    notOffered should contain("Compact the database")
-    Actions.NotOffered.map(_._1) should contain("Compact the database")
+    notOffered should not contain "Compact the database"
+    Actions.NotOffered.map(_._1) should not contain "Compact the database"
     Actions.NotOffered.map(_._1).distinct shouldBe Actions.NotOffered.map(_._1)
     for (what, why) <- Actions.NotOffered do
       withClue(s"$what: ") {
         why should not be empty
       }
-    // What is not offered is no action of the registry.
-    Actions.named("compact") shouldBe None
+    // Compaction is offered since B-371: an action of the registry, a Disrupt.
+    Actions.named("compact").map(_.risk) shouldBe Some(RiskClass.Disrupt)
   }
 
-  // Was a defect, fixed: the runner's list still has `compact`, which is no action: the contract and the registry dropped it.
   "The actions that write a line when they start" should "be the ones the contract names, each an action" taggedAs (
     UnitTest
   ) in {
@@ -129,7 +127,7 @@ class ActionsContractSpec extends AnyFlatSpec with Matchers with OptionValues:
     val named = contract.mkString(" ") match
       case Long(list) => "`([^`]+)`".r.findAllMatchIn(list).map(_.group(1)).toSet
       case _          => fail("the contract does not say which actions run for long")
-    named shouldBe Set("dbcheck", "detect-ip", "bundle")
+    named shouldBe Set("dbcheck", "compact", "detect-ip", "bundle")
     for name <- ActionRunner.LongRunning do
       withClue(s"$name: ") {
         Actions.named(name) should not be empty

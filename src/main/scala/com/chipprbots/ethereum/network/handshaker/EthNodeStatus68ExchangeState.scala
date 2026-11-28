@@ -8,6 +8,7 @@ import com.chipprbots.ethereum.forkid.ForkIdValidationResult.Connect
 import com.chipprbots.ethereum.forkid.ForkIdValidator
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
+import com.chipprbots.ethereum.network.PeerChurnStats
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
@@ -131,7 +132,7 @@ case class EthNodeStatus68ExchangeState(
         log.debug("STATUS_EXCHANGE: ForkId validation result: {}", validationResult)
         validationResult match
           case Connect =>
-            log.info(
+            log.debug(
               "ETH{}_STATUS: Accepted - totalDifficulty={}, latestBlock={} (forkId ok)",
               protocolVersion,
               totalDifficulty,
@@ -152,6 +153,7 @@ case class EthNodeStatus68ExchangeState(
               )
             )
           case other =>
+            PeerChurnStats.global.recordForkIdRejected()
             log.debug(
               "STATUS_EXCHANGE: ForkId validation failed: {} - disconnecting. Local: {}, Remote: {}",
               other,

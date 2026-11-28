@@ -16,9 +16,11 @@ import com.chipprbots.ethereum.console.TuiEnv
 import com.chipprbots.ethereum.ephemery.EphemeryResetWatchdog
 import com.chipprbots.ethereum.ephemery.EphemeryResolver
 import com.chipprbots.ethereum.ephemery.StartupDeps
+import com.chipprbots.ethereum.nodebuilder.BaseNode
 import com.chipprbots.ethereum.nodebuilder.ChainTool
-import com.chipprbots.ethereum.nodebuilder.EngineApiStartupRefusal
+import com.chipprbots.ethereum.nodebuilder.NodeStartup
 import com.chipprbots.ethereum.nodebuilder.StdNode
+import com.chipprbots.ethereum.nodebuilder.StopSignal
 import com.chipprbots.ethereum.nodebuilder.TestNode
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.JvmFlagGuard
@@ -84,8 +86,13 @@ object Fukuii extends Logger:
       System.exit(1)
 
     // The native libraries behind the precompiles of every configured fork (BLS12-381 from ETH Prague or ETC Olympia,
-    // KZG from ETH Cancun or ETC Olympia). A missing one would make this node compute different results from the
-    // network, so it must not start without them (B-135).
+    // KZG from ETH Cancun only: ECIP-1121 defers EIP-4844, so ETC Olympia has no 0x0a). A missing one would make this
+    // node compute different results from the network, so it must not start without them (B-135).
+    NativeBackends.BlsChoice.parse(Config.config.getString("vm.bls12-381-backend")) match
+      case Left(error) =>
+        log.error("Configuration error: {}", error)
+        System.exit(1)
+      case Right(choice) => NativeBackends.selectBls(choice)
     val nativeBackends = NativeBackends.required(Config.blockchains.blockchainConfig)
 
     if nativeBackends.contains(NativeBackends.Backend.Kzg) then
@@ -116,6 +123,8 @@ object Fukuii extends Logger:
       System.exit(1)
     else if nativeBackends.nonEmpty then
       log.info("Native precompile backends checked: {}", nativeBackends.map(_.library).mkString("; "))
+      if nativeBackends.contains(NativeBackends.Backend.Bls12381) then
+        log.info("BLS12-381 precompiles run on {}", NativeBackends.blsBackendName)
     // From here on, a precompile that finds its backend missing halts the node where it finds it. Installed after the
     // self-check, whose probes report a missing backend instead of halting.
     FatalErrors.installCallTimeHalt()
@@ -138,6 +147,9 @@ object Fukuii extends Logger:
       // restores before it exits; this hook covers Ctrl-C and SIGTERM, including when JLine's hook closes the terminal
       // first (Tui.shutdown then writes the reset to the process output).
       Runtime.getRuntime.addShutdownHook(new Thread(() => tui.shutdown(), "TuiRestore"))
+      // A halt (FatalErrors: a precompile backend missing at call time) skips the shutdown hooks, TuiRestore with them,
+      // so it restores the terminal itself before it prints its message (B-155).
+      FatalErrors.beforeHalt(() => tui.shutdown())
       if tui.initialize() then
         tui.updateNetwork(Config.blockchains.network)
         tui.updateConnectionStatus("Starting node...")
@@ -151,25 +163,45 @@ object Fukuii extends Logger:
         sys.exit(2)
       sys.exit(ChainTool.run(args.toIndexedSeq, Config))
 
-    val node =
-      if Config.testmode then
-        log.info("Starting Fukuii in test mode")
-        deleteRocksDBFiles()
-        new TestNode
-      else new StdNode
-
-    try node.start()
-    catch
-      case refusal: EngineApiStartupRefusal =>
-        // The terminal first, so the message is not lost in the alternate screen, then the message once, with no trace.
-        Tui.current.foreach(_.shutdown())
-        System.err.println(refusal.getMessage)
-        log.error(refusal.getMessage)
-        sys.exit(1)
+    // Any throw from building or starting the node ends the process (B-274): logged at ERROR, the terminal restored
+    // before the message is printed on stderr, what started shut down within a bound, exit 1. A refusal
+    // (EngineApiStartupRefusal) is printed and logged as its one line; anything else with its stack trace in the log.
+    var node: Option[BaseNode] = None
+    val started = NodeStartup.startOrExit(
+      () =>
+        val built =
+          if Config.testmode then
+            log.info("Starting Fukuii in test mode")
+            deleteRocksDBFiles()
+            new TestNode
+          else new StdNode
+        node = Some(built)
+        // SIGTERM stops this node and exits 0 when its database closed, not the JVM's 143 (B-426).
+        StopSignal.install(() => built.stopForExit())
+        built.start()
+      ,
+      NodeStartup.OnFailure(
+        restoreTerminal = () => Tui.current.foreach(_.shutdown()),
+        printToUser = message =>
+          System.err.println(message)
+          System.err.flush()
+        ,
+        shutdown = () => node.foreach(_.shutdown()),
+        shutdownBound = NodeStartup.DefaultShutdownBound,
+        exit = deps.exit
+      )
+    )
 
     // An Ephemery iteration ends at its reset: exit 75 for a supervisor to restart (managed), or only warn (an
     // operator's prepared directory, or `exit-at-reset = false`). Nothing is armed on any other network.
-    EphemeryResetWatchdog.startFor(Config.config, deps)
+    // Its exit 75 comes after the node's stop, as SIGTERM's does (B-452): the JVM's hook does not wait for a stop that
+    // began elsewhere, and exiting first could cut the database's close.
+    // A SIGTERM that races the reset waits for the same stop, and the process exits 0 or 75, whichever exits first:
+    // both are harmless. The stop has run to its end either way, and 0 answers the SIGTERM that asked for a stop.
+    if started then
+      val stopThenExit: Int => Unit = code =>
+        StopSignal.stopThenExit(s"exit $code", () => node.forall(_.stopForExit()), deps.exit, _ => code)
+      EphemeryResetWatchdog.startFor(Config.config, deps.copy(exit = stopThenExit))
 
   private def truncateLogs(): Unit =
     import scala.util.Try

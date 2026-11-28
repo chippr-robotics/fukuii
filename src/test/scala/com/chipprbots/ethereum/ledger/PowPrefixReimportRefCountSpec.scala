@@ -1,13 +1,12 @@
 package com.chipprbots.ethereum.ledger
 
-import java.nio.file.Files
-
 import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 
 import scala.collection.mutable
 
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -31,6 +30,7 @@ import com.chipprbots.ethereum.ledger.BlockExecutionError.ValidationAfterExecErr
 import com.chipprbots.ethereum.mpt.*
 import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.testing.TempDirs
 import com.chipprbots.ethereum.utils.BlockchainConfig
 
 /** #1592: a PoW batch that RE-PRESENTS our own canonical blocks, against a real RocksDB under basic pruning with the
@@ -47,7 +47,14 @@ import com.chipprbots.ethereum.utils.BlockchainConfig
   * The batch is driven straight into `ConsensusImpl.evaluateBranch`, exactly as `BlockImporter` hands it over on a PoW
   * chain, so these cases pin the settle-side guarantee whatever the importer trims.
   */
-class PowPrefixReimportRefCountSpec extends AnyFlatSpec with Matchers:
+class PowPrefixReimportRefCountSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
+
+  // B-305: each test's RocksDB directory is closed and deleted once the suite is done (75 MB each)
+  private val tempDirs = new TempDirs
+  override protected def afterAll(): Unit = tempDirs.deleteAll()
+  private def tracked(ds: RocksDbDataSource): RocksDbDataSource =
+    tempDirs.closeBeforeDelete(() => ds.close())
+    ds
 
   private val history = 64
   private val keyCount = 40
@@ -56,20 +63,22 @@ class PowPrefixReimportRefCountSpec extends AnyFlatSpec with Matchers:
   private def value(tag: String): ByteString = ByteString(s"$tag-padding-to-force-a-hashed-leaf-node-xxxxxxxx")
 
   trait RocksDataSourceComponent extends DataSourceComponent:
-    private val dbPath: String = Files.createTempDirectory("pow-prefix-reimport-rocksdb").toAbsolutePath.toString
-    override lazy val dataSource: RocksDbDataSource = RocksDbDataSource(
-      new RocksDbConfig:
-        override val createIfMissing: Boolean = true
-        override val paranoidChecks: Boolean = true
-        override val path: String = dbPath
-        override val maxThreads: Int = 1
-        override val maxOpenFiles: Int = 32
-        override val verifyChecksums: Boolean = true
-        override val levelCompaction: Boolean = true
-        override val blockSize: Long = 16384
-        override val blockCacheSize: Long = 33554432
-      ,
-      Namespaces.nsSeq
+    private val dbPath: String = tempDirs.create("pow-prefix-reimport-rocksdb").toAbsolutePath.toString
+    override lazy val dataSource: RocksDbDataSource = tracked(
+      RocksDbDataSource(
+        new RocksDbConfig:
+          override val createIfMissing: Boolean = true
+          override val paranoidChecks: Boolean = true
+          override val path: String = dbPath
+          override val maxThreads: Int = 1
+          override val maxOpenFiles: Int = 32
+          override val verifyChecksums: Boolean = true
+          override val levelCompaction: Boolean = true
+          override val blockSize: Long = 16384
+          override val blockCacheSize: Long = 33554432
+        ,
+        Namespaces.nsSeq
+      )
     )
 
   class Setup extends EphemBlockchainTestSetup:
@@ -205,7 +214,13 @@ class PowPrefixReimportRefCountSpec extends AnyFlatSpec with Matchers:
       // The executed 7..10 only match the head's weight, so the old head is kept and the index restored. Unfixed, that
       // arm abandoned every executed block as a side block, the canonical 7..10 among them.
       failing = Set(extension.hash.value)
-      importBatch(prefix :+ extension) shouldBe a[BranchExecutionFailure]
+      importBatch(prefix :+ extension) match
+        case BranchExecutionFailure(toEnqueue, failingHash, _) =>
+          // spec 018 C6, T237 (forge): what is queued again is what executed, and never the block that failed, which
+          // ConsensusAdapter drops from the queue with its descendants
+          failingHash shouldBe extension.hash.value
+          toEnqueue.map(_.hash) shouldBe prefix.map(_.hash)
+        case other => fail(s"expected BranchExecutionFailure, got $other")
       reader.getBestBlockNumber shouldBe BigInt(10)
       reader.getBestBlock.map(_.hash) shouldBe Some(head.hash)
       prefix.foreach(b => withClue(s"block ${b.number}: ")(applied(b) shouldBe true))

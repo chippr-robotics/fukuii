@@ -1,0 +1,7 @@
+jar: /home/dontpanic/work/s018-gates/target/scala-3.9.0/fukuii-assembly-0.12.65.jar
+jar sha256: 63ed3d6a1d317963dd6a104aba66b3ebfe8bc0815c4d9f188c5acec5f873bb87
+java: openjdk version "25.0.5.1" 2026-11-17
+jvm: java -Xmx4g -XX:+IgnoreUnrecognizedVMOptions -XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:+ExitOnOutOfMemoryError
+host: Linux 7.0.0-42-generic x86_64; cpus 4; memory 16293676 kB
+datadir filesystem: /dev/mapper/ubuntu--vg-ubuntu--lv  913G  710G  158G  82% /
+reference: http://127.0.0.1:8599 (CoreGeth/v1.12.23-stable-96b2afc2/linux-amd64/go1.21.13)

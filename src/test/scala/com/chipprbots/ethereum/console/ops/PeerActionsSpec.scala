@@ -370,7 +370,8 @@ class PeerActionsSpec extends AnyFlatSpec with Matchers with OptionValues:
       Vector(
         "Blocks 203.0.113.11 until this node restarts: connections from it are refused, and the node will not dial it.",
         s"1 connected peer at it (${short(outbound.id)}) is disconnected now.",
-        "Discovery (UDP) packets to and from it are not blocked."
+        "Discovery drops its UDP packets and sends it none. To keep it blocked after a restart, list it in " +
+          "network.peer.blocked-ips."
       )
     )
     preview(new Fake(), block("198.51.100.200")).lines(1) shouldBe "No connected peer is at that address now."

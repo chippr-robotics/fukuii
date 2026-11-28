@@ -295,7 +295,7 @@ class RequestSystemCallsBlockImportPinSpec extends AnyFlatSpec with Matchers wit
         |gasUsed: 0 execution: 0 state: 0
         |requests (type:length): (none)
         |requestsHash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-        |stateRoot: 333f9e23a9794ed9805e6233f30fd6dfc091bc3fb92a1f68734c083667caa329""".stripMargin
+        |stateRoot: 56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421""".stripMargin
   }
 
   it should "call no request contract in a world that has them, and commit what it did before" taggedAs (
@@ -310,5 +310,5 @@ class RequestSystemCallsBlockImportPinSpec extends AnyFlatSpec with Matchers wit
         |gasUsed: 0 execution: 0 state: 0
         |requests (type:length): (none)
         |requestsHash: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
-        |stateRoot: b828a47d552a394a052a922d46e6e2b41f057f335b04bdc05338304358fdd991""".stripMargin
+        |stateRoot: d92a4f452f34fd92c7ba0f96b34f359c177d913d7dbb9cd56f9c49a5245b52c3""".stripMargin
   }

@@ -664,11 +664,11 @@ object DiscoveryService:
                     removePeer(peer).as(None)
 
                 case Some(address) =>
-                  IO(logger.info(s"Storing the ENR for $peer")) >>
+                  IO(logger.debug(s"Storing the ENR for $peer")) >>
                     storePeer(peer, enr, address)
 
             case Attempt.Successful(false) =>
-              IO(logger.info(s"Could not validate ENR signature from $peer!")) >>
+              IO(logger.debug(s"Could not validate ENR signature from $peer!")) >>
                 removePeer(peer).as(None)
 
             case Attempt.Failure(err) =>
@@ -871,7 +871,7 @@ object DiscoveryService:
 
     /** Look up a random node ID to discover new peers. */
     protected[v4] def lookupRandom: IO[Set[Node]] =
-      IO(logger.info("Looking up a random target...")) >>
+      IO(logger.debug("Looking up a random target...")) >>
         lookup(target = sigalg.newKeyPair._1)
 
     /** Look up self with the bootstrap nodes. First we have to fetch their ENR records to verify they are reachable and

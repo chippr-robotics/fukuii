@@ -4,6 +4,7 @@ import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 import io.micrometer.core.instrument.Counter
+import io.micrometer.core.instrument.FunctionCounter
 import io.micrometer.core.instrument.Gauge
 
 import com.chipprbots.ethereum.metrics.MetricsContainer
@@ -42,19 +43,26 @@ object EngineApiMetrics extends MetricsContainer:
   private val _newPayloadAcceptedCount = new AtomicLong(0)
   private val _authFailureCount = new AtomicLong(0)
 
-  // Note: Metrics.mkName adds "app_" prefix, so "engine_foo" becomes "app_engine_foo" in Prometheus
-  val newPayloadTotal: Gauge = metrics.gauge("engine_newpayload_total", () => _newPayloadCount.get().toDouble)
-  val newPayloadValid: Gauge = metrics.gauge("engine_newpayload_valid", () => _newPayloadValidCount.get().toDouble)
-  val newPayloadSyncing: Gauge =
-    metrics.gauge("engine_newpayload_syncing", () => _newPayloadSyncingCount.get().toDouble)
-  val newPayloadInvalid: Gauge =
-    metrics.gauge("engine_newpayload_invalid", () => _newPayloadInvalidCount.get().toDouble)
+  // Note: Metrics.mkName adds "app_" prefix, so "engine_foo" becomes "app_engine_foo" in Prometheus.
+  // The counts that only go up are counters (B-200), exported with `_total`: `app_engine_newpayload_valid_total`, and
+  // `app_engine_newpayload_total` for "engine_newpayload_total", whose own `_total` Prometheus does not double. As
+  // gauges they were exported without it (`app_engine_newpayload`, prometheus-metrics keeps the suffix for counters),
+  // and `rate()` of a gauge reads a reset into every restart.
+  val newPayloadTotal: FunctionCounter =
+    metrics.functionCounter("engine_newpayload_total", () => _newPayloadCount.get().toDouble)
+  val newPayloadValid: FunctionCounter =
+    metrics.functionCounter("engine_newpayload_valid", () => _newPayloadValidCount.get().toDouble)
+  val newPayloadSyncing: FunctionCounter =
+    metrics.functionCounter("engine_newpayload_syncing", () => _newPayloadSyncingCount.get().toDouble)
+  val newPayloadInvalid: FunctionCounter =
+    metrics.functionCounter("engine_newpayload_invalid", () => _newPayloadInvalidCount.get().toDouble)
 
-  val forkchoiceUpdatedTotal: Gauge =
-    metrics.gauge("engine_forkchoice_total", () => _forkchoiceUpdatedCount.get().toDouble)
-  val forkchoiceValid: Gauge = metrics.gauge("engine_forkchoice_valid", () => _forkchoiceValidCount.get().toDouble)
-  val forkchoiceSyncing: Gauge =
-    metrics.gauge("engine_forkchoice_syncing", () => _forkchoiceSyncingCount.get().toDouble)
+  val forkchoiceUpdatedTotal: FunctionCounter =
+    metrics.functionCounter("engine_forkchoice_total", () => _forkchoiceUpdatedCount.get().toDouble)
+  val forkchoiceValid: FunctionCounter =
+    metrics.functionCounter("engine_forkchoice_valid", () => _forkchoiceValidCount.get().toDouble)
+  val forkchoiceSyncing: FunctionCounter =
+    metrics.functionCounter("engine_forkchoice_syncing", () => _forkchoiceSyncingCount.get().toDouble)
 
   /** Consensus-invalid verdicts pushed in from the p2p import path via `InvalidChainReporter`.
     *
@@ -63,8 +71,8 @@ object EngineApiMetrics extends MetricsContainer:
     * `engine_newpayload_invalid` could not distinguish "nothing invalid arrived" from "invalidity had nowhere to go".
     * Flat at 0 on a syncing ETH node that is refusing blocks means the channel is unbound or misclassifying.
     */
-  val importPathInvalidReports: Gauge =
-    metrics.gauge("engine_import_path_invalid_reports", () => _importPathInvalidReports.get().toDouble)
+  val importPathInvalidReports: FunctionCounter =
+    metrics.functionCounter("engine_import_path_invalid_reports", () => _importPathInvalidReports.get().toDouble)
 
   val latestPayloadBlock: Gauge =
     metrics.gauge("engine_latest_payload_block", () => _latestPayloadBlockNumber.get().toDouble)
@@ -74,14 +82,14 @@ object EngineApiMetrics extends MetricsContainer:
   /** `engine_newPayload` calls whose answer was ACCEPTED (stored, not executed). Until B-193
     * `engine_newpayload_invalid` counted these too; it now counts INVALID answers alone.
     */
-  val newPayloadAccepted: Gauge =
-    metrics.gauge("engine_newpayload_accepted", () => _newPayloadAcceptedCount.get().toDouble)
+  val newPayloadAccepted: FunctionCounter =
+    metrics.functionCounter("engine_newpayload_accepted", () => _newPayloadAcceptedCount.get().toDouble)
 
   /** Engine API requests answered 401 by the JWT check: one number, with no tag. A tag from the request (the reason
     * carries the token's own `iat`) would make a series for each unauthenticated request.
     */
-  val authFailures: Gauge =
-    metrics.gauge("engine_auth_failures", () => _authFailureCount.get().toDouble)
+  val authFailures: FunctionCounter =
+    metrics.functionCounter("engine_auth_failures", () => _authFailureCount.get().toDouble)
 
   /** The last `engine_newPayload` that was recorded, if any. A payload the node already held is answered VALID without
     * a record (`EngineApiService.newPayload`), so it does not move this.

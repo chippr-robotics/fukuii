@@ -29,10 +29,10 @@
       "pc":4,
       "op":"SSTORE",
       "gas":59994,
-      "gasCost":59994,
+      "gasCost":12100,
       "depth":1,
       "stack":["0x1","0x7"],
-      "error":"OutOfGas"
+      "error":"out of gas"
     }]
   },
   "structLogWithMemory":{
@@ -59,11 +59,11 @@
       "pc":4,
       "op":"SSTORE",
       "gas":59994,
-      "gasCost":59994,
+      "gasCost":12100,
       "depth":1,
       "stack":["0x1","0x7"],
       "memory":[],
-      "error":"OutOfGas"
+      "error":"out of gas"
     }]
   },
   "callTracer":{

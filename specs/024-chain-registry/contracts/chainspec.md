@@ -40,7 +40,8 @@ Rules of thumb:
 | `account-start-nonce` | integer or decimal string | yes | both | |
 | `monetary-policy { ... }` | object (5 required keys) | yes | both | ECIP-1017 schedule; ETH entries carry inert values. |
 | `dao { ... }` | object | optional | both | DAO fork handling. |
-| `gas-tie-breaker`, `eth-compatible-storage` | boolean | yes | both | |
+| `eth-compatible-storage` | boolean | yes | both | |
+| `gas-tie-breaker` | boolean | no, deprecated | both | Removed (B-284): read by nothing. Accepted and ignored for one release so that a chain file that sets it loads; rejected after. |
 | `treasury-address` | address | optional | both | ECIP-1112 treasury; built-ins use `${fukuii.olympia.treasury-address}`. |
 | `base-fee-floor`, `min-tip`, `gpo-default-price` | integer or decimal string | optional | both | Fee-market and gas-oracle parameters. |
 | `bootstrap-nodes` | array of enode URLs | yes (may be empty) | both | |
@@ -101,7 +102,6 @@ Derived (not keys; an entry that sets them fails with `UnknownField`): `finality
     era-duration = 500000000
     reward-reduction-rate = 0
   }
-  gas-tie-breaker = false
   eth-compatible-storage = true
   bootstrap-nodes = [
     "enode://<128 hex>@10.0.0.11:30303",
@@ -199,7 +199,6 @@ key `plataberget2` avoids the built-in collision (or start with `--chain-registr
     era-duration = 1
     reward-reduction-rate = 0
   }
-  gas-tie-breaker = false
   eth-compatible-storage = true
   bootstrap-nodes = [ "enode://<128 hex>@<host>:30303" ]
   # no mess block on an engine-api entry

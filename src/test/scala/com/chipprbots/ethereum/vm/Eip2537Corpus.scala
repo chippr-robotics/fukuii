@@ -626,10 +626,23 @@ object Eip2537Corpus:
       flagCases(op, base, Seq(0, 128), "e(G,G2)") ++
       lengthCases(op, pairs(G1 -> G2, negG -> G2, G1 -> G2), Seq(0, 1, 128, 256, 383, 385, 512, 767, 769, 896))
 
+  /** The non-zero u with Z^2 u^4 + Z u^2 = 0, i.e. u^2 = -1/Z: SSWU's other exceptional inputs (RFC 9380 section
+    * 6.6.2), where a map written out by hand (B-151's [[Bls12381MapToCurve]]) takes its rarest branch. For G1, Z = 11
+    * and -1/Z is a square, since -1 and Z are both non-squares mod p. For G2, Z = -(2 + i) and -1/Z = (2 - i)/5 is not
+    * a square in Fp2 (its norm 1/5 is not a square mod p), so u = 0, in the grid below, is G2's only one.
+    */
+  private val G1SswuExceptional: BigInt =
+    val target = (P - BigInt(11).modInverse(P)).mod(P)
+    val root = target.modPow((P + 1) / 4, P)
+    require(root * root % P == target, "-1/11 is a square mod p")
+    root
+
   private def mapG1Edges: Vector[Eip2537Case] =
     val op = Eip2537Op.MapFpToG1
     val canonical = Vector(
       "0: the SSWU exceptional case" -> BigInt(0),
+      "sqrt(-1/Z): the other SSWU exceptional case" -> G1SswuExceptional,
+      "-sqrt(-1/Z)" -> (P - G1SswuExceptional),
       "1" -> BigInt(1),
       "2" -> BigInt(2),
       "p-2" -> (P - 2),

@@ -9,6 +9,8 @@ import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
 
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.consensus.mining.GetNBlocksBack
+import com.chipprbots.ethereum.consensus.mining.OmmerAncestor
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersError.*
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersValid
 import com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored
@@ -87,10 +89,11 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     UnitTest,
     ConsensusTest
   ) in new BlockUtils:
-    val getNBlocksBack: (ByteString, Int) => List[Block] =
+    val getNBlocksBack: GetNBlocksBack =
       (_, n) =>
         ((ommersBlockNumber - n) until ommersBlockNumber).toList
           .flatMap(nb => blockchainReader.getBlockByNumber(blockchainReader.getBestBranch, nb))
+          .map(OmmerAncestor.of)
 
     ommersValidator.validateOmmersAncestors(
       ommersBlockParentHash,
@@ -109,7 +112,7 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     UnitTest,
     ConsensusTest
   ) in new BlockUtils:
-    val none: (ByteString, Int) => List[Block] = (_, _) => List.empty
+    val none: GetNBlocksBack = (_, _) => List.empty
     val missing: AncestorNotStored = the[AncestorNotStored] thrownBy ommersValidator.validateOmmersAncestors(
       ommersBlockParentHash,
       ommersBlockNumber,
@@ -119,7 +122,7 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     (missing.wanted, missing.found) shouldBe (6, 0)
 
     // five of the six: an ommer whose parent is the missing one would read as no ancestor's child
-    val five: (ByteString, Int) => List[Block] = (_, _) => List(block92, block93, block94, block95, block96)
+    val five: GetNBlocksBack = (_, _) => List(block92, block93, block94, block95, block96).map(OmmerAncestor.of)
     val short: AncestorNotStored = the[AncestorNotStored] thrownBy ommersValidator.validateOmmersAncestors(
       ommersBlockParentHash,
       ommersBlockNumber,
@@ -134,9 +137,9 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
   ) in new BlockUtils:
     // block 3 has three ancestors, and that is all of them
     var asked = 0
-    val three: (ByteString, Int) => List[Block] = (_, n) =>
+    val three: GetNBlocksBack = (_, n) =>
       asked = n
-      List(block94, block95, block96)
+      List(block94, block95, block96).map(OmmerAncestor.of)
     // judged, whatever the verdict on these ommers: three ancestors are not a gap
     noException should be thrownBy ommersValidator.validateOmmersAncestors(
       ommersBlockParentHash,
@@ -155,10 +158,77 @@ class StdOmmersValidatorSpec extends AnyFlatSpec with Matchers with ScalaCheckPr
     storagesInstance.storages.blockBodiesStorage.remove(block93.header.hash.value).commit()
     val missing: AncestorNotStored = the[AncestorNotStored] thrownBy
       ommersValidator.validate(ommersBlockParentHash, ommersBlockNumber, ommers, blockchainReader)
-    (missing.wanted, missing.found) shouldBe (6, 3)
+    // the headers are all there; of the five bodies read, block 93's, which has ommers, is not stored (B-302)
+    (missing.wanted, missing.found) shouldBe (5, 4)
+    missing.getMessage should include("the body of block 93")
     // a block with no ommers reads no ancestor, and is judged as it was
     ommersValidator.validate(ommersBlockParentHash, ommersBlockNumber, Nil, blockchainReader) shouldBe
       Right(OmmersValid)
+
+  // B-302 (forge W3, core-geth VerifyUncles): the body of an ancestor is read only where its header names ommers, and
+  // only for the five nearest; the headers of all six are still read.
+  it should "judge a block whose ancestors' bodies are missing where they have no ommers" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new BlockUtils:
+    Seq(block90, block91, block92, block95, block96).foreach(block =>
+      storagesInstance.storages.blockBodiesStorage.remove(block.header.hash.value).commit()
+    )
+    ommersValidator.validate(ommersBlockParentHash, ommersBlockNumber, ommers, blockchainReader) shouldBe
+      Right(OmmersValid)
+    ommersValidator.validate(
+      ommersBlockParentHash,
+      ommersBlockNumber,
+      Seq(block93.body.uncleNodesList.head, ommer2),
+      blockchainReader
+    ) shouldBe Left(OmmersUsedBeforeError)
+
+  it should "read no body of the sixth ancestor, which can have used no ommer this block could have" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new BlockUtils:
+    // the oldest of the six named as having ommers, and its body not held
+    val sixth: OmmerAncestor = OmmerAncestor(block91.header.copy(ommersHash = block93.header.ommersHash), None)
+    val ancestors: GetNBlocksBack =
+      (_, _) => sixth +: List(block92, block93, block94, block95, block96).map(OmmerAncestor.of)
+    val headerOf: ByteString => Option[BlockHeader] = hash => blockchainReader.getBlockHeaderByHash(BlockHash(hash))
+    ommersValidator.validate(ommersBlockParentHash, ommersBlockNumber, ommers, headerOf, ancestors) shouldBe
+      Right(OmmersValid)
+
+  // The mandatory differential (B-302): the rule as it was, every body of the six read, and the rule as it is give the
+  // same verdict on every set of one or two ommers drawn from the fixture, its ancestors, the ommers they used and an
+  // ommer of the sixth that only the old rule reads.
+  it should "give the verdicts that a read of all six bodies gives" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new BlockUtils:
+    val allSix: StdOmmersValidator = new StdOmmersValidator(PoWBlockHeaderValidator):
+      override protected def usedBeforeDepth: Int = OmmerGenerationLimit
+    // block 91 as if it had used block 90 as an ommer: a valid chain's sixth ancestor used ommers no lower than its own
+    // sixth ancestor, and none this block could name
+    val sixthWithOmmers: OmmerAncestor =
+      OmmerAncestor(block91.header.copy(ommersHash = block93.header.ommersHash), Some(Seq(block90.header)))
+    val whole: List[OmmerAncestor] =
+      sixthWithOmmers +: List(block92, block93, block94, block95, block96).map(OmmerAncestor.of)
+    val headersFirst: List[OmmerAncestor] = whole.updated(0, sixthWithOmmers.copy(ommers = None))
+    val pool: Seq[BlockHeader] =
+      Seq(ommer1, ommer2, ommerInvalidBranch) ++ Seq(block90, block91, block92, block93, block94, block95, block96)
+        .map(_.header) ++ block93.body.uncleNodesList ++ block94.body.uncleNodesList
+    val sets: Seq[Seq[BlockHeader]] = pool.map(Seq(_)) ++ pool.combinations(2).toSeq
+    sets.size should be > 50
+    val headerOf: ByteString => Option[BlockHeader] = hash => blockchainReader.getBlockHeaderByHash(BlockHash(hash))
+    sets.foreach { set =>
+      withClue(s"ommers ${set.map(_.number).mkString(", ")}: ") {
+        ommersValidator.validate(
+          ommersBlockParentHash,
+          ommersBlockNumber,
+          set,
+          headerOf,
+          (_, _) => headersFirst
+        ) shouldBe
+          allSix.validate(ommersBlockParentHash, ommersBlockNumber, set, headerOf, (_, _) => whole)
+      }
+    }
 
   it should "report failure if there is an ommer that is too old" taggedAs (UnitTest, ConsensusTest) in new BlockUtils:
     ommersValidator.validate(

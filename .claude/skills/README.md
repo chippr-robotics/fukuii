@@ -35,7 +35,7 @@ single source of truth.
 | `fukuii-log-triage`          | Set log level at runtime; pattern-triage logs | runbooks/log-triage, operations/LOGGING |
 | `fukuii-mining-operations`   | Validate & control ETC mining via `miner_*`/`eth_*` | runbooks/mining-operations |
 | `fukuii-key-management`      | Generate/encrypt keys & genesis allocs via `fukuii cli` | cli/CliCommands, runbooks/first-start |
-| `fukuii-tls-operations`      | TLS for JSON-RPC; cert rotation | runbooks/tls-operations, security |
+| `fukuii-tls-operations`      | TLS and mTLS on every listener; identity rules; reload; outbound profiles | runbooks/tls-operations, security |
 | `fukuii-checkpoint-service`  | Operate the checkpointing service | runbooks/checkpoint-service |
 | `fukuii-node-configuration`  | Edit `fukuii.conf`, pick operating mode safely | runbooks/node-configuration, operating-modes |
 | `fukuii-first-start`         | Bootstrap a brand-new node end to end | runbooks/first-start |
@@ -62,6 +62,12 @@ pairing; they do **not** apply to ETC/Mordor (PoW, no CL).
 | :--- | :--- | :--- |
 | `fukuii-dependency-audit`    | Audit all library versions; flag stale, CVE-affected, or non-LTS deps | `build.sbt`, endoflife.date, CVE feeds |
 | `fukuii-tech-debt-inventory` | Inventory technical debt: deprecated APIs, suppressed warnings, TODO/FIXME, scalafmt violations | Source scan + scapegoat report |
+
+## Release — agent improvement
+
+| Skill | Workflow | Backing source |
+| :--- | :--- | :--- |
+| `fukuii-sprint-retro` | At each minor/patch release: review the sprint's PRs, turn them into an agent eval suite with gold answers, propose agent-file edits, and keep only the ones that win a blind A/B test against this and every earlier sprint's suite | `.claude/evals/` (suites, ledger), `.claude/agents/` |
 
 ## Communications
 

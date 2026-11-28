@@ -175,7 +175,7 @@ class EphemeryResolverSpec extends AnyFlatSpec with Matchers with BeforeAndAfter
 
   it should "name the CL directory when the entry has one, and say from cache for a placed entry" taggedAs UnitTest in {
     resolve(inside165)
-    store().addTestnet(165, completeClDir()) shouldBe Right(true)
+    store().addTestnet(165, completeClDir(scratch)) shouldBe Right(true)
     val r = resolve(inside165)
     managed(r).origin shouldBe Origin.Cache
     texts(r, Level.Info).exists(l =>

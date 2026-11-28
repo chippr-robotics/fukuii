@@ -31,12 +31,17 @@ final class TuiTestTerminal(
 ):
   val keyboard = new PipedOutputStream()
   private val keyboardIn = new PipedInputStream(keyboard, 64 * 1024)
-  private val screen = new ByteArrayOutputStream()
+  private val screen = new TuiTestTerminal.Screen
 
-  /** How much of the output has been looked at for a question. */
+  /** The bytes of output before which no question can start: up to the last one answered, or near the end of the output
+    * already looked at.
+    */
   private var askedUpTo = 0
 
-  /** The terminal's side of the wire: what is written lands in `screen`, and a question is answered on the keyboard. */
+  /** The terminal's side of the wire: what is written lands in `screen`, and a question is answered on the keyboard.
+    * Only the bytes not yet looked at are searched, so a pixel-mode start (megabytes of image data) costs a pass, not a
+    * decode of the whole output per write (B-555: that made TuiGraphicsSpec take 100 s and more).
+    */
   private val wire = new java.io.OutputStream:
     override def write(b: Int): Unit =
       screen.write(b)
@@ -46,11 +51,13 @@ final class TuiTestTerminal(
       answer()
     private def answer(): Unit =
       if queryReply.nonEmpty then
-        val out = screen.toString(StandardCharsets.UTF_8)
-        val at = out.indexOf(TerminalQuery.Questions, askedUpTo)
-        if at >= 0 then
-          askedUpTo = at + TerminalQuery.Questions.length
-          press(queryReply)
+        screen.indexOf(TuiTestTerminal.QuestionBytes, askedUpTo) match
+          case at if at >= 0 =>
+            askedUpTo = at + TuiTestTerminal.QuestionBytes.length
+            press(queryReply)
+          case _ =>
+            // a question may be split across writes: its start can still be in the last length - 1 bytes
+            askedUpTo = (screen.size() - TuiTestTerminal.QuestionBytes.length + 1).max(askedUpTo)
 
   /** The process stream behind the terminal: where [[Tui]] restores the screen once the terminal has been closed. */
   val processOutput = new ByteArrayOutputStream()
@@ -173,6 +180,23 @@ final class TuiTestTerminal(
     terminal.close()
 
 object TuiTestTerminal:
+
+  private val QuestionBytes: Array[Byte] = TerminalQuery.Questions.getBytes(StandardCharsets.UTF_8)
+
+  /** The output, searchable in place: [[indexOf]] reads the buffer without copying it. */
+  final private class Screen extends ByteArrayOutputStream:
+    /** Where `bytes` first occurs at or after `from`, or -1. */
+    def indexOf(bytes: Array[Byte], from: Int): Int = synchronized {
+      val last = count - bytes.length
+      var i = from.max(0)
+      var found = -1
+      while found < 0 && i <= last do
+        var j = 0
+        while j < bytes.length && buf(i + j) == bytes(j) do j += 1
+        if j == bytes.length then found = i else i += 1
+      found
+    }
+
   /** Config for tests: no splash, fast frames at either pace, the test logger's console appender left alone, and text
     * graphics, so the terminal is asked nothing at the start.
     */

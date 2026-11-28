@@ -279,8 +279,25 @@ class SerializingMptStorageCorruptSpec extends AnyFlatSpec with Matchers:
 
   // spec 022 T062, vault: a node is written by counting a reference to what is stored under its hash. A wrapper there
   // that does not unwrap threw a raw decode error, no MPTException, so block execution did not catch it and the import
-  // blamed the peer that sent the block.
-  "Writing a node under basic pruning" should "fail as a corrupt node where the stored wrapper does not unwrap, writing nothing" taggedAs (
+  // blamed the peer that sent the block. Since B-009 a node that hashes to its key replaces such a wrapper; one that
+  // does not is still refused as a corrupt node, and writes nothing.
+  "Writing a node under basic pruning" should "replace a stored wrapper that does not unwrap with a node that hashes to its key" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val b = new Basic
+    b.nodes.put(leafHash, Array[Byte](1, 2, 3))
+    val backing = b.state.getBackingStorage(1)
+    backing.updateNodesInStorage(Some(MptTraversals.decodeNode(leaf)), Nil)
+    backing.get(leafHash.toArray).hash.toSeq shouldBe leafHash.toSeq
+    withClue("written as a new node, with one reference: ") {
+      val stored = storedNodeFromBytes(b.nodes.get(leafHash).get)
+      stored.nodeEncoded.toSeq shouldBe leaf.toSeq
+      stored.references shouldBe 1
+    }
+  }
+
+  it should "fail as a corrupt node where the stored wrapper does not unwrap and the node written is not the key's, writing nothing" taggedAs (
     UnitTest,
     StateTest
   ) in {
@@ -288,41 +305,39 @@ class SerializingMptStorageCorruptSpec extends AnyFlatSpec with Matchers:
     val junk = Array[Byte](1, 2, 3)
     b.nodes.put(leafHash, junk)
     val backing = b.state.getBackingStorage(1)
-    val leafNode = MptTraversals.decodeNode(leaf)
-    val thrown = intercept[CorruptNodeException](backing.updateNodesInStorage(Some(leafNode), Nil))
+    val thrown = intercept[CorruptNodeException](backing.storeRawNodes(Seq(leafHash -> otherLeaf)))
     thrown.hash shouldBe leafHash
     thrown shouldBe a[MissingNodeException]
     withClue("it threw before the write: ") {
       b.nodes.get(leafHash).map(_.toSeq) shouldBe Some(junk.toSeq)
     }
-    withClue("and the same through storeRawNodes, healing's write: ") {
-      intercept[CorruptNodeException](backing.storeRawNodes(Seq(leafHash -> leaf))).hash shouldBe leafHash
-    }
   }
 
-  // spec 022 T062, vault Q1: why a corrupt node is a failure in a heal walk and not a hole to fetch. Healing writes a node
-  // through storeRawNodes, which under basic pruning counts a reference to the entry already there and keeps its bytes:
-  // the good node fetched for a corrupt entry does not replace it. Pinned as it is today.
-  it should "keep a corrupt entry's bytes when healing writes the good node over it" taggedAs (UnitTest, StateTest) in {
+  // spec 022 T062, vault Q1, and B-009: healing writes a node through storeRawNodes, which under basic pruning counts a
+  // reference to the entry already there. Where the stored bytes do not hash to the key, the good node fetched for it
+  // replaces them, and the count is kept: it counts the positions that hold the node, which the wrong bytes did not
+  // change. Before B-009 the corrupt bytes stayed, and healing could never mend them.
+  it should "replace a corrupt entry's bytes when healing writes the good node over it, keeping its count" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
     classes.foreach { case (name, bytes) =>
       withClue(s"$name in a valid wrapper: ") {
         val b = new Basic
         b.nodes.put(leafHash, b.wrap(bytes))
         val backing = b.state.getBackingStorage(1)
         backing.storeRawNodes(Seq(leafHash -> leaf))
-        corruptAt(backing, leafHash)
-        withClue("only the reference count moved: ") {
-          val stored = storedNodeFromBytes(b.nodes.get(leafHash).get)
-          stored.nodeEncoded.toSeq shouldBe bytes.toSeq
-          stored.references shouldBe 2
-        }
+        backing.get(leafHash.toArray).hash.toSeq shouldBe leafHash.toSeq
+        val stored = storedNodeFromBytes(b.nodes.get(leafHash).get)
+        stored.nodeEncoded.toSeq shouldBe leaf.toSeq
+        stored.references shouldBe 2
       }
     }
-    withClue("a wrapper that does not unwrap fails the write itself, and stays: ") {
+    withClue("a wrapper that does not unwrap is replaced as a new node: ") {
       val b = new Basic
       b.nodes.put(leafHash, Array[Byte](1, 2, 3))
       val backing = b.state.getBackingStorage(1)
-      intercept[CorruptNodeException](backing.storeRawNodes(Seq(leafHash -> leaf)))
-      corruptAt(backing, leafHash)
+      backing.storeRawNodes(Seq(leafHash -> leaf))
+      backing.get(leafHash.toArray).hash.toSeq shouldBe leafHash.toSeq
     }
   }

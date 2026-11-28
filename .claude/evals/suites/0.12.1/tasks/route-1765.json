@@ -1,0 +1,40 @@
+{
+ "id": "route-1765",
+ "chain": "ETH",
+ "source_prs": [
+  1765
+ ],
+ "base_sha": "c472634d97487e16c5779c8439f1f6f4e8c1bad6",
+ "prompt": "Security asks: the JSON-RPC WebSocket accepts any browser Origin, and the Engine API returns odd errors instead of 401 on a malformed JWT. Fix both, geth-compatible. Which agents?",
+ "expected": {
+  "route": [
+   "conduit",
+   "beacon"
+  ],
+  "gold_summary": "WS origin allowlist in jsonrpc/server/http -> conduit; JwtAuthenticator under consensus/engine (Engine API auth spec) -> beacon. In the sprint only beacon was used.",
+  "files": [],
+  "must_not": []
+ },
+ "rubric": [
+  "conduit for the WebSocket upgrade/origin policy",
+  "beacon for Engine API JWT semantics",
+  "Does not call it a consensus-rule change needing forge"
+ ],
+ "leak_markers": [
+  "#1765",
+  "#1760",
+  "#1761",
+  "WsOriginPolicy",
+  "B-152"
+ ],
+ "sprint": "0.12.1",
+ "type": "route",
+ "agent": "router",
+ "read_only": true,
+ "budget_usd": 2,
+ "timeout_s": 900,
+ "protocol": [
+  "read-only: no edits",
+  "CLAUDE.md routing rules and the Consensus-Critical Change Protocol"
+ ]
+}

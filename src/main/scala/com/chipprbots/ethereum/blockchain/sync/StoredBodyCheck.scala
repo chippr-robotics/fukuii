@@ -34,9 +34,9 @@ object StoredBodyCheck:
     case Remove(reason: String)
 
   /** Full check of `body` against `header`: everything `StdBlockValidator.validateHeaderAndBody` checks (transactions
-    * root, ommers hash, withdrawals root, RLP size, blob gas) plus the withdrawals-field presence the validator leaves
-    * to RLP decoding (a Shanghai header with `withdrawals = None` passes the validator, because an absent list hashes
-    * like an empty one, but encodes as a 3-item body). One block's worth of trie work: for anchors, not for hot paths.
+    * root, ommers hash, withdrawals root, blob gas) plus the withdrawals-field presence the validator leaves to RLP
+    * decoding (a Shanghai header with `withdrawals = None` passes the validator, because an absent list hashes like an
+    * empty one, but encodes as a 3-item body). One block's worth of trie work: for anchors, not for hot paths.
     */
   def mismatch(header: BlockHeader, body: BlockBody): Option[String] =
     BlockBody

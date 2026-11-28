@@ -14,6 +14,8 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.*
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.jsonrpc.EthUserService.*
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
@@ -121,6 +123,70 @@ class EthUserServiceSpec
     balanceAt(BlockParam.WithHash(canonical.hash.value)) shouldEqual Right(GetBalanceResponse(123))
     balanceAt(BlockParam.WithNumber(canonical.number.value)) shouldEqual Right(GetBalanceResponse(123))
     balanceAt(BlockParam.Latest) shouldEqual Right(GetBalanceResponse(123))
+
+    // B-484, EIP-1898 requireCanonical: geth's `-32000 hash is not currently canonical` for the side block; the
+    // canonical block, and a side block without the flag, are answered
+    val notCanonical: Left[JsonRpcError, Nothing] = Left(JsonRpcError(-32000, "hash is not currently canonical", None))
+    balanceAt(BlockParam.WithHash(side.hash.value, requireCanonical = true)) shouldEqual notCanonical
+    balanceAt(BlockParam.WithHash(side.hash.value, requireCanonical = false)) shouldEqual Right(GetBalanceResponse(456))
+    balanceAt(BlockParam.WithHash(canonical.hash.value, requireCanonical = true)) shouldEqual
+      Right(GetBalanceResponse(123))
+
+  // B-485: geth's answer to a hash that names no block, as for a number (`-32000 header not found`, B-210)
+  it should "answer a hash that names no block with geth's -32000 header for hash not found" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+    val unknown: ByteString = ByteString(Array.fill(32)(0x11.toByte))
+    val notFound: Left[JsonRpcError, Nothing] = Left(JsonRpcError(-32000, "header for hash not found", None))
+    for param <- Seq(BlockParam.WithHash(unknown), BlockParam.WithHash(unknown, requireCanonical = true)) do
+      ethUserService.getBalance(GetBalanceRequest(address, param)).unsafeRunSync() shouldEqual notFound
+
+  // B-489: NodeBuilder wired the consensus client's fork choice into EthBlocksService and EthProofService only, so
+  // every other state read answered "not available" for "safe" and "finalized" on a PoS chain.
+  it should "read getBalance at \"safe\" and \"finalized\" by the fork choice it is given" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))
+
+    import MerklePatriciaTrie.defaultByteArraySerializable
+
+    val mpt: MerklePatriciaTrie[Array[Byte], Account] =
+      MerklePatriciaTrie[Array[Byte], Account](storagesInstance.storages.stateStorage.getBackingStorage(0))
+        .put(
+          crypto.kec256(address.bytes.toArray[Byte]),
+          Account(0, UInt256(123), TrieRoot(ByteString("")), CodeHash(ByteString("code hash")))
+        )
+    val newblock: Block =
+      blockToRequest.copy(header = blockToRequest.header.copy(stateRoot = TrieRoot(ByteString(mpt.getRootHash))))
+    blockchainWriter.storeBlock(newblock).commit()
+    blockchainWriter.saveBestKnownBlocks(newblock.hash, newblock.number.value)
+
+    def balanceAt(service: EthUserService, tag: BlockParam): Either[JsonRpcError, GetBalanceResponse] =
+      service.getBalance(GetBalanceRequest(address, tag)).unsafeRunSync()
+
+    // no fork choice (a PoW chain): not available
+    balanceAt(ethUserService, BlockParam.Safe) shouldEqual Left(JsonRpcError.InvalidParams("safe block not available"))
+    balanceAt(ethUserService, BlockParam.Finalized) shouldEqual
+      Left(JsonRpcError.InvalidParams("finalized block not available"))
+
+    val forkChoice = new ForkChoiceManager(blockchainReader, blockchainWriter, blockchain)
+    val head = newblock.hash.value
+    forkChoice.applyForkChoiceState(ForkChoiceState(head, head, head)) shouldBe Right(())
+    val withForkChoice = new EthUserService(
+      blockchain,
+      blockchainReader,
+      mining,
+      storagesInstance.storages.evmCodeStorage,
+      this,
+      Some(forkChoice)
+    )
+    balanceAt(withForkChoice, BlockParam.Safe) shouldEqual Right(GetBalanceResponse(123))
+    balanceAt(withForkChoice, BlockParam.Finalized) shouldEqual Right(GetBalanceResponse(123))
 
   it should "handle MissingNodeException when getting balance" taggedAs (UnitTest, RPCTest) in new TestSetup:
     val address: Address = Address(ByteString(Hex.decode("abbb6bebfa05aa13e908eaa492bd7a8343760477")))

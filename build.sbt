@@ -121,6 +121,8 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
     "-Dpekko.coordinated-shutdown.exit-jvm=off", // Prevent CoordinatedShutdown from calling System.exit
     "-Dpekko.coordinated-shutdown.run-by-actor-system-terminate=on", // Ensure proper shutdown on ActorSystem.terminate
     "-Dpekko.jvm-shutdown-hooks=off", // Disable Pekko JVM shutdown hooks that may interfere with test cleanup
+    // B-511: a thread that asks for the head's lock while it holds a lock taken inside it throws in tests (CanonicalHeadLock)
+    "-Dfukuii.head-lock.order-check=fail",
     // JDK-8385993: C2 ReduceAllocationMerges miscompiles field reads on JDK 23+ (fixed in JDK 28). .jvmopts only
     // reaches the sbt JVM, so forked test JVMs need it here. Order matters: Unlock must precede the diagnostic flag;
     // Ignore keeps JDK 21 (no such flag) starting. Drop once the test JDK carries the fix.
@@ -131,6 +133,11 @@ def commonSettings(projectName: String): Seq[sbt.Def.Setting[_]] = Seq(
   // Scoverage's statement/branch instrumentation slows forked test JVMs several-fold; the 3 s TestKit expectMsg
   // defaults in BlockFetcherSpec then time out (observed: 3 failures only when the root module is instrumented).
   // (Classic TestKit and the typed ActorTestKit use separate timefactor keys.) Scale timeouts only while `sbt coverage` is active; normal runs are unchanged.
+  // B-125: JDK 24+ warns on stderr the first time Scala 3 lazy vals touch sun.misc.Unsafe. The forked test JVM uses
+  // sbt's java, and JDK 22 and older refuse the flag, so add it only when sbt itself runs on 24 or newer.
+  Test / javaOptions ++= (if (sys.props("java.specification.version").toDouble >= 24)
+                            Seq("--sun-misc-unsafe-memory-access=allow")
+                          else Seq.empty),
   Test / javaOptions ++= (if (coverageEnabled.value)
                             Seq("-Dpekko.test.timefactor=4", "-Dpekko.actor.testkit.typed.timefactor=4")
                           else Seq.empty),
@@ -309,6 +316,8 @@ lazy val node = {
       Dependencies.blsDifferentialOracles
     ).flatten ++ malletDeps
 
+  // Inert since the Mantis build: these are bare expressions in this block, not settings of the project, so
+  // Evm / sourceDirectory stays src/evm (absent) and `Evm / compile` compiles nothing (B-082 follow-up).
   (Evm / test) := (Evm / test).dependsOn(solidityCompile).value
   (Evm / sourceDirectory) := baseDirectory.value / "src" / "evmTest"
 
@@ -373,6 +382,19 @@ lazy val node = {
     .settings(inConfig(Benchmark)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
     .settings(inConfig(Evm)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
     .settings(inConfig(Rpc)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
+    // B-082: scalafmt for src/benchmark, src/evmTest and src/rpcTest. sbt-scalafmt sets up Compile and Test only;
+    // with these, the root's scalafmtAll and scalafmtCheckAll (and so formatAll, formatCheck and the autofix job)
+    // format and check the three configurations too, as IntegrationTest's settings above do for src/it.
+    .settings(inConfig(Benchmark)(org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings(Benchmark)): _*)
+    .settings(inConfig(Rpc)(org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings(Rpc)): _*)
+    .settings(inConfig(Evm)(org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings(Evm)): _*)
+    // Evm's own source directory is src/evm, which does not exist (the two settings above `val node` are inert), so
+    // scalafmt is pointed at src/evmTest directly. Compiling it is a separate fix: src/evmTest predates GasAmount,
+    // CodeHash and the Scala 3 circe, and does not compile.
+    .settings(
+      Evm / scalafmt / unmanagedSourceDirectories := Seq(baseDirectory.value / "src" / "evmTest" / "scala"),
+      Evm / scalafmt / unmanagedSources := ((baseDirectory.value / "src" / "evmTest" / "scala") ** "*.scala").get
+    )
     .settings(
       // Packaging
       maintainer := "chippr-robotics@github.com",
@@ -387,6 +409,18 @@ lazy val node = {
       // Remove once no supported JDK predates the fix.
       bashScriptExtraDefines += """addJava "-XX:+UnlockDiagnosticVMOptions"""",
       bashScriptExtraDefines += """addJava "-XX:DisableIntrinsic=_base64_decodeBlock"""",
+      // B-125: Scala 3 lazy vals (LazyVals) use sun.misc.Unsafe, and JDK 24+ prints a four-line warning on stderr
+      // the first time, over the TUI's first frame. --sun-misc-unsafe-memory-access=allow silences it, but JDK 22 and
+      // older refuse to start with it, so add it only when this java accepts it. process_my_args is the template's
+      // hook that runs after -java-home has picked java_cmd; it must hand the residual arguments back.
+      bashScriptExtraDefines += """process_my_args() {
+  case " ${JDK_JAVA_OPTIONS:-} ${JAVA_OPTS:-} " in
+    *--sun-misc-unsafe-memory-access=*) ;;
+    *) "$java_cmd" --sun-misc-unsafe-memory-access=allow -version >/dev/null 2>&1 &&
+         addJava "--sun-misc-unsafe-memory-access=allow" ;;
+  esac
+  residual_args+=("$@")
+}""",
       batScriptExtraDefines += """call :add_java "-Dconfig.file=%APP_HOME%\conf\app.conf"""",
       batScriptExtraDefines += """call :add_java "-Dlogback.configurationFile=%APP_HOME%\conf\logback.xml"""",
       batScriptExtraDefines += """call :add_java "-XX:+UnlockDiagnosticVMOptions"""",
@@ -529,6 +563,7 @@ addCommandAlias(
     |; rlp / test
     |; bytes / test
     |; crypto / test
+    |; scalanetDiscovery / test
     |; test
     |; IntegrationTest / test
     |""".stripMargin
@@ -574,23 +609,31 @@ addCommandAlias(
 // SyncTest: complex actor choreography (ADR-017) that times out under CI load.
 // DisabledTest: tests explicitly turned off (timing-flaky / WIP) — the tag exists to keep
 //   them out of the gate; see the silenced-test inventory before un-silencing.
+// DifferentialTest: spec 021's full GT-2 suites (>= 10^7 cases per operation, minutes of CPU). Their fast siblings
+//   stay in this tier; the full ones run in CI's own step (nightly, and on PRs touching domain/UInt256* or vm/).
+// BenchmarkTest: wall-clock assertions (TuiRenderBenchmarkSpec's render medians), which a slow or shared CI runner
+//   fails without any change to the code (B-555: 3.09, 6.16 and 3.92 ms against a 3 ms bound). Tier 3 per ADR TEST-002;
+//   testComprehensive runs them, and so do `sbt pp` and `testOnly *TuiRender*` locally. Their deterministic parts stay
+//   here, untagged.
 addCommandAlias(
   "testEssential",
   """; compile-all
-    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest
+    |; testOnly -- -l SlowTest -l IntegrationTest -l SyncTest -l DisabledTest -l DifferentialTest -l BenchmarkTest
     |; rlp / test
     |; bytes / test
     |; crypto / test
+    |; scalanetDiscovery / test
     |""".stripMargin
 )
 
 // testStandard - Tier 2: Standard tests (< 30 minutes)
 // Runs unit and integration tests. Excludes only Tier 3 tests:
 // BenchmarkTest/EthereumTest: the 3-hour compliance suite — belongs in testComprehensive only.
+// DifferentialTest: spec 021's full GT-2 suites, run by their own CI step (see testEssential).
 addCommandAlias(
   "testStandard",
   """; compile-all
-    |; testOnly -- -l BenchmarkTest -l EthereumTest -l SyncTest -l DisabledTest
+    |; testOnly -- -l BenchmarkTest -l EthereumTest -l SyncTest -l DisabledTest -l DifferentialTest
     |""".stripMargin
 )
 
@@ -602,6 +645,7 @@ addCommandAlias(
     |; rlp / test
     |; bytes / test
     |; crypto / test
+    |; scalanetDiscovery / test
     |; testOnly
     |; IntegrationTest / testOnly
     |""".stripMargin

@@ -771,8 +771,6 @@ private[actors] trait HealResponseProcessing extends HealCompletionApi:
   def isNodeInStorage(hash: ByteString, pathset: Seq[ByteString]): Boolean =
     storageScheme match
       case StorageScheme.Hash =>
-        try
-          mptStorage.get(hash.toArray); true
-        catch case _: Exception => false
+        mptStorage.holdsNode(hash)
       case StorageScheme.Path =>
         readPathVerifiedRlp(hash, pathset).isDefined

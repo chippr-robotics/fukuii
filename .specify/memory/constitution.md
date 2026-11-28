@@ -1,6 +1,28 @@
 <!--
 SYNC IMPACT REPORT
 ==================
+Version change: 1.2.0 → 1.2.1 (PATCH)
+Rationale: Principle I, Development Workflow step 7 and Governance named `.github/agents/{forge,beacon,herald}.md`,
+but the specialist agent files live in `.claude/agents/` (backlog item B-118, the follow-up the 1.2.0 report names).
+Wording-only: no principle is added, removed or redefined.
+
+Changes:
+  - Principle I, Development Workflow step 7, Governance: `.github/agents/` → `.claude/agents/`.
+  - Version bumped to 1.2.1; Last Amended updated. Earlier sync impact reports keep the paths of their time.
+
+Templates & artifacts reviewed for alignment:
+  ✅ .specify/templates/*.md (no change required: none names the agent directory)
+  ✅ CLAUDE.md (updated: its constitution highlights named `.github/agents/forge.md`)
+  ✅ docs/governance/constitution-enforcement.md (updated: row I.2)
+
+Follow-up TODOs: none.
+
+Last Amended: 2026-11-27
+-->
+
+<!--
+SYNC IMPACT REPORT
+==================
 Version change: 1.1.2 → 1.2.0 (MINOR)
 Rationale: several hosts (fukuii-fc, dev-node) and cloud agent sessions now work on fukuii at the same time, and the
 backlog lived in gitignored working files and handoff notes that only one host could read. Work was duplicated,
@@ -174,8 +196,8 @@ Rules:
   exactly for each chain. "Close enough" is a consensus bug.
 - Any change touching the domains above MUST be designed and reviewed BEFORE
   implementation — never patched reactively after a failure. Use the chain-appropriate
-  specialist agent: `forge` (`.github/agents/forge.md`) for ETC/Mordor consensus;
-  `beacon` (`.github/agents/beacon.md`) for ETH/Sepolia consensus.
+  specialist agent: `forge` (`.claude/agents/forge.md`) for ETC/Mordor consensus;
+  `beacon` (`.claude/agents/beacon.md`) for ETH/Sepolia consensus.
 - Do NOT mix ETC and ETH code paths. ETC fork dispatch uses
   `OlympiaOpCodes` / `forBlock()`; ETH fork dispatch uses
   `OsakaOpCodes` / `forTimestamp()`. A change to one MUST NOT silently affect the other.
@@ -184,7 +206,7 @@ Rules:
   rewards, ECIP-1017) MUST NOT enter the ETH/Sepolia code path.
 - Wire-protocol messages MUST be formatted for the negotiated peer capability
   (e.g. ETH66+ requestId framing vs. ETH62 framing); formats MUST NOT be mixed
-  on a connection. Use `herald` (`.github/agents/herald.md`) for P2P wire changes.
+  on a connection. Use `herald` (`.claude/agents/herald.md`) for P2P wire changes.
 
 Rationale: A single non-deterministic line can split the chain. This principle
 outranks all others; when it conflicts with convenience, convenience loses.
@@ -367,13 +389,13 @@ read.
 7. Consensus-critical work follows the chain-appropriate specialist agent before
    merge: `forge` for ETC/Mordor consensus, `beacon` for ETH/Sepolia consensus,
    `herald` for P2P wire protocol changes. Both consensus chains require
-   ethereum/tests validation before merge. Agent files are in `.github/agents/`.
+   ethereum/tests validation before merge. Agent files are in `.claude/agents/`.
 
 ## Governance
 
 This constitution supersedes ad hoc practice. Where a guideline elsewhere in the
 repo conflicts with it, this document wins; where this document is silent,
-`docs/development/contributing.md` and the agent definitions in `.github/agents/`
+`docs/development/contributing.md` and the agent definitions in `.claude/agents/`
 provide operational detail.
 
 - **Amendments**: Proposed via PR that edits this file, states the rationale, and
@@ -391,4 +413,4 @@ provide operational detail.
   (`.claude/agent-protocols/backlog-tracker.md`) for claims and status; this file
   defines the standards those plans must satisfy.
 
-**Version**: 1.2.0 | **Ratified**: 2026-06-05 | **Last Amended**: 2026-11-08
+**Version**: 1.2.1 | **Ratified**: 2026-06-05 | **Last Amended**: 2026-11-27

@@ -108,7 +108,7 @@ class JsonRpcControllerTypedTxSpec
     // a JSON number is not a hexutil quantity
     call(List(JObject("from" -> from.toString, "value" -> JInt(1000)))) should haveError(
       JsonRpcError.InvalidParams(
-        "invalid argument 0: json: cannot unmarshal non-string into Go struct field TransactionArgs.value of type hexutil.Big"
+        "invalid argument 0: json: cannot unmarshal non-string into Go struct field TransactionArgs.value of type *hexutil.Big"
       )
     )
 

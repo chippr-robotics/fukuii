@@ -177,6 +177,42 @@ class MockedMinerOnPositionsSpec
       )
     }
 
+  // spec 018 C6, T237 (forge): one run of three blocks across several moves of the head. Each block is built again as
+  // often as a move overtakes its build (the second twice, the most `SettledHeadBuild.Builds` allows before the last),
+  // none is sent from an overtaken build, and each is built on the state its parent's import left, never on the world
+  // of a build.
+  it should "carry a run across several moves of the head, building each block again as often as a move overtakes it" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val rig = new Rig
+      val first = childOf(origin)
+      val second = childOf(first)
+      val third = childOf(second)
+      rig.answers = Map(
+        origin.header.hash -> List(Right(first)),
+        first.header.hash -> List(Right(second)),
+        second.header.hash -> List(Right(third))
+      )
+      var overtakes = Map(origin.header.hash -> 1, first.header.hash -> 2, second.header.hash -> 1)
+      rig.duringBuild = () =>
+        val parent = rig.builds.last._1
+        if overtakes(parent) > 0 then
+          overtakes += parent -> (overtakes(parent) - 1)
+          rig.generation += 2
+
+      rig.order(3)
+      rig.mined(first)
+      rig.held = first
+      manualTime.timePasses(1.second)
+      rig.mined(second)
+      rig.held = second
+      manualTime.timePasses(1.second)
+      rig.mined(third)
+      rig.builds.map(_._1) shouldBe
+        Vector(origin, origin, first, first, first, second, second).map(_.header.hash)
+      rig.builds.map(_._2) shouldBe Vector.fill(7)(None)
+      overtakes.values.toSet shouldBe Set(0)
+    }
+
   it should "wait, building nothing, while a move of the head is open" taggedAs (UnitTest, ConsensusTest) in {
     val rig = new Rig
     val first = childOf(origin)

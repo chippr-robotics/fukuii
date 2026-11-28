@@ -99,7 +99,15 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
     /** A block whose parent nobody here has: a child of a block that is not in this node's chain. */
     def orphan(): Block = BlockHelpers.generateBlock(BlockHelpers.generateBlock(BlockHelpers.genesis))
 
-    /** What the fetcher is told about `block`, announced by `peer`: the one message that answers it. */
+    /** The peers the importer asked the fetcher to blame by name (B-140), in order, as `announce` saw them. */
+    val blamed: scala.collection.mutable.ArrayBuffer[BlockFetcher.BlamePeer] =
+      scala.collection.mutable.ArrayBuffer.empty
+
+    def blamedPeers: List[PeerId] = blamed.toList.map(_.peerId)
+
+    /** What the fetcher is told about `block`, announced by `peer`: the one message that answers it. A peer blamed by
+      * name comes before it, and is kept in `blamed`.
+      */
     def announce(
         importer: TypedActorRef[BlockImporter.Command],
         fetcher: TestProbe,
@@ -107,12 +115,15 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
         peer: PeerId
     ): BlockFetcher.FetchCommand =
       importer ! BlockImporter.ImportNewBlock(block, peer)
-      val answer = fetcher.fishForSpecificMessage(10.seconds) {
-        case m: BlockFetcher.InvalidateBlocksFrom => m
-        case m: BlockFetcher.BlockImportFailed    => m
+      val answer = fetcher.fishForMessage(10.seconds) {
+        case m: BlockFetcher.BlamePeer =>
+          blamed += m
+          false
+        case _: BlockFetcher.InvalidateBlocksFrom | _: BlockFetcher.BlockImportFailed => true
+        case _                                                                        => false
       }
       awaitIdle(fetcher)
-      answer
+      answer.asInstanceOf[BlockFetcher.FetchCommand]
 
     def imported(block: Block): BlockImportResult =
       BlockImportedToTop(List(BlockData(block, Nil, ChainWeight.totalDifficultyOnly(block.number.value))))
@@ -143,6 +154,87 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
         testKit.stop(importer)
     )
 
+    // B-140: a header whose seal (or another rule it can be checked by alone) fails is invalid on any chain, whatever
+    // its parent: the peer is blamed at once, as core-geth's fetcher drops a peer whose propagated header fails
+    // verification, and nothing is fetched on its word beyond undoing the fetcher's count of it.
+    "blame the peer at once when the orphan's header fails the seal check" taggedAs (UnitTest, SyncTest) in sync(
+      new ImporterFixture:
+        val fetcher: TestProbe = TestProbe("bad-seal-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "bad-seal-importer")
+        val block: Block = orphan()
+        setImportResult(block, IO.pure(UnknownParent))
+        setAnnouncedHeaderError(block, "HeaderPoWError")
+
+        val answer: BlockFetcher.FetchCommand = announce(importer, fetcher, block, peerId(1))
+
+        // the first orphan of this peer: no strikes are counted before the blame
+        blamed.toList shouldBe List(BlockFetcher.BlamePeer(peerId(1), BlacklistReason.BlockHeaderValidationFailed))
+        asBackOffWithoutBlame(answer, block)
+        didCheckHeaderOf(block) shouldBe true
+        testKit.stop(importer)
+    )
+
+    // B-140 (b): a seal that holds proves only the difficulty the header claims, which without its parent may be the
+    // chain's minimum: no strike is waived for it.
+    "count an orphan whose header passes the seal check as a strike, as before" taggedAs (UnitTest, SyncTest) in sync(
+      new ImporterFixture:
+        val fetcher: TestProbe = TestProbe("good-seal-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "good-seal-importer")
+        val peer: PeerId = peerId(1)
+        val blocks: List[Block] = List.fill(BlockImporter.OrphanAnnounceStrikeThreshold)(orphan())
+        blocks.foreach(b => setImportResult(b, IO.pure(UnknownParent)))
+
+        blocks.init.foreach(b => asBackOffWithoutBlame(announce(importer, fetcher, b, peer), b))
+        blamedPeers shouldBe empty
+        asBackOffWithoutBlame(announce(importer, fetcher, blocks.last, peer), blocks.last)
+
+        blocks.forall(didCheckHeaderOf) shouldBe true
+        blamed.map(_.reason.reasonType).toList shouldBe List(BlacklistReasonType.BlockImportErrorType)
+        blamedPeers shouldBe List(peer)
+        testKit.stop(importer)
+    )
+
+    // B-140: an orphan far from the best block is not seal-checked, so an announce cannot make the validator build the
+    // cache of a far Ethash epoch; it is counted as a strike as before.
+    "not check the seal of an orphan far from the best block" taggedAs (UnitTest, SyncTest) in sync(
+      new ImporterFixture:
+        val fetcher: TestProbe = TestProbe("far-orphan-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "far-orphan-importer")
+        val near: Block = orphan()
+        val far: Block = near.copy(header =
+          near.header.copy(number =
+            BlockNumber(blockchainReader.getBestBlockNumber + BlockImporter.OrphanSealCheckDistance + 1)
+          )
+        )
+        setImportResult(far, IO.pure(UnknownParent))
+        setAnnouncedHeaderError(far, "HeaderPoWError")
+
+        asBackOffWithoutBlame(announce(importer, fetcher, far, peerId(1)), far)
+
+        didCheckHeaderOf(far) shouldBe false
+        blamedPeers shouldBe empty
+        testKit.stop(importer)
+    )
+
+    // B-140: proof of work only. A chain that follows a consensus layer has no seal, and its behaviour is unchanged.
+    "not check the seal of an orphan on a chain that follows a consensus layer" taggedAs (UnitTest, SyncTest) in sync(
+      new ImporterFixture:
+        override lazy val branchResolution: BranchResolution = stub[BranchResolution]
+        (() => branchResolution.followsConsensusLayer).when().returns(true)
+
+        val fetcher: TestProbe = TestProbe("pos-orphan-fetcher")
+        val importer: TypedActorRef[BlockImporter.Command] = spawnImporter(fetcher, "pos-orphan-importer")
+        val block: Block = orphan()
+        setImportResult(block, IO.pure(UnknownParent))
+        setAnnouncedHeaderError(block, "HeaderPoWError")
+
+        asBackOffWithoutBlame(announce(importer, fetcher, block, peerId(1)), block)
+
+        didCheckHeaderOf(block) shouldBe false
+        blamedPeers shouldBe empty
+        testKit.stop(importer)
+    )
+
     "blacklist the peer that announces a block that is invalid, as before" taggedAs (UnitTest, SyncTest) in sync(
       new ImporterFixture:
         val fetcher: TestProbe = TestProbe("invalid-announce-fetcher")
@@ -170,14 +262,20 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
 
         blocks.init.foreach { b =>
           asBackOffWithoutBlame(announce(importer, fetcher, b, peer), b)
-          blacklist.isBlacklisted(peer) shouldBe false
+          blamedPeers shouldBe empty
         }
         val last: Block = blocks.last
-        // The fetcher only goes back: the peer whose strikes were counted is blacklisted here, not whoever the fetcher
-        // recorded for the block's number (forge, B-007).
+        // The fetcher only goes back: the peer whose strikes were counted is blamed by name, not whoever the fetcher
+        // recorded for the block's number (forge, B-007), through the peers client, which exempts maintained peers
+        // (B-143).
         asBackOffWithoutBlame(announce(importer, fetcher, last, peer), last)
-        blacklist.isBlacklisted(peer) shouldBe true
-        blacklist.reasonFor(peer) shouldBe Some(BlacklistReasonType.BlockImportErrorType)
+        blamed.toList shouldBe List(
+          BlockFetcher.BlamePeer(
+            peer,
+            BlockImporter.orphanStrikesReason(BlockImporter.OrphanAnnounceStrikeThreshold, last.header.hashAsHexString)
+          )
+        )
+        blamed.head.reason.reasonType shouldBe BlacklistReasonType.BlockImportErrorType
         fetcher.receiveWhile(500.millis) { case m => m }.collect { case b: BlockFetcher.BlockImportFailed =>
           b
         } shouldBe empty
@@ -200,8 +298,7 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
         asBackOffWithoutBlame(announce(importer, fetcher, byOther, peerId(2)), byOther)
         asBackOffWithoutBlame(announce(importer, fetcher, kth, peerId(1)), kth)
 
-        blacklist.isBlacklisted(peerId(1)) shouldBe true
-        blacklist.isBlacklisted(peerId(2)) shouldBe false
+        blamedPeers shouldBe List(peerId(1))
         testKit.stop(importer)
     )
 
@@ -221,7 +318,7 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
         awaitIdle(fetcher)
         // Without the block that imported, the next strike would be the threshold's.
         after.foreach(b => asBackOffWithoutBlame(announce(importer, fetcher, b, peer), b))
-        blacklist.isBlacklisted(peer) shouldBe false
+        blamedPeers shouldBe empty
         testKit.stop(importer)
     )
 
@@ -236,8 +333,7 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
         fromFirst.foreach(b => asBackOffWithoutBlame(announce(importer, fetcher, b, peerId(1)), b))
         // One strike short of the threshold for the first peer; the second peer's first strike is its own.
         asBackOffWithoutBlame(announce(importer, fetcher, fromSecond, peerId(2)), fromSecond)
-        blacklist.isBlacklisted(peerId(1)) shouldBe false
-        blacklist.isBlacklisted(peerId(2)) shouldBe false
+        blamedPeers shouldBe empty
         testKit.stop(importer)
     )
 
@@ -262,7 +358,7 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
         awaitIdle(fetcher)
         asBackOffWithoutBlame(announce(importer, fetcher, last, peer), last)
 
-        blacklist.isBlacklisted(peer) shouldBe true
+        blamedPeers shouldBe List(peer)
         testKit.stop(importer)
     )
 
@@ -284,7 +380,7 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
         awaitIdle(fetcher)
         asBackOffWithoutBlame(announce(importer, fetcher, after, peer), after)
 
-        blacklist.isBlacklisted(peer) shouldBe false
+        blamedPeers shouldBe empty
         testKit.stop(importer)
     )
 
@@ -319,6 +415,22 @@ class UnknownParentImportSpec extends WordSpecBase with Matchers with AsyncMockF
         fishForBlacklistPeer(defaultPeer).reason shouldBe BlacklistReason.BlockImportError(
           "INVALID_GAS_LIMIT: out of bounds"
         )
+    )
+
+    // B-140, the whole node: the fetcher hands the importer's blame to the peers client, whose peer list exempts
+    // maintained peers as for every blacklisting (B-143).
+    "end with the peer that announced an orphan whose seal fails blacklisted, through the peers client" taggedAs (
+      UnitTest,
+      SyncTest
+    ) in sync(
+      new OnTopFixture:
+        override def newBlockResult: BlockImportResult = UnknownParent
+        override def newBlockHeaderError: Option[String] = Some("HeaderPoWError")
+
+        goToTop()
+        sendNewBlock()
+
+        fishForBlacklistPeer(defaultPeer).reason shouldBe BlacklistReason.BlockHeaderValidationFailed
     )
   }
 

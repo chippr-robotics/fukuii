@@ -17,11 +17,11 @@ import com.chipprbots.ethereum.utils.Logger
   * The closures NEVER throw at scrape time: a `None` (flag off) or a zero denominator both read `0.0`.
   *
   * Exported series (the `app_` prefix + dot→underscore mapping is applied by the Prometheus exporter):
-  *   - `app_db_rocksdb_block_cache_hit`
-  *   - `app_db_rocksdb_block_cache_miss`
+  *   - `app_db_rocksdb_block_cache_hit_total` (a counter, B-200: the tickers only go up, and dashboards take `rate()`)
+  *   - `app_db_rocksdb_block_cache_miss_total` (a counter)
   *   - `app_db_rocksdb_block_cache_hit_rate` — `hit / (hit + miss)`, `0.0` when `None`/denominator 0
-  *   - `app_db_rocksdb_index_filter_hit`
-  *   - `app_db_rocksdb_index_filter_miss`
+  *   - `app_db_rocksdb_index_filter_hit_total` (a counter)
+  *   - `app_db_rocksdb_index_filter_miss_total` (a counter)
   *   - `app_db_rocksdb_statistics_enabled` — `1.0` when the tickers above are live, `0.0` when they read 0.0 only
   *     because `enable-statistics` is off
   *
@@ -77,12 +77,12 @@ object RocksDbCacheMetrics extends MetricsContainer with Logger:
       case rdb: RocksDbDataSource =>
         if registered.compareAndSet(false, true) then
           // hit
-          val _ = metrics.gauge(
+          val _ = metrics.functionCounter(
             "db.rocksdb.block_cache.hit",
             () => rdb.cacheStats.map(_._1.toDouble).getOrElse(0.0)
           )
           // miss
-          val _ = metrics.gauge(
+          val _ = metrics.functionCounter(
             "db.rocksdb.block_cache.miss",
             () => rdb.cacheStats.map(_._2.toDouble).getOrElse(0.0)
           )
@@ -97,11 +97,11 @@ object RocksDbCacheMetrics extends MetricsContainer with Logger:
                 case None => 0.0
           )
           // index_filter hit / miss
-          val _ = metrics.gauge(
+          val _ = metrics.functionCounter(
             "db.rocksdb.index_filter.hit",
             () => rdb.cacheStats.map(_._3.toDouble).getOrElse(0.0)
           )
-          val _ = metrics.gauge(
+          val _ = metrics.functionCounter(
             "db.rocksdb.index_filter.miss",
             () => rdb.cacheStats.map(_._4.toDouble).getOrElse(0.0)
           )

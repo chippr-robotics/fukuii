@@ -9,11 +9,14 @@ import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.db.storage.pathstate.FinalizedBlock
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
+import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
+import com.chipprbots.ethereum.ledger.AdoptedChainWeights
 import com.chipprbots.ethereum.utils.Logger
 
 /** Thread-safe manager for CL-driven fork choice (post-Merge Ethereum).
@@ -31,7 +34,12 @@ class ForkChoiceManager(
     // What the canonical index move means for the state's reference counts: the blocks it drops are undone, the ones it
     // adopts are put back (idempotent). NoOp for callers with no reference-counted state; the node passes its
     // BlockchainImpl.
-    reorgState: ReorgStateHandler = ReorgStateHandler.NoOp
+    reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
+    // B-245: told of each block a fork choice makes canonical, after the move is committed, lowest first, with whether
+    // it is the new head. The node passes the publish to the `eth_subscribe` block topic: logs for every block, newHeads
+    // for the head only (go-ethereum's SetCanonical). The Engine API never reaches BlockImporter, which is the other
+    // publisher. A notification only: it takes no part in the move.
+    onNewCanonical: (Block, Boolean) => Unit = (_, _) => ()
 ) extends Logger:
 
   // EXECUTED heads only. Written solely by the head-known branch of `applyForkChoiceState`, never by
@@ -100,22 +108,32 @@ class ForkChoiceManager(
     * @param newState
     *   the fork choice state from CL
     * @return
-    *   Right(()) if valid, Left(error) if head block is unknown
+    *   Right(()) when the head was followed; Left with a [[ForkChoiceManager.Refusal]] saying why it was not
     */
-  def applyForkChoiceState(newState: ForkChoiceState): Either[String, Unit] =
+  def applyForkChoiceState(newState: ForkChoiceState): Either[ForkChoiceManager.Refusal, Unit] =
     requestedHead.set(Some(newState.headBlockHash))
     val maybeHeader = blockchainReader.getBlockHeaderByHash(BlockHash(newState.headBlockHash))
 
     // Publish to the listener regardless of head-known status — SNAP needs the
     // unknown-head case as its trigger to start / re-pivot. The listener message
     // is fire-and-forget; the rest of this method's behavior is unchanged.
-    publishBeaconHead(newState.headBlockHash, maybeHeader)
+    // B-317: a known head on the unified layout is published once its move is decided, and not at all when it is
+    // refused for the finalized block (-38002): an inconsistent fork choice is no pivot hint. That is the only branch
+    // that refuses -38002; every other is published first, as before.
+    val decidedFirst = maybeHeader.isDefined && blockchainWriter.holdsStateInPlace
+    if !decidedFirst then publishBeaconHead(newState.headBlockHash, maybeHeader)
 
     if maybeHeader.isEmpty then
       log.info(s"Fork choice head ${newState.headBlockHash} not known yet (SYNCING)")
-      Left("SYNCING")
+      Left(ForkChoiceManager.Refusal.Syncing)
     else if blockchainWriter.holdsStateInPlace then
-      maybeHeader.fold[Either[String, Unit]](Left("SYNCING"))(confirmHeldHead(newState, _))
+      maybeHeader.fold[Either[ForkChoiceManager.Refusal, Unit]](Left(ForkChoiceManager.Refusal.Syncing)) { header =>
+        val decided = confirmHeldHead(newState, header)
+        decided match
+          case Left(ForkChoiceManager.Refusal.FinalizedReversed(_)) => ()
+          case _ => publishBeaconHead(newState.headBlockHash, maybeHeader)
+        decided
+      }
     else
       log.info(
         s"Fork choice updated: head=${newState.headBlockHash}, " +
@@ -127,11 +145,23 @@ class ForkChoiceManager(
       // above the head deleted) and the best-block pointer moves to the head — whether the head moved up, sideways,
       // or DOWN to an ancestor or a shorter side chain.
       maybeHeader.foreach { header =>
-        val move = blockchainWriter.promoteToCanonicalHead(header, blockchainReader)
+        // read before the move, while the index is still the old head's ancestry: these are the blocks it makes canonical
+        val adopting = notCanonicalBelow(header)
+        // Under the head's lock (B-511), the move with the reference counts that follow it: a branch the p2p import
+        // executes and settles holds it, so this moves the head from the index that settle leaves, and the settle
+        // never sees the head moved under it.
         // Reference counts follow the canonical index: a block is applied exactly while it is canonical (see
-        // ReorgStateHandler). Abandon first, then re-adopt, as ConsensusImpl.settleHead does; both are idempotent.
-        reorgState.abandonBlockStates(move.dropped.map { case (n, h) => (n, h.value) })
-        reorgState.readoptBlockStates(move.adopted.map { case (n, h) => (n, h.value) })
+        // ReorgStateHandler). The blocks the move adopts are put back before its batch is written, and those it drops
+        // are taken out after, as ConsensusImpl.settleHead does (BlockchainWriter.promoteToCanonicalHeadCounted).
+        val move = blockchainWriter.promoteToCanonicalHeadCounted(
+          header,
+          blockchainReader,
+          reorgState,
+          s"the fork choice to block ${header.number.value}"
+        )
+        rederiveWeights(move.adopted.map(_._2))
+        // after the move is committed (and the head's lock released): a block that was canonical before is not told again
+        publishCanonical(adopting)
       }
 
       Right(())
@@ -152,15 +182,17 @@ class ForkChoiceManager(
     * `currentState` is set only when the head was confirmed: it is read as the head that was executed and applied.
     *
     * @return
-    *   `Left("SYNCING")` when the head was not followed, and nothing was written (its state is not held: a block whose
-    *   executed state was not kept, or a fork beyond the records; or an ancestor of the head); when the plan found the
-    *   records corrupt, the state has failed closed too. `Left` starting [[ForkChoiceManager.FinalizedReversed]] when
-    *   the move would reverse the finalized block
+    *   `Left(Refusal.Syncing)` when the head was not followed, and nothing was written (its state is not held: a block
+    *   whose executed state was not kept, or a fork beyond the records; or an ancestor of the head); when the plan
+    *   found the records corrupt, the state has failed closed too, and the refusal is a
+    *   [[ForkChoiceManager.Refusal.LocalFault]]. `Left(Refusal.FinalizedReversed)` when the move would reverse the
+    *   finalized block
     */
-  private def confirmHeldHead(newState: ForkChoiceState, header: BlockHeader): Either[String, Unit] =
-    def notMoved(why: String): Either[String, Unit] =
+  private def confirmHeldHead(newState: ForkChoiceState, header: BlockHeader): Either[ForkChoiceManager.Refusal, Unit] =
+    import ForkChoiceManager.Refusal
+    def notMoved(why: String): Either[Refusal, Unit] =
       log.warn(s"Fork choice head ${header.number.value} ${header.hashAsHexString} not applied (SYNCING): $why")
-      Left("SYNCING")
+      Left(Refusal.Syncing)
     // the finalized block it names, by its header (the Engine API has found it on the head's chain); the zero hash
     // names none, and leaves the one named before (C4d part 1)
     val finalized =
@@ -183,20 +215,31 @@ class ForkChoiceManager(
           }
           named
       }
+    // the blocks the move makes canonical: read before it, while the index is still the old head's ancestry (B-126);
+    // re-derived once it has returned, or thrown having made some of them canonical (a move of more than one batch
+    // refused part way, B-510); a block's exact weight is right whether or not the head stays on it
+    val adopting = notCanonicalBelow(header)
     try
-      val moved = blockchainWriter.moveHeadInPlace(
-        header,
-        blockchainReader,
-        finalized = finalized,
-        // up a chain of executed blocks, or across a fork along the records and the executed blocks of the other
-        // branch; never down to an ancestor of the head, which go-ethereum skips too ("Ignoring beacon update to old
-        // head"): the Engine API answers that one VALID, and moves nothing (C4d part 2b)
-        admit = plan =>
-          Option.when(plan.forward.isEmpty && plan.reverse.nonEmpty)(
-            s"block ${header.number.value} is an ancestor of the head (${plan.anchor.show}): the head is not moved down " +
-              "to follow a fork choice"
-          )
-      )
+      val moved = rederivingAfter(adopting) {
+        blockchainWriter.moveHeadInPlace(
+          header,
+          blockchainReader,
+          finalized = finalized,
+          // made while the fork choice's recovery adopts a branch in place: that adoption follows the head named, and
+          // stops when another is (B-294)
+          forkChoice = true,
+          // up a chain of executed blocks, or across a fork along the records and the executed blocks of the other
+          // branch; never down to an ancestor of the head, which go-ethereum skips too ("Ignoring beacon update to old
+          // head"): the Engine API answers that one VALID, and moves nothing (C4d part 2b)
+          admit = plan =>
+            Option.when(plan.forward.isEmpty && plan.reverse.nonEmpty)(
+              s"block ${header.number.value} is an ancestor of the head (${plan.anchor.show}): the head is not moved down " +
+                "to follow a fork choice"
+            )
+        )
+      }
+      // after the move returned: nothing is told of a move that threw part way
+      publishCanonical(adopting)
       log.info(
         s"Fork choice updated: head=${newState.headBlockHash} ($moved), " +
           s"safe=${newState.safeBlockHash}, finalized=${newState.finalizedBlockHash}"
@@ -206,9 +249,12 @@ class ForkChoiceManager(
     catch
       // a block on the way up has no state held, and the chain is held up to `heldTo`: the Engine API has the blocks
       // above it executed again (C4d part 3), and answers SYNCING meanwhile
+      // Another thread's adoption is moving the head (B-294): nothing was written. No fault of this node, so never a
+      // LocalFault, which the escalation counts: SYNCING, and the next fork choice is made once it ends (B-462)
+      case busy: StateBusy => notMoved(busy.getMessage)
       case unavailable: StateUnavailable if unavailable.heldTo.isDefined =>
         notMoved(unavailable.reason)
-        Left(ForkChoiceManager.NotHeldHead + unavailable.reason)
+        Left(Refusal.NotHeld(unavailable.reason))
       // The head was not moved to, and no block of its chain is said to be held. That is many things: a move the fork
       // choice does not make (down to an ancestor of the head), a node with no state yet, a state that has failed
       // closed. Only the last is said for what it is, this node's fault: every fork choice refused while the state is
@@ -216,30 +262,67 @@ class ForkChoiceManager(
       // followed.
       case unavailable: StateUnavailable =>
         notMoved(unavailable.reason)
-        if blockchainWriter.stateFailedClosed then Left(ForkChoiceManager.LocalFault + unavailable.reason)
-        else Left("SYNCING")
+        if blockchainWriter.stateFailedClosed then Left(Refusal.LocalFault(unavailable.reason))
+        else Left(Refusal.Syncing)
       // A record that is not what it should be is this datadir's fault, not the fork choice's: the state fails closed
       // (no further in-place write, no state given out, ERROR) and the head is answered as one not followed (plan.md
       // "C4b part 1": `Corrupt` fails closed at the Engine API; the escalation is C4d's)
       case refused: ReorgTooDeep if refused.reason == ReorgRefusal.Corrupt =>
         blockchainWriter.failStateClosed(s"the changeset records are corrupt (${refused.getMessage})")
         notMoved(refused.getMessage)
-        Left(ForkChoiceManager.LocalFault + refused.getMessage)
+        Left(Refusal.LocalFault(refused.getMessage))
       // a move that would reverse the finalized block: the fork choice is not consistent with what it finalized
       // (go-ethereum: "final block not in canonical chain"), answered -38002 and not SYNCING (the user's decision of
       // 2026-11-14)
       case refused: ReorgTooDeep if refused.reason == ReorgRefusal.Finalized =>
         log.warn(s"Fork choice head ${header.number.value} ${header.hashAsHexString} refused: ${refused.getMessage}")
-        Left(ForkChoiceManager.FinalizedReversed + refused.getMessage)
+        Left(Refusal.FinalizedReversed(refused.getMessage))
       // deeper than the records reach, past a record that is not whole, or below the block the state began at: the
       // records that would take the state there are gone, and no wait brings them back
       case refused: ReorgTooDeep
           if refused.reason == ReorgRefusal.Deep || refused.reason == ReorgRefusal.Incomplete ||
             refused.reason == ReorgRefusal.Pivot =>
         notMoved(refused.getMessage)
-        Left(ForkChoiceManager.Unreachable + refused.getMessage)
+        Left(Refusal.Unreachable(refused.getMessage))
       // `BeyondTheFetch` is said by proof-of-work regular sync only, never by a move of the head: not met here
       case refused: ReorgTooDeep => notMoved(refused.getMessage)
+
+  /** B-245: tells [[onNewCanonical]] of the blocks a fork choice made canonical, lowest first, once each, the last as
+    * the head. `adopting` is read before the move, so a block that was canonical already (imported and published by
+    * BlockImporter) is not in it, and a fork choice to the head already held tells nothing. A listener's failure is
+    * logged and never fails the fork choice, which has been committed.
+    */
+  private def publishCanonical(adopting: Seq[BlockHash]): Unit =
+    val head = adopting.lastOption
+    adopting.foreach { hash =>
+      blockchainReader.getBlockByHash(hash) match
+        case Some(block) =>
+          try onNewCanonical(block, head.contains(hash))
+          catch
+            case scala.util.control.NonFatal(e) =>
+              log.warn(s"New-head notification of block ${block.number.value} failed: ${e.getMessage}")
+        case None =>
+          log.warn(s"New-head notification skipped: body of canonical block ${hash.toHexString} is not stored")
+    }
+
+  /** The blocks a move of the head to `head` makes canonical ([[AdoptedChainWeights.notCanonicalBelow]]). */
+  private def notCanonicalBelow(head: BlockHeader): Seq[BlockHash] =
+    AdoptedChainWeights.notCanonicalBelow(head, blockchainReader, WeightsBy)
+
+  /** '''Re-derives the weights of the blocks a fork choice made canonical''' (B-126; [[AdoptedChainWeights.rederive]]).
+    * On the unified layout every payload is stored by its hash only, with the weight `newPayload` derived from its
+    * parent's then; a side payload is so on the hash layout too.
+    */
+  private def rederiveWeights(adopted: Seq[BlockHash]): Unit =
+    AdoptedChainWeights.rederive(adopted, blockchainReader, blockchainWriter, WeightsBy)
+
+  /** `body`, then [[rederiveWeights]] of `adopted`, whether `body` returns or throws
+    * ([[AdoptedChainWeights.rederivingAfter]], B-510).
+    */
+  private def rederivingAfter[A](adopted: Seq[BlockHash])(body: => A): A =
+    AdoptedChainWeights.rederivingAfter(adopted, blockchainReader, blockchainWriter, WeightsBy)(body)
+
+  private val WeightsBy = "Fork choice (B-126)"
 
   /** Publish the CL head to the registered listener and record it as the requested head — **nothing else**.
     *
@@ -296,27 +379,46 @@ class ForkChoiceManager(
 
 object ForkChoiceManager:
 
-  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a fork choice whose head would reverse
-    * the finalized block: an inconsistent fork choice state, not one this node has yet to sync.
+  /** Why [[ForkChoiceManager.applyForkChoiceState]] did not follow a head (B-005). Typed, so the Engine API matches on
+    * the case and not on the start of a message: these were string prefixes ("LOCAL FAULT: ", "NOT HELD: ", ...) until
+    * B-005, and a reason that happened to start with another prefix would have been read as that refusal.
+    *
+    * Only [[Refusal.FinalizedReversed]] is answered -38002; every other refusal is answered SYNCING to the consensus
+    * client, and differs in what the node does about it.
     */
-  val FinalizedReversed: String = "FINALIZED: "
+  enum Refusal:
+    /** The head is not known, or is not followed for a reason that says nothing of whether the chain can be followed (a
+      * move down to an ancestor of the head, a node with no state yet).
+      */
+    case Syncing
 
-  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a fork choice whose head's chain is held
-    * up to a block below it, and whose blocks above that have no state held: they are executed again, and the head is
-    * not moved meanwhile (spec 018 C4d part 3).
-    */
-  val NotHeldHead: String = "NOT HELD: "
+    /** The head's chain is held up to a block below it, and the blocks above that have no state held: they are executed
+      * again, and the head is not moved meanwhile (spec 018 C4d part 3).
+      */
+    case NotHeld(reason: String)
 
-  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a head on a chain this node's state does
-    * not reach: deeper than its records, or below the block its state began at (spec 018 C5a part 6). Answered SYNCING
-    * to the consensus client, as any head not followed.
-    */
-  val Unreachable: String = "UNREACHABLE: "
+    /** The head is on a chain this node's state does not reach: deeper than its records, or below the block its state
+      * began at (spec 018 C5a part 6).
+      */
+    case Unreachable(reason: String)
 
-  /** The start of what [[ForkChoiceManager.applyForkChoiceState]] answers for a head not followed for a fault of this
-    * node: records that are corrupt, a state that has failed closed (spec 018 C5a part 6). Answered SYNCING.
-    */
-  val LocalFault: String = "LOCAL FAULT: "
+    /** The head was not followed for a fault of this node: records that are corrupt, a state that has failed closed
+      * (spec 018 C5a part 6). Counts towards giving the state up.
+      */
+    case LocalFault(reason: String)
+
+    /** The head's chain would reverse the finalized block: an inconsistent fork choice state, not one this node has yet
+      * to sync. Answered -38002 (the user's decision of 2026-11-14).
+      */
+    case FinalizedReversed(reason: String)
+
+    /** For a log line. */
+    def describe: String = this match
+      case Syncing                   => "SYNCING"
+      case NotHeld(reason)           => s"NOT HELD: $reason"
+      case Unreachable(reason)       => s"UNREACHABLE: $reason"
+      case LocalFault(reason)        => s"LOCAL FAULT: $reason"
+      case FinalizedReversed(reason) => s"FINALIZED: $reason"
 
   /** The hash a fork choice names when it names no block (a safe or finalized block before there is one). */
   val ZeroHash: ByteString = ByteString(new Array[Byte](32))

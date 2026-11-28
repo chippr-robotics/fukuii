@@ -477,6 +477,32 @@ class ContractWorkCarrySpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
     h.selfMessages() shouldBe Seq(AccountRangeCoordinator.CheckCompletion)
   }
 
+  it should "make the accounts-complete task-file infos only after the files are fsynced (B-077)" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    m.contractStorageOut.write(Array.fill[Byte](64)(1))
+    m.uniqueCodeHashesOut.write(Array.fill[Byte](32)(2))
+
+    val storage = m.durableStorageFileInfo()
+    val codeHashes = m.durableCodeHashesFileInfo()
+
+    storage.isSuccess shouldBe true
+    codeHashes.isSuccess shouldBe true
+    Files.size(m.contractStorageFile) shouldBe 64L
+    Files.size(m.uniqueCodeHashesFile) shouldBe 32L
+  }
+
+  it should "report a Failure, with no info, when a task file cannot be fsynced (B-077)" taggedAs UnitTest in {
+    val h = new Harness
+    val m = h.module
+    // Nothing is buffered, so a flush alone would succeed on a closed stream; the fsync is what fails.
+    m.contractStorageFos.close()
+    m.uniqueCodeHashesFos.close()
+
+    m.durableStorageFileInfo().isFailure shouldBe true
+    m.durableCodeHashesFileInfo().isFailure shouldBe true
+  }
+
   it should "make buffered task-file entries durable on syncTaskFiles" taggedAs UnitTest in {
     val h = new Harness
     val m = h.module

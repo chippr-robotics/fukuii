@@ -154,7 +154,8 @@ class EngineApiController(
               payload.blobGasUsed.isDefined && payload.excessBlobGas.isDefined
             val versionError: Option[(Int, String)] = version match
               case 5 => EngineApiController.newPayloadV5ParamsError(payload, params, isAmsterdamPayload)
-              // V4 serves Prague, Osaka and the BPOs (go-ethereum NewPayloadV4: checkFork(Prague, Osaka, BPO1, BPO2)).
+              // V4 serves Prague, Osaka and the BPOs before Amsterdam (go-ethereum NewPayloadV4: checkFork(Prague,
+              // Osaka, BPO1, BPO2); see getPayloadForkError on BPO3+ without Amsterdam).
               // The two ExecutionPayloadV4 fields are refused first, as params errors, in go-ethereum's order; EEST
               // `bal_invalid_engine_payload_field_before_fork` and `invalid_pre_fork_block_with_slot_number` send
               // each to V4 before Amsterdam and expect -32602. Then the fork window: -38005 from Amsterdam on
@@ -515,34 +516,46 @@ class EngineApiController(
     )
     IO.pure(JsonRpcResponse("2.0", Some(clientVersion), None, reqId(request)))
 
+  /** go-ethereum's request bound for engine_getBlobsV1 and V2 (eth/catalyst/api.go: `len(hashes) > 128` answers -38004
+    * "Too large request"); cancun.md and osaka.md require at least 128 and -38004 above what is served (B-477).
+    */
+  private val MaxBlobHashes = 128
+  private val TooLargeRequest = -38004
+
+  /** The versioned hashes a getBlobs request asks for: its one param, a list of 0x-hex strings. Anything else is -32602
+    * (it was taken as an empty list and answered `[]`), more than 128 is -38004 (B-477).
+    */
+  private def blobHashes(request: JsonRpcRequest): Either[JsonRpcError, List[JValue]] =
+    request.params.map(_.arr).getOrElse(Nil) match
+      case JArray(items) :: Nil if items.forall(_.isInstanceOf[JString]) =>
+        if items.size > MaxBlobHashes then
+          Left(JsonRpcError(TooLargeRequest, s"Too large request: ${items.size} hashes, at most $MaxBlobHashes", None))
+        else Right(items)
+      case _ => Left(JsonRpcError(-32602, "invalid argument 0: expected a list of versioned hashes", None))
+
   private def handleGetBlobs(request: JsonRpcRequest): IO[JsonRpcResponse] =
     // engine_getBlobsV1: return null for each requested versioned hash (we don't store blobs)
     // Lighthouse will fall back to fetching blobs from CL peers
-    val hashes = request.params
-      .map(_.arr)
-      .getOrElse(Nil)
-      .headOption
-      .collect { case JArray(items) =>
-        items
-      }
-      .getOrElse(Nil)
-    val nullBlobs = hashes.map(_ => JNull)
-    IO.pure(JsonRpcResponse("2.0", Some(JArray(nullBlobs)), None, reqId(request)))
+    IO.pure(blobHashes(request) match
+      case Left(error)   => JsonRpcResponse("2.0", None, Some(error), reqId(request))
+      case Right(hashes) => JsonRpcResponse("2.0", Some(JArray(hashes.map(_ => JNull))), None, reqId(request))
+    )
 
+  /** engine_getBlobsV2 (execution-apis osaka.md, EIP-7594 / PeerDAS) answers `Array of BlobAndProofV2` or `null`: all
+    * or nothing. The client "MUST return `null` in case of any missing or older version blobs", so a missing blob makes
+    * the whole result `null`, never a `null` element; per-element nulls are V1's shape. A consensus client rejects a
+    * `null` inside the array (Lighthouse: "invalid type: null, expected struct BlobAndProofV2", B-198).
+    *
+    * Fukuii does not index pool blobs by versioned hash, so any non-empty request has a missing blob and is answered
+    * `null`; the CL falls back to fetching the cells from its peers. An empty request has nothing missing and is
+    * answered `[]`, as go-ethereum does (GetBlobsV2: `available != len(hashes)` is false for zero hashes).
+    */
   private def handleGetBlobsV2(request: JsonRpcRequest): IO[JsonRpcResponse] =
-    // engine_getBlobsV2: returns BlobAndProofV2 | null per versioned hash (EIP-7594 / PeerDAS).
-    // Fukuii does not index mempool blobs by versioned hash, so null is returned for every entry;
-    // the CL (Lighthouse/Prysm) will fall back to fetching cell proofs from CL peers.
-    val hashes = request.params
-      .map(_.arr)
-      .getOrElse(Nil)
-      .headOption
-      .collect { case JArray(items) =>
-        items
-      }
-      .getOrElse(Nil)
-    val nullEntries = hashes.map(_ => JNull)
-    IO.pure(JsonRpcResponse("2.0", Some(JArray(nullEntries)), None, reqId(request)))
+    IO.pure(blobHashes(request) match
+      case Left(error) => JsonRpcResponse("2.0", None, Some(error), reqId(request))
+      case Right(hashes) =>
+        JsonRpcResponse("2.0", Some(if hashes.isEmpty then JArray(Nil) else JNull), None, reqId(request))
+    )
 
   /** engine_getPayloadBodiesByHashV1 (execution-apis shanghai.md) and engine_getPayloadBodiesByHashV2 (amsterdam.md),
     * which "follows the same specification as engine_getPayloadBodiesByHashV1": one entry per requested hash, "in the
@@ -882,7 +895,7 @@ object EngineApiController:
     *   - V2: beacon root present -> -38003; Paris with withdrawals -> -38003; Shanghai without withdrawals -> -38003;
     *     any fork other than Paris/Shanghai -> -38005.
     *   - V3: withdrawals missing -> -38003; beacon root missing -> -38003 (at ANY timestamp); a fork outside
-    *     Cancun..BPO5 (i.e. pre-Cancun, or Amsterdam onwards, which needs V4) -> -38005.
+    *     Cancun..Amsterdam, BPO forks included (i.e. pre-Cancun, or Amsterdam onwards, which needs V4) -> -38005.
     *   - V4 (amsterdam.md engine_forkchoiceUpdatedV4, go-ethereum `ForkchoiceUpdatedV4`): the PayloadAttributesV4
     *     structure — withdrawals, beacon root and slotNumber each -38003 when missing — then the Amsterdam window,
     *     -38005 before it. `targetGasLimit` is NOT required. The spec lists it in PayloadAttributesV4 and says the
@@ -906,7 +919,8 @@ object EngineApiController:
     // The Engine API only exists post-merge, so "not yet Shanghai" is Paris.
     val latestIsParis = !isShanghai
     val latestIsShanghai = isShanghai && !isCancun
-    // go-ethereum checkFork(ts, Cancun, Prague, Osaka, BPO1..BPO5): Cancun is active and Amsterdam is not.
+    // Cancun is active and Amsterdam is not (go-ethereum checkFork(ts, Cancun, Prague, Osaka, BPO1, BPO2); BPO3+ on a
+    // chain without Amsterdam stays in this window, see getPayloadForkError).
     val inV3Window = isCancun && !blockchainConfig.isAmsterdamTimestamp(ts)
     version match
       case 1 =>
@@ -962,9 +976,16 @@ object EngineApiController:
     *   - V2: Paris and Shanghai.
     *   - V3: Cancun.
     *   - V4: Prague.
-    *   - V5: Osaka and the blob-parameter-only forks after it (go-ethereum: Osaka, BPO1, BPO2).
-    *   - V6: Amsterdam (go-ethereum: Amsterdam and the forks after it, BPO3..BPO5 and Bogota, none of which fukuii
-    *     schedules; amsterdam.md getPayloadV6).
+    *   - V5: Osaka and the blob-parameter-only forks after it, up to Amsterdam.
+    *   - V6: Amsterdam and every fork after it (amsterdam.md getPayloadV6).
+    *
+    * The windows are keyed on Osaka and Amsterdam being active, never on which BPO fork is: a BPO fork changes blob
+    * parameters only (EIP-7892), so it inherits the payload version of the named fork in force. go-ethereum keys them
+    * on `LatestFork` instead, listing BPO1/BPO2 with Osaka and BPO3..BPO5 with Amsterdam, which agrees on every
+    * schedule its `CheckConfigForkOrder` accepts that declares Amsterdam (BPO3 is ordered after it). On an Osaka-line
+    * chain with BPO3 and no Amsterdam it differs: execution-specs' `BPO2ToBPO3AtTime15k` and `BPO3ToBPO4AtTime15k`
+    * engine fixtures (tests@v21.0.0) send BPO3/BPO4 payloads through engine_newPayloadV4 and forkchoiceUpdatedV3, which
+    * this rule serves and go-ethereum's lists would refuse.
     *
     * V3 used to serve every payload from Cancun on, V4 every payload before Osaka, and V5 Amsterdam.
     *
@@ -981,15 +1002,15 @@ object EngineApiController:
     val prague = blockchainConfig.isPragueTimestamp(timestamp)
     val osaka = blockchainConfig.isOsakaTimestamp(timestamp)
     val amsterdam = blockchainConfig.isAmsterdamTimestamp(timestamp)
-    val fork =
-      if amsterdam then "an Amsterdam"
-      else if blockchainConfig.isBpo2Timestamp(timestamp) then "a BPO2"
-      else if blockchainConfig.isBpo1Timestamp(timestamp) then "a BPO1"
-      else if osaka then "an Osaka"
+    def named: String =
+      if osaka then "an Osaka"
       else if prague then "a Prague"
       else if cancun then "a Cancun"
       else if shanghai then "a Shanghai"
       else "a Paris"
+    val fork =
+      if amsterdam then "an Amsterdam"
+      else blockchainConfig.latestBpoAt(timestamp).fold(named)(n => s"a BPO$n")
     def refuse(serves: String): Some[String] = Some(
       s"getPayloadV$version serves $serves payloads only, not $fork payload"
     )

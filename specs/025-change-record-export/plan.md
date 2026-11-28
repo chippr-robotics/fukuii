@@ -204,6 +204,11 @@ there; the exporter only `.and`s puts onto it.
 | H3 | ETH | **Side payloads abandoned** | `consensus/engine/EngineApiService.scala:617`, `:654` (`abandonBlockStates` on never-canonical payloads); `ConsensusImpl.scala:236-245` (`displaced` in `importToTop`, post-merge only) | **nothing** (never exported, so never retracted) | No change; row documents the non-emission. | beacon |
 | F1 | ETH | **Below-finality retraction attempt** | inside H1, before any put | compare each dropped `number` with `export.finality`; at or below → write **no** log entries, log ERROR, set `export.halted` | No change to the index move (Engine API semantics unchanged); export refuses to describe it. | beacon |
 | B1 | both | **Bound reached** | inside E1/E2/E4/H1, before the log puts | write no log entries; set `export.halted`; block commit proceeds | No change to the commit. | — |
+| S1 | ETH | **Safe head changed** *(amendment 2026-11-24)* | inside H1 (`ForkChoiceManager.applyForkChoiceState`), beside the finality entry | `safe` entry when `safeBlockHash` is non-zero and changed; write `export.safe`; never below `export.finality` | Yes (H1's batch). CF `x`/`s` puts only. | beacon |
+| C1 | both | **Chain start** *(amendment)* | `Exporter.start` when `export.chainStart` is absent, before E5 | append `chainStart(0, genesisHash, iteration)` as the first log entry; write `export.chainStart` | No: exporter-internal write. | — |
+| C2 | ETH | **Ephemery reset exit** *(amendment)* | `ephemery/EphemeryResetWatchdog.scala` (spec 028), before `exit(75)` | call the exporter's fence-drain (drain to the broker if up, persist the position, stop) with a bounded wait | No: shutdown path only. | — |
+| P1 | both | **Pool admission** *(amendment; not a canonical commit)* | `transactions/PendingTransactionsManager.scala` `admit` (`:595-639`, after the `putPooled` loop, beside `pendingTxTopic ! Publish`) and `addOrOverride` (`:714-736`) | build `poolAdd`, non-blocking `offer` to the pool queue (DC-10); **no batch, no store write** | No: the pool's admission decision is already made; nothing it reads changes. | — |
+| P2 | both | **Pool removal** *(amendment)* | the cache removal listener (`PendingTransactionsManager.scala:253-269`) plus the reason map set in `HeadReset` (`:938`), `addOrOverride`, `replacing` (`:677-704`) and `storeSidecar` (`:305-330`) | build `poolRemove`, non-blocking `offer`; nothing for `RemovalCause.REPLACED` | No: removal already happened. | — |
 
 Signatures changed (all in `domain/BlockchainWriter.scala`, default `extra = emptyBatchUpdate` so every existing caller
 compiles unchanged): `promoteToCanonicalHead(head, reader, extra)`, `rewriteCanonicalIndex(put, remove, newBest,
@@ -227,8 +232,16 @@ One PR each; each leaves `main` releasable; slices 0 is phase A, 1–5 are phase
 | **3 (MVP)** | `RecordSink` seam, `FileRecordSink`, `Exporter` drain loop with position-after-ack and halt states, `ReferenceConsumer`, `ReorgFixtures` (five shapes), US1 at unit level (SC-001 on fixtures, both pruning modes), `ExporterSpec`, `FileRecordSinkSpec`, `ExportMetrics` | main; **flow** (drain loop, wake queue, no backpressure into hooks), **forge** (deep ETC reorg semantics in fixtures), **eye** | SC-001 unit-level green; `testEssential` baseline unchanged |
 | **4** | `KafkaRecordSink`, `kafka-clients` dependency, topic checks (partition count), health fields on `/healthcheck`, fence/unfence API for 023, `KafkaRecordSinkSpec` (MockProducer); harness scenarios for SC-002/SC-003 (US2) | main; **flow** (ack/timeout handling), **conduit** (health fields), **eye** (harness) | SC-002, SC-003 in the 023 harness |
 | **5** | SC-004 archive comparison on a fixed Mordor range and a fixed Platåberget range (US3); OQ-7 figures from the harness into `data-model.md` §8 and `contracts/topic.md`; ADR INF-010 final; docs | main; **eye**; **beacon** (Platåberget range choice) | SC-004 |
+| **6** *(amendment)* | Pool records: `PoolRecorder`, hooks P1/P2 in `PendingTransactionsManager` (source on `admit`, reason map), `PoolQueue` + drain fiber, `KafkaPoolSink`, pool config and metrics, `PoolFixtures`; SC-006 (US4) | main; **flow** (queue, actor hooks), **eye** (harness) | SC-006 |
+| **7** *(amendment)* | `chainStart` (C1), `safe` watermark (S1), reset drain (C2) with spec 028's watchdog, reference consumer reads `chainStart`; SC-007 (US5) | main; **beacon** (S1), 028 owner (C2), **eye** | SC-007 |
 
-Dependencies: 0 → 1 → 2 → 3 → 4 → 5. Slice 3 is the MVP (schema + file sink + reference consumer + US1 at unit
+**Amendment 2026-11-24** adds: the four new types' codec and vectors to slice 0 (before GT-1 freezes); slice **6**
+(pool records: rows P1/P2, `PoolRecorder`, pool queue and Kafka pool sink, SC-006; reviewers **flow** for the queue
+and the actor hooks, **eye** for the harness) after slice 4; slice **7** (rows S1, C1, C2: `safe`, `chainStart`, the
+reset drain, SC-007; reviewers **beacon** for S1, the 028 owner for C2) after slice 3. Rows P1/P2 never touch a batch
+and need no `forge`/`beacon` sign-off; S1 needs `beacon`.
+
+Dependencies: 0 → 1 → 2 → 3 → 4 → 5; 3 → 7; 4 → 6. Slice 3 is the MVP (schema + file sink + reference consumer + US1 at unit
 level). Slice 4 needs 023 T-005 (health shape) and T-006 (fence) for the *wiring*; the API is provided here and is
 callable without them. Slice 0 lands beside 022 and touches none of its files (`snap/`, `StateStorage`, CF `g`).
 

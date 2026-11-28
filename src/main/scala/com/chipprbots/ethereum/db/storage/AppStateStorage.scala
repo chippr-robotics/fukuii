@@ -78,7 +78,14 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   private[storage] def removeStateMarks(): DataSourceBatchUpdate =
     update(
-      Seq(Keys.StateAnchor, Keys.StateOrigin, Keys.StateLayout, Keys.StateChangesetPrunedTo, Keys.StateFinalized),
+      Seq(
+        Keys.StateAnchor,
+        Keys.StateOrigin,
+        Keys.StateLayout,
+        Keys.StateChangesetPrunedTo,
+        Keys.StateFinalized,
+        Keys.StateFault
+      ),
       Nil
     )
 
@@ -160,6 +167,21 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
       .and(putBackfillBestReceipt(getBackfillBestReceipt().min(header)))
       .and(update(toRemove = Seq(Keys.BackfillTarget, Keys.BackfillTargetHash), toUpsert = Nil))
 
+  /** The update that holds the next sync to `branch` on the hash layout (B-351): the requirement that it take its pivot
+    * on the branch, and the header download's cursors set back to the block under the branch's first one, the block the
+    * chains share ([[headerCursorsBackTo]]), as the clear of an escalation writes them for the sync after it on the
+    * unified layout (B-307, B-303). Nothing of the index is deleted here: the download writes each height above the
+    * common block again from the branch, and the hand-off clears what lies above its pivot.
+    *
+    * @param hashAt
+    *   the index of blocks by number
+    */
+  def holdTheSyncToTheBranch(
+      branch: pathstate.PivotOnBranch,
+      hashAt: BigInt => Option[ByteString]
+  ): DataSourceBatchUpdate =
+    putPivotOnBranch(branch).and(headerCursorsBackTo(branch.number - 1, hashAt))
+
   /** The update that takes the header download's cursors no higher than the pivot a sync hands off at (spec 018 C5a
     * part 10, forge): an earlier, higher pivot's target left above it would be resumed from where the index no longer
     * has an entry, and download every header again from the genesis, writing entries above the head as it goes. The
@@ -189,6 +211,13 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     */
   private[storage] def putStateResetTrim(trim: pathstate.StateResetTrim): DataSourceBatchUpdate =
     put(Keys.StateResetTrim, pathstate.StateResetTrim.encode(trim))
+
+  /** Why this datadir's state failed closed, and when, if it did ([[pathstate.StateFaultMark]], B-252). */
+  def getStateFault(): Option[String] = get(Keys.StateFault).map(pathstate.StateFaultMark.describe)
+
+  /** The update that records that this datadir's state failed closed. Written synced, as the fault is found. */
+  private[storage] def putStateFault(atMillis: Long, why: String): DataSourceBatchUpdate =
+    put(Keys.StateFault, pathstate.StateFaultMark.encode(atMillis, why))
 
   /** Whether a clear of the state was begun and not seen to its end: its rows may be there still, with no anchor over
     * them ([[pathstate.StateResetPending]]).
@@ -283,6 +312,8 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
         Keys.StateOrigin,
         Keys.StateFinalized,
         Keys.StateChangesetPrunedTo,
+        // the fault found in the state goes with it (B-252)
+        Keys.StateFault,
         Keys.FastSyncDone,
         Keys.SnapSyncPivotBlock,
         Keys.SnapSyncMinPivotBlock,
@@ -530,15 +561,73 @@ class AppStateStorage(val dataSource: DataSource) extends TransactionalKeyValueS
     * The audit's clean anchor and its place go too: every checkpoint import has the same anchor, so nothing else would
     * say the state is new (spec 022 T053).
     */
-  def beginCheckpointImport(stateRoot: ByteString, startMs: Long): DataSourceBatchUpdate =
+  def beginCheckpointImport(
+      stateRoot: ByteString,
+      startMs: Long,
+      archiveId: Option[ByteString] = None
+  ): DataSourceBatchUpdate =
     update(
-      // #1692: the archive holds each node once, so a node two positions use is counted once. Basic pruning would then
-      // delete nodes by a count that is too low, so the stamp goes in the same write as the first of them, on any scheme.
+      // #1692: the stamp goes in the same write as the first node, on any scheme: until the import ends, counts are
+      // partial, and a kill leaves it absent. A hash-layout import that succeeds restores it in its final batch when it
+      // stood before (B-377: format version 2 counts every occurrence, as block import does); nothing else does.
       // #1654: the importer stores the archive's weight for the checkpoint block, trusted and not derived from
       // genesis, so the chain-weight marker goes too; `ChainWeightReconcile` checks it once the headers below are in.
       toRemove = Seq(Keys.SnapHealInvariant, Keys.SnapAuditCleanAnchor, Keys.RefCountsExact, Keys.ChainWeightInvariant),
-      toUpsert = Seq(Keys.CheckpointImportInProgress -> s"${Hex.toHexString(stateRoot.toArray)}:$startMs")
+      // the archive's id rides in the same write (spec 018 E.1, "A failed or killed import"): a start that finds the key
+      // set records that archive as refused, and the id is not otherwise known to it
+      toUpsert = Seq(
+        Keys.CheckpointImportInProgress ->
+          (Seq(Hex.toHexString(stateRoot.toArray), startMs.toString) ++ archiveId.map(id =>
+            Hex.toHexString(id.toArray)
+          ))
+            .mkString(":")
+      )
     ).and(SnapSyncProgressStorage.forgetAudit(dataSource))
+
+  /** The id of the archive the running or interrupted import was reading (keccak of its header block), when the key
+    * names it: a key an earlier release wrote is `<root>:<start ms>` and names none.
+    */
+  def getCheckpointImportArchive(): Option[ByteString] =
+    getCheckpointImportInProgress()
+      .map(_.split(':'))
+      .filter(_.length >= 3)
+      .flatMap(parts => scala.util.Try(ByteString(Hex.decode(parts(2)))).toOption)
+      .filter(_.length == AppStateStorage.CheckpointArchiveIdBytes)
+
+  /** The archives this node refused to import, most recent last (spec 018 E.1, "no retry"; the key is
+    * `checkpoint.import.refused`, comma-separated hex ids). It is not among [[stateClearRemovals]]: the clear that
+    * follows a refusal must not forget it, or the next start would run the same archive again over the SNAP run that
+    * the refusal fell back to.
+    */
+  def getRefusedCheckpointArchives(): Seq[ByteString] =
+    get(Keys.CheckpointImportRefused).toSeq
+      .flatMap(_.split(','))
+      .filter(_.nonEmpty)
+      .flatMap(id => scala.util.Try(ByteString(Hex.decode(id))).toOption)
+
+  def isCheckpointArchiveRefused(id: ByteString): Boolean = getRefusedCheckpointArchives().contains(id)
+
+  /** Records `id` as refused, keeping the last [[AppStateStorage.MaxRefusedCheckpointArchives]]. Commit with
+    * `commitSync`.
+    */
+  def recordRefusedCheckpoint(id: ByteString): DataSourceBatchUpdate =
+    val kept =
+      (getRefusedCheckpointArchives().filterNot(_ == id) :+ id).takeRight(AppStateStorage.MaxRefusedCheckpointArchives)
+    put(Keys.CheckpointImportRefused, kept.map(k => Hex.toHexString(k.toArray)).mkString(","))
+
+  /** `id` is no longer refused: an import of it, which the operator asked for, succeeded. */
+  def forgetRefusedCheckpoint(id: ByteString): DataSourceBatchUpdate =
+    val kept = getRefusedCheckpointArchives().filterNot(_ == id)
+    if kept.isEmpty then remove(Keys.CheckpointImportRefused)
+    else put(Keys.CheckpointImportRefused, kept.map(k => Hex.toHexString(k.toArray)).mkString(","))
+
+  /** The import that failed for a reason that is not its archive's content is not to be recorded as refused by the next
+    * start (B-384): the key keeps its root and its start, and loses the archive's id. Commit with `commitSync`.
+    */
+  def forgetCheckpointImportArchive(): DataSourceBatchUpdate =
+    getCheckpointImportInProgress() match
+      case Some(key) => put(Keys.CheckpointImportInProgress, key.split(':').take(2).mkString(":"))
+      case None      => update(Seq.empty, Seq.empty)
 
   /** The import's CRC checked: it goes in the batch that writes the import's done flags. */
   def endCheckpointImport(): DataSourceBatchUpdate =
@@ -1150,6 +1239,12 @@ object AppStateStorage:
     */
   val SnapHealInvariantVersion: Value = "4"
 
+  /** An archive's id is keccak of its header block (spec 018 E.1). */
+  val CheckpointArchiveIdBytes: Int = 32
+
+  /** How many refused archives are remembered: the bound of the record, oldest dropped first. */
+  val MaxRefusedCheckpointArchives: Int = 32
+
   /** The value of `snap.heal.datadirCreated`. Apart from the marker's: it says who created the datadir, and that did
     * not change with version 4. A datadir with an older value counts as not empty.
     */
@@ -1202,6 +1297,7 @@ object AppStateStorage:
     val BackfillBestReceipt = "BackfillBestReceipt"
     val SnapHealInvariant = "snap.heal.invariant"
     val CheckpointImportInProgress = "checkpoint.import.inProgress"
+    val CheckpointImportRefused = "checkpoint.import.refused"
     val SnapHealFrontierRetired = "snap.heal.frontierRetired"
     val SnapHealDatadirCreated = "snap.heal.datadirCreated"
     val SnapCodeScanOwed = "snap.heal.codeScanOwed"
@@ -1214,6 +1310,7 @@ object AppStateStorage:
     val StateEscalationLast = com.chipprbots.ethereum.db.storage.pathstate.StateEscalation.Key
     val StateEscalationGivenUp = com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranches.Key
     val StateResetPending = com.chipprbots.ethereum.db.storage.pathstate.StateResetPending.Key
+    val StateFault = com.chipprbots.ethereum.db.storage.pathstate.StateFaultMark.Key
     val StateResetTrim = com.chipprbots.ethereum.db.storage.pathstate.StateResetTrim.Key
     val PivotOnBranch = com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch.Key
     val StateChangesetPrunedTo = "state.changeset.pruned-to"

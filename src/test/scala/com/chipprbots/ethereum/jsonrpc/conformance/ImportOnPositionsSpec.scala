@@ -347,6 +347,10 @@ class ImportOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLi
                     blockHash: ByteString,
                     extra: Option[com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate]
                 ): Unit = staged.commitWith(blockNumber, blockHash, extra)
+                // the block's code goes to the staged state that commits it (B-454)
+                override def stageCode(
+                    write: com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
+                ): Unit = staged.stageCode(write)
                 override def isBlockApplied(blockHash: ByteString): Boolean = staged.isBlockApplied(blockHash)
                 override def discard(): Unit = staged.discard()
                 override def prefetchReader(

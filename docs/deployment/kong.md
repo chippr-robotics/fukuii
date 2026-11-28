@@ -678,8 +678,8 @@ For multi-region HADR:
 
 - **Fukuii Documentation**: [Documentation Home](../index.md)
 - **Kong Documentation**: https://developer.konghq.com/
-- **Kong Plugins**: https://docs.konghq.com/hub/
-- **Prometheus**: https://prometheus.io/docs/introduction/overview/
+- **Kong Plugins**: https://developer.konghq.com/plugins/
+- **Prometheus**: https://prometheus.io/docs/
 - **Grafana**: https://grafana.com/docs/
 
 ## License

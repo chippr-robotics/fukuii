@@ -50,13 +50,8 @@ class RestrictedPoWBlockGeneratorImpl(
       val blockNumber = pHeader.number + 1
       val parentHash = pHeader.hash
 
-      // as `PoWBlockGeneratorImpl`: with the ancestors the ommers are checked against not held whole, none is taken
-      val validatedOmmers =
-        try
-          validators.ommersValidator.validate(parentHash.value, blockNumber.value, ommers, blockchainReader) match
-            case Left(_)  => emptyX
-            case Right(_) => ommers
-        catch case _: com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored => emptyX
+      // as `PoWBlockGeneratorImpl`: each valid ommer is kept, and none where the ancestors are not held whole
+      val validatedOmmers = validOmmers(parentHash.value, blockNumber.value, ommers)
       val prepared = prepareBlock(
         evmCodeStorage,
         parent,

@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.dataSource.DataSourceUpdateOptimized
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
 import com.chipprbots.ethereum.db.storage.ChainWeightStorage
@@ -26,8 +27,11 @@ import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.PrefetchNodeReader
+import com.chipprbots.ethereum.db.storage.RawNodeRead
+import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
+import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.utils.LazyLogger
 
 /** The state of the unified layout (spec 018 Track C): the position-keyed rows of CF `t` and CF `u`, the anchor that
@@ -55,7 +59,8 @@ final class PathStateStorage(
     appState: AppStateStorage,
     maxViewAgeMoves: Int = 8,
     settings: PathStateStorage.CommitSettings = PathStateStorage.CommitSettings()
-) extends LazyLogger:
+) extends LazyLogger
+    with PositionRepairs:
   import PathStateStorage.*
 
   private val dataSource: DataSource = rows.dataSource
@@ -69,6 +74,9 @@ final class PathStateStorage(
   /** The lock of the in-place writers (data-model 7.0). */
   val lock: StateLock = new StateLock
 
+  // the anchor the datadir opens with is told, so that its gauge does not read 0 until the first commit (B-328)
+  told("the anchor at open")(settings.observer.anchorAt(clock.anchor))
+
   /** One move of the head at a time, from its plan to its last batch; and no commit of a block in between two batches
     * of it. A move of many blocks is a chain of batches, and the state lock is free between them: `moving` is what a
     * writer that adopts a block looks at under the state lock, and this lock is what it then waits on, with the state
@@ -81,10 +89,19 @@ final class PathStateStorage(
 
   /** Set when a row read back after a write was not the row written (the store wrote other bytes than it was given), or
     * when a caller found this datadir's own records corrupt ([[failClosed]]). Nothing is written in place after that,
-    * by a commit or by a move, and no state is given out, until the node is started again and its state looked at
-    * (plan.md "C4b: the move core": it never rolls back onto such a store).
+    * by a commit or by a move, and no state is given out, until the state is cleared or destroyed (plan.md "C4b: the
+    * move core": it never rolls back onto such a store).
+    *
+    * It is recorded on disk as it is found ([[StateFaultMark]], B-252), and read here: a restart opens the store closed
+    * again, and the fork choice's refusals then escalate to a clear as they would have without the restart.
     */
-  @volatile private var faulted: Option[String] = None
+  @volatile private var faulted: Option[String] = appState.getStateFault()
+  faulted.foreach(why =>
+    log.error(
+      s"[STATE-MOVE] This node's state failed closed before this start: $why. It takes no write and is not read " +
+        "until it is cleared"
+    )
+  )
 
   /** The finalized block named with a fork choice this node followed ([[moveHead]]'s `finalized`), read from AppState
     * at start (spec 018 C4d part 1). Before one is named, what the settings name, which is none in the node.
@@ -279,7 +296,7 @@ final class PathStateStorage(
     }
 
   /** The block whose state the disk holds, or `None` when the datadir has no state yet (SNAP in progress). */
-  def anchor: Option[BlockRef] = clock.anchor
+  override def anchor: Option[BlockRef] = clock.anchor
 
   /** Whether a view of `block`'s state can be made, as [[viewOf]] makes one, and an execution staged on it: `block` is
     * the anchor, a block behind it that its changeset records lead back to, or a block that forward layers lead to from
@@ -486,7 +503,10 @@ final class PathStateStorage(
       triesLeft: Int = ViewTries,
       // told, before anything is read for it, that the block is not the one the disk holds: at the look at the anchor
       // the view itself is made from, so that whoever counts such views counts exactly those that are made
-      notTheAnchor: () => Unit = () => ()
+      notTheAnchor: () => Unit = () => (),
+      // a reader of the chain the disk is on ([[viewBehind]]): a block that forward layers lead to is refused as soon
+      // as the layers are found, before an index is built for a fork the reader would never be handed
+      layersRefused: Boolean = false
   ): StateView =
     // The view may wait for an index another builds, and reads records to build one: under the state lock that is
     // every commit held up behind one read.
@@ -506,6 +526,11 @@ final class PathStateStorage(
           try
             windowFor(anchor, epoch).map { behind =>
               overlay.chainFrom(anchor, block, behind.contains) match
+                case Some(_) if layersRefused =>
+                  throw new StateUnavailable(
+                    s"the state of block ${block.show} is not held as a state of the chain the disk is on: it is an " +
+                      "executed block kept beside it"
+                  )
                 case Some((layers, on)) =>
                   val reverse = Option.when(on != anchor)(indexBetween(anchor, on, epoch, reader))
                   new StateView(block, epoch, clock, rows, layers, reverse)
@@ -521,12 +546,12 @@ final class PathStateStorage(
         made.filter(_ => clock.epoch == epoch).getOrElse {
           if clock.epoch == epoch then
             // the window was of another anchor and the epoch has not moved: the clock is read again
-            if triesLeft > 0 then viewOf(block, reader, triesLeft - 1, notTheAnchor)
+            if triesLeft > 0 then viewOf(block, reader, triesLeft - 1, notTheAnchor, layersRefused)
             else
               throw new StateUnavailable(s"the state of block ${block.show} is not held: the anchor could not be read")
           else if triesLeft > 0 then
             told("a view made again")(settings.observer.viewRetried())
-            viewOf(block, reader, triesLeft - 1, notTheAnchor)
+            viewOf(block, reader, triesLeft - 1, notTheAnchor, layersRefused)
           else
             told("a view that could not be made")(settings.observer.viewStale())
             throw new StaleStateViewException(
@@ -630,14 +655,15 @@ final class PathStateStorage(
     // more than may be is refused before it costs a walk.
     viewBehind(block, Reader.Rpc, () => counted())
 
-  /** The view of the anchor, or of a block behind it on its own chain, for a reader. */
+  /** The view of the anchor, or of a block behind it on its own chain, for a reader. A block that forward layers lead
+    * to is refused when they are found, before any index is built for it (B-239): on a fork that index would be built
+    * for a view the reader is never handed.
+    */
   private def viewBehind(block: BlockRef, reader: Reader, notTheAnchor: () => Unit = () => ()): StateView =
-    val view = viewOf(block, Some(reader), notTheAnchor = notTheAnchor)
+    val view = viewOf(block, Some(reader), notTheAnchor = notTheAnchor, layersRefused = true)
+    // refused in viewOf already; checked again so that no view through a layer is ever handed to a reader
     if view.layers.nonEmpty then
-      throw new StateUnavailable(
-        s"the state of block ${block.show} is not held as a state of the chain the disk is on: it is an executed " +
-          "block kept beside it"
-      )
+      throw new IllegalStateException(s"a reader's view of block ${block.show} reads through forward layers")
     view
 
   /** `block`'s state for an execution that commits nothing: what it persists is kept beside the view and dropped with
@@ -735,6 +761,7 @@ final class PathStateStorage(
       clock.inFlight(StateMove(genesis, written.view.mapValues(_ => Option.empty[ByteString]).toMap))(
         dataSource.updateSync(updates)
       )
+      told("the anchor of the genesis")(settings.observer.anchorAt(Some(genesis)))
     }
 
   /** Commits the end of a sync from scratch (spec 018 C5a part 5; data-model 7.4): the rows the sync wrote are the
@@ -813,6 +840,7 @@ final class PathStateStorage(
             appState.putStateOrigin(pivot).updates ++
             appState.putStateAnchor(pivot).updates
         clock.inFlightBarrier(pivot)(dataSource.updateSync(updates))
+        told("the anchor of a hand-off")(settings.observer.anchorAt(Some(pivot)))
         // nothing was kept in memory of a datadir with no state; said again, so that it does not rest on that
         overlay.clear()
         window.set(None)
@@ -848,7 +876,10 @@ final class PathStateStorage(
     * @param block
     *   the block being committed, with the state root its header carries
     * @throws StateUnavailable
-    *   when the block does not extend the anchor, or there is no anchor
+    *   when the block does not extend the anchor, or there is no anchor: nothing is written
+    * @throws StateBusy
+    *   while another thread's attempt that holds the records is open ([[withRecordsHeld]]): nothing is written, and the
+    *   caller asks again once it has ended
     */
   def commitCanonical(
       staged: Option[PathStagedState],
@@ -862,6 +893,7 @@ final class PathStateStorage(
     // names the finalized block is not this class's.
     val finalized = finalizedNow().map(_.number)
     val outcome = adopting(s"canonical commit of block ${block.show}") {
+      refuseInAnotherAttempt(s"the commit of block ${block.show}")
       // Every in-place writer holds this lock, so the clock is at rest and the anchor is the disk's.
       clock.anchor match
         case None =>
@@ -902,6 +934,119 @@ final class PathStateStorage(
       case CommitOutcome.AlreadyApplied => ()
     outcome
 
+  // ---- repair and on-demand writes by position (data-model 7.5, C5b) ----
+
+  override def rawRowsAt(requests: Seq[(PositionKey, ByteString)]): Seq[RawNodeRead] =
+    rows
+      .readManyNoFill(requests.map(_._1))
+      .map(_.fold[RawNodeRead](RawNodeRead.Absent)(RawNodeRead.Bytes(_)))
+
+  /** A repair of one row (data-model 7.5): a state move, so under the state lock, with the anchor compare-and-set, and
+    * one point write, in one batch. `bytes` go in only when they are the node `expectedHash` names, the anchor's root
+    * still names `expectedHash` at `position`, and the row there is absent or does not decode. It is judged under the
+    * lock, from the rows as they are then: a verdict the caller formed earlier, from a read that straddled a move,
+    * writes nothing. A row that decodes and is not `expectedHash` is overwritten ([[RepairOutcome.Overwrote]]): the
+    * anchor's root names `expectedHash` there, so the row is wrong for the state this store holds, and the old row is
+    * recorded in the move. It is logged at ERROR with the old row's hash, and counted.
+    *
+    * Held for the walk from the root to `position` and one write. The worst case is about 128 uncached point reads (a
+    * path is at most 64 nibbles, in the account trie and again in a storage trie; a mainnet trie is typically far
+    * shallower, some tens of reads), each a RocksDB point lookup that bypasses the caches. It waits for a move of the
+    * head under way, as any adopter does, which can be a whole multi-batch head move, and for no other lock. So it is
+    * called off any actor thread, and it throws [[StateUnavailable]] on a store that has failed closed.
+    */
+  override def repairNodeAt(position: PositionKey, expectedHash: ByteString, bytes: Array[Byte]): RepairOutcome =
+    if !StateStorage.hashesTo(expectedHash, bytes) then RepairOutcome.Rejected
+    else
+      adopting(s"repair of ${position.show}") {
+        underAnchor(position, expectedHash) match
+          case Left(declined) => declined
+          case Right(held) =>
+            rows.readNoFill(position) match
+              case Some(row) if StateStorage.hashesTo(expectedHash, row) => RepairOutcome.AlreadyValid
+              case prior =>
+                writeRowInPlace(held, position, Some(ByteString(bytes)), prior)
+                prior match
+                  case Some(row) if decodesAsNode(row) =>
+                    log.error(
+                      s"[STATE-REPAIR] ${position.show} held a node that decodes and is not ${hexOfBytes(expectedHash.toArray)}, " +
+                        s"which the anchor's root names there: overwritten. The old row hashed to " +
+                        s"${hexOfBytes(kec256(row))}"
+                    )
+                    told("an overwrite of a row that decodes")(settings.observer.repairOverwrote())
+                    RepairOutcome.Overwrote
+                  case _ => RepairOutcome.Written
+      }
+
+  /** The delete of a row that is provably bad (data-model 6.3, 7.5), position-scoped. Under the state lock, from a read
+    * of its own, so a stale verdict of the caller's deletes nothing: the row is read, the anchor's root is asked
+    * whether it still reaches `expectedHash` at `position` (the real `stillReached`), and the row is read again before
+    * the delete, which is the same row or no delete. Only an entry that does not decode as a node is provably bad here:
+    * bytes that decode and are not `expectedHash` are another view's node, never deleted
+    * ([[BadEntryDelete.DifferentNode]]). No anchor, or one that does not reach `expectedHash` there:
+    * [[BadEntryDelete.NotReached]]. The same lock and the same worst-case hold as [[repairNodeAt]].
+    */
+  override def deleteBadNodeAt(position: PositionKey, expectedHash: ByteString): BadEntryDelete =
+    def kept(row: Option[Array[Byte]]): Option[BadEntryDelete] = row match
+      case None                                                      => Some(BadEntryDelete.NoLongerBad)
+      case Some(bytes) if StateStorage.hashesTo(expectedHash, bytes) => Some(BadEntryDelete.NoLongerBad)
+      case Some(bytes) if decodesAsNode(bytes)                       => Some(BadEntryDelete.DifferentNode)
+      case Some(_)                                                   => None
+    adopting(s"delete of a bad row at ${position.show}") {
+      val first = rows.readNoFill(position)
+      kept(first).getOrElse {
+        underAnchor(position, expectedHash) match
+          case Left(_) => BadEntryDelete.NotReached
+          case Right(held) =>
+            val again = rows.readNoFill(position)
+            kept(again).getOrElse {
+              if !sameRow(first, again) then BadEntryDelete.NoLongerBad
+              else
+                writeRowInPlace(held, position, None, again)
+                BadEntryDelete.Deleted
+            }
+      }
+    }
+
+  /** The anchor, if the anchor's root still names `expectedHash` at `position`; the outcome to decline with otherwise.
+    * Under the state lock: it is the compare-and-set of data-model 7.0 (an absent anchor is a failure of it).
+    */
+  private def underAnchor(position: PositionKey, expectedHash: ByteString)(using
+      StateLockHeld
+  ): Either[RepairOutcome, BlockRef] =
+    clock.anchor match
+      case None => Left(RepairOutcome.NotReached)
+      case Some(held) =>
+        AnchorReach.reach(held.stateRoot, position, rows.readNoFill) match
+          case AnchorReach.Reach.Names(hash) if hash == expectedHash => Right(held)
+          case _                                                     => Left(RepairOutcome.NotReached)
+
+  private def hexOfBytes(bytes: Array[Byte]): String = bytes.map("%02x".format(_)).mkString
+
+  private def decodesAsNode(row: Array[Byte]): Boolean =
+    try
+      com.chipprbots.ethereum.mpt.MptTraversals.decodeNode(row)
+      true
+    catch case NonFatal(_) => false
+
+  private def sameRow(a: Option[Array[Byte]], b: Option[Array[Byte]]): Boolean = (a, b) match
+    case (None, None)       => true
+    case (Some(x), Some(y)) => java.util.Arrays.equals(x, y)
+    case _                  => false
+
+  /** One row, written or deleted in place, in the batch of a move that leaves the anchor where it is: a view made
+    * before it sees the prior row through the log (data-model 6.3.1). Nothing else is in the batch: a repair is the
+    * node and nothing it describes.
+    */
+  private def writeRowInPlace(
+      held: BlockRef,
+      position: PositionKey,
+      next: Option[ByteString],
+      prior: Option[Array[Byte]]
+  )(using StateLockHeld): Unit =
+    val updates = rows.rowUpdates(Seq(position -> next))
+    clock.inFlight(StateMove(held, Map(position -> prior.map(ByteString(_)))))(dataSource.update(updates))
+
   /** '''Destroys the state this datadir holds''', so that a genesis can be committed to it again: every row of both
     * column families, every changeset record and index entry, the count of pruned records, the layout stamp and the
     * anchor, in '''one batch''', synced, under the state lock. Returns how many keys it deleted.
@@ -933,6 +1078,7 @@ final class PathStateStorage(
         case Some(deletes) =>
           val updates: Seq[DataUpdate] = deletes ++ appState.removeStateMarks().updates
           clock.inFlightToNoState(dataSource.updateSync(updates))
+          told("no anchor")(settings.observer.anchorAt(None))
           // executed blocks kept beside a state that is gone are of no state, and neither is what was derived from
           // its records
           overlay.clear()
@@ -978,9 +1124,13 @@ final class PathStateStorage(
     *
     * The caller's, and not checked here: nothing may be reading the rows through an iterator of its own (the audit, a
     * hand-off sample, a walker: a view goes stale, an iterator of its own goes on reading rows that are gone); no
-    * import and no fork choice may be committing; it is not called from inside a hold of the records; and no sync may
-    * write rows until this has returned. If it throws after its first batch the mark is left set: nothing may sync
-    * until [[finishPendingClear]] has run.
+    * import and no fork choice may be committing; and no sync may write rows until this has returned. If it throws
+    * after its first batch the mark is left set: nothing may sync until [[finishPendingClear]] has run.
+    *
+    * '''Not while an attempt holds the records''' ([[withRecordsHeld]], B-465): an adoption of a heavier branch may be
+    * moving the head to a state the chain then follows, and a clear in its middle would give that state up for a sync
+    * from scratch. The clear is refused, with nothing written ([[StateClearRefused]]), and asked for again later. It
+    * does not wait for the attempt: it holds the lock of the moves, which the attempt's next move takes.
     *
     * @param genesisHash
     *   the block at height 0, which the best block is set back to
@@ -991,6 +1141,7 @@ final class PathStateStorage(
     * @param givenUpFor
     *   on proof of work, the branch the escalation is for ([[GivenUpBranches]]): recorded in the same batch
     */
+  @throws[StateClearRefused]("when an attempt holds the records: nothing was written")
   def clearForResync(
       genesisHash: ByteString,
       atMillis: Long,
@@ -1004,11 +1155,13 @@ final class PathStateStorage(
     * the block the branch stands on, and its pivot; the header download goes back to that block. One more attempt is
     * counted, in the same synced write that begins the clear. No escalation is recorded: this is the one that was.
     *
-    * As for [[clearForResync]], the caller has stopped the sync, and nothing writes rows until this has returned.
+    * As for [[clearForResync]], the caller has stopped the sync, and nothing writes rows until this has returned; and
+    * it is refused while an attempt holds the records.
     *
     * @return
     *   the requirement as counted, or none when no sync is bound (nothing is cleared then)
     */
+  @throws[StateClearRefused]("when an attempt holds the records: nothing was written")
   def clearForBranchRetry(genesisHash: ByteString, atMillis: Long): Option[PivotOnBranch] =
     clearUnderTheLocks(genesisHash, atMillis, escalation = None, givenUpFor = None, again = true)
 
@@ -1025,6 +1178,13 @@ final class PathStateStorage(
         "a clear of the state for a sync from scratch",
         nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
       ) {
+        // asked under the state lock, where a hold is opened: an attempt that is not listed here begins after the clear
+        attemptThreads.values().iterator().asScala.nextOption().foreach { holder =>
+          throw new StateClearRefused(
+            s"an adoption on thread '${holder.thread.getName}' holds the records and is moving the head, which the chain may " +
+              "follow from where it ends. Ask again once it has ended"
+          )
+        }
         val index = new BlockNumberMappingStorage(dataSource)
         val retry =
           if again then
@@ -1042,6 +1202,7 @@ final class PathStateStorage(
           val begins: Seq[DataUpdate] =
             appState.stateClearBatch(genesisHash, atMillis, escalation, givenUpFor, trim, retry).updates
           clock.inFlightToNoState(dataSource.updateSync(begins))
+          told("no anchor")(settings.observer.anchorAt(None))
           // executed blocks kept beside a state that is gone are of no state, and neither is what was derived from its
           // records, the fault that was found in it, or the block that was finalized on it
           overlay.clear()
@@ -1138,7 +1299,11 @@ final class PathStateStorage(
     * It is [[clearForResync]] with no escalation, mark and all: a kill between the batch and the range deletes leaves
     * the mark, and the start finishes it ([[finishPendingClear]]). Deleting the rows first and the anchor after, as the
     * data model had it, would leave a genesis anchor over rows that are gone if killed between the two (vault).
+    *
+    * It may throw [[StateClearRefused]], as [[clearForResync]] does, when an attempt holds the records: not met in
+    * practice, since no adoption runs while SNAP starts on a genesis state.
     */
+  @throws[StateClearRefused]("when an attempt holds the records; none does as a sync starts (B-465)")
   def clearGenesisStateForSync(genesis: BlockRef, atMillis: Long): Boolean =
     val heldIsGenesis = anchor.contains(genesis)
     if heldIsGenesis then clearForResync(genesis.hash, atMillis, escalation = None)
@@ -1402,6 +1567,8 @@ final class PathStateStorage(
     * @throws StateUnavailable
     *   when `block` has no forward layer, or its parent is not the anchor, or its layer was not built on the state the
     *   disk holds
+    * @throws StateBusy
+    *   while another thread's attempt that holds the records is open: nothing is written, and the caller asks again
     */
   def promote(block: BlockRef, extra: Option[DataSourceBatchUpdate]): CommitOutcome =
     extra.foreach(other =>
@@ -1409,6 +1576,7 @@ final class PathStateStorage(
     )
     val finalized = finalizedNow().map(_.number)
     val outcome = adopting(s"promotion of block ${block.show}") {
+      refuseInAnotherAttempt(s"the promotion of block ${block.show}")
       (clock.anchor, overlay.layerOf(block)) match
         case (None, _) =>
           throw new StateUnavailable(s"block ${block.show} cannot be committed: there is no state anchor")
@@ -1479,17 +1647,30 @@ final class PathStateStorage(
         moves.unlock()
         adopting(holder)(body)
 
-  /** '''This store takes no further write''', and gives out no state, until the node is started again: a caller found
-    * this datadir's own changeset records corrupt (a plan refused `Corrupt`), and nothing is built over that (plan.md
-    * "C4b part 1": `Corrupt` fails closed at the Engine API, C4d). It is logged at ERROR; the escalation is C4d's.
+  /** '''This store takes no further write''', and gives out no state, until its state is cleared: a caller found this
+    * datadir's own changeset records corrupt (a plan refused `Corrupt`), and nothing is built over that (plan.md "C4b
+    * part 1": `Corrupt` fails closed at the Engine API, C4d). It is logged at ERROR; the escalation is C4d's.
     *
     * It takes no lock: a write already past its check under the state lock completes, and no write that starts after
-    * this does. It is kept in memory only; nothing looks at the records again at the next start (B-252).
+    * this does. The fault is recorded on disk, synced, so that a restart opens the store closed again (B-252).
     */
   def failClosed(why: String): Unit =
     if faulted.isEmpty then
       faulted = Some(why)
-      log.error(s"[STATE-MOVE] This node's state takes no further write and is not read: $why. Start the node again")
+      log.error(s"[STATE-MOVE] This node's state takes no further write and is not read: $why")
+      recordFault(why)
+
+  /** The fault, written synced to AppState ([[StateFaultMark]]). A store that cannot record it is closed all the same,
+    * in memory, and says at ERROR that a restart would open it.
+    */
+  private def recordFault(why: String): Unit =
+    try appState.putStateFault(System.currentTimeMillis(), why).commitSync()
+    catch
+      case NonFatal(failed) =>
+        log.error(
+          s"[STATE-MOVE] The fault of this node's state could not be recorded ($failed): it is closed until it is " +
+            "cleared or the node is started again, and a restart would open it"
+        )
 
   /** Whether this store has failed closed ([[failClosed]], or a row read back that was not the row written). */
   def hasFailedClosed: Boolean = faulted.isDefined
@@ -1508,9 +1689,68 @@ final class PathStateStorage(
     */
   private val recordHolds = new ConcurrentHashMap[Object, BigInt]()
 
+  /** Each attempt that holds the records, by the attempt (B-294): the thread that opened it, what it holds and when it
+    * was opened. An attempt adopts its branch on the thread that opened it: its moves and its commits are made there,
+    * one after another.
+    */
+  private val attemptThreads = new ConcurrentHashMap[Object, OpenAttempt]()
+
+  /** How long the oldest attempt that is open has been, in milliseconds of [[CommitSettings.nowMillis]]: none when none
+    * is open (B-462). Read at any time, from any thread, without the state lock: what the gauge of its age reads.
+    */
+  def oldestAttemptAgeMillis: Option[Long] =
+    attemptThreads
+      .values()
+      .iterator()
+      .asScala
+      .map(_.openedAt)
+      .minOption
+      .map(opened => math.max(0L, settings.nowMillis() - opened))
+
+  // the gauge of the open attempt's age reads this store, by its own clock (B-462)
+  told("the age of the open attempt")(settings.observer.attemptAgeOf(() => oldestAttemptAgeMillis))
+
+  /** Whether an attempt holds the records right now ([[withRecordsHeld]]), read without a lock: for a caller that would
+    * undo work of its own before a clear that is then refused (B-465). The clear's own check, under the state lock, is
+    * the one that counts: an attempt may begin or end just after this is read.
+    */
+  def recordsHeld: Boolean = !attemptThreads.isEmpty
+
   /** The lowest height an attempt holds the records of, if any does. */
   private def heldFrom: Option[BigInt] =
     recordHolds.values().iterator().asScala.minOption
+
+  /** '''No block is adopted, and no attempt begins, while another thread's attempt is open''' (spec 018 C4e part 4,
+    * B-294). Such an attempt moves the head to a branch and commits its blocks in place, and may move it back: in the
+    * meantime the head stands on blocks it may not stay on, and a block committed on one of them would be moved off by
+    * the attempt's next write, or would take its place. The writer is refused, with nothing written, and asks again
+    * once the attempt has ended. It does not wait for the attempt, which may be waiting for what that writer holds (the
+    * gate of a block it executes; forge). A commit or a promotion may still wait before it gets here, as any adopter
+    * does ([[adopting]]): for one move of the head under way on another thread, which takes no gate, and is then
+    * refused. Asked under the state lock, where an attempt is opened: a writer that passes it finds the head settled,
+    * or its own attempt's.
+    *
+    * The refusal is a [[StateBusy]] (B-462): no fault of this node, never counted by the escalation, said at WARN. An
+    * attempt found open for longer than [[CommitSettings.attemptAgeWarnMillis]] is said once more, at WARN, the first
+    * time a writer is refused by it: an adoption that holds the head that long is stuck, and every writer it refuses
+    * meanwhile is asked to ask again, without end.
+    */
+  private def refuseInAnotherAttempt(what: String)(using StateLockHeld): Unit =
+    val self = Thread.currentThread()
+    attemptThreads.values().iterator().asScala.find(_.thread ne self).foreach { other =>
+      val holder = s"the adoption on thread '${other.thread.getName}' (${other.what})"
+      val age = math.max(0L, settings.nowMillis() - other.openedAt)
+      if age > settings.attemptAgeWarnMillis && other.warned.compareAndSet(false, true) then
+        log.warn(
+          s"[STATE-BUSY] $holder has held the head for ${age / 1000}s, more than " +
+            s"${settings.attemptAgeWarnMillis / 1000}s: every writer is refused until it ends, and $what was not made"
+        )
+      throw new StateBusy(
+        holder,
+        s"$what was not made: an adoption on thread '${other.thread.getName}' is moving the head, which stands on a " +
+          "block it may not stay on until the adoption ends. Ask again then"
+      )
+    }
 
   /** `body`, with the changeset records of every block above `above` kept from retention for as long as it runs.
     *
@@ -1519,12 +1759,64 @@ final class PathStateStorage(
     * block of it fails the head is moved back to the old head by the records. Every in-place commit prunes, so without
     * this a branch longer than what is retained would delete the old branch's records, which are the way back, and its
     * own first ones. Nothing is pruned while it runs that the hold covers; the commit after it catches up.
+    *
+    * '''The attempt is the calling thread's''' (B-294): while it runs, no other thread adopts a block, moves the head
+    * (but a fork choice) or begins an attempt ([[refuseInAnotherAttempt]]). So `body` must run synchronously on the
+    * calling thread, its moves and commits included: one it hands to another thread, or makes on one (an `IO` shifted
+    * off this thread, a future), is refused as another thread's write, with a [[StateBusy]].
+    *
+    * '''On the head the caller read''' (B-463): `expectedAnchor` is the block whose state the disk held when the caller
+    * read the head, which it weighed its branch against and which its way back leads to. A block committed on that
+    * head, or a move of it, between that read and this hold is a head the attempt knows nothing of: its branch would be
+    * weighed against the stale head, and a move back would leave the block committed meanwhile a side block. So the
+    * hold is refused unless the anchor is that block still, compared under the state lock where the hold is made: a
+    * [[StateBusy]], with nothing held or written, and the caller reads the head again and asks again. Nor while a move
+    * of the head is under way on another thread (B-504): a head read between two of its batches is a block the move
+    * passes through, and is the anchor still until its next batch.
     */
   @throws[ReorgTooDeep]("when the records above `above` are not all kept already: the way back is not there")
-  def withRecordsHeld[A](above: BlockRef)(body: => A): A =
+  @throws[IllegalStateException](
+    "when the best block is not the anchor, on a store that keeps the best block beside it: nothing was held"
+  )
+  @throws[StateBusy](
+    "when another thread's attempt is open, a move of the head is under way on another thread, or the head is not " +
+      "`expectedAnchor` any more: nothing was held, and the caller asks again"
+  )
+  def withRecordsHeld[A](above: BlockRef, expectedAnchor: Option[BlockRef])(body: => A): A =
     val hold = new Object
     // under the lock, so that no commit prunes between the look at what is kept and the hold
     lock.locked(s"a hold of the records above block ${above.show}") {
+      // First, the best block is the anchor (data-model 5.1, I1). Every writer moves the two in one batch under this
+      // lock (a commit, each batch of a move, the genesis, a hand-off), so here, between two batches of another
+      // thread's move included, they agree; and with no anchor yet there is nothing to hold. One that does not is a
+      // writer that moved one without the other: a defect, said at ERROR and thrown, as before any batch. Asked before
+      // the refusals below, which answer a head that moved with its state: without it, the head read as the anchor
+      // that is not would be refused as busy at every attempt, and never said (forge, B-315 W1 on the cap path)
+      clock.anchor.foreach(anchor => bestIsTheAnchor(anchor, s"the hold of the records above block ${above.show}"))
+      refuseInAnotherAttempt(s"the hold of the records above block ${above.show}")
+      // Nor while a move of the head is under way on another thread (B-504): between two of its batches the anchor is
+      // a block the move is passing through, and the next batch takes it on. A caller that read the head then would
+      // pass the check below, and hold the records on a head no writer meant: its way back would lead half-way up a
+      // fork choice's move. Refused as busy, as for a head that moved since it was read; the move ends without waiting
+      // for anything this thread holds (it takes no lock but the state lock, a batch at a time)
+      if moving && !moves.isHeldByCurrentThread then
+        throw new StateBusy(
+          "the move of the head under way on another thread",
+          s"the hold of the records above block ${above.show} was not made: a move of the head is under way, and the " +
+            s"head, at ${clock.anchor.fold("no block")(ref => s"block ${ref.show}")}, is a block it is passing " +
+            "through. Read the head and ask again once it has ended"
+        )
+      // and none moved the head since the caller read it (B-463): checked before the records, which are looked at from
+      // a head the caller may have read stale
+      val anchorNow = clock.anchor
+      if anchorNow.map(_.hash) != expectedAnchor.map(_.hash) then
+        def shown(anchor: Option[BlockRef]): String = anchor.fold("no block")(ref => s"block ${ref.show}")
+        throw new StateBusy(
+          s"the writer that moved the head to ${shown(anchorNow)}",
+          s"the hold of the records above block ${above.show} was not made: the head is at ${shown(anchorNow)}, not " +
+            s"at ${shown(expectedAnchor)}, which it was read at and the branch weighed against. Read the head and ask " +
+            "again"
+        )
       appState.getChangesetPrunedTo().filter(_ > above.number + 1).foreach { prunedTo =>
         throw new ReorgTooDeep(
           ReorgRefusal.Deep,
@@ -1532,12 +1824,19 @@ final class PathStateStorage(
         )
       }
       recordHolds.put(hold, above.number + 1)
+      attemptThreads.put(
+        hold,
+        new OpenAttempt(Thread.currentThread(), s"the records above block ${above.show}", settings.nowMillis())
+      )
     }
-    // the hold is the attempt: the head is not settled until it ends, whatever moves and commits it makes
-    openAttempt()
-    try body
+    // the hold is the attempt: the head is not settled until it ends, whatever moves and commits it makes. Opened
+    // inside the `try`, so that nothing between the hold and its release can leave the hold, or its thread, behind
+    try
+      openAttempt()
+      body
     finally
       recordHolds.remove(hold)
+      attemptThreads.remove(hold)
       closeAttempt()
 
   /** Whether a move of the head is under way: from its plan to its last batch, the time between two batches included.
@@ -1610,6 +1909,10 @@ final class PathStateStorage(
     *   why the move as planned is not to be made, when it is not: asked of each plan before anything of it is written
     *   or counted, and a refusal ends the move with a [[StateUnavailable]] and nothing written (a fork choice moves the
     *   head up or across, never down to an ancestor of the head: C4d part 2b)
+    * @param forkChoice
+    *   a move a consensus client's fork choice asks for, which is made while another thread's attempt is open: the
+    *   attempt follows the head the consensus client names, and stops when another is named (`StateRecovery`). Any
+    *   other move is refused then, before its first batch, with a [[StateBusy]] ([[refuseInAnotherAttempt]], B-294)
     * @param extraFor
     *   the caller's rows for the batch that ends on a block. It is called with no lock of this store held but the one
     *   that keeps other moves and commits out, once for each batch, and again if the move is planned again; what it
@@ -1622,14 +1925,18 @@ final class PathStateStorage(
     *   when the move is refused: nothing was changed
     * @throws StateUnavailable
     *   when a block on the way up has neither record nor layer (`heldTo` says how far a move could be made), when the
-    *   target's chain does not lead to this node's state, or when a layer was found not to stand and was dropped
+    *   target's chain does not lead to this node's state, or when a layer was found not to stand and was dropped; and,
+    *   asking again, when the state was moved by another writer between two of its batches, or under every plan of it
+    * @throws StateBusy
+    *   when it is no fork choice and another thread's attempt is open: nothing was written, and the caller asks again
     */
   def moveHead(
       target: BlockRef,
       link: ByteString => Option[HeadMovePlan.Link],
       extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate],
       finalized: Option[FinalizedBlock] = None,
-      admit: HeadMovePlan => Option[String] = _ => None
+      admit: HeadMovePlan => Option[String] = _ => None,
+      forkChoice: Boolean = false
   ): MoveOutcome =
     if moves.isHeldByCurrentThread then
       throw new IllegalStateException(s"A move of the head to ${target.show} cannot start inside another")
@@ -1641,7 +1948,7 @@ final class PathStateStorage(
     val pin = new BranchPin(s"the move of the head to ${target.show}")
     try
       val outcome =
-        try move(target, link, extraFor, finalized, admit, pin, MoveReplans)
+        try move(target, link, extraFor, finalized, admit, forkChoice, pin, MoveReplans)
         catch
           case NonFatal(failed) =>
             // A move that stopped part of the way kept the layers its later batches were to apply. Those of the
@@ -1672,6 +1979,7 @@ final class PathStateStorage(
       extraFor: HeadMovePlan.Chunk => Option[DataSourceBatchUpdate],
       namesFinalized: Option[FinalizedBlock],
       admit: HeadMovePlan => Option[String],
+      forkChoice: Boolean,
       pin: BranchPin,
       replansLeft: Int
   ): MoveOutcome =
@@ -1727,6 +2035,9 @@ final class PathStateStorage(
           nanos => told("the wait for the state lock")(settings.observer.lockWaited(nanos))
         ) {
           refuseIfFaulted()
+          // before anything of it is written: a move under way is not stopped part of the way by an attempt opened
+          // between two of its batches, whose own moves and commits wait for it to end
+          if at == 0 && !forkChoice then refuseInAnotherAttempt(s"the move of the head to ${target.show}")
           val layersStand = chunk.forward.forall { step =>
             step.source match
               case HeadMovePlan.Source.Layer(layer) => overlay.layerOf(step.block).exists(_ eq layer)
@@ -1779,7 +2090,7 @@ final class PathStateStorage(
           batches = chunks.size,
           nanos = System.nanoTime() - started
         )
-    else if replansLeft > 0 then move(target, link, extraFor, namesFinalized, admit, pin, replansLeft - 1)
+    else if replansLeft > 0 then move(target, link, extraFor, namesFinalized, admit, forkChoice, pin, replansLeft - 1)
     else
       throw new StateUnavailable(
         s"no move of the head to ${target.show} could be made: the state, or an executed block of the plan, changed " +
@@ -1872,10 +2183,12 @@ final class PathStateStorage(
       .find((position, node) => rows.read(position).map(ByteString(_)) != node)
       .foreach { (position, _) =>
         val why = s"${position.show}, after the move to block ${chunk.head.show}"
-        faulted = Some(s"a row read back after a write was not the row written ($why)")
+        val fault = s"a row read back after a write was not the row written ($why)"
+        faulted = Some(fault)
         log.error(
           s"[STATE-MOVE] The row at $why is not the row that was written. This node's state takes no further write."
         )
+        recordFault(fault)
       }
 
     ChunkWritten(
@@ -2147,6 +2460,22 @@ object PathStateStorage:
     */
   val MaxKeysDestroyed: Long = 1000000L
 
+  /** How long an attempt that holds the records (an adoption by reverse-then-commit, or the fork choice's recovery) may
+    * be open before a writer it refuses says so, once, at WARN (B-462): ten minutes. Such an attempt moves the head
+    * down to a fork and commits the branch above it in place, a branch no longer than what the changeset records reach
+    * and regular sync fetches whole: at the speed blocks are executed again (several a second, even on mainnet),
+    * seconds to a few minutes. Ten minutes is well past that and short of what an operator would take for a node that
+    * stopped following the chain. It changes nothing but the log: the refusal is never counted, however old the
+    * attempt.
+    */
+  val AttemptAgeWarnMillis: Long = 10L * 60 * 1000
+
+  /** An attempt that holds the records ([[PathStateStorage.withRecordsHeld]]), by the thread that opened it, what it
+    * holds and when it was opened; `warned` once a writer it refused has said it is old (B-462).
+    */
+  final private[pathstate] class OpenAttempt(val thread: Thread, val what: String, val openedAt: Long):
+    val warned = new java.util.concurrent.atomic.AtomicBoolean(false)
+
   private val NotBuiltForDestruction =
     "The state of a data directory is destroyed only in test mode (fukuii.testmode), for a new genesis"
 
@@ -2208,7 +2537,11 @@ object PathStateStorage:
       maxReversePoolBytes: Long = 128L * 1024 * 1024,
       // How many reads of a state behind the anchor callers of the JSON-RPC may have in flight: each may hold an
       // index of maxReverseIndexBytes that is not kept. A constant until it is measured (M5).
-      maxReadsBehindHead: Int = 4
+      maxReadsBehindHead: Int = 4,
+      // The wall clock, in milliseconds: what the age of an attempt that holds the records is read by (B-462).
+      nowMillis: () => Long = () => System.currentTimeMillis(),
+      // How long an attempt may hold the records before a writer it refuses says so at WARN, once (B-462).
+      attemptAgeWarnMillis: Long = AttemptAgeWarnMillis
   )
 
   object CommitSettings:
@@ -2343,6 +2676,11 @@ object PathStateStorage:
     def lockWaited(nanos: Long): Unit = ()
     def committed(commit: Commit): Unit = ()
 
+    /** The block whose state the disk holds, where it is set otherwise than by a commit or a move (B-328): at open, at
+      * a genesis commit, at a sync's hand-off, and none at a clear.
+      */
+    def anchorAt(anchor: Option[BlockRef]): Unit = ()
+
     /** The head was moved, by a move of more than the commit of one block. */
     def moved(move: MoveOutcome.Moved): Unit = ()
 
@@ -2371,6 +2709,14 @@ object PathStateStorage:
 
     /** A view could not be made: the disk moved on each time. */
     def viewStale(): Unit = ()
+
+    /** A repair overwrote a row that decodes and is not the node the anchor's root names there (data-model 7.5). */
+    def repairOverwrote(): Unit = ()
+
+    /** How to read the age of the oldest attempt that holds the records, in milliseconds, none when none is open: told
+      * once, when the store is made (B-462).
+      */
+    def attemptAgeOf(ageMillis: () => Option[Long]): Unit = ()
 
   object CommitObserver:
     val Silent: CommitObserver = new CommitObserver {}

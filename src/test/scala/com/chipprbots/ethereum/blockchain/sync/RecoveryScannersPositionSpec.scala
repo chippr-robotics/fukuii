@@ -129,22 +129,16 @@ class RecoveryScannersPositionSpec extends AnyFlatSpec with Matchers:
     val scans: Seq[(String, Scanned)] = Seq(
       "scanFrom" -> scanned(_.scanFrom(root)),
       "scanShards-1" -> scanned(scan => shards(1).foreach(shard => scan.scanShard(shard.root, shard.pathPrefix))),
-      "scanShards-2" -> scanned(scan => shards(2).foreach(shard => scan.scanShard(shard.root, shard.pathPrefix))),
-      "legacy-storage" ->
-        thrown(Found(Nil, StorageRecoveryActor.scanForMissingStorage(root, store, quiet), 0)),
-      "legacy-bytecode" ->
-        thrown(Found(BytecodeRecoveryActor.scanForMissingBytecodes(root, store, codes, quiet), Nil, 0))
+      "scanShards-2" -> scanned(scan => shards(2).foreach(shard => scan.scanShard(shard.root, shard.pathPrefix)))
     )
 
     def scan(name: String): Scanned = scans.toMap.apply(name)
 
-    /** Every answer by its name, as text, in the order and the form the frozen list has them. */
+    /** Every answer by its name, as text, in the order and the form the frozen list has them. The legacy storage and
+      * bytecode scans had verdicts here too, until B-217 retired them and their rows left the frozen list.
+      */
     def verdicts: Seq[(String, String)] =
-      val scanText = scans.map {
-        case ("legacy-storage", found)  => "legacy-storage" -> found.fold(identity, f => pairs(f.storage))
-        case ("legacy-bytecode", found) => "legacy-bytecode" -> found.fold(identity, f => hexes(f.code))
-        case (name, found)              => name -> found.fold(identity, _.show)
-      }.toMap
+      val scanText = scans.map((name, found) => name -> found.fold(identity, _.show)).toMap
       val text = plain.toMap ++ scanText
       Seq(
         "validateAccountTrie",
@@ -154,9 +148,7 @@ class RecoveryScannersPositionSpec extends AnyFlatSpec with Matchers:
         "shards-1",
         "shards-2",
         "scanShards-1",
-        "scanShards-2",
-        "legacy-storage",
-        "legacy-bytecode"
+        "scanShards-2"
       ).map(name => name -> text(name))
 
   "Each walk, on a hash store" should "answer as it did before it read by position, in the same order" taggedAs UnitTest in {
@@ -221,7 +213,7 @@ class RecoveryScannersPositionSpec extends AnyFlatSpec with Matchers:
           val rootHash = state.hashAt(root)
 
           val rootLost = new Walks(chosen.root, state.positionsWithout(root), chosen.codes)
-          Seq("scanFrom", "scanShards-1", "scanShards-2", "legacy-storage").foreach { name =>
+          Seq("scanFrom", "scanShards-1", "scanShards-2").foreach { name =>
             withClue(s"$name: ")(rootLost.scan(name).map(_.storage) shouldBe Right(Seq(loser -> rootHash)))
           }
           rootLost.plain.toMap.apply("validateAllStorageTries") shouldBe s"Right([${hex(rootHash)}])"
@@ -386,9 +378,6 @@ class RecoveryScannersPositionSpec extends AnyFlatSpec with Matchers:
     }
 
 object RecoveryScannersPositionSpec:
-
-  /** The log of a scan that is not looked at: the logger is off in the test configuration. */
-  val quiet: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger("RecoveryScannersPositionSpec.scan")
 
   def hex(bytes: ByteString): String = bytes.map("%02x".format(_)).mkString
   def hexes(all: Seq[ByteString]): String = all.map(hex).mkString("[", ",", "]")

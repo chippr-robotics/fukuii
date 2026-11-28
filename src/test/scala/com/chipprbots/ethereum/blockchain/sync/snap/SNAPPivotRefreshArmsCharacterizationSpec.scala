@@ -177,7 +177,7 @@ class SNAPPivotRefreshArmsCharacterizationSpec
 
   // ── The readiness probe ───────────────────────────────────────────────────────────────────────
 
-  /** Proactive roll: a stagnation tick sees the pivot more than 100 blocks behind the network head. The new pivot's
+  /** Proactive roll: a stagnation tick sees the pivot more than 96 blocks behind the network head. The new pivot's
     * header is local, so the refresh goes straight to the readiness probe. Returns the probe's request id.
     */
   private def startProbedRoll(

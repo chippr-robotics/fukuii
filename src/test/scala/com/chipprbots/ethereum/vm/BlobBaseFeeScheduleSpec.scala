@@ -114,3 +114,28 @@ class BlobBaseFeeScheduleSpec extends AnyFlatSpec with Matchers:
         blobBaseFeeOpcode(ephemery, t, e) shouldBe BlobGasUtils.getBlobGasPrice(e, Timestamp(t), ephemery)
       }
   }
+
+  it should "use BPO3's and BPO4's fractions from their own timestamps (B-443)" taggedAs (UnitTest, VMTest) in {
+    // Mainnet plus a hypothetical BPO3 / BPO4 with go-ethereum's Default{BPO3,BPO4}BlobConfig (no network schedules
+    // them yet). Expected values computed outside fukuii (Python fake_exponential(1, excess, fraction)): fraction
+    // 11684671 (BPO2) gives 72 and 5209 at 50,000,000 and 100,000,000; 20609697 (BPO3) 11 and 128; 13739630 (BPO4)
+    // 38 and 1448.
+    val (bpo3, bpo4) = (2000000000L, 2100000000L)
+    val chain = mainnet.copy(
+      forkTimestamps = mainnet.forkTimestamps.copy(bpo3Timestamp = Some(bpo3), bpo4Timestamp = Some(bpo4)),
+      blobSchedule = mainnet.blobSchedule.copy(
+        bpo3 = Some(com.chipprbots.ethereum.utils.BlobParams.Bpo3),
+        bpo4 = Some(com.chipprbots.ethereum.utils.BlobParams.Bpo4)
+      )
+    )
+    blobBaseFeeOpcode(chain, bpo3 - 1, BigInt(50_000_000)) shouldBe BigInt(72)
+    blobBaseFeeOpcode(chain, bpo3, BigInt(50_000_000)) shouldBe BigInt(11)
+    blobBaseFeeOpcode(chain, bpo3, BigInt(100_000_000)) shouldBe BigInt(128)
+    blobBaseFeeOpcode(chain, bpo4 - 1, BigInt(100_000_000)) shouldBe BigInt(128)
+    blobBaseFeeOpcode(chain, bpo4, BigInt(50_000_000)) shouldBe BigInt(38)
+    blobBaseFeeOpcode(chain, bpo4, BigInt(100_000_000)) shouldBe BigInt(1448)
+    for t <- Seq(bpo3 - 1, bpo3, bpo4 - 1, bpo4); e <- excesses do
+      withClue(s"ts=$t excess=$e: ") {
+        blobBaseFeeOpcode(chain, t, e) shouldBe BlobGasUtils.getBlobGasPrice(e, Timestamp(t), chain)
+      }
+  }

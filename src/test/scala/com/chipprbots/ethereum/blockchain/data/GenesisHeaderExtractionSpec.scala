@@ -134,6 +134,9 @@ class GenesisHeaderExtractionSpec extends AnyFlatSpec with Matchers:
       bpo1 = Some(1762365720L),
       bpo2 = Some(1762955544L),
       amsterdam = None,
+      bpo3 = None,
+      bpo4 = None,
+      bpo5 = None,
       blobSchedule = Seq(
         ("cancun", BigInt(3), BigInt(6), BigInt(3338477)),
         ("prague", BigInt(6), BigInt(9), BigInt(5007716)),

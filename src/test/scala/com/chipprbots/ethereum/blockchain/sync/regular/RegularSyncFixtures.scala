@@ -35,7 +35,6 @@ import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.domain.BlockHeaderImplicits.*
 import com.chipprbots.ethereum.ledger.*
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
@@ -52,13 +51,17 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockBodies as ETHGetBlockBodies
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetBlockHeaders as ETHGetBlockHeaders
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config.SyncConfig
+
+/** The fork choice of a chain that follows a consensus layer (`followsConsensusLayer`), where the importer's SYNC-FORK
+  * keeps the blind rewind (B-347 changed it only where the resolver weighs the branch: proof of work).
+  */
+class FollowingAConsensusLayer(reader: BlockchainReader) extends BranchResolution(reader):
+  override def followsConsensusLayer: Boolean = true
 
 // Fixture classes are wrapped in a trait due to problems with making mocks available inside of them
 trait RegularSyncFixtures:
@@ -97,7 +100,7 @@ trait RegularSyncFixtures:
     val blacklist: CacheBasedBlacklist = CacheBasedBlacklist.empty(100)
     lazy val branchResolution = new BranchResolution(blockchainReader)
 
-    val stateStorage: StateStorage = stub[StateStorage]
+    lazy val stateStorage: StateStorage = stub[StateStorage]
     val evmCodeStorage: EvmCodeStorage = stub[EvmCodeStorage]
     // The session's exhaust count, handed to `regularSync` and through it to every importer it spawns.
     val exhausts: BlockImporter.ExhaustCount = new BlockImporter.ExhaustCount
@@ -172,6 +175,14 @@ trait RegularSyncFixtures:
       (adapter.refusedWithTheirParent(_: NonEmptyList[Block])).when(*).onCall { (blocks: NonEmptyList[Block]) =>
         refusedWithTheirParent.get()(blocks)
       }
+      // B-140: what an orphan announce's header says of itself; valid unless a test says otherwise
+      (adapter
+        .announcedHeaderError(_: BlockHeader)(using _: BlockchainConfig))
+        .when(*, *)
+        .onCall { case (header: BlockHeader, _) =>
+          checkedHeaders.add(header.hash.value)
+          headerErrors.get(header.hash.value)
+        }
       // Batch path: regular sync blocks via tryImportBlocks
       (adapter
         .evaluateBranch(_: NonEmptyList[Block])(using _: IORuntime, _: BlockchainConfig))
@@ -298,6 +309,11 @@ trait RegularSyncFixtures:
     protected val results: mutable.Map[ByteString, IO[BlockImportResult]] =
       mutable.Map[ByteString, IO[BlockImportResult]]()
     protected val importedBlocksSet: mutable.Set[Block] = mutable.Set[Block]()
+    protected val headerErrors: mutable.Map[ByteString, String] = mutable.Map.empty
+    // The headers whose seal the importer asked the adapter about (B-140); asked on the import's thread.
+    protected val checkedHeaders: java.util.Set[ByteString] = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+    def didCheckHeaderOf(block: Block): Boolean = checkedHeaders.contains(block.header.hash.value)
 
     /** What the adapter answers when the importer asks whether a batch hangs from a refused branch (B-297). */
     protected val refusedWithTheirParent =
@@ -316,6 +332,10 @@ trait RegularSyncFixtures:
 
     def setImportResult(block: Block, result: IO[BlockImportResult]): Unit =
       results(block.header.hash.value) = result
+
+    /** Why the adapter calls `block`'s header invalid by itself, the seal with it (B-140); valid if never set. */
+    def setAnnouncedHeaderError(block: Block, error: String): Unit =
+      headerErrors(block.header.hash.value) = error
 
     class PeersClientAutoPilot(blocks: List[Block] = testBlocks) extends AutoPilot:
 
@@ -344,12 +364,6 @@ trait RegularSyncFixtures:
           val matchingBodies = hashes.flatMap(hash => blocks.find(_.hash.value == hash)).map(_.body)
 
           replyTo ! PeersClient.Response(defaultPeer, BlockBodies(BigInt(0), matchingBodies))
-          None
-        case PeersClient.Request(GetNodeData(hash :: Nil), _, _, replyTo) =>
-          replyTo ! PeersClient.Response(
-            defaultPeer,
-            NodeData(List(ByteString(blocks.byHashUnsafe(hash).header.toBytes: Array[Byte])))
-          )
           None
         case _ => None
       }
@@ -414,7 +428,7 @@ trait RegularSyncFixtures:
     // for core-geth compatibility). Also handles comparison between ETH65 and ETH66 message
     // versions. Only handles GetBlockHeaders and GetBlockBodies as those are the ETH66
     // message types used in these tests. Other ETH66 request types like GetPooledTransactions,
-    // GetNodeData, and GetReceipts are not used in RegularSync tests.
+    // and GetReceipts are not used in RegularSync tests.
     private def messagesEqualIgnoringRequestId(x: Message, y: Message): Boolean = (x, y) match
       // ETH66 to ETH66 comparison
       case (h1: ETHGetBlockHeaders, h2: ETHGetBlockHeaders) =>
@@ -496,6 +510,14 @@ trait RegularSyncFixtures:
     override lazy val branchResolution: BranchResolution = stub[BranchResolution]
     branchResolution.resolveBranch.when(*).returns(NewBetterBranch(Nil))
 
+    /** Why `newBlock`'s header is invalid by itself, the seal with it (B-140): valid unless a test says otherwise. */
+    def newBlockHeaderError: Option[String] = None
+
+    (consensusAdapter
+      .announcedHeaderError(_: BlockHeader)(using _: BlockchainConfig))
+      .when(*, *)
+      .onCall { case (header: BlockHeader, _) => if header == newBlock.header then newBlockHeaderError else None }
+
     (consensusAdapter
       .evaluateBranchBlock(_: Block)(using _: IORuntime, _: BlockchainConfig))
       .when(*, *, *)
@@ -531,8 +553,7 @@ trait RegularSyncFixtures:
     )
 
     // Set up AutoPilot for pendingTransactionsManager to respond to pending transaction asks.
-    // RegularSync/BlockImporter only send fire-and-forget commands (AddUncheckedTransactions,
-    // RemoveTransactions); this autopilot handles both Classic and Typed ask variants defensively.
+    // RegularSync/BlockImporter only send fire-and-forget commands (HeadReset); this autopilot handles both Classic and Typed ask variants defensively.
     pendingTransactionsManager.setAutoPilot(
       new AutoPilot:
         def run(sender: ActorRef, msg: Any): AutoPilot = msg match

@@ -3,6 +3,9 @@ package com.chipprbots.ethereum.ledger
 import org.apache.pekko.util.ByteString
 
 import org.bouncycastle.util.encoders.Hex
+import org.json4s.JsonAST.*
+import org.json4s.jvalue2monadic
+import org.scalatest.EitherValues
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
@@ -14,8 +17,9 @@ import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie.MPTException
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.*
+import com.chipprbots.ethereum.vm.CallTracer
 
-class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
+class StxLedgerSpec extends AnyFlatSpec with Matchers with EitherValues with Logger:
 
   "StxLedger" should "correctly estimate minimum gasLimit to run transaction which throws" taggedAs (
     UnitTest,
@@ -37,11 +41,11 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     val stxFromAddress: SignedTransactionWithSender = SignedTransactionWithSender(stx, fromAddress)
 
     val simulationResult: TxResult =
-      stxLedger.simulateTransaction(stxFromAddress, genesisHeader, None)
+      stxLedger.simulateTransaction(stxFromAddress, genesisHeader, stxLedger.worldAt(genesisHeader))
     val executionResult: TxResult =
       mining.blockPreparator.executeTransaction(stx, fromAddress, genesisHeader, worldWithAccount)
     val estimationResult: BigInt =
-      stxLedger.binarySearchGasEstimation(stxFromAddress, genesisHeader, None)
+      stxLedger.binarySearchGasEstimation(stxFromAddress, genesisHeader, stxLedger.worldAt(genesisHeader))
 
     // Check that gasUsed from simulation and execution are equal
     simulationResult.gasUsed shouldEqual executionResult.gasUsed
@@ -100,7 +104,7 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     val stxFromAddress: SignedTransactionWithSender = SignedTransactionWithSender(stx, fromAddress)
 
     val estimationResult: BigInt =
-      stxLedger.binarySearchGasEstimation(stxFromAddress, block32Header, None)
+      stxLedger.binarySearchGasEstimation(stxFromAddress, block32Header, stxLedger.worldAt(block32Header))
 
     // THE pin: geth's measured answer for this exact fixture request.
     estimationResult shouldEqual BigInt(111953)
@@ -163,6 +167,76 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     totalRefunded shouldEqual vmResult.gasRemaining + expectedRefundCredit
     totalRefunded should be > vmResult.gasRemaining
 
+  /** B-518: a refund-heavy call (SSTORE set then clear, R_sclear): the estimate is a limit that executes and the least
+    * one, though the refund makes the charged `UsedGas` far below the gas the execution consumed.
+    */
+  it should "estimate a refund-heavy call at the least gas limit that executes" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new HiveGraphQLScenarioSetup:
+    // init code: SSTORE(0, 1), SSTORE(0, 0) (sets then clears: refund accrues), then STOP (empty runtime code)
+    val initCode: ByteString = ByteString(Hex.decode("6001600055" + "6000600055" + "00"))
+    def stxWithGas(gas: BigInt): SignedTransactionWithSender = SignedTransactionWithSender(
+      SignedTransaction(LegacyTransaction(0, GasPrice.Zero, GasAmount(gas), None, 0, initCode), noSignature),
+      fromAddress
+    )
+    val ceiling: BigInt = BigInt(200000)
+    val options = StxLedger.CallOptions.Empty
+
+    val atCeiling: PR =
+      mining.blockPreparator.runVM(stxWithGas(ceiling).tx, fromAddress, block32Header, worldWithAccount)
+    atCeiling.error shouldBe None
+    atCeiling.gasRefund should be > BigInt(0)
+    val peak: BigInt = ceiling - atCeiling.gasRemaining
+    val usedAfterRefund: BigInt = stxLedger
+      .simulateCall(stxWithGas(ceiling), block32Header, stxLedger.worldAt(block32Header), options, None)
+      .value
+      .txResult
+      .gasUsed
+    usedAfterRefund should be < peak // the refund really lowers UsedGas below what execution consumed
+
+    val estimate: BigInt =
+      stxLedger.estimateCallGas(stxWithGas(ceiling), block32Header, stxLedger.worldAt(block32Header), options).value
+    def runs(gas: BigInt): Boolean =
+      stxLedger
+        .simulateCall(stxWithGas(gas), block32Header, stxLedger.worldAt(block32Header), options, None)
+        .value
+        .txResult
+        .vmError
+        .isEmpty
+    runs(estimate).shouldBe(true) // sufficient for execution
+    runs(estimate - 1).shouldBe(false) // and the least such limit
+
+  /** B-518: geth's search runs the optimistic guess `(MaxUsedGas + 2300) * 64 / 63` first. When it succeeds the search
+    * is confined below it, in far fewer runs than bisecting from the ceiling; the answer is the same minimum.
+    */
+  it should "run the optimistic guess first and so search narrower than the old bisection" taggedAs (
+    UnitTest,
+    StateTest
+  ) in {
+    val needed = BigInt(50000)
+    var runsCounted = 0
+    def fails(g: BigInt): Boolean =
+      runsCounted += 1
+      g < needed
+    val ceiling = BigInt(30000000)
+    val guess = (BigInt(49000) + StxLedger.CallStipend) * 64 / 63 // 52114, above `needed`
+    StxLedger.estimateSearch(BigInt(20999), ceiling, guess)(fails).shouldBe(needed)
+    val withGuess = runsCounted
+
+    runsCounted = 0
+    StxLedger.binaryChop(BigInt(21000), ceiling)(g => if fails(g) then Some(()) else None).shouldBe(needed)
+    val oldBisection = runsCounted
+
+    runsCounted = 0
+    StxLedger.estimateSearch(BigInt(20999), ceiling, guess)(fails)
+    withGuess.should(be < oldBisection)
+    // a failing guess raises lo and still finds the same minimum
+    StxLedger.estimateSearch(BigInt(20999), ceiling, BigInt(40000))(g => g < needed).shouldBe(needed)
+    // a guess at or above hi is ignored
+    StxLedger.estimateSearch(BigInt(20999), BigInt(60000), BigInt(70000))(g => g < needed).shouldBe(needed)
+  }
+
   /** go-ethereum `gasestimator.Estimate` (gasestimator.go:139-143) returns any failure at the ceiling that is not
     * `ErrOutOfGas`. At the ceiling below, a pre-Homestead CREATE runs its init code but cannot pay the 200,000 deposit
     * for 1,000 bytes: go-ethereum's (and core-geth's) `create` returns `ErrCodeStoreOutOfGas` as the message's `vmerr`
@@ -185,6 +259,61 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
       com.chipprbots.ethereum.jsonrpc.CallErrors.vmErrorMessage(error)
     } shouldBe Some("contract creation code storage out of gas")
 
+  /** B-173: the trace endpoints tell the tracer what go-ethereum's `create` hands its deferred `captureEnd`: for a
+    * pre-Homestead creation short of its code deposit, `ErrCodeStoreOutOfGas`, though the frame is a consensus success.
+    * The top-level frame on a replay (`simulateTransactionWithTracer`) and on a traced call (`simulateCall`), and a
+    * CREATE inside a frame (the VM's call-exit hook) alike.
+    */
+  it should "tell a tracer that a pre-Homestead creation short of its code deposit failed" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new HiveGraphQLScenarioSetup:
+    val shortfall = "contract creation code storage out of gas"
+    val returns1000Bytes: ByteString = ByteString(Hex.decode("6103e86000f3")) // PUSH2 0x03e8, PUSH1 0, RETURN
+    def creation(initCode: ByteString): SignedTransactionWithSender = SignedTransactionWithSender(
+      SignedTransaction(LegacyTransaction(0, GasPrice.Zero, GasAmount(60000), None, 0, initCode), noSignature),
+      fromAddress
+    )
+    def errorOf(tracer: CallTracer): JValue = tracer.getResult \ "error"
+
+    val replayed = new CallTracer(onlyTopCall = false)
+    stxLedger.simulateTransactionWithTracer(
+      creation(returns1000Bytes),
+      block32Header,
+      stxLedger.worldAt(block32Header),
+      replayed
+    )
+    errorOf(replayed) shouldBe JString(shortfall)
+
+    val traced = new CallTracer(onlyTopCall = false)
+    stxLedger
+      .simulateCall(
+        creation(returns1000Bytes),
+        block32Header,
+        stxLedger.worldAt(block32Header),
+        StxLedger.CallOptions.Empty,
+        Some(traced)
+      )
+      .isRight shouldBe true
+    errorOf(traced) shouldBe JString(shortfall)
+
+    // PUSH6 <returns1000Bytes>, PUSH1 0, MSTORE, PUSH1 6, PUSH1 26, PUSH1 0, CREATE, STOP: the inner creation gets all
+    // the gas (Frontier) and cannot pay 200,000 for its 1,000 bytes; the outer one deploys nothing and succeeds
+    val createsShortOne: ByteString = ByteString(Hex.decode("656103e86000f3600052600660" + "1a6000f000"))
+    val nested = new CallTracer(onlyTopCall = false)
+    stxLedger.simulateTransactionWithTracer(
+      creation(createsShortOne),
+      block32Header,
+      stxLedger.worldAt(block32Header),
+      nested
+    )
+    errorOf(nested) shouldBe JNothing
+    (nested.getResult \ "calls") match
+      case JArray(inner :: Nil) =>
+        (inner \ "type") shouldBe JString("CREATE")
+        (inner \ "error") shouldBe JString(shortfall)
+      case other => fail(s"expected one inner CREATE frame, got $other")
+
   /** The message-call side of the same case: `simulateCall` hands the shortfall to the RPC beside the frame's result,
     * and the result is the one block execution's frame gives, a success: `vmError` None, the gas kept. Nothing about it
     * moves onto `TxResult`.
@@ -204,7 +333,7 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
         .toOption
         .get
     outcome.codeDepositShortfall shouldBe true
-    val viaTx: TxResult = stxLedger.simulateTransaction(creation, block32Header, None)
+    val viaTx: TxResult = stxLedger.simulateTransaction(creation, block32Header, stxLedger.worldAt(block32Header))
     (outcome.txResult.vmError, outcome.txResult.gasUsed, outcome.txResult.vmReturnData, outcome.txResult.logs) shouldBe
       ((None, viaTx.gasUsed, viaTx.vmReturnData, viaTx.logs))
     outcome.txResult.gasUsed should be < BigInt(60000)
@@ -284,7 +413,11 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
     val executionResult: TxResult =
       mining.blockPreparator.executeTransaction(stx, fromAddress, genesisHeader, worldWithAccount)
     val estimationResult: BigInt =
-      stxLedger.binarySearchGasEstimation(SignedTransactionWithSender(stx, fromAddress), genesisHeader, None)
+      stxLedger.binarySearchGasEstimation(
+        SignedTransactionWithSender(stx, fromAddress),
+        genesisHeader,
+        stxLedger.worldAt(genesisHeader)
+      )
 
     estimationResult shouldEqual executionResult.gasUsed
 
@@ -326,15 +459,42 @@ class StxLedgerSpec extends AnyFlatSpec with Matchers with Logger:
       * MPTexception.RootNotFound
       */
 
-    assertThrows[MPTException](stxLedger.simulateTransaction(stxFromAddress, header, None))
+    assertThrows[MPTException](stxLedger.simulateTransaction(stxFromAddress, header, stxLedger.worldAt(header)))
 
     /** Solution is to return this ReadOnlyWorldStateProxy from `ledger.prepareBlock` along side with preparedBlock and
       * perform simulateTransaction on this world.
       */
     val result: TxResult =
-      stxLedger.simulateTransaction(stxFromAddress, header, Some(preparedWorld))
+      stxLedger.simulateTransaction(stxFromAddress, header, preparedWorld)
 
     result.vmError shouldBe None
+
+  // B-230: an eth_call or an estimate that deploys a contract left its code in the code store, so an RPC user could grow
+  // the database without bound. The code stays in the call's world.
+  it should "leave the code store as it was after an eth_call or an estimate that deploys a contract" taggedAs (
+    UnitTest,
+    StateTest
+  ) in new ScenarioSetup:
+    // PUSH4 0xdeadbeef PUSH1 0 MSTORE PUSH1 4 PUSH1 28 RETURN: deploys the 4 bytes deadbeef
+    val initCode: ByteString = ByteString(Hex.decode("63deadbeef6000526004601cf3"))
+    val runtime: ByteString = ByteString(Hex.decode("deadbeef"))
+    val runtimeHash: ByteString = com.chipprbots.ethereum.crypto.kec256(runtime)
+    val tx: LegacyTransaction = LegacyTransaction(0, GasPrice.Zero, lastBlockGasLimit, None, 0, initCode)
+    val stx: SignedTransactionWithSender =
+      SignedTransactionWithSender(SignedTransaction(tx, noSignature), fromAddress)
+    val codeStore = storagesInstance.storages.evmCodeStorage
+
+    val result: TxResult = stxLedger.simulateTransaction(stx, genesisHeader, stxLedger.worldAt(genesisHeader))
+    result.vmError shouldBe None
+    codeStore.get(runtimeHash) shouldBe None
+    // it did deploy, in its own world; and persisting that world, as eth_simulateV1, a trace replay and a build do
+    // with theirs, still writes nothing
+    val persisted: InMemoryWorldStateProxy = InMemoryWorldStateProxy.persistState(result.worldState)
+    persisted.deployedCode.get(runtimeHash) shouldBe Some(runtime)
+    codeStore.get(runtimeHash) shouldBe None
+
+    stxLedger.binarySearchGasEstimation(stx, genesisHeader, stxLedger.worldAt(genesisHeader)) should be > BigInt(0)
+    codeStore.get(runtimeHash) shouldBe None
 
   // migrated from old LedgerSpec
   "binaryChop" should "properly find minimal required gas limit to execute transaction" in new BinarySimulationChopSetup:
@@ -376,7 +536,6 @@ trait ScenarioSetup extends EphemBlockchainTestSetup:
     accountStartNonce = UInt256.Zero,
     monetaryPolicyConfig = MonetaryPolicyConfig(5, 0, 0, 0),
     daoForkConfig = None,
-    gasTieBreaker = false,
     ethCompatibleStorage = true,
     bootstrapNodes = Set()
   )
@@ -437,6 +596,8 @@ trait ScenarioSetup extends EphemBlockchainTestSetup:
       .saveAccount(existingAddress, existingAccount)
       .saveCode(existingAddress, failingCode)
   )
+  // the genesis state is committed: its code too, which persisting a world does not write (B-230)
+  InMemoryWorldStateProxy.deployedCodeWrite(worldWithAccount).foreach(_.commit())
 
   val someGenesisBlock: Array[Byte] =
     Hex.decode(
@@ -483,7 +644,6 @@ trait HiveGraphQLScenarioSetup extends ScenarioSetup:
     accountStartNonce = UInt256.Zero,
     monetaryPolicyConfig = MonetaryPolicyConfig(5, 0, 0, 0),
     daoForkConfig = None,
-    gasTieBreaker = false,
     ethCompatibleStorage = true,
     bootstrapNodes = Set()
   )

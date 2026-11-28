@@ -36,7 +36,17 @@ object SyncCommonItSpecUtils:
         maxMptComponentsPerMessage = random.nextInt(100, 201)
       )
 
-  final case class FakePeerCustomConfig(hostConfig: HostConfig)
+  /** @param networkId
+    *   what the peer's STATUS says, and what it demands of the STATUS it receives (a peer on another one is dropped)
+    * @param validateStateRoots
+    *   whether the peer's block import checks a block's state root and gas used against its own execution of the block.
+    *   The harness default accepts any root; see `ValidatorsExecutorChecksStateRoot`.
+    */
+  final case class FakePeerCustomConfig(
+      hostConfig: HostConfig,
+      networkId: Long = 1L,
+      validateStateRoots: Boolean = false
+  )
 
   object FakePeerCustomConfig:
     val defaultConfig: FakePeerCustomConfig = FakePeerCustomConfig(HostConfig(200, 200, 200, 200))

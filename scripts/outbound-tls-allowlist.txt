@@ -1,0 +1,23 @@
+# Spec 030 FR-045 (slice 7): where TLS for an outbound client, or an outbound connection, is made outside the outbound
+# factory (tls/OutboundTls), and why each is allowed.
+#
+# Checked by scripts/check-outbound-tls.sh, which says what each construct is. Run it with --inventory to see what the
+# tree holds.
+#
+#   construct  count  file  reason
+#
+# The count is exact: more uses fail the check, and so do fewer. A reason starts with one of:
+#   FACTORY   the factory itself, or the listeners' server side (tls/)
+#   USES      a client that takes its TLS from the factory and passes it in
+#   PLAIN     a connection that makes no TLS (http, or a socket)
+#   PROBE     the dashboard's endpoint probe, which reports the certificate it sees without verifying it
+
+ssl-context 1 src/main/scala/com/chipprbots/ethereum/tls/OutboundTls.scala FACTORY the client context of a profile, from its loaded material
+ssl-context 1 src/main/scala/com/chipprbots/ethereum/tls/TlsContexts.scala FACTORY the listeners' server contexts, with the reloading managers
+https-context 1 src/main/scala/com/chipprbots/ethereum/tls/OutboundTls.scala FACTORY the Pekko client context, host names checked on every engine
+https-context 1 src/main/scala/com/chipprbots/ethereum/tls/TlsServerEngine.scala FACTORY the listeners' server connection context
+url-open 1 src/main/scala/com/chipprbots/ethereum/tls/OutboundTls.scala FACTORY openHttpsStream: https only, the profile's socket factory, https-only redirects
+pekko-request 1 src/main/scala/com/chipprbots/ethereum/jsonrpc/client/RpcClient.scala USES the faucet's client of the node, on FaucetRpcClientTls's context
+pekko-request 1 src/main/scala/com/chipprbots/ethereum/consensus/pow/WorkNotifier.scala USES the work notifier, on the context of mining.notify-tls-profile
+ssl-context 1 src/main/scala/com/chipprbots/ethereum/console/ops/EndpointProbe.scala PROBE the recording trust manager: reports the listener's certificate, verifies nothing, says so (FR-046)
+jdk-client 1 src/main/scala/com/chipprbots/ethereum/console/ops/EndpointProbe.scala PROBE the probe's plain and recording client; a tui.probe.tls-profile client comes from the factory

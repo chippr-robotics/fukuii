@@ -13,10 +13,10 @@ import scala.util.Failure
 import scala.util.Success
 import scala.util.Try
 
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.crypto.KzgCellProofs
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
-import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.Address
@@ -81,11 +81,15 @@ class EthTxService(
     val scheduler: Scheduler,
     val rpcTxSubmission: RpcTxSubmission = RpcTxSubmission.Default,
     // NodeBuilder passes the node's one oracle (shared with EthBlocksService); tests get their own
-    gasPriceOracleOpt: Option[GasPriceOracle] = None
+    gasPriceOracleOpt: Option[GasPriceOracle] = None,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 )(implicit val blockchainConfig: BlockchainConfig)
     extends TransactionPicker
     with ResolveBlock
     with Logger:
+
+  // "safe" and "finalized" are the consensus client's, as in EthBlocksService (B-489)
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
   import EthTxService.*
   // blockchainConfig is taken as an implicit constructor parameter so multi-instance
   // runtime callers (NodeBuilder) automatically supply the per-instance config in scope
@@ -134,26 +138,30 @@ class EthTxService(
     val eventualMaybeData = getTransactionDataByHash(req.txHash)
     eventualMaybeData.map(txResponse => Right(GetTransactionByHashResponse(txResponse.map(TransactionResponse(_)))))
 
+  /** Chain first, then the pool, as go-ethereum's `GetTransaction` then `GetPoolTransaction` do (internal/ethapi
+    * GetTransactionByHash). The chain answer needs the lookup's block to be canonical at its number
+    * ([[CanonicalTxLookup]]): a stale lookup left by a reorg falls through to the pool, and to null if the pool lacks
+    * it.
+    */
   private def getTransactionDataByHash(txHash: ByteString): IO[Option[TransactionData]] =
-    val maybeTxPendingResponse: IO[Option[TransactionData]] = getTransactionsFromPool.map {
-      _.pendingTransactions.map(_.stx.tx).find(_.hash.value == txHash).map(TransactionData(_))
-    }
-
-    maybeTxPendingResponse.map { txPending =>
-      txPending.orElse {
-        for
-          TransactionLocation(blockHash, txIndex) <- transactionMappingStorage.get(txHash)
-          Block(header, body) <- blockchainReader.getBlockByHash(BlockHash(blockHash))
-          stx <- body.transactionList.lift(txIndex)
-        yield TransactionData(stx, Some(header), Some(txIndex))
-      }
+    IO(CanonicalTxLookup(transactionMappingStorage, blockchainReader, txHash)).flatMap {
+      case Some(CanonicalTxLookup.Found(Block(header, body), txIndex)) =>
+        IO.pure(Some(TransactionData(body.transactionList(txIndex), Some(header), Some(txIndex))))
+      case None =>
+        getTransactionsFromPool.map {
+          _.pendingTransactions.map(_.stx.tx).find(_.hash.value == txHash).map(TransactionData(_))
+        }
     }
 
   def getTransactionReceipt(req: GetTransactionReceiptRequest): ServiceResponse[GetTransactionReceiptResponse] =
     IO {
       val result: Option[TransactionReceiptResponse] = for
-        TransactionLocation(blockHash, txIndex) <- transactionMappingStorage.get(req.txHash)
-        Block(header, body) <- blockchainReader.getBlockByHash(BlockHash(blockHash))
+        CanonicalTxLookup.Found(Block(header, body), txIndex) <- CanonicalTxLookup(
+          transactionMappingStorage,
+          blockchainReader,
+          req.txHash
+        )
+        blockHash = header.hash.value
         // Only surface receipts for CANONICAL transactions. Under engine-API, a block
         // may be stored (with receipts + tx-location mapping) immediately after newPayload
         // but not promoted to canonical until a subsequent forkchoiceUpdated — hive's
@@ -162,7 +170,6 @@ class EthTxService(
         // index, AND (b) its number is <= the client's best-block pointer (i.e. FCU has
         // advanced past it). (a) alone is true right after newPayload's storeBlock but
         // (b) flips only when the subsequent FCU updates saveBestKnownBlocks.
-        _ <- blockchainReader.getBlockHeaderByNumber(header.number.value).filter(_.hash.value == blockHash)
         bestNum = blockchainReader.getBestBlockNumber if header.number.value <= bestNum
         stx <- body.transactionList.lift(txIndex)
         receipts <- blockchainReader.getReceiptsByHash(BlockHash(blockHash))
@@ -317,16 +324,19 @@ class EthTxService(
 
   private def admitAtHead(stx: SignedTransaction, sidecar: Option[BlobSidecar]): Either[JsonRpcError, LocalAdmission] =
     blockchainReader.getBestBlockHeader match
-      case None => Left(JsonRpcError.LogicError("cannot validate transaction: no chain head"))
+      case None       => Left(JsonRpcError.LogicError("cannot validate transaction: no chain head"))
       case Some(head) =>
+        // In a scope of reads (spec 018, B-238): the head read above may be a block the disk has moved past since, whose
+        // state is handed out only inside one; and a view that moves under the read is read again.
+        def admitted = TxAdmission.validateLocal(
+          stx,
+          sidecar,
+          head,
+          address => blockchainReader.accountAt(head, address)
+        )
         try
-          TxAdmission
-            .validateLocal(
-              stx,
-              sidecar,
-              head,
-              address => blockchainReader.accountAt(head, address)
-            )
+          StateRead
+            .attemptingOrThrow(admitted)
             .left
             .map {
               case TxAdmission.Rejection.InitCodeTooLarge(size, max) =>
@@ -457,24 +467,25 @@ class EthTxService(
   def pendingTransactionsFrom(accounts: Set[Address]): ServiceResponse[OwnPendingTransactionsResponse] =
     getTransactionsFromPool.map { resp =>
       val own = resp.pendingTransactions.filter(pt => accounts.contains(pt.stx.senderAddress))
-      val head = blockchainReader.getBestBlockHeader
-      def stateNonce(sender: Address): BigInt =
-        head
-          .flatMap(header => blockchainReader.accountAt(header, sender))
-          .map(_.nonce.toBigInt)
-          .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
-      val executable: Map[Address, Set[BigInt]] = own
-        .groupBy(_.stx.senderAddress)
-        .map { case (sender, txs) =>
-          sender -> TxAdmission.executableRun(txs.map(_.stx.tx.tx), stateNonce(sender)).map(_.nonce).toSet
-        }
-      Right(
+      // the head's state, read in a scope (spec 018, B-238): the disk may have moved past the head read here
+      StateRead.attempting {
+        val head = blockchainReader.getBestBlockHeader
+        def stateNonce(sender: Address): BigInt =
+          head
+            .flatMap(header => blockchainReader.accountAt(header, sender))
+            .map(_.nonce.toBigInt)
+            .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+        val executable: Map[Address, Set[BigInt]] = own
+          .groupBy(_.stx.senderAddress)
+          .map { case (sender, txs) =>
+            sender -> TxAdmission.executableRun(txs.map(_.stx.tx.tx), stateNonce(sender)).map(_.nonce).toSet
+          }
         OwnPendingTransactionsResponse(
           own
             .filter(pt => executable.get(pt.stx.senderAddress).exists(_.contains(pt.stx.tx.tx.nonce)))
             .map(pt => TransactionResponse(pt.stx.tx))
         )
-      )
+      }
     }
 
   /** The sender's next nonce with the pool's executable transactions applied: go-ethereum `TxPool.PoolNonce`
@@ -494,10 +505,13 @@ class EthTxService(
         PendingTransactionsManager.GetPendingTransactionsReq(_)
       )
       .map { resp =>
-        val stateNonce = blockchainReader
-          .accountAt(head, address)
-          .map(_.nonce.toBigInt)
-          .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+        // in a scope (spec 018, B-238): `head` may be a block the disk has moved past since the caller read it
+        val stateNonce = StateRead.attemptingOrThrow(
+          blockchainReader
+            .accountAt(head, address)
+            .map(_.nonce.toBigInt)
+            .getOrElse(blockchainConfig.accountStartNonce.toBigInt)
+        )
         EthTxService.nextPoolNonce(resp.pendingTransactions, address, stateNonce)
       }
 

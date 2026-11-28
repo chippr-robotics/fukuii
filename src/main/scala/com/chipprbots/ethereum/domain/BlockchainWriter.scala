@@ -40,6 +40,11 @@ class BlockchainWriter(
   /** Whether this node holds its state on the unified layout, where the head moves with the state or not at all. */
   def holdsStateInPlace: Boolean = pathState.isDefined
 
+  /** The position store's repairs, where this node holds its state on the unified layout: what the importer's on-demand
+    * fetch writes through (spec 018 C5b, data-model 7.5).
+    */
+  def positionRepairs: Option[com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs] = pathState
+
   /** Refuses, on the unified layout, a write of the best block or the index of blocks by number that does not move the
     * state with it: the state anchor and the best block are one block there (spec 018 data-model 5.1, I1), and only a
     * move of the head ([[com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage.moveHead]], with
@@ -120,6 +125,13 @@ class BlockchainWriter(
     blockHeadersStorage
       .remove(blockHash.value)
       .and(blockBodiesStorage.remove(blockHash.value))
+
+  /** The delete of the entry of the index of blocks by number at `number`, for a caller that removes the block it names
+    * (`EngineApiService`'s removal of an invalid block, B-511), on the hash layout, under the head's lock.
+    */
+  def removeBlockNumberMapping(number: BigInt): DataSourceBatchUpdate =
+    refuseOnTheUnifiedLayout(s"removeBlockNumberMapping at block $number")
+    blockNumberMappingStorage.remove(number)
 
   def storeBlockHeader(blockHeader: BlockHeader): DataSourceBatchUpdate =
     val hash = blockHeader.hash
@@ -226,20 +238,110 @@ class BlockchainWriter(
       batch.and(appStateStorage.putBestBlockInfo(BlockInfo(targetHash.value, targetNumber))).commit()
 
   /** Rewrite part of the canonical number→hash index in ONE atomic batch: write `put` (and re-point the transaction
-    * locations of those blocks at them), delete the `remove` heights, and move the best block if `newBest` is given.
+    * locations of those blocks at them), delete the `remove` heights, move the best block if `newBest` is given, and
+    * delete the lookups of the transactions the blocks in `left` include and the blocks in `chain` do not.
     *
     * The index half of core-geth's `reorg()` + `writeHeadBlock` (core/blockchain.go): after it, the index is exactly
-    * the head's ancestry — no entry from another chain below the head, none at all above it. `ConsensusImpl.reorganise`
-    * uses it both to adopt a new head and to put the old head's entries back when it keeps the old head.
+    * the head's ancestry — no entry from another chain below the head, none at all above it — and no transaction is
+    * looked up in a block that left the chain (`types.HashDifference(deletedTxs, addedTxs)`, then
+    * `rawdb.DeleteTxLookupEntry`; B-088). `ConsensusImpl.reorganise` uses it both to adopt a new head and to put the
+    * old head's entries back when it keeps the old head.
+    *
+    * Under [[CanonicalHeadLock]], as the fork choice's [[promoteToCanonicalHead]]: `admit` and the read of the entries
+    * above `clearAbove` are made there, with the write, so no fork choice lands between them (B-511).
+    *
+    * @param left
+    *   the blocks the rewrite takes off the chain, as the caller read them before anything overwrote the index: on the
+    *   hash layout the executed blocks of a branch have already written their own entries over the heights they share
+    *   with the old chain, so the index no longer says which blocks they replaced
+    * @param chain
+    *   the blocks of the chain the index names afterwards, above the point where `left` leaves it: a transaction one of
+    *   them includes keeps its lookup, which names the block of `chain` that includes it
+    * @param clearAbove
+    *   every entry above this height is deleted too, up to the first height that has none, and the blocks they name are
+    *   taken off the chain as `left`'s are: go-ethereum `reorg`, "Delete all hash markers that are not part of the new
+    *   canonical chain", as [[canonicalHeadUpdate]] deletes them. `engine_newPayload` writes the entry of a payload
+    *   that extends the index above the best block, so the old best block is not where the old chain's entries end
+    *   (B-506)
+    * @param admit
+    *   asked first: a reason given refuses the rewrite, and nothing is written
+    * @param beforeTheWrite
+    *   run once the rewrite is admitted, before its batch is written: the reference counts of the blocks it makes
+    *   canonical again are put back there (`ReorgStateHandler.readoptBlockStates`), so that a stop between the two
+    *   leaves them counted while not indexed, which only keeps nodes longer, and never indexed while not counted, which
+    *   lets the prune delete nodes the head uses (B-511, vault). Counted twice it is not: a block's record says whether
+    *   its changes are applied, and a second put-back finds them so
+    * @return
+    *   how many transaction lookups were deleted, and the entries the batch deleted or replaced, as read with it under
+    *   the lock; or the reason `admit` gave
     */
   def rewriteCanonicalIndex(
       put: Seq[(BigInt, BlockHash)],
       remove: Seq[BigInt],
       newBest: Option[(BlockHash, BigInt)],
-      reader: BlockchainReader
-  ): Unit =
+      left: Seq[BlockHash],
+      chain: Seq[BlockHash],
+      reader: BlockchainReader,
+      clearAbove: Option[BigInt] = None,
+      admit: () => Option[String] = () => None,
+      beforeTheWrite: () => Unit = () => ()
+  ): Either[String, IndexRewrite] =
     refuseOnTheUnifiedLayout("rewriteCanonicalIndex")
-    canonicalIndexUpdate(put, remove, newBest, reader).commit()
+    CanonicalHeadLock.held("a rewrite of the index of blocks by number") {
+      admit() match
+        case Some(refused) => Left(refused)
+        case None =>
+          val cleared = clearAbove.fold(List.empty[(BigInt, BlockHash)])(indexAbove(_, reader))
+          val removing = (remove ++ cleared.map(_._1)).distinct
+          // what the index names now at the heights the batch replaces or deletes
+          val removed: List[(BigInt, BlockHash)] =
+            (put.flatMap((n, hash) => reader.getCanonicalHashByNumber(n).filterNot(_ == hash).map(n -> _)) ++
+              removing.flatMap(n => reader.getCanonicalHashByNumber(n).map(n -> _))).toList.distinct
+          val (staleLookups, dropped) = staleLookupRemoval(left ++ cleared.map(_._2), chain, reader)
+          beforeTheWrite()
+          canonicalIndexUpdate(put, removing, newBest, reader).and(staleLookups).commit()
+          Right(IndexRewrite(dropped, removed))
+    }
+
+  /** The entries of the index above `number`, from `number + 1` up to the first height that has none, in order: what a
+    * writer of the head's ancestry deletes above it (go-ethereum `reorg`), and [[canonicalHeadUpdate]] reads.
+    */
+  def indexAbove(number: BigInt, reader: BlockchainReader): List[(BigInt, BlockHash)] =
+    LazyList
+      .iterate(number + 1)(_ + 1)
+      .map(n => reader.getCanonicalHashByNumber(n).map(n -> _))
+      .takeWhile(_.isDefined)
+      .flatten
+      .toList
+
+  /** The deletes of the lookups of the transactions the `left` blocks include and the `chain` blocks do not, and how
+    * many: go-ethereum `reorg`, `types.HashDifference(deletedTxs, addedTxs)`. The one implementation for every writer
+    * that takes blocks off the index. A block whose body is not stored contributes no transaction.
+    *
+    * Only a lookup that names one of the `left` blocks is deleted. go-ethereum's `deletedTxs` come from the old head's
+    * own chain down to the common block, so none of them can also be canonical below the fork; the entries cleared
+    * above a head can belong to a chain that forked lower, whose transactions a canonical block below the fork may
+    * include too, and that block's lookup stays (B-506).
+    */
+  private def staleLookupRemoval(
+      left: Seq[BlockHash],
+      chain: Seq[BlockHash],
+      reader: BlockchainReader
+  ): (DataSourceBatchUpdate, Int) =
+    def txHashes(blocks: Seq[BlockHash]): Set[ByteString] =
+      blocks.flatMap(reader.getBlockBodyByHash).flatMap(_.transactionList.map(_.hash.value)).toSet
+    val leftTxs = txHashes(left)
+    val leftBlocks: Set[ByteString] = left.map(_.value).toSet
+    val stale =
+      if leftTxs.isEmpty then leftTxs
+      else
+        (leftTxs -- txHashes(chain)).filter(tx =>
+          transactionMappingStorage.get(tx).forall(l => leftBlocks(l.blockHash))
+        )
+    val removal = stale.foldLeft(transactionMappingStorage.emptyBatchUpdate) { (acc, tx) =>
+      acc.and(transactionMappingStorage.remove(tx))
+    }
+    (removal, stale.size)
 
   /** The batch [[rewriteCanonicalIndex]] commits, uncommitted, so a caller can add to the same atomic write. */
   private def canonicalIndexUpdate(
@@ -265,12 +367,12 @@ class BlockchainWriter(
     * THE BRANCH. Walk back from `head` along parent hashes to the first height AT OR BELOW the current best block whose
     * entry already names the walked block. Up to the best block the index is the best block's ancestry, so that is
     * where the two chains meet and nothing below it needs rewriting. Above the best block nothing guarantees the index
-    * — `engine_newPayload` writes entries ahead of the head, and the p2p import path's designated-head arm moves the
-    * best block without clearing what lies above it — so a match up there is not trusted: a forkchoiceUpdated back to a
-    * longer chain used to stop at such a leftover entry and keep the other branch's hashes below it. Every walked block
-    * gets its entry and its transaction locations rewritten; without the latter, eth_getTransactionReceipt answers from
-    * the block a side chain re-pointed the transaction at (hive 'Transaction Re-Org, Re-Org to Different Block'). The
-    * walk also ends at a missing header, and at genesis.
+    * — `engine_newPayload` writes entries ahead of the head, and until B-088 the p2p import path's designated-head arm
+    * moved the best block without clearing what lay above it, which a datadir may still hold — so a match up there is
+    * not trusted: a forkchoiceUpdated back to a longer chain used to stop at such a leftover entry and keep the other
+    * branch's hashes below it. Every walked block gets its entry and its transaction locations rewritten; without the
+    * latter, eth_getTransactionReceipt answers from the block a side chain re-pointed the transaction at (hive
+    * 'Transaction Re-Org, Re-Org to Different Block'). The walk also ends at a missing header, and at genesis.
     *
     * ABOVE THE HEAD. Every height from `head + 1` up to the old best block, and on up while the index has an entry
     * there, is deleted: go-ethereum `reorg` "Delete all hash markers that are not part of the new canonical chain". A
@@ -284,9 +386,53 @@ class BlockchainWriter(
     * block that had left the chain.
     *
     * Only the index, the lookups and the best-block pointer move; headers, bodies and receipts stay where they are.
+    *
+    * Under [[CanonicalHeadLock]], read and write alike: a branch being executed and settled holds it, and the fork
+    * choice moves the head from the index that settle leaves, not from one it is about to put back over (B-511).
     */
-  def promoteToCanonicalHead(head: BlockHeader, reader: BlockchainReader): CanonicalMove =
+  def promoteToCanonicalHead(
+      head: BlockHeader,
+      reader: BlockchainReader,
+      beforeTheWrite: CanonicalMove => Unit = _ => ()
+  ): CanonicalMove =
     refuseOnTheUnifiedLayout(s"promoteToCanonicalHead to block ${head.number.value}")
+    CanonicalHeadLock.held(s"a move of the head to block ${head.number.value}")(
+      promoteUnderTheLock(head, reader, beforeTheWrite)
+    )
+
+  /** [[promoteToCanonicalHead]] with the reference counts that follow it, under the head's lock: go-ethereum's move to
+    * a block it has with its state, `SetCanonical` for a fork choice and `writeKnownBlock` for an import, neither of
+    * which executes the block. A block is applied exactly while it is canonical (`ReorgStateHandler`): the blocks the
+    * move adopts are put back before its batch is written, and those it drops are taken out after, as
+    * `ConsensusImpl.settleHead` does. A stop between them leaves a block counted that is not indexed, which only keeps
+    * nodes longer, never one indexed that is not counted, whose nodes the prune would delete under the head (B-511,
+    * vault). Both are idempotent, so the move made again after a stop counts nothing twice. Hash layout only, as
+    * [[promoteToCanonicalHead]] is. `what` names the move in the head lock's WARN.
+    */
+  def promoteToCanonicalHeadCounted(
+      head: BlockHeader,
+      reader: BlockchainReader,
+      reorgState: com.chipprbots.ethereum.consensus.ReorgStateHandler,
+      what: => String
+  ): CanonicalMove =
+    CanonicalHeadLock.held(what) {
+      val move = promoteToCanonicalHead(
+        head,
+        reader,
+        beforeTheWrite = planned => reorgState.readoptBlockStates(planned.adopted.map { case (n, h) => (n, h.value) })
+      )
+      reorgState.abandonBlockStates(move.dropped.map { case (n, h) => (n, h.value) })
+      move
+    }
+
+  /** `beforeTheWrite` is told the move before its batch is written, as [[rewriteCanonicalIndex]]'s is: the fork choice
+    * puts back the reference counts of the blocks it adopts there (B-511, vault).
+    */
+  private def promoteUnderTheLock(
+      head: BlockHeader,
+      reader: BlockchainReader,
+      beforeTheWrite: CanonicalMove => Unit
+  ): CanonicalMove =
     val update = canonicalHeadUpdate(head, reader)
     // A plain extension rewrites only heights above the old best and clears nothing: not worth a line.
     if update.reorganises then
@@ -299,6 +445,7 @@ class BlockchainWriter(
         update.cleared,
         update.droppedTxLookups
       )
+    beforeTheWrite(update.move)
     update.batch.commit()
     update.move
 
@@ -335,21 +482,15 @@ class BlockchainWriter(
       put.flatMap { case (number, hash) =>
         reader.getCanonicalHashByNumber(number).filterNot(_ == hash).map(number -> _)
       } ++ remove.flatMap(n => reader.getCanonicalHashByNumber(n).map(n -> _))
-    val dropped: Seq[BlockHash] = droppedAt.map(_._2)
-    def txHashes(blocks: Seq[BlockHash]): Set[ByteString] =
-      blocks.flatMap(reader.getBlockBodyByHash).flatMap(_.transactionList.map(_.hash.value)).toSet
-    val staleLookups = txHashes(dropped) -- txHashes(put.map(_._2))
+    val (staleLookups, droppedTxLookups) = staleLookupRemoval(droppedAt.map(_._2), put.map(_._2), reader)
 
-    val batch = canonicalIndexUpdate(put, remove, Some((head.hash, headNumber)), reader)
-      .and(staleLookups.foldLeft(transactionMappingStorage.emptyBatchUpdate) { (acc, tx) =>
-        acc.and(transactionMappingStorage.remove(tx))
-      })
+    val batch = canonicalIndexUpdate(put, remove, Some((head.hash, headNumber)), reader).and(staleLookups)
     CanonicalHeadUpdate(
       batch = batch,
       move = CanonicalMove(adopted = put, dropped = droppedAt),
       previousBest = oldBest,
       cleared = remove.size,
-      droppedTxLookups = staleLookups.size,
+      droppedTxLookups = droppedTxLookups,
       reorganises = remove.nonEmpty || put.exists(_._1 <= oldBest)
     )
 
@@ -372,6 +513,10 @@ class BlockchainWriter(
     * @param admit
     *   why the move as planned is not to be made ([[PathStateStorage.moveHead]]'s `admit`): asked before anything is
     *   written
+    * @param forkChoice
+    *   a consensus client's fork choice, which is made while another thread's adoption is open; any other move is
+    *   refused then, with a [[com.chipprbots.ethereum.db.storage.pathstate.StateBusy]] ([[PathStateStorage.moveHead]]'s
+    *   `forkChoice`, B-294, B-462)
     * @throws IllegalStateException
     *   on the hash layout, which holds the state of every block and has no head of the state to move
     * @throws com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
@@ -384,7 +529,8 @@ class BlockchainWriter(
       reader: BlockchainReader,
       refuse: HeadMovePlan.Chunk => Option[String] = _ => None,
       finalized: Option[FinalizedBlock] = None,
-      admit: HeadMovePlan => Option[String] = _ => None
+      admit: HeadMovePlan => Option[String] = _ => None,
+      forkChoice: Boolean = false
   ): PathStateStorage.MoveOutcome =
     val state = pathState.getOrElse(
       throw new IllegalStateException(
@@ -409,7 +555,8 @@ class BlockchainWriter(
         Some(canonicalHeadUpdate(head, reader).batch)
       ,
       finalized,
-      admit
+      admit,
+      forkChoice
     )
 
   /** '''START only''': the batch that makes the index of blocks by number the ancestry of `held`, the block whose state
@@ -467,9 +614,8 @@ class BlockchainWriter(
     // keeps its lookup, and is pointed at the ancestor that includes it (beacon), not only at a rewritten one.
     val reincluded: Seq[(BigInt, BlockHash)] =
       put.headOption.fold(Seq.empty[(BigInt, BlockHash)])((lowest, _) => chain.filter(_._1 >= lowest))
-    def txHashes(blocks: Seq[BlockHash]): Set[ByteString] =
-      blocks.flatMap(reader.getBlockBodyByHash).flatMap(_.transactionList.map(_.hash.value)).toSet
-    val staleLookups = txHashes((replaced ++ removed).map(_._2)) -- txHashes(reincluded.map(_._2))
+    val (staleLookups, droppedTxLookups) =
+      staleLookupRemoval((replaced ++ removed).map(_._2), reincluded.map(_._2), reader)
     val putHashes = put.map(_._2).toSet
     val relocated =
       reincluded.filterNot((_, hash) => putHashes(hash)).foldLeft(transactionMappingStorage.emptyBatchUpdate) {
@@ -483,10 +629,8 @@ class BlockchainWriter(
       removed.map(_._1),
       Option.when(bestMoves)((held.hash, heldNumber)),
       reader
-    ).and(staleLookups.foldLeft(transactionMappingStorage.emptyBatchUpdate) { (acc, tx) =>
-      acc.and(transactionMappingStorage.remove(tx))
-    }).and(relocated)
-    HeldBlockIndex(batch, oldBest, put, replaced, removed, staleLookups.size, bestMoves, capped)
+    ).and(staleLookups).and(relocated)
+    HeldBlockIndex(batch, oldBest, put, replaced, removed, droppedTxLookups, bestMoves, capped)
 
   /** The state on the unified layout takes no further write ([[PathStateStorage.failClosed]]): for a caller that found
     * this datadir's own changeset records corrupt. Nothing on the hash layout.
@@ -512,12 +656,17 @@ class BlockchainWriter(
 
   /** `body` with the changeset records of every block above `fork` kept from retention on the unified layout
     * ([[PathStateStorage.withRecordsHeld]]): for an adoption that moves the head to a branch before the branch is
-    * settled, and may have to move it back. Just `body` on the hash layout.
+    * settled, and may have to move it back. Only while the head is `expectedHead` still, the head the caller read and
+    * weighed its branch against: otherwise it is refused, as busy, with nothing held (B-463). Just `body` on the hash
+    * layout.
     */
-  def withRecordsHeldAbove[A](fork: BlockHeader)(body: => A): A =
+  def withRecordsHeldAbove[A](fork: BlockHeader, expectedHead: BlockHeader)(body: => A): A =
     pathState match
       case Some(state) =>
-        state.withRecordsHeld(BlockRef(fork.hash.value, fork.number.value, fork.stateRoot.value))(body)
+        state.withRecordsHeld(
+          BlockRef(fork.hash.value, fork.number.value, fork.stateRoot.value),
+          Some(BlockRef(expectedHead.hash.value, expectedHead.number.value, expectedHead.stateRoot.value))
+        )(body)
       case None => body
 
   /** Whether the state of `header`'s block is held on the unified layout, so that a block can be executed on it
@@ -556,6 +705,13 @@ class BlockchainWriter(
   * `ReorgStateHandler`), which the index write cannot do atomically.
   */
 final case class CanonicalMove(adopted: Seq[(BigInt, BlockHash)], dropped: Seq[(BigInt, BlockHash)])
+
+/** What [[BlockchainWriter.rewriteCanonicalIndex]] wrote: how many transaction lookups it deleted (`droppedTxLookups`),
+  * and the entries it deleted or replaced (`removed`, by height and the hash the index named there), read with the
+  * write under the head's lock. The caller takes those blocks' state changes out
+  * (`ReorgStateHandler.abandonBlockStates`): exactly what left the index, not what was read before the branch ran.
+  */
+final case class IndexRewrite(droppedTxLookups: Int, removed: List[(BigInt, BlockHash)])
 
 /** The batch that makes a block the canonical head ([[BlockchainWriter.canonicalHeadUpdate]]), not yet written.
   *

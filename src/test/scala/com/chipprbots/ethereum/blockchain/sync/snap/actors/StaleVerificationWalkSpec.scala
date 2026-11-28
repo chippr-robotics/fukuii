@@ -119,7 +119,9 @@ class StaleVerificationWalkSpec extends ScalaTestWithActorTestKit() with AnyFlat
         awaitQueuedWalk(coordinator, executor) // the stale completion was processed and the fresh walk of B queued
         executor.runPending() // the fresh walk of B
         pendingTasks(coordinator) shouldBe 1 // B's absent storage root is queued for healing (mailbox barrier)
-        controller.expectNoMessage(1.second) // and no StateHealingComplete was declared
+        // and no StateHealingComplete was declared: the barrier above shows B's walk was fully handled, and the
+        // coordinator declares completion in that same handler, so a declaration would already be in the probe
+        controller.expectNoMessage(Duration.Zero)
       finally testKit.stop(coordinator)
     }
 

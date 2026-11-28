@@ -18,6 +18,7 @@ This directory contains operational runbooks for running and maintaining Fukuii 
 - **[Checkpoint Service for Rapid Sync](checkpoint-service.md)** - Enable rapid blockchain synchronization with bootstrap checkpoints and SNAP sync
 
 ### Operations
+- **[Olympia EIP-2935 Deployment](olympia-eip2935-deployment.md)** - Send EIP-2935's history-contract deploy transaction on Mordor and ETC mainnet before Olympia
 - **[Mining Operations](mining-operations.md)** - Mining configuration, start/stop control, monitoring, and external miner integration
 - **[Network Management](network-management.md)** - Peer management, blacklist operations, and network hygiene best practices
 - **[Peering](peering.md)** - Peer discovery, network connectivity, and peering troubleshooting

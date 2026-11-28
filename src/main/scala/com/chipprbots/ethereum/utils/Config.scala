@@ -75,7 +75,21 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
       // - `checkpointSyncDownloadDir`: where to place the downloaded archive. Defaults to datadir.
       checkpointSyncFile: Option[java.nio.file.Path],
       checkpointSyncUrl: Option[String],
-      blockFetcherTickInterval: FiniteDuration = 500.millis
+      // - `checkpointSyncExpectedHash`: the hash the archive's checkpoint block must have (spec 018 E.1 "Trust"). It
+      //   wins over the chain config's pinned `checkpoint-expected-block-hash`; with neither, every archive is refused.
+      checkpointSyncExpectedHash: Option[ByteString] = None,
+      // - `checkpointSyncRetryRefused`: retry an archive this node refused before (spec 018 E.1, "no retry"). Off by
+      //   default: a refused archive is recorded by its id and not run again on a restart.
+      checkpointSyncRetryRefused: Boolean = false,
+      blockFetcherTickInterval: FiniteDuration = 500.millis,
+      // - `backfillStallTimeout`: how long the backfill's cursors may stand still before a gap at or below the SNAP
+      //   pivot is no longer left to it, and a heavier proof-of-work branch over the gap is told to the escalation's
+      //   feed as one over a gap above the pivot is (B-410; `BranchResolution.acrossAGap`). Key
+      //   `sync.backfill-stall-timeout` (sync.conf; this default applies when the key is absent): 30 minutes,
+      //   twenty times the longest wait of one backfill request (peer-response-timeout, 90 s), so a peer drought or a
+      //   restart of the download is not taken for a stall; the watch then still needs the branch to grow past its
+      //   threshold.
+      backfillStallTimeout: FiniteDuration = 30.minutes
   )
 
   object SyncConfig:
@@ -144,7 +158,19 @@ object Config extends InstanceConfig(ConfigFactory.load().getConfig("fukuii"), "
         checkpointSyncUrl = if syncConfig.hasPath("checkpoint-sync-url") then
           val raw = syncConfig.getString("checkpoint-sync-url").trim
           if raw.isEmpty then None else Some(raw)
-        else None
+        else None,
+        checkpointSyncExpectedHash = Option
+          .when(syncConfig.hasPath("checkpoint-sync-expected-hash"))(
+            syncConfig.getString("checkpoint-sync-expected-hash").trim
+          )
+          .filter(_.nonEmpty)
+          .map(BlockchainConfig.parseBlockHash("checkpoint-sync-expected-hash", _)),
+        checkpointSyncRetryRefused =
+          syncConfig.hasPath("checkpoint-sync-retry-refused") && syncConfig.getBoolean("checkpoint-sync-retry-refused"),
+        backfillStallTimeout =
+          if syncConfig.hasPath("backfill-stall-timeout") then
+            syncConfig.getDuration("backfill-stall-timeout").toMillis.millis
+          else 30.minutes
       )
 
   // SyncConfig remains here as it's a case class used as a type throughout the codebase.

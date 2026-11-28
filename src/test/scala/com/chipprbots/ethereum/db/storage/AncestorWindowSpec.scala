@@ -11,13 +11,23 @@ import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** The window below a block that a hand-off needs (spec 018 C5a part 2; T198's check): the 256 headers `BLOCKHASH`
-  * walks, by the hash each child names, and on a proof-of-work chain the six bodies the ommers are checked against.
+  * walks, by the hash each child names, and on a proof-of-work chain the bodies the ommers are checked against: the
+  * block's and the four below it, where their headers name ommers (B-302).
   */
 class AncestorWindowSpec extends AnyFlatSpec with Matchers:
 
-  // a chain of 300 blocks above the genesis
+  /** An ommers hash that is not the empty list's: a header that names ommers. */
+  private val SomeOmmers = BlockHash(org.apache.pekko.util.ByteString(Array.fill[Byte](32)(7)))
+
+  // a chain of 300 blocks above the genesis, every block above the genesis naming ommers
   private val chain: Vector[Block] =
     (BlockHelpers.genesis +: BlockHelpers.generateChain(300, BlockHelpers.genesis)).toVector
+      .foldLeft(Vector.empty[Block]) { (built, block) =>
+        val header =
+          if block.header.number.value == 0 then block.header
+          else block.header.copy(parentHash = built.last.header.hash, ommersHash = SomeOmmers)
+        built :+ block.copy(header = header)
+      }
 
   /** What a node holds of the chain: the headers and the bodies, each by hash. */
   private class Held(blocks: Seq[Block]):
@@ -60,25 +70,39 @@ class AncestorWindowSpec extends AnyFlatSpec with Matchers:
       held.check(300, proofOfWork = false).header shouldBe Some((BigInt(299), chain(299).header.hash))
     }
 
-  it should "name each of the six bodies that is missing on a proof-of-work chain, the block's own among them, and none after the merge" taggedAs
+  it should "name each of the five bodies that is missing on a proof-of-work chain, the block's own among them, and none after the merge" taggedAs
     UnitTest in {
       val held = new Held(chain)
-      Seq(300, 297, 295, 294).foreach(held.dropBody)
-      // 300 down to 295 are read; 294 is the seventh
+      Seq(300, 297, 296, 295).foreach(held.dropBody)
+      // 300 down to 296 are read; 295 is the sixth, whose ommers no block above 300 could name (B-302)
       held.check(300, proofOfWork = true) shouldBe
-        AncestorWindow.Missing(None, List(chain(300).header, chain(297).header, chain(295).header))
+        AncestorWindow.Missing(None, List(chain(300).header, chain(297).header, chain(296).header))
       held.check(300, proofOfWork = false).isEmpty shouldBe true
-      held.check(300, proofOfWork = true).describe should include("the bodies of blocks 300, 297, 295")
+      held.check(300, proofOfWork = true).describe should include("the bodies of blocks 300, 297, 296")
     }
+
+  // B-302 (core-geth VerifyUncles): the check of ommers reads a body only where its header names ommers
+  it should "not ask for the body of a block whose header names no ommers" taggedAs UnitTest in {
+    val plain = (BlockHelpers.genesis +: BlockHelpers.generateChain(20, BlockHelpers.genesis)).toVector
+    plain.drop(1).forall(_.header.ommersHash.value == BlockHeader.EmptyOmmers) shouldBe true
+    val held = new Held(plain):
+      override def check(at: Int, proofOfWork: Boolean): AncestorWindow.Missing =
+        AncestorWindow.check(plain(at).header, proofOfWork, headers.get, bodies.get)
+    plain.indices.foreach(at => held.bodies -= plain(at).header.hash)
+    held.check(20, proofOfWork = true).isEmpty shouldBe true
+  }
 
   it should "ask of a block near the genesis only the ancestors there are" taggedAs UnitTest in {
     val held = new Held(chain)
-    // block 3: the headers of 2, 1 and 0, and the bodies of 3, 2, 1 and 0
+    // block 3: the headers of 2, 1 and 0, and the bodies of 3, 2 and 1; the genesis names no ommers
     held.check(3, proofOfWork = true).isEmpty shouldBe true
     held.dropBody(0)
-    held.check(3, proofOfWork = true).bodies shouldBe List(chain(0).header)
+    held.check(3, proofOfWork = true).isEmpty shouldBe true
+    held.dropBody(1)
+    held.check(3, proofOfWork = true).bodies shouldBe List(chain(1).header)
     held.dropHeader(0)
-    held.check(3, proofOfWork = true) shouldBe AncestorWindow.Missing(Some((BigInt(0), chain(0).header.hash)), Nil)
+    held.check(3, proofOfWork = true) shouldBe
+      AncestorWindow.Missing(Some((BigInt(0), chain(0).header.hash)), List(chain(1).header))
     // the genesis has nothing below it
     new Held(chain).check(0, proofOfWork = true).isEmpty shouldBe true
   }

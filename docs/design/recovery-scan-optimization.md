@@ -2,6 +2,12 @@
 
 **Status:** proposed · **Context:** ETC mainnet checkpoint generation · **Authored:** 2026-06-03
 
+> **Update 2026-11-24 (B-217):** the combined scan shipped as the default in 0.7.0 (`parallel-recovery-scan = true`),
+> and the two legacy per-phase walks and the flag are now retired (#2056; the key left `sync.conf` with B-493):
+> `BytecodeRecoveryActor` and `StorageRecoveryActor` only download the gaps the combined scan reports. The legacy walks
+> stopped at the first absent node and the recovery flags were then settled on that partial walk; the combined scan
+> counts the hole and walks the rest. The plan below is kept as written.
+
 ## TL;DR
 
 The post-SNAP recovery scan (`BytecodeRecoveryActor` + `StorageRecoveryActor`) walks the
@@ -69,7 +75,9 @@ handle so a real missing-node `MPTException` is isolated per subtree (preserving
 semantics) and threads don't share a storage handle. Drive shards on a **bounded pool sized
 `min(nproc, cap)`, default 3 not 4** (reserve a core + memory for the live node/GC; only ~5GB
 free with swap active). Merge per-shard missing-sets in the single-threaded driver (commutative
-union). Behind `sync.conf` flag `parallel-recovery-scan` (default false).
+union). Behind `sync.conf` flag `parallel-recovery-scan` (default false; it later shipped `true` in 0.7.0, and the
+flag was retired by B-217 (#2056) and removed from `sync.conf` by B-493: no code reads it, and `ConfigValidator` warns
+when it is set).
 
 ### Phase 3 — Raw read-only path, skip ref-count unwrap · Effort M (~0.5d, OPTIONAL)
 Add `getRaw` to the node-storage trait; in `ReferenceCountNodeStorage` extract only the

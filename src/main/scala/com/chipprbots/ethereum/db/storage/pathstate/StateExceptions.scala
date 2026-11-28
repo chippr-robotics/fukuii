@@ -42,6 +42,53 @@ final class StateUnavailable(
     val heldTo: Option[BlockRef] = None
 ) extends StateFault(s"State unavailable: $reason")
 
+/** A write of the head was refused, with nothing written, because another thread's adoption holds the head (spec 018
+  * C4e part 4, B-294, B-462): it moves the head to a branch and commits the branch in place, and may move it back. It
+  * is no fault of this node's state and no verdict on any block: the writer asks again once the adoption has ended. So
+  * it is never counted by the escalation (forge, 2026-11-24), and it is said at WARN with `[STATE-BUSY]`, not at ERROR.
+  *
+  * Not a [[StateUnavailable]], whose `askAgain` is also said by refusals that are counted: a move of the head that the
+  * state moved under between two of its batches, or that no plan of could be made. Thrown where another attempt is
+  * found open ([[PathStateStorage]]`.refuseInAnotherAttempt`), and by a hold of the records asked for on a head that is
+  * not the one its caller read (B-463, [[PathStateStorage.withRecordsHeld]]): a block was committed on it, or it was
+  * moved, since; or while a move of the head is under way on another thread (B-504). That too is no fault and no
+  * verdict: the caller reads the head again and asks again. And by the weight arm of a reorganisation whose branch was
+  * weighed against a head that is not the head any more (B-315, `ConsensusImpl`), with the cause
+  * [[StateBusy.Cause.HeadMovedSinceWeighed]].
+  *
+  * @param holder
+  *   who holds the head: the thread of the adoption that is open, and what it holds; or the writer that moved it
+  * @param reason
+  *   what was refused, and why
+  * @param cause
+  *   which kind of busy it is: what the writer that asks again can expect of its next attempt ([[StateBusy.Cause]])
+  */
+final class StateBusy(
+    val holder: String,
+    val reason: String,
+    val cause: StateBusy.Cause = StateBusy.Cause.HeldByAnother
+) extends StateFault(s"State busy: $reason")
+
+object StateBusy:
+
+  /** Why the head was busy, for the writer that asks again: regular sync paces its tries by it (`BlockImporter`). */
+  enum Cause:
+
+    /** Another writer holds the head, or is moving it: an adoption that is open (B-294, B-462), a move of the head
+      * under way on another thread (B-504), or a head that moved between a caller's read of it and its hold (B-463). It
+      * lasts as long as that writer's work does, which may be long: the tries are spaced out from the third.
+      */
+    case HeldByAnother
+
+    /** The weight arm's branch was weighed against a head that is not the head any more (B-315): a block was committed
+      * on it, or it was moved, between the weight comparison and the move. It ends as soon as the branch is weighed
+      * again against the head as it is, so it is tried again at once.
+      *
+      * @param headNumber
+      *   the height of the head the refusal found
+      */
+    case HeadMovedSinceWeighed(headNumber: BigInt)
+
 /** A block of this node's own chain that a rule needs is not stored whole: the ommers of a block are checked against
   * the blocks of its six ancestors, and after a sync that began from a pivot the bodies below the pivot arrive later
   * (spec 018 C5a part 2, B-283). It says nothing of the block being validated: with the ancestors short, a valid ommer
@@ -129,3 +176,13 @@ final class HandedToRecovery(detail: String) extends StateFault(s"Handed to the 
 /** A branch under execution holds more than the pinned-layer cap allows. Retryable, and never an invalid block. */
 final class BranchTooLarge(val bytes: Long, val cap: Long)
     extends StateFault(s"The branch under execution holds $bytes bytes of state changes, above the cap of $cap")
+
+/** A clear of the state for a sync from scratch was not begun: an attempt holds the records (an adoption of a heavier
+  * branch, [[PathStateStorage.withRecordsHeld]]), and its head may yet be one the chain follows (B-465, forge). Nothing
+  * was written. It cannot wait for the attempt under the lock of the moves, which the attempt's next move takes: the
+  * clear is asked for again once it has ended.
+  *
+  * Not a [[StateFault]]: it says nothing of the state, only that this is not the time to give it up.
+  */
+final class StateClearRefused(detail: String)
+    extends RuntimeException(s"The state was not cleared for a sync from scratch: $detail")

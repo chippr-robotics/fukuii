@@ -76,6 +76,24 @@ see [Known Issues](../runbooks/known-issues.md) and [Disk Management](../runbook
     - sbt 1.13.0 or later
     - Git
 
+### Platform Support
+
+Fukuii runs on the JVM, but a few precompiles call native libraries, and each library ships builds for some platforms
+only:
+
+| Native library | Precompiles | Linux x86_64 / aarch64 | macOS x86_64 / aarch64 | Windows x86_64 |
+|---|---|---|---|---|
+| eth_pairings (`org.hyperledger.besu:bls12-381`) | EIP-2537 BLS12-381, 0x0b-0x11 | Yes | Yes | No |
+| blst (`tech.pegasys:jblst`) | EIP-2537 BLS12-381, 0x0b-0x11 | Yes | Yes | Yes |
+| c-kzg-4844 (`io.consensys.protocols:jc-kzg-4844`) | EIP-4844 point evaluation, 0x0a | Yes | Yes | Yes |
+
+The BLS12-381 precompiles run on eth_pairings where it loads and on blst elsewhere, so ETH chains (mainnet, Sepolia,
+Hoodi, Ephemery, Platåberget) and ETC from Olympia run on Windows too. `fukuii.vm.bls12-381-backend` (or
+`FUKUII_BLS12381_BACKEND`) can force one: `auto` (the default), `eth-pairings` or `blst`. Both libraries give the same
+bytes on the EIP-2537 test corpus (ADR [VM-008](../adr/vm/VM-008-windows-bls12-381-backend.md)). A node whose chain
+needs a library that does not load stops at startup with a message naming it, rather than compute different results
+from the network.
+
 ### Ports
 
 | Port | Protocol | Purpose | Exposure |

@@ -18,7 +18,7 @@ import com.chipprbots.ethereum.rpcTest.Tags.MainNet
   *
   * Run with: sbt "rpcTest:testOnly *MordorPoWMiningSpec"
   */
-class MordorPoWMiningSpec extends AnyFlatSpec with Matchers {
+class MordorPoWMiningSpec extends AnyFlatSpec with Matchers:
 
   val testConfig: RpcTestConfig = RpcTestConfig("test.conf")
   val service: Web3j = Web3j.build(new HttpService(testConfig.fukuiiUrl))
@@ -28,22 +28,17 @@ class MordorPoWMiningSpec extends AnyFlatSpec with Matchers {
   val MordorEcip1099Block: Long = 2520000L
   val MordorEraDuration: Long = 5000000L
 
-  private def skipIfNotMordor(): Unit = {
+  private def skipIfNotMordor(): Unit =
     val chainId = service.ethChainId().send().getChainId
-    if (chainId.compareTo(MordorChainId) != 0) {
-      cancel(s"Not connected to Mordor (chain ID $chainId, expected 63)")
-    }
-  }
+    if chainId.compareTo(MordorChainId) != 0 then cancel(s"Not connected to Mordor (chain ID $chainId, expected 63)")
 
-  private def getBlock(number: Long, fullTxs: Boolean = false) = {
+  private def getBlock(number: Long, fullTxs: Boolean = false) =
     val param = DefaultBlockParameter.valueOf(BigInteger.valueOf(number))
     service.ethGetBlockByNumber(param, fullTxs).send().getBlock
-  }
 
-  private def getLatestBlock(fullTxs: Boolean = false) = {
+  private def getLatestBlock(fullTxs: Boolean = false) =
     val param = DefaultBlockParameter.valueOf("latest")
     service.ethGetBlockByNumber(param, fullTxs).send().getBlock
-  }
 
   "Mordor PoW" should "be connected to Mordor testnet (chain ID 63)" taggedAs MainNet in {
     skipIfNotMordor()
@@ -58,7 +53,7 @@ class MordorPoWMiningSpec extends AnyFlatSpec with Matchers {
     block.getNumber should not be null
     block.getNumber.longValue() should be > 0L
     block.getHash should not be null
-    block.getHash should have length 66 // 0x + 64 hex chars
+    (block.getHash should have).length(66) // 0x + 64 hex chars
     block.getGasLimit should not be null
     block.getGasLimit.longValue() should be > 0L
     block.getDifficulty should not be null
@@ -72,7 +67,7 @@ class MordorPoWMiningSpec extends AnyFlatSpec with Matchers {
     // ETChash blocks must have non-zero nonce and mixHash
     block.getNonce should not be null
     block.getMixHash should not be null
-    block.getMixHash should have length 66
+    (block.getMixHash should have).length(66)
 
     // Nonce should be 8 bytes (0x + 16 hex chars)
     block.getNonceRaw should not be null
@@ -94,7 +89,7 @@ class MordorPoWMiningSpec extends AnyFlatSpec with Matchers {
     val latestBlock = getLatestBlock()
     val latestNumber = latestBlock.getNumber.longValue()
 
-    if (latestNumber < 10) cancel("Not enough blocks to verify timestamps")
+    if latestNumber < 10 then cancel("Not enough blocks to verify timestamps")
 
     val timestamps = (latestNumber - 5 to latestNumber).map { n =>
       getBlock(n).getTimestamp.longValue()
@@ -111,7 +106,7 @@ class MordorPoWMiningSpec extends AnyFlatSpec with Matchers {
     val latestBlock = getLatestBlock()
     val latestNumber = latestBlock.getNumber.longValue()
 
-    if (latestNumber < 2) cancel("Not enough blocks")
+    if latestNumber < 2 then cancel("Not enough blocks")
 
     val parentBlock = getBlock(latestNumber - 1)
     val parentGasLimit = parentBlock.getGasLimit
@@ -128,13 +123,13 @@ class MordorPoWMiningSpec extends AnyFlatSpec with Matchers {
     val latestBlock = getLatestBlock()
     val latestNumber = latestBlock.getNumber.longValue()
 
-    if (latestNumber < MordorEcip1099Block) cancel("Node not synced past ECIP-1099 fork block")
+    if latestNumber < MordorEcip1099Block then cancel("Node not synced past ECIP-1099 fork block")
 
     val forkBlock = getBlock(MordorEcip1099Block)
     forkBlock should not be null
     forkBlock.getNumber.longValue() shouldBe MordorEcip1099Block
     forkBlock.getDifficulty.compareTo(BigInteger.ZERO) should be > 0
-    forkBlock.getHash should have length 66
+    (forkBlock.getHash should have).length(66)
   }
 
   it should "have blocks in current era with expected reward characteristics" taggedAs MainNet in {
@@ -151,5 +146,4 @@ class MordorPoWMiningSpec extends AnyFlatSpec with Matchers {
     // We just verify the era is computable and reasonable
     era should be < 200L // After era ~193, rewards round to 0
   }
-}
 // scalastyle:on magic.number

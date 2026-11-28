@@ -93,6 +93,15 @@ class ChainFactsSpec extends AnyFlatSpec with Matchers:
       Seq("Shanghai", "Cancun", "Prague", "Osaka", "Amsterdam", "BPO1", "BPO2")
   }
 
+  it should "list BPO3..BPO5 by activation time only when scheduled (B-443)" taggedAs (UnitTest) in {
+    val withBpo3 = ChainFacts.byTimestamp(
+      BigInt(1),
+      TuiFixtures.sepoliaForks.copy(amsterdamTimestamp = None, bpo3Timestamp = Some(1900000000L))
+    )
+    withBpo3.forks.map(_.name).takeRight(2) shouldBe Seq("BPO2", "BPO3")
+    withBpo3.notScheduled shouldBe Seq("Amsterdam")
+  }
+
   it should "find the next fork against the head timestamp, in UTC and as a time to go" taggedAs (UnitTest) in {
     val sepolia = TuiFixtures.chainSepolia
     val head = 1_791_294_816L - (3 * 86_400L + 4 * 3_600L)

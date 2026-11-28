@@ -76,70 +76,70 @@ import com.chipprbots.ethereum.rpcTest.TestData.*
 import com.chipprbots.ethereum.utils.KeyStoreConfig
 import com.chipprbots.ethereum.utils.Logger
 
-class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
+class RpcApiTests extends AnyFlatSpec with Matchers with Logger:
 
-  ("Json rpc service" should "be listening before all tests").taggedAs(MainNet, PrivNet) in new ScenarioSetup {
+  ("Json rpc service" should "be listening before all tests").taggedAs(MainNet, PrivNet) in new ScenarioSetup:
     val response: NetListening = service.netListening().send()
     response.isListening shouldBe true
-  }
 
-  (it should "return correct protocol version").taggedAs(MainNet, PrivNet) in new ScenarioSetup {
+  (it should "return correct protocol version").taggedAs(MainNet, PrivNet) in new ScenarioSetup:
     val response: EthProtocolVersion = service.ethProtocolVersion().send()
     hexToBigInt(response.getProtocolVersion) shouldEqual capabilities.head.version.toInt
-  }
 
-  (it should "return correct client version").taggedAs(MainNet, PrivNet) in new ScenarioSetup {
+  (it should "return correct client version").taggedAs(MainNet, PrivNet) in new ScenarioSetup:
     val response: Web3ClientVersion = service.web3ClientVersion().send()
     response.getWeb3ClientVersion shouldEqual clientVersion
-  }
 
-  (it should "correctly calculate Sha3").taggedAs(MainNet, PrivNet) in new ScenarioSetup {
+  (it should "correctly calculate Sha3").taggedAs(MainNet, PrivNet) in new ScenarioSetup:
     val response: Web3Sha3 = service.web3Sha3("").send()
     response.getResult shouldEqual "0xc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
-  }
 
-  it should "eth_getBlockTransactionCountByHash" taggedAs (MainNet) in new ScenarioSetup {
-    val response: EthGetBlockTransactionCountByHash = service.ethGetBlockTransactionCountByHash(noTransactionsOrUnclesBlock.hash).send()
+  it should "eth_getBlockTransactionCountByHash" taggedAs (MainNet) in new ScenarioSetup:
+    val response: EthGetBlockTransactionCountByHash =
+      service.ethGetBlockTransactionCountByHash(noTransactionsOrUnclesBlock.hash).send()
     response.getTransactionCount.asBigInt shouldEqual noTransactionsOrUnclesBlock.transactions.size
 
-    val response1: EthGetBlockTransactionCountByHash = service.ethGetBlockTransactionCountByHash(twoTransactionBlock.hash).send()
+    val response1: EthGetBlockTransactionCountByHash =
+      service.ethGetBlockTransactionCountByHash(twoTransactionBlock.hash).send()
     response1.getTransactionCount.asBigInt shouldEqual twoTransactionBlock.transactions.size
 
-    val response2: EthGetBlockTransactionCountByHash = service.ethGetBlockTransactionCountByHash(unexisitingBlockHash).send()
+    val response2: EthGetBlockTransactionCountByHash =
+      service.ethGetBlockTransactionCountByHash(unexisitingBlockHash).send()
     response2.getResult shouldBe null
-  }
 
-  it should "eth_getBlockTransactionCountByNumber" taggedAs (MainNet) in new ScenarioSetup {
-    val response: EthGetBlockTransactionCountByNumber = service.ethGetBlockTransactionCountByNumber(noTransactionsOrUnclesBlock.blockNumber).send()
+  it should "eth_getBlockTransactionCountByNumber" taggedAs (MainNet) in new ScenarioSetup:
+    val response: EthGetBlockTransactionCountByNumber =
+      service.ethGetBlockTransactionCountByNumber(noTransactionsOrUnclesBlock.blockNumber).send()
     response.getTransactionCount.asBigInt shouldEqual noTransactionsOrUnclesBlock.transactions.size
 
-    val response1: EthGetBlockTransactionCountByNumber = service.ethGetBlockTransactionCountByNumber(twoTransactionBlock.blockNumber).send()
+    val response1: EthGetBlockTransactionCountByNumber =
+      service.ethGetBlockTransactionCountByNumber(twoTransactionBlock.blockNumber).send()
     response1.getTransactionCount.asBigInt shouldEqual twoTransactionBlock.transactions.size
 
     assertThrows[ClientConnectionException](service.ethGetBlockTransactionCountByNumber(futureBlock).send())
-  }
 
-  it should "eth_getUncleCountByBlockHash" taggedAs (MainNet) in new ScenarioSetup {
-    val response: EthGetUncleCountByBlockHash = service.ethGetUncleCountByBlockHash(noTransactionsOrUnclesBlock.hash).send()
+  it should "eth_getUncleCountByBlockHash" taggedAs (MainNet) in new ScenarioSetup:
+    val response: EthGetUncleCountByBlockHash =
+      service.ethGetUncleCountByBlockHash(noTransactionsOrUnclesBlock.hash).send()
     response.getUncleCount.asBigInt shouldEqual noTransactionsOrUnclesBlock.uncles.size
 
     val response1: EthGetUncleCountByBlockHash = service.ethGetUncleCountByBlockHash(oneUncleTestBlock.hash).send()
     response1.getUncleCount.asBigInt shouldEqual oneUncleTestBlock.uncles.size
 
     assertThrows[ClientConnectionException](service.ethGetUncleCountByBlockHash(unexisitingBlockHash).send())
-  }
 
-  it should "eth_getUncleCountByBlockNumber" taggedAs (MainNet) in new ScenarioSetup {
-    val response: EthGetUncleCountByBlockNumber = service.ethGetUncleCountByBlockNumber(noTransactionsOrUnclesBlock.blockNumber).send()
+  it should "eth_getUncleCountByBlockNumber" taggedAs (MainNet) in new ScenarioSetup:
+    val response: EthGetUncleCountByBlockNumber =
+      service.ethGetUncleCountByBlockNumber(noTransactionsOrUnclesBlock.blockNumber).send()
     response.getUncleCount.asBigInt shouldEqual noTransactionsOrUnclesBlock.uncles.size
 
-    val response1: EthGetUncleCountByBlockNumber = service.ethGetUncleCountByBlockNumber(oneUncleTestBlock.blockNumber).send()
+    val response1: EthGetUncleCountByBlockNumber =
+      service.ethGetUncleCountByBlockNumber(oneUncleTestBlock.blockNumber).send()
     response1.getUncleCount.asBigInt shouldEqual oneUncleTestBlock.uncles.size
 
     assertThrows[ClientConnectionException](service.ethGetUncleCountByBlockNumber(futureBlock).send())
-  }
 
-  it should "eth_getBlockByHash" taggedAs (MainNet) in new ScenarioSetup {
+  it should "eth_getBlockByHash" taggedAs (MainNet) in new ScenarioSetup:
     val response: EthBlock = service.ethGetBlockByHash(twoTransactionBlock.hash, false).send()
     response.getBlock.getNumber.asBigInt shouldEqual twoTransactionBlock.number
 
@@ -148,9 +148,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     response1.getError shouldEqual null
 
     assertThrows[ClientConnectionException](service.ethGetBlockByHash(badHash, false).send())
-  }
 
-  it should "eth_getTransactionByBlockHashAndIndex" taggedAs (MainNet) in new ScenarioSetup {
+  it should "eth_getTransactionByBlockHashAndIndex" taggedAs (MainNet) in new ScenarioSetup:
     val response: EthTransaction = service
       .ethGetTransactionByBlockHashAndIndex(twoTransactionBlock.hash, twoTransactionBlock.transactions.head.index)
       .send()
@@ -166,9 +165,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
       .send()
     response2.getTransaction.isPresent shouldEqual false
     response2.getError shouldEqual null
-  }
 
-  it should "eth_getTransactionByBlockNumberAndIndex" taggedAs (MainNet) in new ScenarioSetup {
+  it should "eth_getTransactionByBlockNumberAndIndex" taggedAs (MainNet) in new ScenarioSetup:
     val response: EthTransaction = service
       .ethGetTransactionByBlockNumberAndIndex(
         twoTransactionBlock.blockNumber,
@@ -190,9 +188,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
       .send()
     response2.getTransaction.isPresent shouldEqual false
     response2.getError shouldEqual null
-  }
 
-  it should "eth_getUncleByBlockHashAndIndex" taggedAs (MainNet) in new ScenarioSetup {
+  it should "eth_getUncleByBlockHashAndIndex" taggedAs (MainNet) in new ScenarioSetup:
     val response: EthBlock =
       service.ethGetUncleByBlockHashAndIndex(oneUncleTestBlock.hash, oneUncleTestBlock.uncles.head.index).send()
     response.getBlock.getHash shouldEqual oneUncleTestBlock.uncles.head.hash
@@ -205,21 +202,19 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
       service.ethGetUncleByBlockHashAndIndex(oneUncleTestBlock.hash, oneUncleTestBlock.uncles.head.index + 1).send()
     response2.getBlock shouldEqual null
     response2.getError shouldEqual null
-  }
 
-  it should "eth_getBlockByNumber without mining" taggedAs (MainNet) in new ScenarioSetup {
+  it should "eth_getBlockByNumber without mining" taggedAs (MainNet) in new ScenarioSetup:
     val response: EthBlock = service.ethGetBlockByNumber(latestBlock, false).send()
     val lBlock = response.getBlock
-    lBlock should not equal null
+    (lBlock should not).equal(null)
 
     val response1: EthBlock = service.ethGetBlockByNumber(pendingBlock, false).send()
     val pBlock = response1.getBlock
-    pBlock should not equal null
+    (pBlock should not).equal(null)
 
     pBlock.getNumber should be >= lBlock.getNumber
-  }
 
-  it should "eth_getUncleByBlockNumberAndIndex" taggedAs (MainNet) in new ScenarioSetup {
+  it should "eth_getUncleByBlockNumberAndIndex" taggedAs (MainNet) in new ScenarioSetup:
     val response: EthBlock = service
       .ethGetUncleByBlockNumberAndIndex(oneUncleTestBlock.blockNumber, oneUncleTestBlock.uncles.head.index)
       .send()
@@ -234,86 +229,79 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
       .send()
     response2.getBlock shouldEqual null
     response2.getError shouldEqual null
-  }
 
-  it should "eth_mining false on MainNet" taggedAs (MainNet) in new ScenarioSetup {
+  it should "eth_mining false on MainNet" taggedAs (MainNet) in new ScenarioSetup:
     val response: EthMining = service.ethMining().send()
     response.isMining shouldEqual false
-  }
 
-  it should "eth_hashrate equal to 0 on MainNet" taggedAs (MainNet) in new ScenarioSetup {
+  it should "eth_hashrate equal to 0 on MainNet" taggedAs (MainNet) in new ScenarioSetup:
     val response: EthHashrate = service.ethHashrate().send()
     response.getHashrate.asBigInt shouldEqual 0
-  }
 
-  it should "eth_getBalance" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_getBalance" taggedAs (PrivNet) in new ScenarioSetup:
     val response: EthGetBalance = service.ethGetBalance(thirdAccount.address, latestBlock).send()
     response.getBalance.asBigInt shouldEqual thirdAccount.balance
 
     val response1: EthGetBalance = service.ethGetBalance(unexistingAccount.address, latestBlock).send()
     response1.getBalance.asBigInt shouldEqual 0
-  }
 
-  it should "eth_BlockNumber" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_BlockNumber" taggedAs (PrivNet) in new ScenarioSetup:
     val response: EthBlockNumber = service.ethBlockNumber().send()
-    response.getBlockNumber should not equal null
+    (response.getBlockNumber should not).equal(null)
     val receivedNumber = response.getBlockNumber.asBigInt
 
     // Wait for new block
     service.blockFlowable(false).blockingFirst()
 
     val response1: EthBlockNumber = service.ethBlockNumber().send()
-    response1.getBlockNumber should not equal null
+    (response1.getBlockNumber should not).equal(null)
     response1.getBlockNumber.asBigInt should be > receivedNumber
-  }
 
-  it should "eth_mining true on privNet" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_mining true on privNet" taggedAs (PrivNet) in new ScenarioSetup:
     val response: EthMining = service.ethMining().send()
     response.isMining shouldEqual true
-  }
 
-  it should "eth_coinbase on privNet" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_coinbase on privNet" taggedAs (PrivNet) in new ScenarioSetup:
     val response: EthCoinbase = service.ethCoinbase().send()
     response.getAddress shouldEqual coinbase
-  }
 
-  it should "eth_hashrate larger than 0 on privNet" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_hashrate larger than 0 on privNet" taggedAs (PrivNet) in new ScenarioSetup:
     val response: EthHashrate = service.ethHashrate().send()
-    response.getHashrate.asBigInt should not equal 0
-  }
+    (response.getHashrate.asBigInt should not).equal(0)
 
-  it should "personal_unlockAccount for indefinite duration" taggedAs (PrivNet) in new ScenarioSetup {
-    val response: PersonalUnlockAccount = service.personalUnlockAccount(firstAccount.address, firstAccount.password, BigInt(0)).send()
+  it should "personal_unlockAccount for indefinite duration" taggedAs (PrivNet) in new ScenarioSetup:
+    val response: PersonalUnlockAccount =
+      service.personalUnlockAccount(firstAccount.address, firstAccount.password, BigInt(0)).send()
     response.accountUnlocked() shouldEqual true
-  }
 
-  it should "eth_getBlockByNumber with mining" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_getBlockByNumber with mining" taggedAs (PrivNet) in new ScenarioSetup:
     val response: EthBlock = service.ethGetBlockByNumber(latestBlock, false).send()
     val lBlock = response.getBlock
-    lBlock should not equal null
+    (lBlock should not).equal(null)
 
     val response3: EthBlock = service.ethGetBlockByNumber(pendingBlock, false).send()
     val pBlock = response3.getBlock
-    pBlock should not equal null
+    (pBlock should not).equal(null)
 
     val response1: EthBlock = service.ethGetBlockByNumber(getBlockParam(lBlock.getNumber), false).send()
     val nBlock = response1.getBlock
-    nBlock should not equal null
+    (nBlock should not).equal(null)
 
     lBlock.getHash shouldEqual nBlock.getHash
 
     val response2: EthBlock = service.ethGetBlockByNumber(earliestBlock, false).send()
     val eBlock = response2.getBlock
-    eBlock should not equal null
+    (eBlock should not).equal(null)
 
     eBlock.getNumber.asBigInt shouldEqual 0
 
     val response4: EthSendTransaction = service.ethSendTransaction(sampleTransaction).send()
-    response4.getTransactionHash should not equal null
+    (response4.getTransactionHash should not).equal(null)
     val tHash = response4.getTransactionHash
 
     // Wait for the transaction to be mined
-    val minedTransaction: org.web3j.protocol.core.methods.response.Transaction = service.transactionFlowable().blockingFirst()
+    val minedTransaction: org.web3j.protocol.core.methods.response.Transaction =
+      service.transactionFlowable().blockingFirst()
     minedTransaction.getHash shouldEqual tHash
 
     val response5: EthBlock = service.ethGetBlockByNumber(getBlockParam(minedTransaction.getBlockNumber), false).send()
@@ -329,9 +317,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
 
     val response7: EthBlock = service.ethGetBlockByNumber(futureBlock, false).send()
     response7.getBlock shouldEqual null
-  }
 
-  it should "eth_getTransactionCount with mining" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_getTransactionCount with mining" taggedAs (PrivNet) in new ScenarioSetup:
     val response: EthGetTransactionCount = service.ethGetTransactionCount(firstAccount.address, latestBlock).send()
     val currentCount = response.getTransactionCount.asBigInt
 
@@ -347,43 +334,47 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
 
     currentCount2 shouldEqual currentCount + 1
 
-    val response3: EthGetTransactionCount = service.ethGetTransactionCount(unexistingAccount.address, latestBlock).send()
+    val response3: EthGetTransactionCount =
+      service.ethGetTransactionCount(unexistingAccount.address, latestBlock).send()
     val currentCount3 = response3.getTransactionCount.asBigInt
 
     currentCount3 shouldEqual 0
-  }
 
-  it should "not send eth_sendTransaction from locked account" taggedAs (PrivNet) in new ScenarioSetup {
-    val response1: EthSendTransaction = service.ethSendTransaction(createContract(thirdAccount.address, testContract)).send()
+  it should "not send eth_sendTransaction from locked account" taggedAs (PrivNet) in new ScenarioSetup:
+    val response1: EthSendTransaction =
+      service.ethSendTransaction(createContract(thirdAccount.address, testContract)).send()
 
     response1.getTransactionHash shouldEqual null
-    response1.getError should not equal null
+    (response1.getError should not).equal(null)
     response1.getError.getMessage shouldEqual "account is locked or unknown"
-  }
 
-  it should "eth_sendTransaction for value transfer" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_sendTransaction for value transfer" taggedAs (PrivNet) in new ScenarioSetup:
     val transferAmaunt = 100
-    val firstAccountstartBalance: BigInt = service.ethGetBalance(firstAccount.address, latestBlock).send().getBalance.asBigInt
-    val secondAccountstartBalance: BigInt = service.ethGetBalance(secondAccount.address, latestBlock).send().getBalance.asBigInt
+    val firstAccountstartBalance: BigInt =
+      service.ethGetBalance(firstAccount.address, latestBlock).send().getBalance.asBigInt
+    val secondAccountstartBalance: BigInt =
+      service.ethGetBalance(secondAccount.address, latestBlock).send().getBalance.asBigInt
 
     val response1: EthSendTransaction =
       service.ethSendTransaction(valueTransfer(firstAccount.address, secondAccount.address, transferAmaunt)).send()
     response1.getError shouldEqual null
 
     val mined: org.web3j.protocol.core.methods.response.Transaction = service.transactionFlowable().blockingFirst()
-    val receipt: Optional[TransactionReceipt] = service.ethGetTransactionReceipt(response1.getTransactionHash).send().getTransactionReceipt
+    val receipt: Optional[TransactionReceipt] =
+      service.ethGetTransactionReceipt(response1.getTransactionHash).send().getTransactionReceipt
     receipt.isPresent shouldEqual true
 
     val transactionCost: BigInt = receipt.get().getCumulativeGasUsed.asBigInt * mined.getGasPrice.asBigInt
 
-    val firstAccountEndBalance: BigInt = service.ethGetBalance(firstAccount.address, latestBlock).send().getBalance.asBigInt
-    val secondAccountEndBalance: BigInt = service.ethGetBalance(secondAccount.address, latestBlock).send().getBalance.asBigInt
+    val firstAccountEndBalance: BigInt =
+      service.ethGetBalance(firstAccount.address, latestBlock).send().getBalance.asBigInt
+    val secondAccountEndBalance: BigInt =
+      service.ethGetBalance(secondAccount.address, latestBlock).send().getBalance.asBigInt
 
     firstAccountstartBalance - transferAmaunt - transactionCost shouldEqual firstAccountEndBalance
     secondAccountstartBalance + transferAmaunt shouldEqual secondAccountEndBalance
-  }
 
-  it should "eth_sendTransaction with several transactions in pool with same nonce" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_sendTransaction with several transactions in pool with same nonce" taggedAs (PrivNet) in new ScenarioSetup:
     val fundingAmount = 20000000000000000L
     val amount1 = 100
     val amount2 = 200
@@ -433,9 +424,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val minedhashes: List[String] =
       mineBlock.getBlock.getTransactions.asScala.map(result => result.asInstanceOf[TransactionHash].get()).toList
     minedhashes should contain theSameElementsAs List(t4hash, t5hash)
-  }
 
-  it should "eth_sendRawTransaction" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_sendRawTransaction" taggedAs (PrivNet) in new ScenarioSetup:
     val response: EthGetTransactionCount = service.ethGetTransactionCount(firstAccount.address, latestBlock).send()
     val nextNonce = response.getTransactionCount.asBigInt
 
@@ -445,7 +435,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val response1: EthSendTransaction = service.ethSendRawTransaction(rawValueTransaction).send
     val txHash = response1.getTransactionHash
 
-    val minedTransaction: org.web3j.protocol.core.methods.response.Transaction = service.transactionFlowable().blockingFirst()
+    val minedTransaction: org.web3j.protocol.core.methods.response.Transaction =
+      service.transactionFlowable().blockingFirst()
     minedTransaction.getHash shouldEqual txHash
 
     val contractCreation: String =
@@ -453,7 +444,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val response2: EthSendTransaction = service.ethSendRawTransaction(contractCreation).send
     val txHash1 = response2.getTransactionHash
 
-    val minedTransaction1: org.web3j.protocol.core.methods.response.Transaction = service.transactionFlowable().blockingFirst()
+    val minedTransaction1: org.web3j.protocol.core.methods.response.Transaction =
+      service.transactionFlowable().blockingFirst()
     minedTransaction1.getHash shouldEqual txHash1
 
     val value1 = 200
@@ -471,7 +463,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val response4: EthSendTransaction = service.ethSendRawTransaction(rawValueTransaction2).send()
     response4.getError shouldEqual null
 
-    val minedTransaction2: org.web3j.protocol.core.methods.response.Transaction = service.transactionFlowable().blockingFirst()
+    val minedTransaction2: org.web3j.protocol.core.methods.response.Transaction =
+      service.transactionFlowable().blockingFirst()
 
     minedTransaction2.getValue.asBigInt shouldEqual value2
 
@@ -479,9 +472,12 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     // Transactions from two accounts with same nonce
     val (firstAcc, secondAcc) = setupTwoNewAccounts(firstAccount.address, fundingAmount)
 
-    val rawValueTransaction3: String = prepareRawTx(firstAcc, toAccount = Some(secondAccount), value = Some(value), nonce = 0)
-    val rawValueTransaction4: String = prepareRawTx(secondAcc, toAccount = Some(secondAccount), value = Some(value1), nonce = 0)
-    val rawValueTransaction5: String = prepareRawTx(firstAcc, toAccount = Some(secondAccount), value = Some(value2), nonce = 0)
+    val rawValueTransaction3: String =
+      prepareRawTx(firstAcc, toAccount = Some(secondAccount), value = Some(value), nonce = 0)
+    val rawValueTransaction4: String =
+      prepareRawTx(secondAcc, toAccount = Some(secondAccount), value = Some(value1), nonce = 0)
+    val rawValueTransaction5: String =
+      prepareRawTx(firstAcc, toAccount = Some(secondAccount), value = Some(value2), nonce = 0)
 
     service.blockFlowable(false).blockingFirst()
 
@@ -504,18 +500,18 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val minedhashes: List[String] =
       mineBlock.getBlock.getTransactions.asScala.map(result => result.asInstanceOf[TransactionHash].get()).toList
     minedhashes should contain theSameElementsAs List(t4hash, t5hash)
-  }
 
-  it should "eth_sendTransaction for contract creation" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_sendTransaction for contract creation" taggedAs (PrivNet) in new ScenarioSetup:
     val response: EthGetTransactionCount = service.ethGetTransactionCount(firstAccount.address, latestBlock).send()
     val latestNonce = response.getTransactionCount
 
     val response1: EthSendTransaction = service.ethSendTransaction(sampleTransaction).send()
     response1.getError shouldEqual null
     val hash = response1.getTransactionHash
-    hash should not equal null
+    (hash should not).equal(null)
     // Wait for the transaction to be mined
-    val minedTransaction: org.web3j.protocol.core.methods.response.Transaction = service.transactionFlowable().blockingFirst()
+    val minedTransaction: org.web3j.protocol.core.methods.response.Transaction =
+      service.transactionFlowable().blockingFirst()
 
     minedTransaction.getHash shouldEqual hash
     minedTransaction.getGas.asBigInt shouldEqual defaultGas
@@ -526,12 +522,12 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val response2: EthGetTransactionCount = service.ethGetTransactionCount(firstAccount.address, latestBlock).send()
     val latestNonce2 = response2.getTransactionCount
     latestNonce2.asBigInt shouldEqual latestNonce.add(1).asBigInt
-  }
 
-  it should "eth_getStorageAt and eth_getCode" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_getStorageAt and eth_getCode" taggedAs (PrivNet) in new ScenarioSetup:
     // eth_getStorageAt
-    val response: EthSendTransaction = service.ethSendTransaction(createContract(firstAccount.address, storageContract)).send()
-    response.getTransactionHash should not equal null
+    val response: EthSendTransaction =
+      service.ethSendTransaction(createContract(firstAccount.address, storageContract)).send()
+    (response.getTransactionHash should not).equal(null)
 
     // Wait till transaction is mined
     service.transactionFlowable().blockingFirst()
@@ -564,11 +560,10 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
 
     val response8: EthGetCode = service.ethGetCode(unexistingAccount.address, latestBlock).send()
     response8.getCode shouldEqual emptyResponse
-  }
 
-  it should "eth_getTransactionByHash" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_getTransactionByHash" taggedAs (PrivNet) in new ScenarioSetup:
     val response1: EthSendTransaction = service.ethSendTransaction(sampleTransaction).send()
-    response1.getTransactionHash should not equal null
+    (response1.getTransactionHash should not).equal(null)
     val tHash = response1.getTransactionHash
 
     val response2: EthTransaction = service.ethGetTransactionByHash(tHash).send()
@@ -579,11 +574,10 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
 
     val response3: EthTransaction = service.ethGetTransactionByHash(tHash).send()
     response3.getTransaction.isPresent shouldEqual true
-  }
 
-  it should "eth_getTransactionReceipt" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_getTransactionReceipt" taggedAs (PrivNet) in new ScenarioSetup:
     val response1: EthSendTransaction = service.ethSendTransaction(sampleTransaction).send()
-    response1.getTransactionHash should not equal null
+    (response1.getTransactionHash should not).equal(null)
     val tHash = response1.getTransactionHash
 
     val response2: EthGetTransactionReceipt = service.ethGetTransactionReceipt(tHash).send()
@@ -594,13 +588,14 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
 
     val response3: EthTransaction = service.ethGetTransactionByHash(tHash).send()
     response3.getTransaction.isPresent shouldEqual true
-  }
 
-  it should "eth_Call" taggedAs (PrivNet) in new ScenarioSetup {
-    val response: EthCall = service.ethCall(valueTransfer(firstAccount.address, secondAccount.address, 100), latestBlock).send()
+  it should "eth_Call" taggedAs (PrivNet) in new ScenarioSetup:
+    val response: EthCall =
+      service.ethCall(valueTransfer(firstAccount.address, secondAccount.address, 100), latestBlock).send()
     response.getValue shouldEqual emptyResponse
 
-    val response2: EthSendTransaction = service.ethSendTransaction(createContract(firstAccount.address, counterEventContract)).send()
+    val response2: EthSendTransaction =
+      service.ethSendTransaction(createContract(firstAccount.address, counterEventContract)).send()
     val txHash = response2.getTransactionHash
 
     service.transactionFlowable().blockingFirst()
@@ -645,10 +640,10 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
       .ethCall(contractCall(firstAccount.address, receipt.getContractAddress, readEventContract, Some(10)), latestBlock)
       .send()
     response9.getValue shouldEqual emptyResponse
-  }
 
-  it should "eth_estimateGas" taggedAs (PrivNet) in new ScenarioSetup {
-    val response: EthEstimateGas = service.ethEstimateGas(valueTransfer(firstAccount.address, secondAccount.address, 100)).send()
+  it should "eth_estimateGas" taggedAs (PrivNet) in new ScenarioSetup:
+    val response: EthEstimateGas =
+      service.ethEstimateGas(valueTransfer(firstAccount.address, secondAccount.address, 100)).send()
     response.getAmountUsed.asBigInt shouldEqual 21000
 
     // Currently when sending transaction where amount > sender.balance estimate_gas
@@ -663,7 +658,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val response1: EthEstimateGas = service.ethEstimateGas(createContract(firstAccount.address, testContract)).send()
     val gasEstimated = response1.getAmountUsed.asBigInt
 
-    val response2: EthSendTransaction = service.ethSendTransaction(createContract(firstAccount.address, testContract)).send()
+    val response2: EthSendTransaction =
+      service.ethSendTransaction(createContract(firstAccount.address, testContract)).send()
     val txHash = response2.getTransactionHash
     service.transactionFlowable().blockingFirst()
 
@@ -682,9 +678,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val response5: EthGetTransactionReceipt = service.ethGetTransactionReceipt(txHash1).send()
     response5.getTransactionReceipt.isPresent shouldEqual true
     response5.getTransactionReceipt.get()
-  }
 
-  it should "eth_getLogs" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_getLogs" taggedAs (PrivNet) in new ScenarioSetup:
     val setupContractResponse: EthSendTransaction =
       service.ethSendTransaction(createContract(firstAccount.address, counterEventContract)).send()
     setupContractResponse.getError shouldEqual null
@@ -697,11 +692,13 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     service.blockFlowable(false).blockingFirst()
 
     // Get receipt for both contract creation transactions
-    val receiptResponse: EthGetTransactionReceipt = service.ethGetTransactionReceipt(setupContractResponse.getTransactionHash).send()
+    val receiptResponse: EthGetTransactionReceipt =
+      service.ethGetTransactionReceipt(setupContractResponse.getTransactionHash).send()
     receiptResponse.getTransactionReceipt.isPresent shouldBe true
     val receipt: TransactionReceipt = receiptResponse.getTransactionReceipt.get()
 
-    val receiptResponse1: EthGetTransactionReceipt = service.ethGetTransactionReceipt(setupContractResponse1.getTransactionHash).send()
+    val receiptResponse1: EthGetTransactionReceipt =
+      service.ethGetTransactionReceipt(setupContractResponse1.getTransactionHash).send()
     receiptResponse1.getTransactionReceipt.isPresent shouldBe true
     val receipt2: TransactionReceipt = receiptResponse1.getTransactionReceipt.get()
 
@@ -792,24 +789,22 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val nullTopicResponse: EthLog = service.ethGetLogs(nullTopic).send()
     val nullTopicLogs: List[LogObject] = getLogs(nullTopicResponse)
     nullTopicLogs.size shouldEqual 2
-  }
 
-  it should "net_peerCount on privnet" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "net_peerCount on privnet" taggedAs (PrivNet) in new ScenarioSetup:
     val response: NetPeerCount = service.netPeerCount().send()
     response.getQuantity.asBigInt shouldEqual 0
-  }
 
-  (it should "eth_syncing on privnet").taggedAs(PrivNet, PrivNetNoMining) in new ScenarioSetup {
+  (it should "eth_syncing on privnet").taggedAs(PrivNet, PrivNetNoMining) in new ScenarioSetup:
     val response: EthSyncing = service.ethSyncing().send()
     response.isSyncing shouldEqual false
-  }
 
   // test case really similar to eth_Logs but now filters are installed via id
-  it should "eth_newFilter and eth_getFilterLogs" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_newFilter and eth_getFilterLogs" taggedAs (PrivNet) in new ScenarioSetup:
     val blockFilter: org.web3j.protocol.core.methods.response.EthFilter = service.ethNewBlockFilter().send()
     val blockFilterId = blockFilter.getFilterId
 
-    val pendingTransactionFilter: org.web3j.protocol.core.methods.response.EthFilter = service.ethNewPendingTransactionFilter().send()
+    val pendingTransactionFilter: org.web3j.protocol.core.methods.response.EthFilter =
+      service.ethNewPendingTransactionFilter().send()
     val pendingTransactionFilterId = pendingTransactionFilter.getFilterId
 
     val setupContractResponse: EthSendTransaction =
@@ -824,11 +819,13 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     service.blockFlowable(false).take(2).blockingLast()
 
     // Get receipt for both contract creation transactions
-    val receiptResponse: EthGetTransactionReceipt = service.ethGetTransactionReceipt(setupContractResponse.getTransactionHash).send()
+    val receiptResponse: EthGetTransactionReceipt =
+      service.ethGetTransactionReceipt(setupContractResponse.getTransactionHash).send()
     receiptResponse.getTransactionReceipt.isPresent shouldBe true
     val receipt: TransactionReceipt = receiptResponse.getTransactionReceipt.get()
 
-    val receiptResponse1: EthGetTransactionReceipt = service.ethGetTransactionReceipt(setupContractResponse1.getTransactionHash).send()
+    val receiptResponse1: EthGetTransactionReceipt =
+      service.ethGetTransactionReceipt(setupContractResponse1.getTransactionHash).send()
     receiptResponse1.getTransactionReceipt.isPresent shouldBe true
     val receipt2: TransactionReceipt = receiptResponse1.getTransactionReceipt.get()
 
@@ -937,9 +934,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
 
     val nonExistingFilterChanges: EthLog = service.ethGetFilterChanges(1).send()
     nonExistingFilterChanges.getLogs.asScala.size shouldEqual 0
-  }
 
-  it should "eth_newBlockFilter" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_newBlockFilter" taggedAs (PrivNet) in new ScenarioSetup:
     val blockFilter: org.web3j.protocol.core.methods.response.EthFilter = service.ethNewBlockFilter().send()
     val filterid = blockFilter.getFilterId
 
@@ -950,10 +946,10 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val addedBlocks: List[String] = logs.map(log => log.asInstanceOf[Hash].get)
 
     addedBlocks should contain(minedBlock.getBlock.getHash)
-  }
 
-  it should "eth_newPendingTransactionFilter" taggedAs (PrivNet) in new ScenarioSetup {
-    val transactionFilter: org.web3j.protocol.core.methods.response.EthFilter = service.ethNewPendingTransactionFilter().send()
+  it should "eth_newPendingTransactionFilter" taggedAs (PrivNet) in new ScenarioSetup:
+    val transactionFilter: org.web3j.protocol.core.methods.response.EthFilter =
+      service.ethNewPendingTransactionFilter().send()
     val filterid = transactionFilter.getFilterId
 
     val setupContractResponse: EthSendTransaction =
@@ -971,9 +967,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
       setupContractResponse.getTransactionHash,
       setupContractResponse1.getTransactionHash
     )
-  }
 
-  it should "eth_uninstallFilter" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "eth_uninstallFilter" taggedAs (PrivNet) in new ScenarioSetup:
     val filter = new EthFilter(earliestBlock, latestBlock, List(firstAccount.address).asJava)
     val txFilter: org.web3j.protocol.core.methods.response.EthFilter = service.ethNewFilter(filter).send()
     val logFilter = txFilter.getFilterId
@@ -981,7 +976,7 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val uninstalTxFilterResponse: EthUninstallFilter = service.ethUninstallFilter(logFilter).send()
     uninstalTxFilterResponse.isUninstalled shouldEqual true
 
-    //parity version, geth returns true
+    // parity version, geth returns true
     val uninstalTxFilterResponse1: EthUninstallFilter = service.ethUninstallFilter(logFilter).send()
     uninstalTxFilterResponse1.isUninstalled shouldEqual true
 
@@ -999,7 +994,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     blockchanges1.getLogs.asScala.toList.size shouldEqual 0
 
     // Uninstall pending filter
-    val transactionFilter: org.web3j.protocol.core.methods.response.EthFilter = service.ethNewPendingTransactionFilter().send()
+    val transactionFilter: org.web3j.protocol.core.methods.response.EthFilter =
+      service.ethNewPendingTransactionFilter().send()
     val transactionFilterId = transactionFilter.getFilterId
     val setupContractResponse: EthSendTransaction =
       service.ethSendTransaction(createContract(firstAccount.address, counterEventContract)).send()
@@ -1015,7 +1011,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
 
     service.blockFlowable(false).blockingFirst()
 
-    val receiptResponse: EthGetTransactionReceipt = service.ethGetTransactionReceipt(setupContractResponse.getTransactionHash).send()
+    val receiptResponse: EthGetTransactionReceipt =
+      service.ethGetTransactionReceipt(setupContractResponse.getTransactionHash).send()
     receiptResponse.getTransactionReceipt.isPresent shouldBe true
     val receipt: TransactionReceipt = receiptResponse.getTransactionReceipt.get()
 
@@ -1036,9 +1033,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val logsResponse: EthLog = service.ethGetFilterChanges(logFilter).send()
     val logs: List[LogObject] = getLogs(logsResponse)
     logs.size shouldEqual 0
-  }
 
-  it should "eth_getWork and eth_submitWork" taggedAs (PrivNetNoMining) in new ScenarioSetup {
+  it should "eth_getWork and eth_submitWork" taggedAs (PrivNetNoMining) in new ScenarioSetup:
     val currentBlock: Block = service.ethGetBlockByNumber(latestBlock, false).send().getBlock
     val workResponse: EthGetWork = service.ethGetWork().send()
     val pendingBlockR: Block = service.ethGetBlockByNumber(pendingBlock, false).send().getBlock
@@ -1049,8 +1045,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
 
     val workResponse1: EthGetWork = service.ethGetWork().send()
     val pendingBlockR1: Block = service.ethGetBlockByNumber(pendingBlock, false).send().getBlock
-    workResponse.getCurrentBlockHeaderPowHash should not equal workResponse1.getCurrentBlockHeaderPowHash
-    pendingBlockR.getTimestamp.asBigInt should not equal pendingBlockR1.getTimestamp.asBigInt
+    (workResponse.getCurrentBlockHeaderPowHash should not).equal(workResponse1.getCurrentBlockHeaderPowHash)
+    (pendingBlockR.getTimestamp.asBigInt should not).equal(pendingBlockR1.getTimestamp.asBigInt)
 
     val submitResponse: EthSubmitWork =
       service.ethSubmitWork(currentBlock.getNonceRaw, currentBlock.getHash, currentBlock.getHash).send()
@@ -1062,9 +1058,8 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
 
     val submitResponse1: EthSubmitWork = service.ethSubmitWork(fakeNonce, fakeHash, fakeMix).send()
     submitResponse1.solutionValid() shouldEqual false
-  }
 
-  it should "eth_submitHashRate" taggedAs (PrivNetNoMining) in new ScenarioSetup {
+  it should "eth_submitHashRate" taggedAs (PrivNetNoMining) in new ScenarioSetup:
     val hashRate1 = "0x0000000000000000000000000000000000000000000000000000000000500000"
     val hashRate2 = "0x0000000000000000000000000000000000000000000000000000000000600000"
     val id = "0x59daa26581d0acd1fce254fb7e85952f4c09d0915afd33d3886cd914bc7d283c"
@@ -1088,17 +1083,18 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val getHashRateResponse2: EthHashrate = service.ethHashrate().send()
     getHashRateResponse2.getHashrate.asBigInt shouldEqual hexToBigInt(hashRate1) + hexToBigInt(hashRate2)
 
-    //TimeOut of hashrate
+    // TimeOut of hashrate
     Thread.sleep(5500)
     val getHashRateResponse3: EthHashrate = service.ethHashrate().send()
     getHashRateResponse3.getHashrate.asBigInt shouldEqual 0
-  }
 
-  it should "eth_getTransactionCount (without pending block) without mining" taggedAs (PrivNetNoMining) in new ScenarioSetup {
-    val unlockAccountResponse: PersonalUnlockAccount = service.personalUnlockAccount(firstAccount.address, firstAccount.password, 0).send()
+  it should "eth_getTransactionCount (without pending block) without mining" taggedAs (PrivNetNoMining) in new ScenarioSetup:
+    val unlockAccountResponse: PersonalUnlockAccount =
+      service.personalUnlockAccount(firstAccount.address, firstAccount.password, 0).send()
     unlockAccountResponse.accountUnlocked() shouldEqual true
 
-    val currentCountResponse: EthGetTransactionCount = service.ethGetTransactionCount(firstAccount.address, latestBlock).send()
+    val currentCountResponse: EthGetTransactionCount =
+      service.ethGetTransactionCount(firstAccount.address, latestBlock).send()
     val currentCount = currentCountResponse.getTransactionCount
 
     val transferAmount = 100
@@ -1106,17 +1102,19 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
       service.ethSendTransaction(valueTransfer(firstAccount.address, secondAccount.address, transferAmount)).send()
     response1.getError shouldEqual null
 
-    val txCountResponse: EthGetTransactionCount = service.ethGetTransactionCount(firstAccount.address, latestBlock).send()
+    val txCountResponse: EthGetTransactionCount =
+      service.ethGetTransactionCount(firstAccount.address, latestBlock).send()
     val txCount = txCountResponse.getTransactionCount
 
     txCount.asBigInt shouldEqual currentCount.asBigInt
-  }
 
-  it should "eth_getTransactionCount (with pending block) without mining" taggedAs (PrivNetNoMining) in new ScenarioSetup {
-    val unlockAccountResponse: PersonalUnlockAccount = service.personalUnlockAccount(firstAccount.address, firstAccount.password, 0).send()
+  it should "eth_getTransactionCount (with pending block) without mining" taggedAs (PrivNetNoMining) in new ScenarioSetup:
+    val unlockAccountResponse: PersonalUnlockAccount =
+      service.personalUnlockAccount(firstAccount.address, firstAccount.password, 0).send()
     unlockAccountResponse.accountUnlocked() shouldEqual true
 
-    val currentCountResponse: EthGetTransactionCount = service.ethGetTransactionCount(firstAccount.address, latestBlock).send()
+    val currentCountResponse: EthGetTransactionCount =
+      service.ethGetTransactionCount(firstAccount.address, latestBlock).send()
     val currentCount = currentCountResponse.getTransactionCount
 
     val transferAmount = 100
@@ -1124,13 +1122,13 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
       service.ethSendTransaction(valueTransfer(firstAccount.address, secondAccount.address, transferAmount)).send()
     response1.getError shouldEqual null
 
-    val txCountResponseWithPendingBlock: EthGetTransactionCount = service.ethGetTransactionCount(firstAccount.address, pendingBlock).send()
+    val txCountResponseWithPendingBlock: EthGetTransactionCount =
+      service.ethGetTransactionCount(firstAccount.address, pendingBlock).send()
     val txCount = txCountResponseWithPendingBlock.getTransactionCount
 
     txCount.asBigInt shouldEqual currentCount.asBigInt
-  }
 
-  it should "personal_ListAccounts and eth_ListAccounts " taggedAs (PrivNet) in new ScenarioSetup {
+  it should "personal_ListAccounts and eth_ListAccounts " taggedAs (PrivNet) in new ScenarioSetup:
     val response: PersonalListAccounts = service.personalListAccounts().send()
     val personalAccounts = response.getAccountIds.asScala
 
@@ -1145,10 +1143,9 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
     val ethAccounts = response1.getAccounts.asScala
 
     ethAccounts should contain theSameElementsAs personalAccounts
-  }
 
   // There is no api to delete account, so to avoid creating a lot of unnecessery key stores several methods in one test
-  it should "personal_newAccount and personal_unlockAccount and personal_sendTransaction" taggedAs (PrivNet) in new ScenarioSetup {
+  it should "personal_newAccount and personal_unlockAccount and personal_sendTransaction" taggedAs (PrivNet) in new ScenarioSetup:
     val acc1Pass = "1234567"
     val response: NewAccountIdentifier = service.personalNewAccount(acc1Pass).send()
     val newAccId = response.getAccountId
@@ -1164,34 +1161,36 @@ class RpcApiTests extends AnyFlatSpec with Matchers with Logger {
 
     service.transactionFlowable().blockingFirst()
 
-    val transfer2: EthSendTransaction = service.personalSendTransaction(valueTransfer(newAccId, newAccId1, 100), "badpass").send()
-    transfer2.getError should not equal null
+    val transfer2: EthSendTransaction =
+      service.personalSendTransaction(valueTransfer(newAccId, newAccId1, 100), "badpass").send()
+    (transfer2.getError should not).equal(null)
     transfer2.getError.getMessage shouldEqual "Could not decrypt key with given passphrase"
 
     val unlock: PersonalUnlockAccount = service.personalUnlockAccount(newAccId, "badpass", 0).send()
-    unlock.getError should not equal null
+    (unlock.getError should not).equal(null)
     unlock.getError.getMessage shouldEqual "Could not decrypt key with given passphrase"
 
-    val transfer3: EthSendTransaction = service.personalSendTransaction(valueTransfer(newAccId, newAccId1, 100), acc1Pass).send()
+    val transfer3: EthSendTransaction =
+      service.personalSendTransaction(valueTransfer(newAccId, newAccId1, 100), acc1Pass).send()
     transfer3.getError shouldEqual null
-    transfer3.getTransactionHash should not equal null
+    (transfer3.getTransactionHash should not).equal(null)
 
     val unlock1: PersonalUnlockAccount = service.personalUnlockAccount(newAccId, acc1Pass, 5).send()
     unlock1.accountUnlocked() shouldEqual true
     unlock1.getError shouldEqual null
 
-    val transfer4: EthSendTransaction = service.ethSendTransaction(valueTransfer(newAccId, firstAccount.address, 10)).send()
+    val transfer4: EthSendTransaction =
+      service.ethSendTransaction(valueTransfer(newAccId, firstAccount.address, 10)).send()
     transfer4.getError shouldEqual null
 
     // Wait 5s
     Thread.sleep(5000)
 
-    val transfer5: EthSendTransaction = service.ethSendTransaction(valueTransfer(newAccId, firstAccount.address, 10)).send()
-    transfer5.getError should not equal null
-  }
-}
+    val transfer5: EthSendTransaction =
+      service.ethSendTransaction(valueTransfer(newAccId, firstAccount.address, 10)).send()
+    (transfer5.getError should not).equal(null)
 
-abstract class ScenarioSetup {
+abstract class ScenarioSetup:
   val testConfig: RpcTestConfig = RpcTestConfig("test.conf")
 
   // Some data from fukuii config (this data is not exposed to built version so it is safe to load it here
@@ -1212,32 +1211,27 @@ abstract class ScenarioSetup {
   val pendingBlock: DefaultBlockParameter = DefaultBlockParameter.valueOf("pending")
   val earliestBlock: DefaultBlockParameter = DefaultBlockParameter.valueOf("earliest")
 
-  def getBlockParam(number: BigInt): DefaultBlockParameter = {
+  def getBlockParam(number: BigInt): DefaultBlockParameter =
     DefaultBlockParameter.valueOf(number)
-  }
 
-  def getLogs(logResponse: EthLog): List[LogObject] = {
+  def getLogs(logResponse: EthLog): List[LogObject] =
     logResponse.getLogs.asScala.toList.map(log => log.asInstanceOf[LogObject])
-  }
 
-  def decode(s: String): Array[Byte] = {
+  def decode(s: String): Array[Byte] =
     val stripped = s.replaceFirst("^0x", "")
-    val normalized = if (stripped.length % 2 == 1) "0" + stripped else stripped
+    val normalized = if stripped.length % 2 == 1 then "0" + stripped else stripped
     Hex.decode(normalized)
-  }
 
-  def hexToBigInt(s: String): BigInt = {
+  def hexToBigInt(s: String): BigInt =
     BigInt(decode(s))
-  }
 
-  implicit class BigIntegerExt(val x: BigInteger) {
+  implicit class BigIntegerExt(val x: BigInteger):
     def asBigInt: BigInt = BigInt(x)
-  }
   implicit def intToBigInt(x: Int): BigInteger = BigInt(x).bigInteger
   implicit def BigIntToBingInteger(x: BigInt): BigInteger = x.bigInteger
 
   // Helpers to provide some meaningful naming in tests
-  def createContract(address: String, code: String, gasLimit: Option[BigInteger] = None): Transaction = {
+  def createContract(address: String, code: String, gasLimit: Option[BigInteger] = None): Transaction =
     new Transaction(
       address,
       null,
@@ -1247,9 +1241,8 @@ abstract class ScenarioSetup {
       null,
       code
     )
-  }
 
-  def contractCall(address: String, to: String, data: String, gasLimit: Option[BigInteger] = None): Transaction = {
+  def contractCall(address: String, to: String, data: String, gasLimit: Option[BigInteger] = None): Transaction =
     new Transaction(
       address,
       null,
@@ -1259,7 +1252,6 @@ abstract class ScenarioSetup {
       null,
       data
     )
-  }
 
   def valueTransfer(
       from: String,
@@ -1267,7 +1259,7 @@ abstract class ScenarioSetup {
       amount: BigInt,
       nonce: Option[BigInteger] = None,
       gasLimit: Option[BigInteger] = None
-  ): Transaction = {
+  ): Transaction =
     new Transaction(
       from,
       nonce.orNull,
@@ -1277,12 +1269,11 @@ abstract class ScenarioSetup {
       amount,
       null
     )
-  }
 
   val sampleTransaction: Transaction = createContract(firstAccount.address, testContract)
 
   // helper to setup two accounts with same nonce and some initial funding
-  def setupTwoNewAccounts(fundsProvider: String, amount: BigInt): (TestAccount, TestAccount) = {
+  def setupTwoNewAccounts(fundsProvider: String, amount: BigInt): (TestAccount, TestAccount) =
     val first = service.personalNewAccount("").send().getAccountId
     val second = service.personalNewAccount("").send().getAccountId
 
@@ -1296,19 +1287,16 @@ abstract class ScenarioSetup {
     service.blockFlowable(false).blockingFirst()
 
     (TestAccount(first, "", amount), TestAccount(second, "", amount))
-  }
 
   // Needed to sign transaction and send raw transactions
   val keyStoreConfig: KeyStoreConfig = KeyStoreConfig.customKeyStoreConfig(testConfig.keystoreDir)
 
   val keyStore = new KeyStoreImpl(keyStoreConfig, new SecureRandom())
 
-  def getAccountWallet(address: String, pass: String): Wallet = {
-    keyStore.unlockAccount(Address(address), pass) match {
-      case Right(w) => w
+  def getAccountWallet(address: String, pass: String): Wallet =
+    keyStore.unlockAccount(Address(address), pass) match
+      case Right(w)  => w
       case Left(err) => throw new RuntimeException(s"Cannot get wallet, because of $err")
-    }
-  }
 
   def prepareRawTx(
       fromAccount: TestAccount,
@@ -1316,7 +1304,7 @@ abstract class ScenarioSetup {
       value: Option[BigInt] = None,
       data: Option[ByteString] = None,
       nonce: BigInt
-  ): String = {
+  ): String =
     val fromAddress = Address(fromAccount.address)
     val fromWallet = getAccountWallet(fromAccount.address, fromAccount.password)
 
@@ -1332,5 +1320,3 @@ abstract class ScenarioSetup {
 
     val stx = fromWallet.signTx(transaction, None)
     Hex.toHexString(rlp.encode(stx.tx.toRLPEncodable))
-  }
-}

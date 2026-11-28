@@ -603,7 +603,7 @@ class BackgroundAuditWalkSpec extends AnyFlatSpec with Matchers:
 
   // ---- decision 15: what a delete rests on ----------------------------------------------------------------------------
 
-  private def read(s: AuditTestState): ByteString => RawNodeRead = hash => s.reader.nodes(Seq(hash)).head
+  private def read(s: AuditTestState): AuditWalk.AuditRead = (_, hash) => s.reader.nodes(Seq(hash)).head
 
   "stillNeeds" should "be true for a bad entry the root reaches at that position" taggedAs UnitTest in {
     val s = new AuditTestState

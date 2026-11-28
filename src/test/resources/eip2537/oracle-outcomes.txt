@@ -1,0 +1,11 @@
+# EIP-2537 oracle outcome digests (B-151): one line per op, `<op> <cases> <sha256>`, over every Eip2537Corpus input
+# and the outcome eth_pairings and gnark agree on (the output bytes, or failure). Eip2537DifferentialSpec checks this
+# file against both oracles; BlstEip2537Spec holds blst to it where no oracle has a build (Windows). When the corpus
+# changes, copy the "Computed:" lines Eip2537DifferentialSpec prints into this file.
+G1ADD 582 5fef6bec9b08e0110bc6e57585cda1c2b270a92067bc5f07e50a9a9e23fc7197
+G1MSM 542 6566df63751e9690dc7344e76e7e9a80a2e4bfcba29a336edfbd3780c0039c43
+G2ADD 651 6bbed7e3e9059ae860f1a882a87e44dab6b1ef627db5c69c87e1ee2b1ecc683b
+G2MSM 525 5defebc7fb6231390c496429020cb0482e2aed7d6144d0e4ac6b04d890370f88
+PAIRING 459 d4ed0ef70b229e6186813debb723eb22bf30b63f06bfc1207f8b769e00e6f41e
+MAP_FP_TO_G1 484 fd4b702ccfa604951d250afb8d12f1d99b98d4cf27e988411a3d86b7b2dcea3d
+MAP_FP2_TO_G2 393 53b87a99875ff745fe14faf00fcf81504310601f1a9b65860d5022f1bf585f6d

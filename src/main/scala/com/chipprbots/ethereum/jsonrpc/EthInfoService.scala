@@ -14,6 +14,7 @@ import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.crypto.ECDSASignature
 import com.chipprbots.ethereum.domain.*
@@ -146,8 +147,12 @@ class EthInfoService(
     gasCap: BigInt = CallTxBuilder.DefaultGasCap,
     // On the unified state layout, the adoption of a long branch under way (spec 018 C4d part 4b): the head walks down
     // to the fork and up the branch meanwhile, and this node is syncing to it. None elsewhere.
-    adoption: () => Option[com.chipprbots.ethereum.ledger.StateRecovery.Progress] = () => None
+    adoption: () => Option[com.chipprbots.ethereum.ledger.StateRecovery.Progress] = () => None,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 ) extends ResolveBlock:
+
+  // "safe" and "finalized" are the consensus client's, as in EthBlocksService (B-489)
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
 
   import EthInfoService.*
 
@@ -205,11 +210,12 @@ class EthInfoService(
                 pulledStates = stateNodesProgress.current
               )
             )
-          )
-        case Status.NotSyncing => SyncingResponse(None)
-        case Status.SyncDone   => SyncingResponse(None)
+          ).asRight
+        case Status.NotSyncing => SyncingResponse(None).asRight
+        case Status.SyncDone   => SyncingResponse(None).asRight
+        // B-319: neither syncing nor synced; `false` would say the node is at the head
+        case Status.Stopped(reason) => JsonRpcError.LogicError(s"the sync stopped: $reason").asLeft
       }
-      .map(_.asRight)
 
   /** eth_config (EIP-7910).
     *
@@ -248,7 +254,10 @@ class EthInfoService(
       ft.osakaTimestamp,
       ft.bpo1Timestamp,
       ft.bpo2Timestamp,
-      ft.amsterdamTimestamp
+      ft.amsterdamTimestamp,
+      ft.bpo3Timestamp,
+      ft.bpo4Timestamp,
+      ft.bpo5Timestamp
     ).flatten.distinct.sorted
 
     val head = headTimestamp
@@ -303,7 +312,7 @@ class EthInfoService(
   private def ethPrecompilesAt(ts: Timestamp): Map[String, Address] =
     val active =
       if blockchainConfig.isOsakaTimestamp(ts) then PrecompiledContracts.osakaContracts
-      else if blockchainConfig.isPragueTimestamp(ts) then PrecompiledContracts.olympiaContracts
+      else if blockchainConfig.isPragueTimestamp(ts) then PrecompiledContracts.pragueContracts
       else if blockchainConfig.isCancunTimestamp(ts) then PrecompiledContracts.cancunContracts
       else PrecompiledContracts.istanbulPhoenixContracts
     active.keys.flatMap(addr => Eip7910PrecompileNames.get(addr).map(_ -> addr)).toMap
@@ -462,8 +471,8 @@ class EthInfoService(
     StateRead
       .reading {
         for
-          resolved <- resolveBlock(req.block)
-          hi = CallTxBuilder.estimateGasCeiling(req.tx, resolved.block.header, gasCap)(using blockchainConfig)
+          resolved <- resolveHeader(req.block)
+          hi = CallTxBuilder.estimateGasCeiling(req.tx, resolved.header, gasCap)(using blockchainConfig)
           // the estimator does not skip the execution gas cap (gasestimator)
           prepared <- prepareCall(req, resolved, hi, skipExecutionGasCap = false)
           (msg, world) = prepared
@@ -504,8 +513,8 @@ class EthInfoService(
       .reading {
         for
           _ <- req.tx.validateForCall.left.map(_.toJsonRpcError)
-          resolved <- resolveBlock(req.block)
-          header = resolved.block.header
+          resolved <- resolveHeader(req.block)
+          header = resolved.header
           base = resolved.pendingState.getOrElse(stxLedger.worldAt(header))
           // geth applies the overrides straight after loading the state, before reading the sender's nonce, and with no
           // precompiles (`Apply(db, nil)`, api.go:1366): no move is possible and no precompile is deleted, so the
@@ -609,15 +618,15 @@ class EthInfoService(
       gas: BigInt,
       skipExecutionGasCap: Boolean
   ): Either[JsonRpcError, (CallTxBuilder.CallMessage, InMemoryWorldStateProxy)] =
-    resolveBlock(req.block).flatMap(prepareCall(req, _, gas, skipExecutionGasCap))
+    resolveHeader(req.block).flatMap(prepareCall(req, _, gas, skipExecutionGasCap))
 
   private def prepareCall(
       req: CallRequest,
-      resolved: ResolvedBlock,
+      resolved: ResolvedHeader,
       gas: BigInt,
       skipExecutionGasCap: Boolean
   ): Either[JsonRpcError, (CallTxBuilder.CallMessage, InMemoryWorldStateProxy)] =
-    val header = resolved.block.header
+    val header = resolved.header
     for
       // GraphQL builds TxArgs itself; the JSON-RPC decoder has already run this (decodeForCall)
       _ <- req.tx.validateForCall.left.map(_.toJsonRpcError)
@@ -660,6 +669,9 @@ class EthInfoService(
   private def callPreCheckError(suppliedGas: BigInt)(e: StxLedger.CallPreCheckError): JsonRpcError =
     JsonRpcError.LogicError(s"err: ${e.message} (supplied gas $suppliedGas)")
 
+  /** go-ethereum `revertError` (internal/ethapi): "execution reverted", with ": <reason>" when the payload is an
+    * `Error(string)` or a `Panic(uint256)` (`abi.UnpackRevert`), and the payload as `data` (B-026, from B-172).
+    */
   private def revertError(data: ByteString): JsonRpcError =
     val dataHex = "0x" + org.bouncycastle.util.encoders.Hex.toHexString(data.toArray[Byte])
-    JsonRpcError(3, "execution reverted", Some(org.json4s.JString(dataHex)))
+    JsonRpcError(3, com.chipprbots.ethereum.vm.RevertReason.message(data), Some(org.json4s.JString(dataHex)))

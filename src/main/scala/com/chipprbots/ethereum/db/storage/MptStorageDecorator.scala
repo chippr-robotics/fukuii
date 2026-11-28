@@ -81,6 +81,10 @@ trait MptStorageDecorator extends MptStorage:
 
   override def rawNodesAt(requests: Seq[(NibblePath, ByteString)]): Seq[RawNodeRead] = underlying.rawNodesAt(requests)
 
+  override def holdsNode(hash: ByteString): Boolean = underlying.holdsNode(hash)
+
+  override def holdsNodeAt(path: NibblePath, hash: ByteString): Boolean = underlying.holdsNodeAt(path, hash)
+
   override def storeRawNodes(nodes: Seq[(ByteString, Array[Byte])]): Unit = underlying.storeRawNodes(nodes)
 
 object MptStorageDecorator:

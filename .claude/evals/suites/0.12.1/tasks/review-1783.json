@@ -1,0 +1,43 @@
+{
+ "id": "review-1783",
+ "agent": "prism",
+ "chain": "n/a",
+ "source_prs": [
+  1783
+ ],
+ "base_sha": "3e33a4a648176ac077ef01dd33ed40cd09c523bc",
+ "prompt": "Review the dashboard's new frame loop and status probe thread (uncommitted change) before merge. Report blockers and should-fix items with file:line.",
+ "expected": {
+  "review_sha": "a03c429cd7e2e6a46fe4a906d9df57b7a9e4595b",
+  "review_ref": "pull/1783/head",
+  "files": [
+   "src/main/scala/com/chipprbots/ethereum/console/Tui.scala",
+   "src/main/scala/com/chipprbots/ethereum/console/TuiProbeThread.scala",
+   "src/main/scala/com/chipprbots/ethereum/nodebuilder/StdNode.scala"
+  ],
+  "must_not": [],
+  "gold_summary": "Blocker: the input check's NonFatal arm treats JLine's InterruptedIOException at stop() as a failed read: an ERROR with a stack and a TUI shutdown under the node's own shutdown, on every Ctrl-C. TuiProbeThread keeps polling after the TUI ends (no owner stops it); a hung or dead probe still shows Fresh; a fatal error escapes the probe thread. StdNode's TUI fields are not volatile though read from other threads. The new timing specs assert wall-clock bounds instead of events."
+ },
+ "rubric": [
+  "Identifies the interrupt at stop() being classified as a read failure (ERROR + shutdown)",
+  "Identifies that the probe thread outlives the TUI / has no owner that stops it",
+  "Identifies a fatal (non-NonFatal) error escaping the probe thread or a dead probe still shown as fresh",
+  "Identifies non-volatile cross-thread fields in StdNode",
+  "Identifies wall-clock assertions in the tests"
+ ],
+ "protocol": [
+  "prism: findings by lens and severity with file:line",
+  "read-only: no edits"
+ ],
+ "leak_markers": [
+  "#1783",
+  "b971c9dae",
+  "7847c70b",
+  "snapshotStaleAfter"
+ ],
+ "sprint": "0.12.1",
+ "type": "review",
+ "read_only": true,
+ "budget_usd": 3,
+ "timeout_s": 2400
+}

@@ -137,7 +137,10 @@ object ChainFacts:
       "BPO1" -> forks.bpo1Timestamp,
       "BPO2" -> forks.bpo2Timestamp
     )
-    val scheduled = named.collect { case (name, Some(at)) => ForkPoint(name, at) }.sortBy(_.at)
+    // BPO3..BPO5 (B-443) are listed when a chain schedules them and are never "not scheduled": unlike the named forks,
+    // no network is expected to reach them, as go-ethereum's banner prints a BPO fork only when it is set.
+    val optional = Seq("BPO3" -> forks.bpo3Timestamp, "BPO4" -> forks.bpo4Timestamp, "BPO5" -> forks.bpo5Timestamp)
+    val scheduled = (named ++ optional).collect { case (name, Some(at)) => ForkPoint(name, at) }.sortBy(_.at)
     ChainFacts(
       chainId,
       ChainFamily.PoS,

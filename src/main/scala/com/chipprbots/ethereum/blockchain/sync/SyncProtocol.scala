@@ -2,6 +2,7 @@ package com.chipprbots.ethereum.blockchain.sync
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
 
@@ -44,9 +45,18 @@ object SyncProtocol:
     * able to serve our parent stateRoot (typical when the node is many thousands of blocks behind canonical tip and the
     * snap-serve window of every connected peer has moved far past us). The controller responds by clearing the
     * SnapSyncDone flag and re-running SNAP sync from a recent pivot, which is the only viable recovery path.
+    *
+    * @param branch
+    *   on the hash layout, where a heavier chain leaves this one below the fork recovery's floor (B-346): the branch's
+    *   first block above the block the chains share. The re-SNAP is held to it, as the sync after an escalation on the
+    *   unified layout is (B-307), so that it takes its pivot, and the index above the common block, from the heavier
+    *   chain and not from the one this node leaves (B-351)
     */
-  final case class RegularSyncStuck(blockNumber: BigInt, missingHash: String)
-      extends SyncProtocolMsg
+  final case class RegularSyncStuck(
+      blockNumber: BigInt,
+      missingHash: String,
+      branch: Option[GivenUpBranch] = None
+  ) extends SyncProtocolMsg
       with RegularSyncCommand
 
   /** The escalation's watch found that this node cannot follow the chain with the state it has (spec 018 C5a part 7): a
@@ -138,6 +148,7 @@ object SyncProtocol:
       case Status.Syncing(_, _, _) => true
       case Status.NotSyncing       => false
       case Status.SyncDone         => false
+      case Status.Stopped(_)       => false
 
     def notSyncing: Boolean = !syncing
   object Status:
@@ -154,3 +165,6 @@ object SyncProtocol:
 
     case object NotSyncing extends Status
     case object SyncDone extends Status
+
+    /** The sync stopped and will not go on until the node is started again (B-319): why, for the operator. */
+    final case class Stopped(reason: String) extends Status

@@ -88,6 +88,16 @@ jobs:
         env:
           FUKUII_DEV: true
         continue-on-error: true
+
+      # Spec 018 T117 (B-220): the sequential runner with the unified layout's guard on, over the same vectors
+      - name: Run the sequential BlockchainTests on the unified state layout
+        run: |
+          sbt "IntegrationTest / testOnly com.chipprbots.ethereum.ethtest.ComprehensiveBlockchainTestsSpec" 2>&1 | tee ethereum-tests-unified-output.log
+          grep -E "(Tests: succeeded|All tests passed|TESTS FAILED)" ethereum-tests-unified-output.log || true
+        env:
+          FUKUII_DEV: true
+          FUKUII_ETHTEST_LAYOUT: unified
+        continue-on-error: true
       
       - name: Generate Test Report
         if: always()
@@ -132,6 +142,7 @@ jobs:
           name: ethereum-tests-nightly-logs-${{ github.run_number }}
           path: |
             ethereum-tests-output.log
+            ethereum-tests-unified-output.log
             ethereum-tests-summary.md
             /tmp/fukuii-it-test/**/*.log
           retention-days: 30
@@ -153,3 +164,149 @@ jobs:
         run: |
           echo "::warning::Ethereum/Tests nightly run failed. Check artifacts for details."
           echo "See https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }} for details"
+
+  # B-429: LegacyPreByzantiumBlockchainTestsSpec over ethereum/legacytests. The job above runs the same
+  # spec without a corpus, and it cancels there; here the corpus is checked out, pinned by commit, and the
+  # spec is told it is required, so a missing or partial checkout fails instead of cancelling.
+  #
+  # Corpus: legacytests @ LEGACY_TESTS_SHA, sparse: Constantinople/BlockchainTests and Cancun/BlockchainTests
+  # (14,193 files, ~2.3 GB on disk). Two slices: Frontier/Homestead/EIP150/EIP158 (6,817 vectors; the
+  # pre-Byzantium rules ETC history below Atlantis executes under, with a state root per receipt) and
+  # Byzantium..Berlin (54,497). Recorded at this commit in specs/018-storage-engine-consolidation/baselines/
+  # ethtests-2026-11-22.txt: every vector passes; the known-failure lists are empty (B-432), so any failure
+  # fails the job. A local run took 20 min (both slices); a separate job, so it does not count against the
+  # 60-minute budget of the job above.
+  legacy-blockchain-tests:
+    name: Legacy BlockchainTests (ethereum/legacytests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      LEGACY_TESTS_SHA: 1f581b8ccdc4c63acf5f2c5c1b155c690c32a8eb
+      LEGACY_TESTS_FILES: '14193'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Check out ethereum/legacytests at the pinned commit
+        uses: actions/checkout@v5
+        with:
+          repository: ethereum/legacytests
+          ref: ${{ env.LEGACY_TESTS_SHA }}
+          path: legacytests
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout: |
+            Constantinople/BlockchainTests
+            Cancun/BlockchainTests
+          sparse-checkout-cone-mode: true
+
+      - name: Verify the corpus
+        run: |
+          test "$(git -C legacytests rev-parse HEAD)" = "$LEGACY_TESTS_SHA"
+          files=$(find legacytests/Constantinople/BlockchainTests legacytests/Cancun/BlockchainTests -name '*.json' | wc -l)
+          echo "legacytests $LEGACY_TESTS_SHA: $files fixture files"
+          test "$files" -eq "$LEGACY_TESTS_FILES"
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+          cache: 'sbt'
+
+      - name: Cache Coursier
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: ${{ runner.os }}-sbt-25-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          restore-keys: |
+            ${{ runner.os }}-sbt-25-
+            ${{ runner.os }}-sbt-
+
+      - name: Set up SBT
+        uses: ./.github/actions/setup-sbt
+
+      - name: Run LegacyPreByzantiumBlockchainTestsSpec
+        run: sbt "IntegrationTest / testOnly com.chipprbots.ethereum.ethtest.LegacyPreByzantiumBlockchainTestsSpec" 2>&1 | tee legacy-tests-output.log
+        shell: bash -o pipefail {0}
+        env:
+          FUKUII_DEV: true
+          FUKUII_LEGACY_TESTS_REQUIRED: '1'
+          FUKUII_LEGACY_TESTS_DIRS: ${{ github.workspace }}/legacytests/Constantinople/BlockchainTests:${{ github.workspace }}/legacytests/Cancun/BlockchainTests
+          FUKUII_LEGACY_TESTS_REPORT: ${{ github.workspace }}/legacy-tests-failures.txt
+          # randomStatetest94 expands EVM memory to ~1.5 GB (the spec's HeapBound); 1024-deep call fixtures need the stack
+          SBT_OPTS: -Xmx6g -Xss4M
+
+      - name: Summary
+        if: always()
+        run: |
+          grep -E "(: [0-9]+ run, |TOTAL:|Tests: succeeded|TESTS FAILED|CANCELED)" legacy-tests-output.log || true
+          if [ -s legacy-tests-failures.txt ]; then
+            echo "--- report (failures, then per-network counts) ---"
+            head -100 legacy-tests-failures.txt
+          fi
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: legacy-tests-nightly-${{ github.run_number }}
+          path: |
+            legacy-tests-output.log
+            legacy-tests-failures.txt
+          retention-days: 30
+          if-no-files-found: warn
+
+  # Spec 021 T028: GT-2's full differential, UInt256DifferentialFullSpec (tag DifferentialTest): every UInt256 member
+  # against the BigInt oracle on >= 10^7 cases per operation, plus every named row. testEssential and testStandard
+  # exclude the tag; ci.yml also runs it on PRs that touch UInt256 or vm/. It took about 8 min on 4 cores, after
+  # the compile, before the swap (2026-11-25).
+  uint256-differential:
+    name: UInt256 GT-2 full differential (spec 021)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Set up JDK 25
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '25'
+          cache: 'sbt'
+
+      - name: Cache Coursier
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+            ~/.sbt
+          key: ${{ runner.os }}-sbt-25-${{ hashFiles('**/build.sbt', '**/build.properties', '**/Dependencies.scala', '**/plugins.sbt') }}
+          restore-keys: |
+            ${{ runner.os }}-sbt-25-
+            ${{ runner.os }}-sbt-
+
+      - name: Set up SBT
+        uses: ./.github/actions/setup-sbt
+
+      - name: Run UInt256DifferentialFullSpec
+        run: sbt "testOnly com.chipprbots.ethereum.domain.UInt256DifferentialFullSpec" 2>&1 | tee gt2-full-output.log
+        shell: bash -o pipefail {0}
+        env:
+          FUKUII_DEV: true
+
+      - name: Upload log
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: uint256-gt2-full-${{ github.run_number }}
+          path: gt2-full-output.log
+          retention-days: 30
+          if-no-files-found: warn

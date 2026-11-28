@@ -8,7 +8,6 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
 import scala.concurrent.Await
-import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration.*
 import scala.util.Failure
 import scala.util.Success
@@ -20,7 +19,9 @@ import com.chipprbots.ethereum.blockchain.sync.StoredBodyRepair
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncMetrics
+import com.chipprbots.ethereum.consensus.engine.EngineApiMetrics
 import com.chipprbots.ethereum.consensus.mining.StdMiningBuilder
+import com.chipprbots.ethereum.consensus.mining.ifEthash
 import com.chipprbots.ethereum.consensus.pow.PoWMiningMetrics
 import com.chipprbots.ethereum.console.AuditReading
 import com.chipprbots.ethereum.console.AuditSample
@@ -47,6 +48,7 @@ import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.SignedTransaction
 import com.chipprbots.ethereum.domain.StateReconciliation
 import com.chipprbots.ethereum.forkid.ForkId
+import com.chipprbots.ethereum.jsonrpc.CanonicalTxLookup
 import com.chipprbots.ethereum.jsonrpc.server.RpcExposureCheck
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
@@ -56,6 +58,8 @@ import com.chipprbots.ethereum.network.StaticNodesLoader
 import com.chipprbots.ethereum.network.discovery.PeerDiscoveryManager
 import com.chipprbots.ethereum.nodebuilder.tooling.PeriodicConsistencyCheck
 import com.chipprbots.ethereum.nodebuilder.tooling.StorageConsistencyChecker
+import com.chipprbots.ethereum.tls.TlsConfig
+import com.chipprbots.ethereum.tls.TlsStartupCheck
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.TxPoolMetrics
 import com.chipprbots.ethereum.utils.BuildInfo
@@ -89,6 +93,15 @@ abstract class BaseNode extends Node:
     // EngineApiStartupRefusal here, which the caller turns into one clear line and exit 1, not a stack trace from
     // phase 3 with P2P and discovery already up.
     StdNode.failIfRefused(engineApiJwtAuthenticator)
+    // A static node or bootnode that is not on the enabled node allowlist refuses the start too (spec 030 FR-053),
+    // before any listener or the P2P server starts.
+    StdNode.failIfRefused(nodeAllowlistStore)
+
+    // Phase -1 (spec 030 FR-010): every TLS listener's material is validated before the first port binds. The first
+    // failure is the refusal, so a listener never comes up half-configured next to one that did.
+    checkTlsAtStart()
+    // the identity-rules file reloads from here on (spec 030 FR-033); each TLS listener registers itself as it binds
+    startIdentityReload()
 
     // Phase 0: the TUI's frames, so its splash and "starting node" move while the node starts. The probe that feeds it
     // starts in phase 6, once the actors it asks exist.
@@ -98,22 +111,23 @@ abstract class BaseNode extends Node:
     startMetricsClient()
     // On the unified state layout the best block and the index are the held block's, made so before anything reads
     // them (spec 018 C4b part 4): the hash layout's two repairs trust the best block or the index, and would undo it.
-    if blockchainReader.holdsStateInPlace then
-      // a clear of the state that a kill interrupted is finished first: its rows are deleted before the state is
-      // looked at (spec 018 C5a part 3). It refuses a datadir that has the mark of one and a state.
-      refuseSnapRepairOnTheGuard()
-      finishPendingStateClear()
-      forgetGivenUpBranchesIfAsked()
-      reconcileState()
-    // A datadir stamped for the unified layout, opened with the guard off, never gets here: the layout guard refused
-    // it where the storages were built (spec 018 data-model 5.3), so nothing is repaired in it.
-    else
-      fixDatabase()
-      repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
+    StdNode.repairsAtStart(blockchainReader.holdsStateInPlace)(
+      onUnified = () =>
+        // a clear of the state that a kill interrupted is finished first: its rows are deleted before the state is
+        // looked at (spec 018 C5a part 3). It refuses a datadir that has the mark of one and a state.
+        refuseSnapRepairOnTheGuard()
+        finishPendingStateClear()
+        forgetGivenUpBranchesIfAsked()
+        reconcileState()
+      ,
+      onHash = () =>
+        fixDatabase()
+        repairBestBlockMapping() // before any server binds, so no newPayload/FCU races the read-then-write
+    )
     loadGenesisData()
     repairStoredBodies() // after genesis is loaded, before the sync controller reads the backfill cursors
     importChainData() // Must complete before APIs so queries return chain data
-    refuseRegularSyncFromGenesisOnTheGuard() // after the genesis and a chain file: what they leave is what syncs
+    refuseRegularSyncWithNoStateOnTheGuard() // after the genesis and a chain file: what they leave is what syncs
     tuiStarted(StartupPhase.Storage)
 
     // Phase 2: P2P networking — bind discovery + TCP server BEFORE the user-facing
@@ -121,6 +135,7 @@ abstract class BaseNode extends Node:
     // bring up RPC first, hive starts probing UDP 30303 (discovery) before our
     // discovery service has bound. Race is small but real and shows up as
     // i/o-timeout failures in the discv4 hive suite.
+    startAllowlistReload()
     startServer()
     loadStaticNodes()
     startPortForwarding()
@@ -309,6 +324,7 @@ abstract class BaseNode extends Node:
     Metrics.configure(metricsConfig, instanceConfig.instanceId) match
       case Success(_) =>
         log.info("Metrics started")
+        if metricsConfig.enabled && metricsConfig.tlsEnabled then startMetricsTlsServer(metricsConfig)
 
         if metricsConfig.enabled then
           val snapSyncEnabled =
@@ -322,7 +338,37 @@ abstract class BaseNode extends Node:
           // (spec 002 US2 / FR-005). No-op unless the DataSource is a RocksDbDataSource; the gauges
           // read 0.0 until db.rocksdb.enable-statistics = true.
           RocksDbCacheMetrics.register(storagesInstance.dataSource)
+
+          // The state layout's meters (B-425): made when the storages were built, before this registry was installed;
+          // they are on it from here, so db.state.* is exported from the start.
+          com.chipprbots.ethereum.db.storage.pathstate.StateMetrics.register()
       case Failure(exception) => throw exception
+
+  /** The metrics endpoint over TLS (spec 030 FR-016): bound through the node's TLS stack and awaited; a bind that fails
+    * stops the node, as for every TLS listener (FR-011).
+    */
+  private def startMetricsTlsServer(config: MetricsConfig): Unit =
+    val bind = com.chipprbots.ethereum.tls.TlsServerEngine
+      .metrics(instanceConfig.config, secureRandom)
+      .left
+      .map(e => new IllegalStateException(e.message))
+      .flatMap(_.toRight(new IllegalStateException("fukuii.metrics.tls: TLS is not configured on this listener")))
+      .fold(
+        scala.concurrent.Future.failed,
+        ctx =>
+          tlsReloader.register(com.chipprbots.ethereum.tls.ListenerId.Metrics.label, ctx)
+          com.chipprbots.ethereum.metrics.MetricsTlsServer.bind(config.interface, config.port, ctx)(using classicSystem)
+      )
+    try
+      val binding = scala.concurrent.Await.result(bind, 10.seconds)
+      log.info(s"Metrics server (TLS) bound to ${binding.localAddress}")
+    catch
+      case scala.util.control.NonFatal(e) =>
+        throw StdNode.startupRefusal(
+          s"Refusing to start: the metrics endpoint cannot start on ${config.interface}:${config.port} " +
+            s"(${e.getClass.getSimpleName}: ${e.getMessage}). Fix fukuii.metrics (interface, port, tls), or set " +
+            "fukuii.metrics.enabled = false."
+        )
 
   private def loadGenesisData(): Unit =
     if !Config.testmode then genesisDataLoader.loadGenesisData()
@@ -331,8 +377,16 @@ abstract class BaseNode extends Node:
     val chainFile = scala.util.Try(instanceConfig.config.getString("import-chain-file")).toOption
     chainFile.foreach { path =>
       log.info(s"Importing chain data from: $path")
-      val (imported, skipped, failed) = chainImporter.importChainFile(path)
-      log.info(s"Chain import: $imported imported, $skipped skipped, $failed failed")
+      val summary = chainImporter.importChainFile(path)
+      summary.busy match
+        // another writer held the head: the import stopped there, nothing of that block written (B-487)
+        case Some(busy) =>
+          log.warn(
+            s"[STATE-BUSY] Chain import: ${summary.imported} imported, ${summary.skipped} skipped, " +
+              s"${summary.failed} failed, then stopped: ${busy.getMessage}. Restart to import the rest"
+          )
+        case None =>
+          log.info(s"Chain import: ${summary.imported} imported, ${summary.skipped} skipped, ${summary.failed} failed")
     }
 
   private def runDBConsistencyCheck(): Unit =
@@ -361,6 +415,25 @@ abstract class BaseNode extends Node:
         )(using log)
 
   private def startPeerManager(): Unit = peerManager ! PeerManagerActor.StartConnectingCmd
+
+  /** With the node allowlist on, announces it (FR-060) and reloads its file every `reload-interval` (FR-058). */
+  private def startAllowlistReload(): Unit =
+    nodeAllowlistStore.foreach { store =>
+      val interval = nodeAllowlistReloadInterval
+      log.info(
+        "P2P node allowlist on: {} node(s), {}, reload every {}; discovery is off",
+        store.allowlist.snapshot.size,
+        store.filePath.fold("no file (runtime edits refused)")(f => s"file $f"),
+        interval
+      )
+      val _ = store.schedule(interval, classicSystem.scheduler)(using classicSystem.dispatcher)
+      // metrics are configured by now: the meters go on the exported registry (see NodeAllowlistMetrics)
+      com.chipprbots.ethereum.network.NodeAllowlistMetrics.register()
+      // FR-051: the refusals, logged at DEBUG one by one, are summed at INFO each minute (contracts/observability.md)
+      val _ = classicSystem.scheduler.scheduleWithFixedDelay(1.minute, 1.minute)(() =>
+        com.chipprbots.ethereum.network.NodeAllowlistMetrics.summary().foreach(line => log.info(line))
+      )(using classicSystem.dispatcher)
+    }
 
   /** Load static peer nodes from ${datadir}/static-nodes.json and add each to the maintained-peers set.
     *
@@ -397,13 +470,26 @@ abstract class BaseNode extends Node:
   private def startMining(): Unit =
     // A node that produces blocks takes transactions from peers: core-geth's StartMining calls
     // `enableSyncedFeatures()` for the same reason, or a miner held behind the gate would mine empty blocks.
-    if mining.config.generic.miningEnabled then
-      txGossipGate.markSynced("block production is enabled")
-      // The DAG gauges are written from the mining thread (EthashDAGManager), inside loops whose failure paths
-      // delete and regenerate the DAG file. Initialise the metrics object here, after startMetricsClient and before
-      // that thread exists, so that a failed initialiser surfaces at start-up and not on it (spec 027 slice 5, M2).
+    if mining.config.generic.miningEnabled then txGossipGate.markSynced("block production is enabled")
+    // The DAG gauges are written from the mining thread (EthashDAGManager), inside loops whose failure paths delete and
+    // regenerate the DAG file, and eth_getWork / eth_submitWork / eth_mining touch the object on an IO fiber whether
+    // or not this node mines. Initialise it here, after startMetricsClient and before that thread or the first request
+    // exists, so that a failed initialiser surfaces at start-up and not on either (spec 027 slice 5, M2; B-194: a
+    // LinkageError on an IO fiber is fatal to every IORuntime). Only under Ethash: no other mining touches it.
+    mining.ifEthash { _ =>
       val _ = PoWMiningMetrics
+    }(())
     mining.startProtocol(this)
+
+  /** The pre-bind TLS pass: refuses the start on the first misconfiguration, logs one line per TLS listener. */
+  private def checkTlsAtStart(): Unit =
+    val config = instanceConfig.config
+    TlsStartupCheck.run(config, availableApis) match
+      case Left(message) => throw StdNode.startupRefusal(message)
+      case Right(lines) =>
+        if TlsStartupCheck.usesLegacy(config) then log.warn(TlsConfig.LegacyDeprecation)
+        com.chipprbots.ethereum.tls.BindPolicy.insecureWarnings(config).foreach(line => log.warn(line))
+        lines.flatMap(_.renderAll).foreach(line => log.info(line))
 
   private def startDiscoveryManager(): Unit = peerDiscoveryManagerTyped ! PeerDiscoveryManager.Start
 
@@ -420,29 +506,24 @@ abstract class BaseNode extends Node:
     * Awaiting here makes 8545 genuinely the last port up, which is what hive/fukuii/Dockerfile's HIVE_CHECK_LIVE_PORT
     * now keys on: 8545 accepting connections implies 8551 already does.
     *
-    * A bind failure is logged, not thrown -- a node that cannot serve RPC should still sync.
+    * A bind failure, and an HTTPS server whose TLS context cannot be built, are fatal (B-148, spec 030 FR-011): a node
+    * that logged it and ran on would look healthy with no RPC, or with the operator believing the port is encrypted.
     */
   private def startJsonRpcHttpServer(): Unit =
+    val httpConfig = jsonRpcConfig.httpServerConfig
     maybeJsonRpcHttpServer match
-      case Right(jsonRpcServer) if jsonRpcConfig.httpServerConfig.enabled =>
-        try
-          val binding = scala.concurrent.Await.result(
-            jsonRpcServer.run(),
-            scala.concurrent.duration.Duration(10, "seconds")
-          )
-          log.info(s"JSON-RPC HTTP server bound to ${binding.localAddress}")
-        catch
-          case ex: Exception =>
-            log.error(
-              s"JSON-RPC HTTP server failed to start on ${jsonRpcConfig.httpServerConfig.interface}:" +
-                s"${jsonRpcConfig.httpServerConfig.port}",
-              ex
-            )
-      case Left(error) if jsonRpcConfig.httpServerConfig.enabled =>
-        log.error(error)
-        // No server was made: it will not listen, and the dashboard's RPC view says so (spec 029 FR-039).
+      case Right(jsonRpcServer) if httpConfig.enabled =>
+        StdNode.awaitJsonRpcHttpBind(jsonRpcServer.run(), httpConfig.interface, httpConfig.port, 10.seconds) match
+          case Right(binding) => log.info(s"JSON-RPC HTTP server bound to ${binding.localAddress}")
+          case Left(message)  =>
+            // No server is listening: the dashboard's RPC view says so (spec 029 FR-039), then the start is refused.
+            com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node
+              .listening(com.chipprbots.ethereum.jsonrpc.RpcCallStats.Http, isListening = false)
+            throw StdNode.startupRefusal(message)
+      case Left(error) if httpConfig.enabled =>
         com.chipprbots.ethereum.jsonrpc.RpcCallStats.Node
           .listening(com.chipprbots.ethereum.jsonrpc.RpcCallStats.Http, isListening = false)
+        throw StdNode.startupRefusal(s"Refusing to start: $error (fukuii.network.rpc.http.mode must be http or https)")
       case _ => // Nothing
   /** The JSON-RPC transports as the dashboard's RPC view lists them (spec 029 FR-039): from the node's configuration,
     * with each one's exposure worked out once by the start-up warning's own rule. The Engine API is listed where it is
@@ -450,6 +531,8 @@ abstract class BaseNode extends Node:
     */
   private def tuiRpcTransports: Seq[com.chipprbots.ethereum.console.TransportStatus] =
     import com.chipprbots.ethereum.console.TransportAuth
+    import com.chipprbots.ethereum.console.TransportClientAuth
+    import scala.util.chaining.scalaUtilChainingOps
     import com.chipprbots.ethereum.console.TransportKind
     import com.chipprbots.ethereum.console.TransportStatus
     val http = jsonRpcConfig.httpServerConfig
@@ -457,16 +540,33 @@ abstract class BaseNode extends Node:
     val ipc = jsonRpcConfig.ipcServerConfig
     def exposed(name: String, key: String, enabled: Boolean, interface: String, apis: Seq[String]): Seq[String] =
       RpcExposureCheck.exposedNamespaces(RpcExposureCheck.Transport(name, key, enabled, interface, apis))
-    val engine = Option.when(engineApiConfig.enabled || blockchainConfig.networkType == NetworkType.ETH)(
-      TransportStatus(
-        TransportKind.Engine,
-        engineApiConfig.enabled,
-        None,
-        s"${engineApiConfig.interface}:${engineApiConfig.port}",
-        Seq("engine", "eth", "net", "web3"),
-        TransportAuth.Jwt
+    // each listener's TLS, client-auth and plaintext opt-out, as the bind policy reads them (spec 030 FR-061)
+    val listeners = com.chipprbots.ethereum.tls.BindPolicy.listeners(instanceConfig.config).map(l => l.id -> l).toMap
+    def tlsOf(id: com.chipprbots.ethereum.tls.ListenerId): TransportStatus => TransportStatus = t =>
+      listeners.get(id).fold(t) { l =>
+        val key = s"${l.key}.tls.client-auth"
+        val auth =
+          if !l.tls || !instanceConfig.config.hasPath(key) then TransportClientAuth.None
+          else
+            instanceConfig.config.getString(key).trim.toLowerCase(java.util.Locale.ROOT) match
+              case "need" => TransportClientAuth.Need
+              case "want" => TransportClientAuth.Want
+              case _      => TransportClientAuth.None
+        t.copy(tls = l.tls, clientAuth = auth, insecureBind = l.allowInsecure)
+      }
+    import com.chipprbots.ethereum.tls.ListenerId
+    val engine = Option
+      .when(engineApiConfig.enabled || blockchainConfig.networkType == NetworkType.ETH)(
+        TransportStatus(
+          TransportKind.Engine,
+          engineApiConfig.enabled,
+          None,
+          s"${engineApiConfig.interface}:${engineApiConfig.port}",
+          Seq("engine", "eth", "net", "web3"),
+          TransportAuth.Jwt
+        )
       )
-    )
+      .map(tlsOf(ListenerId.EngineApi))
     Seq(
       TransportStatus(
         TransportKind.Http,
@@ -475,9 +575,8 @@ abstract class BaseNode extends Node:
         s"${http.interface}:${http.port}",
         jsonRpcConfig.httpApis,
         TransportAuth.None,
-        exposed("HTTP", "http", http.enabled, http.interface, jsonRpcConfig.httpApis),
-        tls = http.mode == "https"
-      ),
+        exposed("HTTP", "http", http.enabled, http.interface, jsonRpcConfig.httpApis)
+      ).pipe(tlsOf(ListenerId.RpcHttp)),
       TransportStatus(
         TransportKind.Ws,
         ws.enabled,
@@ -486,7 +585,7 @@ abstract class BaseNode extends Node:
         jsonRpcConfig.wsApis,
         TransportAuth.None,
         exposed("WebSocket", "ws", ws.enabled, ws.interface, jsonRpcConfig.wsApis)
-      ),
+      ).pipe(tlsOf(ListenerId.RpcWs)),
       TransportStatus(
         TransportKind.Ipc,
         ipc.enabled,
@@ -517,8 +616,17 @@ abstract class BaseNode extends Node:
       )
       .foreach(warning => log.warn(warning))
 
+  /** Starts the WebSocket server. Over TLS it waits for the bind, and a bind that fails stops the node (spec 030
+    * FR-011): a node that ran on would leave the operator believing WSS is served. Plaintext keeps its asynchronous
+    * start.
+    */
   private def startJsonRpcWsServer(): Unit =
-    if jsonRpcConfig.wsServerConfig.enabled then jsonRpcWsServer.run()
+    val wsConfig = jsonRpcConfig.wsServerConfig
+    if wsConfig.enabled && wsConfig.tlsEnabled then
+      StdNode.awaitJsonRpcWsBind(jsonRpcWsServer.lifecycle.start(), wsConfig.interface, wsConfig.port, 10.seconds) match
+        case Right(binding) => log.info(s"JSON-RPC WSS server bound to ${binding.localAddress}")
+        case Left(message)  => throw StdNode.startupRefusal(message)
+    else if wsConfig.enabled then jsonRpcWsServer.run()
 
   private def startJsonRpcIpcServer(): Unit =
     if jsonRpcConfig.ipcServerConfig.enabled then jsonRpcIpcServer.run()
@@ -528,6 +636,10 @@ abstract class BaseNode extends Node:
     */
   private def startEngineApiServer(): Unit =
     maybeEngineApiServer.foreach { server =>
+      // engine_newPayload, engine_forkchoiceUpdated and the JWT check record into EngineApiMetrics on an IO fiber.
+      // Initialise it here, after startMetricsClient and before the first request can arrive, so that a failed
+      // initialiser surfaces at start-up (B-194: a LinkageError on an IO fiber is fatal to every IORuntime).
+      val _ = EngineApiMetrics
       StdNode.awaitEngineApiBind(server.start(), engineApiConfig.interface, engineApiConfig.port, 10.seconds) match
         case Right(binding) => log.info(s"Engine API server bound to ${binding.localAddress}")
         case Left(message)  => throw StdNode.startupRefusal(message)
@@ -556,10 +668,9 @@ abstract class BaseNode extends Node:
   private def startTuiFrames(): Unit =
     // Tui.current, never getInstance(): a node started without --tui has no TUI, and asking must not make one (B-045).
     Tui.current.filter(_.isEnabled).foreach { tui =>
-      // `q` restores the terminal, then exits the JVM; the shutdown hook (ShutdownHooks) runs this node's shutdown(),
-      // which stops the updater. The restore cannot wait for the TuiRestore hook: JLine's hook may close the terminal
-      // first, leaving the user's shell in the alternate screen with the cursor hidden.
-      val quit = TuiUpdater.restoreThenQuit(tui, () => sys.exit(0))
+      // `q` restores the terminal, runs this node's stop (or waits for one under way), then exits with its status
+      // (B-452): the JVM's hook does not wait for a stop under way, so exiting first could cut the database's close.
+      val quit = StdNode.tuiQuit(tui, () => stopForExit(), code => sys.exit(code))
       // The settings Fukuii.main loaded (`fukuii.tui` plus the environment) when it built the TUI.
       val updater = TuiUpdater(tui, tui.config, () => tuiSnapshots.get, Config.blockchains.network, quit)
       // The chain's identity, from the configuration alone, before the first frame: the sidebar's icon and the header
@@ -619,7 +730,9 @@ abstract class BaseNode extends Node:
         isMined = hash =>
           ChainReads
             .bytes(hash)
-            .exists(b => storagesInstance.storages.transactionMappingStorage.get(b.toIndexedSeq).isDefined),
+            .exists(b =>
+              CanonicalTxLookup(storagesInstance.storages.transactionMappingStorage, blockchainReader, b).isDefined
+            ),
         poolCapacity = txPoolConfig.txPoolSize,
         poolCounters = () => Some(TxPoolMetrics.Node.snapshot),
         // Spec 029 slice 5, the RPC view: the transports as configured, and what their servers counted.
@@ -655,9 +768,8 @@ abstract class BaseNode extends Node:
           bodyByHash = blockchainReader.getBlockBodyByHash,
           receiptsByHash = blockchainReader.getReceiptsByHash,
           txLocation = hash =>
-            storagesInstance.storages.transactionMappingStorage
-              .get(hash.toIndexedSeq)
-              .map(location => (location.blockHash, location.txIndex)),
+            CanonicalTxLookup(storagesInstance.storages.transactionMappingStorage, blockchainReader, hash)
+              .map(found => (found.block.header.hash.value, found.txIndex)),
           accountAt = blockchainReader.accountAt,
           codeSize = hash => storagesInstance.storages.evmCodeStorage.get(hash).map(_.size),
           sender = stx => SignedTransaction.getSender(stx)(using blockchainConfig),
@@ -709,54 +821,125 @@ abstract class BaseNode extends Node:
       enginePort = opt(c.getInt("network.engine-api.port")).getOrElse(0)
     )
 
-  override def shutdown: () => Unit = () =>
-    def tryAndLogFailure(f: () => Any): Unit = Try(f()) match // Any: accepts any thunk — return value discarded
-      case Failure(e) => log.warn("Error while shutting down...", e)
-      case Success(_) =>
+  // The stop, run by the first call (B-274, B-426). A later call waits for it to end, so the SIGTERM handler that comes
+  // after a stop began elsewhere (a failed start, `shutdownOnError`) exits with that stop's outcome, not while the
+  // database still closes; one re-entered on the stop's own thread returns at once. The JVM hook does not wait: a start
+  // that fails shuts the node down within a bound and then exits, and a first stop that overran its bound must not
+  // hold that exit up (B-274). Lazy: the hook can run before this trait's constructor has.
+  private lazy val stopOnce = new StopOnce[ShutdownSequence.Outcome](() => shutDownOnce())
 
-    tryAndLogFailure(() => tuiProbe.foreach(_.stop()))
-    tryAndLogFailure(() => tuiUpdater.foreach(_.stop()))
-    tryAndLogFailure(() => Tui.current.foreach(_.shutdown()))
-    tryAndLogFailure(() => peerDiscoveryManagerTyped ! PeerDiscoveryManager.Stop)
-    tryAndLogFailure(() => mining.stopProtocol())
-    // Stop the Engine API server first: it owns its own Http() binding (port 8551) on a dedicated
-    // ActorSystem + IORuntime. Terminate them before the main ActorSystem so the port is released
-    // and its dispatcher/compute pools don't outlive node death.
-    tryAndLogFailure(() =>
-      maybeEngineApiServer.foreach { engineServer =>
-        shutdownTimeoutDuration match
-          case fd: scala.concurrent.duration.FiniteDuration => engineServer.stopSync(fd)
-          case _                                            => engineServer.stopSync()
-      }
-    )
-    // The recovery of a state that is no longer held stops once nothing can ask for one, and before the data source
-    // closes: one under way ends after the block it is executing (spec 018 C4d part 3).
-    tryAndLogFailure(() => stateRecovery.foreach(_.close()))
-    // Discovery's own runtime goes once the Stop sent above has released the service (UDP socket, feeder), and before
-    // the actor system that hosts PeerDiscoveryManager is terminated (task #52).
-    tryAndLogFailure(() => shutdownDiscoveryIoRuntime(10.seconds))
-    // Terminate the secondary ActorSystem hosting the periodic DB consistency check.
-    tryAndLogFailure(() =>
-      periodicConsistencyCheckSystem.foreach { s =>
-        s.terminate()
-        Await.ready(s.whenTerminated, shutdownTimeoutDuration)
-      }
-    )
-    tryAndLogFailure(() =>
-      Await.ready(
-        system.classicSystem
-          .terminate()
-          .map(
-            _ ->
-              log.info("actor system finished")
-          ),
-        shutdownTimeoutDuration
+  override def shutdown: () => Unit = () => stopOnce.run(): Unit
+
+  override def shutdownOnExit(): Unit = stopOnce.runOrLeave()
+
+  /** Whether this node's stop has run and closed the database: the exit status of a SIGTERM stop is 0 only then. */
+  def stoppedCleanly: Boolean = stopOnce.outcome.exists(_.toOption.exists(_.completed(StdNode.CloseDatabase)))
+
+  /** Runs this node's stop, or waits for the one under way, and says whether it closed the database: what an exit path
+    * that starts once the node is up calls before it exits (SIGTERM, the TUI's `q`, the Ephemery reset; B-452).
+    */
+  def stopForExit(): Boolean =
+    shutdown()
+    stoppedCleanly
+
+  /** The store failed during an import (B-440, the user's decision of 2026-11-24): a write refused, a read that failed,
+    * or a store busy `ConsensusAdapter.BusyBeforeStop` times with no block made the head, and for at least
+    * `ConsensusAdapter.BusyStopAfter`. The node stops, on a thread of its own, and exits non-zero
+    * ([[StopSignal.stopThenExitAside]]).
+    */
+  override lazy val onFatalStoreFailure: Throwable => Unit =
+    val stop =
+      StopSignal.stopThenExitAside("the store failed", () => stopForExit(), code => sys.exit(code))
+    _ => stop()
+
+  private def shutDownOnce(): ShutdownSequence.Outcome =
+    import ShutdownSequence.Budget
+    import ShutdownSequence.Step
+    val quick = Budget.Bounded(StdNode.QuickStepBudget)
+    // A step that bounds its own wait by `shutdown-timeout` is given that much and a little more, so its own wait, not
+    // the sequence's, is what ends it.
+    val ownWait: Budget = Budget.upTo(shutdownTimeoutDuration + StdNode.OwnWaitMargin)
+    val steps = Seq(
+      Step("TLS reloader", quick, () => tlsReloader.shutdown()),
+      // Option(...).flatten: a start refused while a parent trait initialises runs this stop before BaseNode's
+      // constructor has set these fields, so they are still null, not None (B-399).
+      Step("TUI probe", quick, () => Option(tuiProbe).flatten.foreach(_.stop())),
+      Step("TUI updater", quick, () => Option(tuiUpdater).flatten.foreach(_.stop())),
+      Step("TUI", quick, () => Tui.current.foreach(_.shutdown())),
+      Step("discovery stop", quick, () => peerDiscoveryManagerTyped ! PeerDiscoveryManager.Stop),
+      Step("miner", quick, () => mining.stopProtocol()),
+      // Stop the Engine API server first: it owns its own Http() binding (port 8551) on a dedicated ActorSystem +
+      // IORuntime. Terminate them before the main ActorSystem so the port is released and its dispatcher/compute pools
+      // don't outlive node death. It is also the one writer from outside: no newPayload executes a block after it.
+      Step(
+        "Engine API server",
+        ownWait,
+        () =>
+          maybeEngineApiServer.foreach { engineServer =>
+            shutdownTimeoutDuration match
+              case fd: FiniteDuration => engineServer.stopSync(fd)
+              case _                  => engineServer.stopSync()
+          }
+      ),
+      // The recovery of a state that is no longer held stops once nothing can ask for one, and before the data source
+      // closes: one under way ends after the block it is executing (spec 018 C4d part 3).
+      Step("state recovery", quick, () => stateRecovery.foreach(_.close())),
+      // Discovery's own runtime goes once the Stop sent above has released the service (UDP socket, feeder), and before
+      // the actor system that hosts PeerDiscoveryManager is terminated (task #52).
+      Step(
+        "discovery runtime",
+        Budget.Bounded(StdNode.DiscoveryRuntimeWait + StdNode.OwnWaitMargin),
+        () => shutdownDiscoveryIoRuntime(StdNode.DiscoveryRuntimeWait)
+      ),
+      // The secondary ActorSystem hosting the periodic DB consistency check.
+      Step(
+        "consistency-check actor system",
+        Budget.upTo(shutdownTimeoutDuration),
+        () =>
+          Option(periodicConsistencyCheckSystem).flatten.foreach { s => // null before the constructor ran (B-399)
+            s.terminate()
+            Await.ready(s.whenTerminated, Duration.Inf): Unit
+          }
+      ),
+      // Sync (SNAP and regular), the peers, the miner's coordinator, the JSON-RPC and WebSocket servers' streams: every
+      // actor. It terminates once each actor has returned from the message it is handling, so past its budget the log
+      // names the actors still alive and the calls their threads are in (B-426: 15 s passed and nothing said which).
+      Step(
+        "actor system",
+        Budget.upTo(shutdownTimeoutDuration),
+        () => Await.ready(system.classicSystem.terminate(), Duration.Inf): Unit,
+        onOverrun = () =>
+          val tree = Try(system.printTree).getOrElse("(no actor tree)")
+          Some(
+            s"actors still alive:\n$tree\n" +
+              ShutdownSequence
+                .busyThreadStacks(system.name)
+                .fold("no busy thread of the actor system")(stacks => s"its busy threads:\n$stacks")
+          )
+      ),
+      Step(
+        "port forwarding",
+        Budget.upTo(shutdownTimeoutDuration),
+        () => Await.ready(stopPortForwarding(), Duration.Inf): Unit
+      ),
+      Step("IPC server", quick, () => if jsonRpcConfig.ipcServerConfig.enabled then jsonRpcIpcServer.close()),
+      Step("metrics", quick, () => Metrics.get().close()),
+      // Last, once nothing that writes is left running, and with no budget: a close cut short is the corruption a
+      // clean stop is there to avoid. It waits for the block import under way, if any, to commit, and holds the import
+      // lock while it closes, so no other block import starts; RocksDB's close then waits for the writes in progress and
+      // cancels the running compactions (B-281).
+      Step(
+        StdNode.CloseDatabase,
+        Budget.Unbounded(ShutdownSequence.DefaultNotice),
+        () =>
+          StdNode.closeAfterImports(
+            StdNode.ImportWait,
+            wait => close => com.chipprbots.ethereum.ledger.ChainInsertLock.tryExclusive(wait)(close()),
+            () => storagesInstance.dataSource.close()
+          )
       )
     )
-    tryAndLogFailure(() => Await.ready(stopPortForwarding(), shutdownTimeoutDuration))
-    if jsonRpcConfig.ipcServerConfig.enabled then tryAndLogFailure(() => jsonRpcIpcServer.close())
-    tryAndLogFailure(() => Metrics.get().close())
-    tryAndLogFailure(() => storagesInstance.dataSource.close())
+    ShutdownSequence.run(steps)
 
   /** `-Dfukuii.snap.clearDoneOnStart` on the unified state layout (spec 018 C5a part 10): refused, and the node does
     * not start. It re-runs SNAP's healing over a state the node holds, on the hash-keyed store, which this layout never
@@ -767,15 +950,16 @@ abstract class BaseNode extends Node:
       .snapRepairRefusal(System.getProperty("fukuii.snap.clearDoneOnStart", "false").toBoolean)
       .foreach(why => throw new IllegalStateException(why))
 
-  /** A node on the unified state layout that would run regular sync from its genesis (spec 018 C5a part 10, the user's
-    * decision of 2026-11-17): refused, and the node does not start
-    * ([[com.chipprbots.ethereum.blockchain.sync.PathLiveSync.regularSyncFromGenesisRefusal]]).
+  /** A node on the unified state layout that would run regular sync with no state at all (spec 018 C5a part 10):
+    * refused, and the node does not start
+    * ([[com.chipprbots.ethereum.blockchain.sync.PathLiveSync.regularSyncWithNoStateRefusal]]). Regular sync from the
+    * genesis state starts, on every chain (the user's decision of 2026-11-24, B-314).
     */
-  def refuseRegularSyncFromGenesisOnTheGuard(): Unit =
+  def refuseRegularSyncWithNoStateOnTheGuard(): Unit =
     storagesInstance.storages.pathStateStorage.foreach { pathState =>
       val appState = storagesInstance.storages.appStateStorage
       com.chipprbots.ethereum.blockchain.sync.PathLiveSync
-        .regularSyncFromGenesisRefusal(
+        .regularSyncWithNoStateRefusal(
           doSnapSync = syncConfig.doSnapSync,
           testMode = Config.testmode,
           anchor = pathState.anchor,
@@ -908,6 +1092,71 @@ class StdNode(
 
 object StdNode:
 
+  /** The TUI's `q` (B-452): the terminal is restored first (its raw mode and alternate screen, whatever the stop then
+    * does), then the node stops through [[StopSignal.stopThenExit]], and `exit` comes only once that stop has ended,
+    * with its status (or `halt` when the stop died of a [[VirtualMachineError]]). `stop` is [[BaseNode.stopForExit]].
+    */
+  def tuiQuit(
+      tui: Tui,
+      stop: () => Boolean,
+      exit: Int => Unit,
+      halt: Int => Unit = code => Runtime.getRuntime.halt(code)
+  ): () => Unit =
+    TuiUpdater.restoreThenQuit(tui, () => StopSignal.stopThenExit("TUI quit", stop, exit, halt = halt))
+
+  /** The name of the stop's last step, whose completion makes a stop clean (B-426). */
+  val CloseDatabase: String = "database close"
+
+  /** The budget of a stop step that only signals or closes something in memory (B-426): milliseconds when it works. */
+  val QuickStepBudget: FiniteDuration = 5.seconds
+
+  /** What a step that bounds its own wait is given on top of it, so its own wait ends it (B-426). */
+  val OwnWaitMargin: FiniteDuration = 2.seconds
+
+  /** How long the stop waits for discovery to release its runtime (task #52). */
+  val DiscoveryRuntimeWait: FiniteDuration = 10.seconds
+
+  /** How long the database's close waits for a block import under way to commit before it closes regardless (B-426).
+    * One block: milliseconds on ETC, seconds for a full Ethereum block executed cold.
+    */
+  val ImportWait: FiniteDuration = 30.seconds
+
+  /** Closes the database once no block import is under way (B-426): `exclusively(wait)(body)` runs `body` holding the
+    * chain insert lock exclusively, if it can be had within `wait` (the block every import path holds it for has
+    * committed), and gives `None` otherwise. An import still running after `importWait` does not hold the close off: it
+    * closes regardless, and RocksDB's close waits for that import's write in progress. The close itself is never cut.
+    */
+  private[nodebuilder] def closeAfterImports(
+      importWait: FiniteDuration,
+      exclusively: FiniteDuration => (() => Unit) => Option[Unit],
+      close: () => Unit,
+      report: ShutdownSequence.Report = ShutdownSequence.Report.log
+  ): Unit =
+    val started = System.nanoTime()
+    exclusively(importWait) { () =>
+      report.info(
+        s"[SHUTDOWN] No block import under way (waited ${(System.nanoTime() - started) / 1000000} ms): " +
+          "closing the database"
+      )
+      close()
+    } match
+      case Some(_) => ()
+      case None =>
+        report.warn(
+          s"[SHUTDOWN] A block import still runs after $importWait: the database closes regardless, after that " +
+            "import's write in progress"
+        )
+        close()
+
+  /** The repairs a start makes of the datadir before anything reads it (spec 018 C4b part 4; B-251): on the unified
+    * state layout, the reconciliation (and what comes before it); on the hash layout, its own two repairs, which trust
+    * the best block or the index and would undo the reconciliation. Never both. A datadir stamped for the unified
+    * layout, opened with the guard off, gets to neither: the layout guard refused it where the storages were built
+    * (data-model 5.3).
+    */
+  private[nodebuilder] def repairsAtStart(holdsStateInPlace: Boolean)(onUnified: () => Unit, onHash: () => Unit): Unit =
+    if holdsStateInPlace then onUnified() else onHash()
+
   /** The refusal to start, for the caller (`Fukuii.run`, or one instance of the multi-instance runtime) to report. */
   def startupRefusal(message: String): EngineApiStartupRefusal = new EngineApiStartupRefusal(message)
 
@@ -940,6 +1189,40 @@ object StdNode:
           s"Refusing to start: the Engine API cannot bind $interface:$port (${e.getClass.getSimpleName}: ${e.getMessage}). " +
             "The consensus client could never reach this node, which would not sync. Free the port, or set " +
             "network.engine-api.port (each instance on one host needs its own)."
+        )
+
+  /** Waits for the JSON-RPC HTTP(S) bind. A failure, or no answer in `timeout`, is a message for the refusal: it names
+    * the address, the reason (for TLS, the key and file that cannot be used) and the keys to change.
+    */
+  /** As [[awaitJsonRpcHttpBind]], for the WebSocket listener over TLS (spec 030 FR-011). */
+  def awaitJsonRpcWsBind[A](
+      bind: => scala.concurrent.Future[A],
+      interface: String,
+      port: Int,
+      timeout: scala.concurrent.duration.FiniteDuration
+  ): Either[String, A] =
+    try Right(scala.concurrent.Await.result(bind, timeout))
+    catch
+      case scala.util.control.NonFatal(e) =>
+        Left(
+          s"Refusing to start: the JSON-RPC WebSocket server cannot start on $interface:$port " +
+            s"(${e.getClass.getSimpleName}: ${e.getMessage}). Fix network.rpc.ws (interface, port, tls), or set " +
+            "network.rpc.ws.enabled = false."
+        )
+
+  def awaitJsonRpcHttpBind[A](
+      bind: => scala.concurrent.Future[A],
+      interface: String,
+      port: Int,
+      timeout: scala.concurrent.duration.FiniteDuration
+  ): Either[String, A] =
+    try Right(scala.concurrent.Await.result(bind, timeout))
+    catch
+      case scala.util.control.NonFatal(e) =>
+        Left(
+          s"Refusing to start: the JSON-RPC HTTP server cannot start on $interface:$port " +
+            s"(${e.getClass.getSimpleName}: ${e.getMessage}). Fix network.rpc.http (mode, interface, port, " +
+            "tls, certificate), or set network.rpc.http.enabled = false."
         )
 
   /** Should the Engine API bind after the ETH JSON-RPC server rather than before it?

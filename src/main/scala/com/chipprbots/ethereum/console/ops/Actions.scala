@@ -161,6 +161,13 @@ object Actions:
     Disrupt,
     "nothing to undo"
   )
+  val Compact: ActionSpec = ActionSpec(
+    "compact",
+    "compact",
+    "rewrites the database's files: heavy disk I/O",
+    Disrupt,
+    "nothing to undo; it ends by itself, or when the node stops"
+  )
   val DetectIp: ActionSpec = ActionSpec(
     "detect-ip",
     "detect-ip",
@@ -210,6 +217,7 @@ object Actions:
     RpcStop,
     RpcStart,
     DbCheck,
+    Compact,
     DetectIp,
     Bundle,
     MiningStop,
@@ -225,8 +233,5 @@ object Actions:
       "none can be stopped and started again without ending the process",
     "Reload configuration from file" -> "no key is read again after the start; `tunables` lists what changes while it runs",
     "Create a snapshot" -> "this client has no snapshots (spec 013 has no code)",
-    "Compact the database" ->
-      ("it holds the database lock for its whole run, so the node would import nothing until it ended, which on a " +
-        "large database may take hours and cannot be stopped (B-281)"),
     "Change the pruning mode or the state scheme" -> "needs a restart, and for the scheme a resync"
   )

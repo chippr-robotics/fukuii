@@ -178,9 +178,9 @@ object HeaderChainCheck:
       rejectingThrows(header)(validator.validateHeaderOnly(header)(using blockchainConfig))
 
     /** A peer's header the validator cannot evaluate is rejected with the reason, not thrown into the actor that asked.
-      * The Ethash seal check throws for a difficulty its target arithmetic does not handle (0 and 1 among them); block
-      * import never reaches it with one, because the difficulty rule against the parent runs first, but the header-only
-      * check runs the seal on a header with no parent.
+      * The Ethash seal check used to throw for a difficulty its target arithmetic did not handle (0 and 1; fixed in
+      * B-164, where 0 and below is HeaderDifficultyError and 1 is evaluated); the guard stays for any other throw,
+      * since the header-only check runs the seal on a header with no parent.
       */
     private def rejectingThrows(header: BlockHeader)(
         validation: => Either[BlockHeaderError, BlockHeaderValid]

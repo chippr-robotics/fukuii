@@ -4,6 +4,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.util.control.NonFatal
 
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeEncoded
 import com.chipprbots.ethereum.db.storage.NodeStorage.NodeHash
 import com.chipprbots.ethereum.db.storage.pruning.PruneSupport
@@ -135,13 +136,59 @@ class ReferenceCountNodeStorage(
   private def prepareUpsertChanges(toUpsert: Seq[(NodeHash, NodeEncoded)], blockNumber: BigInt): Changes =
     toUpsert.foldLeft(Map.empty[NodeHash, (StoredNode, StoredNodeSnapshot)]) { (storedNodes, toUpsertItem) =>
       val (nodeKey, nodeEncoded) = toUpsertItem
-      val (storedNode, snapshot) = getFromChangesOrStorage(nodeKey, storedNodes)
+      val (storedNode, snapshot) = storedNodes
+        .get(nodeKey)
+        .orElse(readForUpsert(nodeKey, nodeEncoded))
         .getOrElse(
           StoredNode.withoutReferences(nodeEncoded) -> StoredNodeSnapshot(nodeKey, None)
         ) // if it's new, return an empty stored node
 
       storedNodes + (nodeKey -> ((storedNode.incrementReferences(1, blockNumber), snapshot)))
     }
+
+  /** The stored entry an upsert of `nodeKey` with `incoming` builds on. An upsert of a node that is stored keeps the
+    * stored bytes and counts one more reference, except when those bytes are a junk wrapper: they do not hash to the
+    * key while `incoming` does (B-009). SNAP healing re-fetches a node that is on disk as junk (an earlier writer, a
+    * corrupt wrapper) and the old rule kept the junk for good.
+    *
+    * The replacement keeps the stored reference count: the count is the number of positions that emitted the node,
+    * which the bytes being wrong does not change, so resetting it would let a later removal prune a node another
+    * position still reads. The snapshot is the entry as it was stored, so a rollback puts the old bytes back with the
+    * old count, as for any other change. A wrapper that does not unwrap at all is replaced the same way (as a new node:
+    * its count is unreadable, and its snapshot is None) when `incoming` hashes to the key, and throws as before when it
+    * does not.
+    *
+    * Bound on the hot path: the hash is taken only when the stored node bytes differ from `incoming`, which for an
+    * upsert of a node that is already stored correctly is a byte compare. When `incoming` does not hash to the key the
+    * stored node is kept, whatever it is: a node that is not the key's must never overwrite one. Keys that are not
+    * hashes of their node (test stores, non-hash keys) therefore behave as before.
+    */
+  private def readForUpsert(nodeKey: NodeHash, incoming: NodeEncoded): Option[(StoredNode, StoredNodeSnapshot)] =
+    nodeStorage.get(nodeKey).map { stored =>
+      val decoded =
+        try Right(storedNodeFromBytes(stored))
+        catch case NonFatal(e) => Left(e)
+      decoded match
+        case Right(sn) =>
+          if !java.util.Arrays.equals(sn.nodeEncoded.toArray, incoming) &&
+            hashesTo(incoming, nodeKey) && !hashesTo(sn.nodeEncoded.toArray, nodeKey)
+          then
+            logReplacedJunk(nodeKey)
+            sn.copy(nodeEncoded = ByteString(incoming)) -> StoredNodeSnapshot(nodeKey, Some(sn))
+          else sn -> StoredNodeSnapshot(nodeKey, Some(sn))
+        case Left(e) =>
+          if hashesTo(incoming, nodeKey) then
+            StoredNode.withoutReferences(incoming) -> StoredNodeSnapshot(nodeKey, None)
+          else
+            throw SerializingMptStorage.corrupt(
+              nodeKey,
+              s"stored wrapper does not unwrap: ${e.getClass.getSimpleName}: ${e.getMessage}",
+              Some(e)
+            )
+    }
+
+  private def hashesTo(bytes: Array[Byte], key: NodeHash): Boolean =
+    java.util.Arrays.equals(kec256(bytes), key.toArray)
 
   private def prepareRemovalChanges(
       toRemove: Seq[NodeHash],
@@ -201,6 +248,11 @@ class ReferenceCountNodeStorage(
 object ReferenceCountNodeStorage extends PruneSupport with Logger:
 
   val nodeKeyLength = 32
+
+  private def logReplacedJunk(nodeKey: NodeHash): Unit =
+    log.warn(
+      s"Replacing stored node ${nodeKey.take(4).toArray.map("%02x".format(_)).mkString}...: its bytes do not hash to the key"
+    )
 
   /** The reference count of a node the background audit repaired (spec 022 decision 1). Its real count cannot be known:
     * the blocks that referenced it incremented a node that was not there. A low guess is how a node gets pruned while

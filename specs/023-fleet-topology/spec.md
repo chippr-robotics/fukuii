@@ -12,7 +12,7 @@ processing** (balances, simulation) for many users. Initial sync is a one-time c
 
 **Scope boundary**: fukuii is the **execution layer** and nothing else. The fleet's control plane (placement,
 failover, replica seeding, scaling, request routing, multi-tenant admission) is a **separate project, Orbita**. This
-spec and its three companions define what fukuii must provide so that Orbita and the Chain Intelligence indexer can
+spec and its three companions define what fukuii must provide so that Orbita and downstream consumers can
 build the cluster around it.
 
 ---
@@ -157,7 +157,7 @@ relevant **inside** a process (DC-8).
   routing and multi-tenant admission belong to Orbita.
 - **New consensus families** (BSC Parlia, Polygon Bor, OP Stack deposits and L1 data fees, rollup derivation). Out of
   scope by D-2; each would be its own spec.
-- The Chain Intelligence pipeline, its schemas and its correlation engine (it consumes 025's records).
+- Downstream consumers of 025's records, their schemas and their processing.
 - Cross-chain atomicity or consistency beyond per-chain block pinning.
 - Any throughput or concurrency claim (018 FR-028's rule applies).
 - Changing any consensus output.
@@ -419,8 +419,8 @@ for `vault` and the user to accept or reject. 025 and 026 cite the ones they dep
 2. **F2 changeset format: store the post-value as well as the previous value**, with `chainKey` and a schema version
    from the first byte. One record then serves rollback, follower and archive replay, export and historical-balance
    derivation (025 GT-1, DC-9).
-3. **H3: the node does not write ClickHouse.** The `ColdStore` write side publishes to Kafka (025 FR-002); the indexer
-   owns all analytics tables. H4's `eth_getLogs` routing reads the indexer's tables through the `ColdStore` read
+3. **H3: the node does not write ClickHouse.** The `ColdStore` write side publishes to Kafka (025 FR-002); analytics
+   tables are owned downstream. H4's `eth_getLogs` routing reads those tables through the `ColdStore` read
    adapter. Removes node egress to an analytics database and avoids two writers for one schema (025 DC-7).
 4. **T-010 close-fence: schedule early.** Merge-able on RocksDB, independent of the engine choice; removes the `dbLock`
    read stall that limits concurrent reads today (018 research §16). Followers and `sim` need it.
@@ -438,7 +438,7 @@ for `vault` and the user to accept or reject. 025 and 026 cite the ones they dep
 - **019 zkVM guest**: unaffected.
 - **024, 025, 026**: companions (table above). **[alignment-review.md](./alignment-review.md)** (2026-10-30): every
   spec after 016 read against this end state, with the pending amendments on 013, 017 and 018 and the sequenced plan.
-- **Chain Intelligence** (separate service, Scala 3 on Kafka/Flink): the primary consumer of 025 records.
+- **Downstream consumers** (separate services): consumers of 025 records.
 - **Orbita** (separate project): the control plane.
 
 ## Known tasks (seed for `/speckit-tasks`)

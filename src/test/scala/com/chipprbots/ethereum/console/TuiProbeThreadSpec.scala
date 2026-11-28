@@ -19,8 +19,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -224,9 +222,7 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
   // the TUI's screen. It is logged, and polling stops.
   it should "log a fatal error from a poll, and stop polling" taggedAs (UnitTest) in {
     val logger = LoggerFactory.getLogger(classOf[TuiProbeThread]).asInstanceOf[LogbackLogger]
-    val appender = new ListAppender[ILoggingEvent]
-    appender.start()
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     val published = new AtomicReference[Option[NodeStatusSnapshot]](None)
     val thread = new TuiProbeThread(() => throw new LinkageError("fatal poll"), 20, published)
     try
@@ -235,5 +231,5 @@ class TuiProbeThreadSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike 
       appender.list.asScala.map(_.getLevel) should contain(Level.ERROR)
     finally
       thread.stop()
-      logger.detachAppender(appender)
+      appender.close()
   }

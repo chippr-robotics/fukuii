@@ -1,17 +1,20 @@
 name: Autofix (scalafmt)
 
 # Auto-applies `sbt scalafmtAll` and commits the result, so formatting never has to
-# be fixed by hand and never blocks a release. Runs on same-repo PRs (pushes the fix
-# to the PR's source branch) and on pushes to the integration branches (self-heals a
+# be fixed by hand and never blocks a release. The result is pushed only after it re-checks
+# and compiles (B-576: scalafmt can write code that does not parse). Runs on same-repo PRs (pushes the fix
+# to the PR's source branch only with CI_PAT, see below) and on pushes to the integration branches (self-heals a
 # squash-merge that landed unformatted code — the exact gap that broke the 0.6.0
 # release prep). `ci.yml` keeps `formatCheck` as the backstop for fork PRs, which
 # GITHUB_TOKEN cannot push to, and for scalafix findings, which this job does not rewrite.
 #
 # NOTE: commits pushed with the default GITHUB_TOKEN do NOT re-trigger other workflows
-# (GitHub's loop-prevention). On unprotected integration branches (develop/staging) that
-# is fine — there are no required checks to re-run, and scalafmt is idempotent so there
-# is no commit loop. If you later want the auto-commit to re-trigger required checks on a
-# protected branch, add a PAT secret and set `token: ${{ secrets.CI_PAT }}` on checkout.
+# (GitHub's loop-prevention). On the integration branches (develop/staging) that is fine:
+# there are no required checks to re-run, and scalafmt is idempotent so there is no commit
+# loop. On a PR it is not (B-353): the pushed "style: apply scalafmt" commit became the PR's
+# head with no checks at all, and someone had to push again to get CI. So on a PR the fix is
+# pushed only with a `CI_PAT` secret (a push with it does start CI); without one the job
+# fails, names the unformatted files and says to run `sbt formatAll`, and pushes nothing.
 
 on:
   push:
@@ -50,12 +53,17 @@ jobs:
       (github.event_name == 'push' && !startsWith(github.event.head_commit.message, 'chore: bump version to'))
       || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
     runs-on: ubuntu-latest
+    env:
+      # Read by the steps' `if`s, which see job-level env only (a step's own env is not set yet there).
+      HAS_CI_PAT: ${{ secrets.CI_PAT != '' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v5
         with:
           ref: ${{ github.head_ref || github.ref_name }}
           fetch-depth: 0
+          # With CI_PAT, the fix commit's push starts CI on a PR; without it, GITHUB_TOKEN.
+          token: ${{ secrets.CI_PAT || github.token }}
 
       - name: Set up JDK 25
         uses: actions/setup-java@v5
@@ -85,11 +93,59 @@ jobs:
         # selector and fails with "Expected '/'"), which had this job red on every PR.
         # The root project does not aggregate the other modules, so a bare scalafmtAll formats
         # root alone; each module is named here, the same set ci.yml's formatCheck checks.
-        run: sbt "scalafmtAll; scalafmtSbt; bytes / scalafmtAll; crypto / scalafmtAll; rlp / scalafmtAll; scalanet / scalafmtAll; scalanetDiscovery / scalafmtAll"
+        # Two passes: scalafmt 3.8.3 is not always idempotent in one (some braced `else { ... }` blocks lose their
+        # braces only on the second, B-082), and the verify step below re-checks, so one pass would fail it there.
+        # sbt-scalafmt caches by modification time and skips a file it wrote itself, so the second pass is a second
+        # sbt run after a `touch` of the changed files, not a repeat in the same run.
+        run: |
+          FMT="scalafmtAll; scalafmtSbt; bytes / scalafmtAll; crypto / scalafmtAll; rlp / scalafmtAll; scalanet / scalafmtAll; scalanetDiscovery / scalafmtAll"
+          sbt "$FMT"
+          git diff --name-only -z | xargs -0 -r touch
+          sbt "$FMT"
         env:
           FUKUII_DEV: true
 
+      - name: Verify the formatted tree before any push
+        # B-576: on PR #2160 this job pushed 4044fdd671, which does not parse. scalafmt 3.8.3 (and 3.10.1) joins a
+        # lambda whose body is a one-line `try ... catch case ...` with the next argument on the same line,
+        # `catch case NonFatal(e) => log.error(...), "FatalErrors-beforeHalt"`, where the comma then ends nothing.
+        # Local `sbt scalafmtAll` gives the same bytes, so this is a scalafmt bug, not a CI/local difference, and
+        # scalafmt does not re-parse what it writes. Only a fixed tree is pushed: a re-check (the check tasks parse
+        # every file, so they fail on unparseable output and on a rewrite that has not converged) and `compile-all`
+        # (every compiled module and configuration) must pass first. A failure fails the job, so nothing is pushed.
+        # The changed files are touched first: sbt-scalafmt's cache would otherwise skip the files it just wrote,
+        # and a check right after scalafmtAll passes on that broken FatalErrors.scala (reproduced locally).
+        if: github.event_name == 'push' || env.HAS_CI_PAT == 'true'
+        run: |
+          if git diff --quiet; then
+            echo "Formatted: nothing to verify."
+            exit 0
+          fi
+          echo "Reformatted by scalafmt:"
+          git diff --name-only | sed 's/^/  /'
+          git diff --name-only -z | xargs -0 -r touch
+          if ! sbt "scalafmtCheckAll; scalafmtSbtCheck; bytes / scalafmtCheckAll; crypto / scalafmtCheckAll; rlp / scalafmtCheckAll; scalanet / scalafmtCheckAll; scalanetDiscovery / scalafmtCheckAll; compile-all"; then
+            echo "::error::scalafmt produced a tree that does not re-check or compile; nothing was pushed. Format these files by hand so scalafmt leaves them valid (B-576), and push."
+            git diff
+            exit 1
+          fi
+        env:
+          FUKUII_DEV: true
+
+      - name: Fail on an unformatted PR that cannot be fixed with a push that starts CI
+        # B-353: a GITHUB_TOKEN push to a PR starts no workflow, which left the PR's head unchecked.
+        if: github.event_name == 'pull_request' && env.HAS_CI_PAT != 'true'
+        run: |
+          if git diff --quiet; then
+            echo "Formatted: nothing to fix."
+            exit 0
+          fi
+          echo "::error::These files are not formatted. Run 'sbt formatAll' and push (no fix is pushed from here: a push with GITHUB_TOKEN would start no CI on this PR, B-353)."
+          git diff --name-only | sed 's/^/  /'
+          exit 1
+
       - name: Commit formatting if changed
+        if: github.event_name == 'push' || env.HAS_CI_PAT == 'true'
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "style: apply scalafmt"

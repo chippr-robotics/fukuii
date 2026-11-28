@@ -21,36 +21,6 @@
         <defaultValue>fukuii-rlpx-debug</defaultValue>
     </define>
 
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>${stdoutEncoderPattern}</pattern>
-        </encoder>
-    </appender>
-
-    <appender name="STASH" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
-            <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
-            <fieldNames>
-                <timestamp>timestamp</timestamp>
-                <version>[ignore]</version>
-                <logger>logger</logger>
-                <thread>thread</thread>
-                <level>level</level>
-                <levelValue>level_value</levelValue>
-                <message>message</message>
-                <stackTrace>stack_trace</stackTrace>
-            </fieldNames>
-            <includeMdcKeyNames>
-                <includeMdcKeyName>peer</includeMdcKeyName>
-                <includeMdcKeyName>block</includeMdcKeyName>
-                <includeMdcKeyName>transaction</includeMdcKeyName>
-                <includeMdcKeyName>actor</includeMdcKeyName>
-            </includeMdcKeyNames>
-            <includeCallerData>true</includeCallerData>
-            <includeContext>true</includeContext>
-        </encoder>
-    </appender>
-
     <appender name="FILE" class="com.chipprbots.ethereum.utils.ResilientRollingFileAppender">
         <file>${LOGSDIR}/${LOGSFILENAME}.log</file>
         <append>true</append>
@@ -67,29 +37,58 @@
         </encoder>
     </appender>
 
-    <appender name="METRICS" class="io.prometheus.client.logback.InstrumentedAppender" />
+    <!-- prometheus-metrics 1.x ships no logback appender (deps bump 6e73fcfcb), so there is no METRICS appender. -->
 
-    <if condition='p("ASJSON").contains("true")'>
+    <!-- Console: JSON (STASH) when ASJSON is true, plain text (STDOUT) otherwise. Each branch defines its appender and the
+         root logger, so no appender is left unreferenced. The <if> is at the top level: logback 1.5 drops a <root>
+         holding a nested <if>, and the root logger got no appender at all. Its test is a <condition> element just
+         before it, not the deprecated condition attribute (see src/main/resources/logback.xml). -->
+    <condition class="ch.qos.logback.core.boolex.PropertyEqualityCondition">
+        <key>ASJSON</key>
+        <value>true</value>
+    </condition>
+    <if>
         <then>
-            <appender-ref ref="STASH" />
+            <appender name="STASH" class="ch.qos.logback.core.ConsoleAppender">
+                <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                    <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
+                    <fieldNames>
+                        <timestamp>timestamp</timestamp>
+                        <version>[ignore]</version>
+                        <logger>logger</logger>
+                        <thread>thread</thread>
+                        <level>level</level>
+                        <levelValue>level_value</levelValue>
+                        <message>message</message>
+                        <stackTrace>stack_trace</stackTrace>
+                    </fieldNames>
+                    <includeMdcKeyNames>
+                        <includeMdcKeyName>peer</includeMdcKeyName>
+                        <includeMdcKeyName>block</includeMdcKeyName>
+                        <includeMdcKeyName>transaction</includeMdcKeyName>
+                        <includeMdcKeyName>actor</includeMdcKeyName>
+                    </includeMdcKeyNames>
+                    <includeCallerData>true</includeCallerData>
+                    <includeContext>true</includeContext>
+                </encoder>
+            </appender>
+            <root level="${LOGSLEVEL}">
+                <appender-ref ref="STASH" />
+                <appender-ref ref="FILE" />
+            </root>
         </then>
         <else>
-            <appender-ref ref="STDOUT" />
+            <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+                <encoder>
+                    <pattern>${stdoutEncoderPattern}</pattern>
+                </encoder>
+            </appender>
+            <root level="${LOGSLEVEL}">
+                <appender-ref ref="STDOUT" />
+                <appender-ref ref="FILE" />
+            </root>
         </else>
     </if>
-
-    <root level="${LOGSLEVEL}">
-        <appender-ref ref="FILE" />
-        <appender-ref ref="METRICS" />
-        <if condition='p("ASJSON").contains("true")'>
-            <then>
-                <appender-ref ref="STASH" />
-            </then>
-            <else>
-                <appender-ref ref="STDOUT" />
-            </else>
-        </if>
-    </root>
 
     <!-- Reduce noise from third-party libraries -->
     <logger name="io.netty" level="WARN" />

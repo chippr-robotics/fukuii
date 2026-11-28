@@ -212,7 +212,7 @@ class BlockRewardImportPinSpec extends AnyFlatSpec with Matchers:
         |ommer1: 64000000000000000
         |ommer2: 64000000000000000
         |treasury: 21000000000000
-        |stateRoot: 5d9e9dcddf3573a8ac0aad60a6b87122559ec25ff27b5b38d090f7a94ae2c024""".stripMargin
+        |stateRoot: f6a1dbfef032f3eec5f9ffd218cd0739fe89128e3d286d04db89b6f5c0e067b0""".stripMargin
   }
 
   // ---- Mordor: ECIP-1017, 2,000,000-block eras ----
@@ -258,7 +258,7 @@ class BlockRewardImportPinSpec extends AnyFlatSpec with Matchers:
         |ommer1: 32768000000000000
         |ommer2: 32768000000000000
         |treasury: 21000000000000
-        |stateRoot: 91f6f395aa10adcc5b17d60b740f687d7474d096bcb39fcacb4259266edb1059""".stripMargin
+        |stateRoot: da90123f8d24557b25bff9d4cd912ba999163bacb5a33d03b0fed6110acfa334""".stripMargin
   }
 
   // ---- ETH mainnet: one era; EIP-649, EIP-1234; nothing after the merge ----

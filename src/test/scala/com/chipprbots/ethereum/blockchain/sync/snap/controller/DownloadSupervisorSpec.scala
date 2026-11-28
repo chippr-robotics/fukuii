@@ -40,6 +40,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.actors.AccountRangeCoordinat
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.ByteCodeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.StorageRangeCoordinator
 import com.chipprbots.ethereum.blockchain.sync.snap.actors.TrieNodeHealingCoordinator
+import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
@@ -98,7 +99,19 @@ private[snap] class StubDownloadSupervisorState(
     with HeapWatchdogApi
     with AccountResumeSelectionApi:
 
-  private val dataSource = EphemDataSource()
+  /** An ephemeral data source that counts its synced and its async batches (B-077). */
+  final class Counting extends EphemDataSource(Map.empty):
+    @volatile var synced = 0
+    @volatile var async = 0
+    override def update(updates: Seq[DataUpdate]): Unit =
+      async += 1
+      super.update(updates)
+    override def updateSync(updates: Seq[DataUpdate]): Unit =
+      synced += 1
+      super.update(updates)
+
+  private val dataSource = new Counting
+  val dataSourceCounts: Counting = dataSource
 
   // DownloadSupervisorState
   var coordinatorGeneration: Long = 0L
@@ -784,6 +797,30 @@ class DownloadSupervisorSpec extends ScalaTestWithActorTestKit(ManualTime.config
     val infos = h.kit.logEntries().filter(_.level == org.slf4j.event.Level.INFO).map(_.message)
     infos should contain(s"Persisted storage file path for recovery: $storageFile (42 entries)")
     infos should contain(s"Persisted codeHashes file path for recovery: $codeHashesFile (7 entries)")
+  }
+
+  it should "commit the task-file pointers synchronously, as the file has been fsynced by then (B-077)" taggedAs UnitTest in {
+    val h = new Harness()
+    val storageFile = java.nio.file.Paths.get("fukuii-contract-storage-b077.bin")
+    val codeHashesFile = java.nio.file.Paths.get("fukuii-unique-codehashes-b077.bin")
+    val syncedBefore = h.module.dataSourceCounts.synced
+    val asyncBefore = h.module.dataSourceCounts.async
+
+    h.call(m =>
+      m.accountRangeSyncCompleteArms(
+        StorageFileInfoReply(Success(AccountRangeCoordinator.StorageFileInfoResponse(storageFile, 3L)))
+      )
+    )
+    h.call(m =>
+      m.accountRangeSyncCompleteArms(
+        CodeHashesFileInfoReply(Success(AccountRangeCoordinator.CodeHashesFileInfoResponse(codeHashesFile, 2L)))
+      )
+    )
+
+    h.module.dataSourceCounts.synced - syncedBefore shouldBe 2
+    h.module.dataSourceCounts.async - asyncBefore shouldBe 0
+    h.module.appStateStorage.getSnapSyncStorageFileCount() shouldBe Some(3L)
+    h.module.appStateStorage.getSnapSyncCodeHashesCount() shouldBe Some(2L)
   }
 
   it should "log a WARN naming the path that was not persisted when the coordinator could not flush a task file (#1603)" taggedAs UnitTest in {

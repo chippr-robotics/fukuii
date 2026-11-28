@@ -154,7 +154,9 @@ object ForkIdValidator:
       _ <- Logger[F].trace(s"FORKID_VALIDATION: Fork list: $forks")
       _ <- Logger[F].trace(s"FORKID_VALIDATION: Checksum list: $checksums")
       res <- validate.map(_.swap)
-      _ <- Logger[F].info(s"FORKID_VALIDATION: Validation result: $res for remote $remoteId")
+      // DEBUG: this runs once per handshake and once per discovered ENR or DNS record, so a busy node runs it
+      // thousands of times a minute. A rejected handshake is counted in the `Network [60s]` summary instead.
+      _ <- Logger[F].debug(s"FORKID_VALIDATION: Validation result: $res for remote $remoteId")
     yield res.getOrElse(Connect)
 
   private def calculateChecksums(

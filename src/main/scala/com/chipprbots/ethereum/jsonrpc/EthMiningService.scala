@@ -97,7 +97,9 @@ class EthMiningService(
     val getTransactionFromPoolTimeout: FiniteDuration,
     configBuilder: BlockchainConfigBuilder,
     coinbaseProvider: CoinbaseProvider,
-    system: ActorSystem
+    system: ActorSystem,
+    workNotifyTls: org.apache.pekko.http.scaladsl.HttpsConnectionContext =
+      com.chipprbots.ethereum.tls.OutboundTls.pekkoHttpsContext(javax.net.ssl.SSLContext.getDefault)
 ) extends TransactionPicker:
   override lazy val scheduler: Scheduler = system.toTyped.scheduler
   import configBuilder.*
@@ -106,16 +108,17 @@ class EthMiningService(
   val hashRate: ConcurrentMap[ByteString, (BigInt, Date)] = new TrieMap[ByteString, (BigInt, Date)]()
   val lastActive = new AtomicReference[Option[Date]](None)
 
-  def getMining(req: GetMiningRequest): ServiceResponse[GetMiningResponse] =
-    ifEthash(req) { _ =>
-      val isMining = lastActive.updateAndGet { (e: Option[Date]) =>
+  def getMining(@unused req: GetMiningRequest): ServiceResponse[GetMiningResponse] =
+    mining.ifEthash[ServiceResponse[GetMiningResponse]] { ethash =>
+      val externalActive = lastActive.updateAndGet { (e: Option[Date]) =>
         e.filter { time =>
           Duration.between(time.toInstant, (new Date).toInstant).toMillis < jsonRpcConfig.minerActiveTimeout.toMillis
         }
       }.isDefined
-
-      GetMiningResponse(isMining)
-    }
+      // B-279: the built-in miner's own state, at once, not only "an external miner asked for work recently", which
+      // lagged a start or a stop by minerActiveTimeout.
+      IO.pure(Right(GetMiningResponse(externalActive || (ethash.hasInternalMiner && PoWMiningMetrics.isMinerRunning))))
+    }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
   // The work is built on the head read under its generation (spec 018 B-293): on the unified layout a move of the head
   // in place steps it through blocks it may not stay on, and work built on one of them would be wasted.
@@ -164,7 +167,8 @@ class EthMiningService(
           if notifyUrls.nonEmpty then
             WorkNotifier.notify(
               notifyUrls,
-              WorkNotifier.WorkPackage(powHeaderHash, dagSeed, target, blockNumber)
+              WorkNotifier.WorkPackage(powHeaderHash, dagSeed, target, blockNumber),
+              workNotifyTls
             )(using system)
           Right(workResponse)
       }.handleErrorWith {
@@ -228,21 +232,33 @@ class EthMiningService(
       GetHashRateResponse(hashRate.map { case (_, (hr, _)) => hr }.sum)
     }
 
+  // B-279: with no built-in miner (mining disabled, an Engine API node) the message went nowhere and the call still
+  // answered success. It is refused instead, and says why.
+  private def noInternalMiner(ethash: com.chipprbots.ethereum.consensus.pow.PoWMining): JsonRpcError =
+    JsonRpcError.LogicError(
+      if ethash.miningEnabled then "the built-in miner has not started yet"
+      else "this node runs no built-in miner: mining is disabled in its configuration"
+    )
+
   def startMiner(@unused req: StartMinerRequest): ServiceResponse[StartMinerResponse] =
     mining.ifEthash[ServiceResponse[StartMinerResponse]] { ethash =>
       IO {
-        ethash.sendMiner(MinerProtocol.StartMining)
-        log.info("Mining started via RPC")
-        Right(StartMinerResponse(true))
+        if !ethash.hasInternalMiner then Left(noInternalMiner(ethash))
+        else
+          ethash.sendMiner(MinerProtocol.StartMining)
+          log.info("Mining started via RPC")
+          Right(StartMinerResponse(true))
       }
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 
   def stopMiner(@unused req: StopMinerRequest): ServiceResponse[StopMinerResponse] =
     mining.ifEthash[ServiceResponse[StopMinerResponse]] { ethash =>
       IO {
-        ethash.sendMiner(MinerProtocol.StopMining)
-        log.info("Mining stopped via RPC")
-        Right(StopMinerResponse(true))
+        if !ethash.hasInternalMiner then Left(noInternalMiner(ethash))
+        else
+          ethash.sendMiner(MinerProtocol.StopMining)
+          log.info("Mining stopped via RPC")
+          Right(StopMinerResponse(true))
       }
     }(IO.pure(Left(JsonRpcError.MiningIsNotEthash)))
 

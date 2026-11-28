@@ -2176,9 +2176,10 @@ object TrieNodeHealingCoordinator:
       math.min(availableProcessors, math.max(minParallelism, availableProcessors - reservedCores))
     )
 
-  /** Behavior factory (Group S3). SSC is still Classic at S3 time, so it spawns this via `PropsAdapter` and holds a
-    * Classic `ActorRef`; its `!` routes Command-typed messages. TNHC spawns no child workers — it dispatches
-    * GetTrieNodes directly to `networkPeerManager` (still Classic) and runs its BFS walks on dedicated dispatchers.
+  /** Behavior factory (Group S3). SNAPSyncController (Typed) spawns this as a child with `ctx.spawn`, through
+    * `ChildFactories`, and holds a typed `ActorRef[Command]`. TNHC spawns no child workers — it dispatches GetTrieNodes
+    * directly to `networkPeerManager` (the Typed NetworkPeerManagerActor) and runs its BFS walks on dedicated
+    * dispatchers.
     */
   def apply(
       stateRoot: ByteString,

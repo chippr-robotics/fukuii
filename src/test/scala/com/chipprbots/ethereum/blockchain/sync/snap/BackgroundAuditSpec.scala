@@ -17,7 +17,6 @@ import scala.concurrent.duration.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.scalatest.concurrent.Eventually
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
@@ -71,7 +70,6 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent.MessageFromPe
 import com.chipprbots.ethereum.network.PeerEventBusActor.PublishCmd
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.messages.Capability
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetTrieNodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.TrieNodes
 import com.chipprbots.ethereum.testing.Tags.*
@@ -175,10 +173,10 @@ class BackgroundAuditSpec
       s.progress.writeAuditBadEntries(AuditBadEntries(s.app.snapAuditAnchor(), 0L, Map(hash -> entry)).encode)
 
   private def serve(fetch: StateNodeFetcher.FetchStateNode, bytes: Array[Byte]): Unit =
-    fetch.originalSender ! FetchedStateNode(NodeData(Seq(ByteString(bytes))))
+    fetch.originalSender ! FetchedStateNode(Seq(ByteString(bytes)))
 
   private def exhaust(fetch: StateNodeFetcher.FetchStateNode): Unit =
-    fetch.originalSender ! FetchedStateNode(NodeData(Seq.empty))
+    fetch.originalSender ! FetchedStateNode(Seq.empty)
 
   /** A state of a few accounts, one holding a storage trie, with a storage node well below its root. */
   private def populate(n: Node): ByteString =
@@ -194,16 +192,14 @@ class BackgroundAuditSpec
   /** What the audit's logger says while `f` runs. */
   private def logsOf[T](f: => T): (T, Seq[ILoggingEvent]) =
     val logger = LoggerFactory.getLogger(BackgroundAudit.LoggerName).asInstanceOf[ch.qos.logback.classic.Logger]
-    val appender = new ListAppender[ILoggingEvent]
-    appender.start()
     val before = logger.getLevel
     logger.setLevel(Level.INFO)
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     try
       val result = f
       (result, appender.list.toArray(Array.empty[ILoggingEvent]).toSeq)
     finally
-      logger.detachAppender(appender)
+      appender.close()
       logger.setLevel(before)
 
   private def lines(events: Seq[ILoggingEvent], level: Level): Seq[String] =
@@ -823,19 +819,36 @@ class BackgroundAuditSpec
       case _ => Behaviors.same
     })
     val bus = testKit.spawn(PeerEventBusActor.behavior())
+    // B-571. The loop below moves the manual clock by the fetcher backoff (5 s) each time it goes round, and goes round
+    // again whenever the 100 ms real-time window for the message is missed, which a request that takes longer than
+    // that to come through the actors does (a loaded sbt). TestSyncConfig gives a request a response timeout of those
+    // same 5 s, so an extra turn can expire the request in flight on the clock this test moves, and the fetcher is no
+    // longer waiting on the reply this test then sends: the next request goes to the peer the first one went to. So
+    // the response timeout is out of reach of any number of turns, and the second request, which needs no clock, is
+    // waited for without moving it.
     val config = syncConfig.copy(
       peersScanInterval = 1.millis,
       syncRetryInterval = 1.millis,
       maxRetryDelay = 1.millis,
-      blacklistDuration = 1.hour
+      blacklistDuration = 1.hour,
+      peerResponseTimeout = 1.day
     )
 
+    // The first request needs the clock: the fetcher asks before the client has scanned any peer, is told no peer
+    // suits, and re-asks after its backoff.
     def trieNodesRequest(): NetworkPeerManagerActor.SendMessageCmd = eventually {
       manualTime.timePasses(StateNodeFetcher.BackoffInterval)
       val send = sent.receiveMessage(100.millis)
       send.message.underlyingMsg shouldBe a[GetTrieNodes]
       send
     }
+
+    // The next one does not: after a reply that is not the node, the fetcher blames the peer and asks the next peer at
+    // once, with no backoff. So this waits for the message to arrive and moves no clock.
+    def nextTrieNodesRequest(): NetworkPeerManagerActor.SendMessageCmd =
+      val send = sent.receiveMessage()
+      send.message.underlyingMsg shouldBe a[GetTrieNodes]
+      send
 
     val gaugeBefore = NetworkMetrics.BlacklistedPeersSize.get
     NetworkMetrics.BlacklistedPeersSize.set(12345L)
@@ -852,7 +865,7 @@ class BackgroundAuditSpec
       bus ! PublishCmd(MessageFromPeer(TrieNodes(requestId, Seq(ByteString(Array.fill[Byte](40)(1)))), request.peerId))
 
       // The fetcher tells its client to blacklist and then asks again, so the client has handled the one by the other.
-      val next = trieNodesRequest()
+      val next = nextTrieNodesRequest()
       next.peerId should not be request.peerId
 
       NetworkMetrics.BlacklistedPeersSize.get shouldBe 12345L

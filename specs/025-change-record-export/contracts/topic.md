@@ -15,6 +15,10 @@ fukuii.<chainKey>.records.v1
   topic; the old one keeps draining until its retention expires. Consumers subscribe to exactly one version.
 - The template is `fukuii.export.kafka.topic-template = "fukuii.{chainKey}.records.v1"`; operators who must fit a
   naming policy may change the prefix, never the `chainKey` or version segments.
+- *(Amendment 2026-11-24)* A chain that resets (Ephemery) keeps **one** topic across iterations; each iteration opens
+  with a `chainStart` record (`record-schema.md` §5.2). There is no topic per iteration.
+- *(Amendment 2026-11-24)* Pool records have their own topic, `fukuii.<chainKey>.txpool.v1` (§8), with the same naming
+  rules (`fukuii.export.pool.topic-template`).
 
 ## 2. Partitioning
 
@@ -48,7 +52,7 @@ Throughput ceiling of one partition is far above any chain's record rate (a Sepo
 | `compression.type` | `zstd` (operator: `compression`) | RLP diffs compress 3–5× |
 | `max.request.size` | 16 MiB (operator: `max-request-size`) | §3 |
 | `client.id` | `fukuii-ingest-<chainKey>` | per-chain attribution on the broker |
-| headers | `schemaVersion=1`, `recordType=<0..3>`, `chainKey=<key>` | lets the indexer route without decoding the value |
+| headers | `schemaVersion=1`, `recordType=<0..7>`, `chainKey=<key>` | lets a consumer route without decoding the value |
 
 ## 5. Ordering and delivery guarantees
 
@@ -73,4 +77,35 @@ Throughput ceiling of one partition is far above any chain's record rate (a Sepo
 
 Deployment concerns (spec Non-goals). The node passes `fukuii.export.kafka.properties` through to the producer for
 `security.protocol`, `sasl.*`, `ssl.*`. The producer needs `WRITE` and `DESCRIBE` on its topic and `IDEMPOTENT_WRITE`
-on the cluster.
+on the cluster; with pool export on, also `WRITE` and `DESCRIBE` on the pool topic.
+
+## 8. Pool topic (amendment 2026-11-24)
+
+```
+fukuii.<chainKey>.txpool.v1
+```
+
+Carries `poolAdd` and `poolRemove` records only (`record-schema.md` §6a), with the same framing and version byte as
+the record topic. Off unless `fukuii.export.pool.enabled = true`.
+
+| Aspect | Record topic | Pool topic |
+|--------|--------------|------------|
+| Delivery | at-least-once, no gaps (durable buffer, position) | **best-effort**: in-memory queue; dropped records counted and visible as `seq` gaps |
+| Partitions | exactly 1 | 1 by default; any count allowed (OQ-8, resolved) |
+| Message key | `blockNumber`, 8 bytes BE | `sender`, 20 bytes: one sender's records share a partition, so nonce order and replacements stay in order |
+| Order | total per chain | per `(nodeId, session)` in `seq` order, per sender on the topic; none against the record topic |
+| `cleanup.policy` | `delete` | `delete` (never `compact`: a removal and a re-admission share a key) |
+| `retention.ms` | ≥ longest tolerated follower outage (7 days guidance) | short; 24 hours default (OQ-8, resolved). A consumer that falls further behind resynchronises from `txpool_content` |
+| Writers | one per chain (the fenced `ingest` process, 023) | any number of nodes; each record names its `nodeId` |
+
+Producer settings: as §4, except `delivery.timeout.ms` is short (operator: `pool.delivery-timeout`, 10 s default) so
+a slow broker turns into counted drops, not a growing queue, and `acks` defaults to `1` with
+`enable.idempotence = false` (Kafka's idempotence needs `acks = all`; a retried duplicate is harmless because
+consumers de-duplicate on `(nodeId, session, seq)`). The operator may set `acks = all`; durability is not promised
+either way. Headers: `schemaVersion=1`, `recordType=<4|5>`, `chainKey=<key>`,
+`nodeId=<hex>`.
+
+What a consumer may assume: one `poolAdd` per admission and one `poolRemove` per removal for every `seq` it received;
+nothing about a `seq` range it did not receive. After a gap or a new `session` it re-reads the node's pool
+(`txpool_content`) if it needs the current contents. Inclusion is confirmed by block records on the record topic,
+never by a `poolRemove` alone.

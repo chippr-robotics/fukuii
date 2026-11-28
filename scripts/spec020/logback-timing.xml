@@ -39,10 +39,16 @@
 
     <!-- prometheus-metrics 1.x does not ship a logback appender; removed in deps bump 6e73fcfcb -->
 
-    <!-- Console appender - uses JSON output if ASJSON property is true, otherwise plain text -->
-    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
-        <if condition='p("ASJSON").contains("true")'>
-            <then>
+    <!-- Console appender: JSON when ASJSON is true, plain text otherwise. The <if> is at the top level and its test is a
+         <condition> element just before it, as in src/main/resources/logback.xml (logback 1.5 warns about an <if>
+         nested in an <appender>, and deprecates the condition attribute). -->
+    <condition class="ch.qos.logback.core.boolex.PropertyEqualityCondition">
+        <key>ASJSON</key>
+        <value>true</value>
+    </condition>
+    <if>
+        <then>
+            <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
                 <encoder class="net.logstash.logback.encoder.LogstashEncoder">
                     <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
                     <fieldNames>
@@ -64,14 +70,16 @@
                     <includeCallerData>false</includeCallerData>
                     <includeContext>true</includeContext>
                 </encoder>
-            </then>
-            <else>
+            </appender>
+        </then>
+        <else>
+            <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
                 <encoder>
                     <pattern>${stdoutEncoderPattern}</pattern>
                 </encoder>
-            </else>
-        </if>
-    </appender>
+            </appender>
+        </else>
+    </if>
 
     <root level="${LOGSLEVEL}">
         <appender-ref ref="CONSOLE" />

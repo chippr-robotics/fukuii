@@ -78,14 +78,14 @@ class EthashMiner(
     val headerHash = crypto.kec256(BlockHeader.getEncodedWithoutNonce(block.header))
     val startTime = System.nanoTime()
     val mineResult =
-      mineEthash(headerHash, block.header.difficulty.toLong, dagSize, dag, blockCreator.miningConfig.mineRounds)
+      mineEthash(headerHash, block.header.difficulty.value, dagSize, dag, blockCreator.miningConfig.mineRounds)
     (startTime, mineResult)
 
   private def mineEthash(
       headerHash: Array[Byte],
-      difficulty: Long,
+      difficulty: BigInt,
       dagSize: Long,
-      dag: Array[Array[Int]],
+      dag: MappedDag,
       numRounds: Int
   ): MiningResult =
     val initNonce = BigInt(NumBits, new Random())
@@ -94,7 +94,7 @@ class EthashMiner(
       .map { round =>
         val nonce = (initNonce + round) % MaxNounce
         val nonceBytes = ByteUtils.padLeft(ByteString(nonce.toUnsignedByteArray), 8)
-        val pow = EthashUtils.hashimoto(headerHash, nonceBytes.toArray[Byte], dagSize, dag.apply)
+        val pow = EthashUtils.hashimoto(headerHash, nonceBytes.toArray[Byte], dagSize, dag.item)
         (EthashUtils.checkDifficulty(difficulty, pow), pow, nonceBytes, round)
       }
       .collectFirst { case (true, pow, nonceBytes, n) => MiningSuccessful(n + 1, pow.mixHash, nonceBytes) }

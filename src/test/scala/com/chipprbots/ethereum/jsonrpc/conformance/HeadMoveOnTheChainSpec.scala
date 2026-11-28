@@ -40,6 +40,7 @@ import com.chipprbots.ethereum.db.storage.pathstate.PathStateTestKit
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
 import com.chipprbots.ethereum.db.storage.pathstate.StateConfig
+import com.chipprbots.ethereum.db.storage.pathstate.StateFaultMark
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHeader
@@ -167,7 +168,10 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         held: () => Option[ByteString],
         choices: com.chipprbots.ethereum.consensus.engine.ForkChoiceManager = node.forkChoiceManager,
         recovery: Option[StateRecovery] = None,
-        escalation: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None
+        escalation: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None,
+        pool: Option[
+          org.apache.pekko.actor.typed.ActorRef[com.chipprbots.ethereum.transactions.PendingTransactionsManager.Command]
+        ] = None
     ): EngineApiService =
       given org.apache.pekko.actor.typed.Scheduler = system.scheduler
       new EngineApiService(
@@ -175,7 +179,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
         writer,
         execution,
         choices,
-        None,
+        pool,
         stateHeldInPlace = Some(held),
         stateRecovery = recovery,
         escalationWatch = escalation
@@ -491,7 +495,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
             .setCanonicalChainHead(chain(1).header.number.value, chain(1).header.hash, chain.last.header.number.value)
         ),
         "rewriteCanonicalIndex" -> (() =>
-          on.writer.rewriteCanonicalIndex(Nil, Seq(chain.last.header.number.value), None, on.reader)
+          on.writer.rewriteCanonicalIndex(Nil, Seq(chain.last.header.number.value), None, Nil, Nil, on.reader)
         ),
         "promoteToCanonicalHead" -> (() => on.writer.promoteToCanonicalHead(chain(1).header, on.reader)),
         "removeBlock" -> (() => on.node.blockchain.removeBlock(chain.last.header.hash)),
@@ -596,7 +600,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       // the next block, committed in place between the look and the write
       on.imports(chain(3))
       val before = on.everything
-      choices.applyForkChoiceState(looked) shouldBe Left("SYNCING")
+      choices.applyForkChoiceState(looked) shouldBe Left(ForkChoiceManager.Refusal.Syncing)
       on.everything shouldBe before
       on.holds(chain(3).header, chain)
       // not taken as a head that was applied
@@ -620,7 +624,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
           // the next block committed in place after every look the Engine API takes at the head, the gate's and its
           // own answer for an ancestor's, and before the fork choice is written
           val committing = new com.chipprbots.ethereum.consensus.engine.ForkChoiceManager(on.reader, on.writer):
-            override def applyForkChoiceState(newState: ForkChoiceState): Either[String, Unit] =
+            override def applyForkChoiceState(newState: ForkChoiceState): Either[ForkChoiceManager.Refusal, Unit] =
               on.imports(chain(3))
               super.applyForkChoiceState(newState)
           val engine = on.engine(() => on.pathState.anchor.map(_.hash), committing)
@@ -665,6 +669,37 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.source.offTheLock.toArray.toSeq shouldBe empty
     }
 
+  // B-253: on the unified layout a block committed in place moves the head before any fork choice names it; the pool
+  // is reset from the head it was last reset to, so those blocks leave it too
+  it should "reset the tx pool over the blocks committed in place since the last fork choice" taggedAs
+    (UnitTest, ConsensusTest) in {
+      import com.chipprbots.ethereum.transactions.PendingTransactionsManager
+      import scala.concurrent.duration.*
+      val on = new Node
+      val chain = blocks.take(10)
+      chain.take(5).foreach(on.imports)
+      val pool = createTestProbe[PendingTransactionsManager.Command]()
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash), pool = Some(pool.ref))
+      def choose(head: Block, upTo: Seq[Block]) =
+        engine
+          .forkchoiceUpdated(choiceOf(head, upTo), None)
+          .unsafeRunSync()(using cats.effect.unsafe.IORuntime.global)
+          .map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Valid)
+      def told(onto: Seq[Block]): Unit =
+        val included = onto.map(_.body.transactionList).filter(_.nonEmpty)
+        if included.isEmpty then pool.expectNoMessage(200.millis)
+        else pool.expectMessage(PendingTransactionsManager.HeadReset(included, Nil))
+      choose(chain(4), chain.take(5))
+      told(Seq(chain(4)))
+      // five blocks committed in place: the head is at the last before the fork choice names it
+      chain.slice(5, 10).foreach(on.imports)
+      on.reader.getBestBlockNumber shouldBe chain.last.header.number.value
+      choose(chain.last, chain)
+      chain.slice(5, 10).exists(_.body.transactionList.nonEmpty) shouldBe true
+      told(chain.slice(5, 10))
+      pool.expectNoMessage(200.millis)
+    }
+
   // C4d part 2b: the fork choice moves the head up, or across, as one move; never down to an ancestor of the head.
   "The fork choice on the unified layout" should "move the head up the chain it left, and never down to an ancestor of the head" taggedAs
     (UnitTest, ConsensusTest) in {
@@ -676,7 +711,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       val before = on.everything
       val started = on.pathState.movesStarted
       // down to the first block, an ancestor of the head: not followed, nothing written, no move counted
-      choices.applyForkChoiceState(choiceOf(chain.head, chain)) shouldBe Left("SYNCING")
+      choices.applyForkChoiceState(choiceOf(chain.head, chain)) shouldBe Left(ForkChoiceManager.Refusal.Syncing)
       on.everything shouldBe before
       on.pathState.movesStarted shouldBe started
       choices.getHeadBlockHash shouldBe None
@@ -710,8 +745,14 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       // not followed, and said for what it is: a fault of this node, which counts towards giving the state up (C5a
       // part 6). The consensus client is answered SYNCING all the same
       val refused = on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain(2), chain))
-      refused.left.toOption.exists(_.startsWith(ForkChoiceManager.LocalFault)) shouldBe true
-      on.everything shouldBe before
+      refused.left.toOption.exists(_.isInstanceOf[ForkChoiceManager.Refusal.LocalFault]) shouldBe true
+      withClue("nothing is written but the record of the fault (B-252): ") {
+        on.everything.filter((key, _) => before.contains(key)) shouldBe before
+        (on.everything.keySet -- before.keySet).map(_.utf8String).toList match
+          case List(added) => added should endWith(StateFaultMark.Key)
+          case other       => fail(s"written beside the fault: $other")
+        new AppStateStorage(on.source).getStateFault().get should include("changeset records are corrupt")
+      }
       on.node.forkChoiceManager.getHeadBlockHash shouldBe None
       on.pathState.hasFailedClosed shouldBe true
       // and nothing more is written in place: not the next block, not a confirmation of the head
@@ -721,10 +762,10 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
           .applyForkChoiceState(choiceOf(chain.last, chain))
           .left
           .toOption
-          .exists(_.startsWith(ForkChoiceManager.LocalFault)) shouldBe true
+          .exists(_.isInstanceOf[ForkChoiceManager.Refusal.LocalFault]) shouldBe true
       }
       on.holds(chain.last.header, chain)
-      // closed until the node is started again (the fault is kept in memory only; B-252)
+      // closed until its state is cleared: the fault is recorded, and a restart opens the store closed (B-252)
       (the[StateUnavailable] thrownBy on.pathState.moveHead(
         refOf(chain.last.header),
         on.link,
@@ -741,7 +782,9 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
     on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain.last, chain)) shouldBe Right(())
     on.pathState.movesStarted shouldBe before
     // nor one that is refused before anything is written
-    on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain(1), chain)) shouldBe Left("SYNCING")
+    on.node.forkChoiceManager.applyForkChoiceState(choiceOf(chain(1), chain)) shouldBe Left(
+      ForkChoiceManager.Refusal.Syncing
+    )
     on.pathState.movesStarted shouldBe before
     on.move(chain(1).header)
     on.pathState.movesStarted shouldBe before + 1
@@ -861,6 +904,49 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.source.offTheLock.toArray.toSeq shouldBe empty
     }
 
+  // B-126: every payload here is stored by its hash only, so ChainWeightReconcile's final step, which checks the
+  // heights the index names, never sees one; a payload's weight is its parent's when newPayload ran. The fork choice
+  // that moves the head to it re-derives it from the parent's weight as it is then.
+  it should "have the weights of the blocks a fork choice moves the head to re-derived from their parents' (B-126)" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash))
+      given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+      val (forty, fortyOne) = (blocks(39), blocks(40))
+      Seq(forty, fortyOne).foreach(block =>
+        engine.newPayload(payloadOf(block)).unsafeRunSync().status shouldBe
+          PayloadStatus.Valid
+      )
+      val held = on.reader.getChainWeightByHash(chain.last.header.hash).get
+      on.reader.getChainWeightByHash(fortyOne.header.hash) shouldBe Some(
+        held
+          .increase(forty.header)
+          .increase(
+            fortyOne.header
+          )
+      )
+      // a repair rewrites the held block's weight after the payloads took theirs from it
+      val repaired = ChainWeight.totalDifficultyOnly(held.totalDifficulty.value + 1000)
+      on.storages.chainWeightStorage.put(chain.last.header.hash.value, repaired).commit()
+
+      engine
+        .forkchoiceUpdated(
+          ForkChoiceState(fortyOne.header.hash.value, ForkChoiceManager.ZeroHash, ForkChoiceManager.ZeroHash),
+          None
+        )
+        .unsafeRunSync()
+        .map(_.payloadStatus.status) shouldBe Right(PayloadStatus.Valid)
+
+      on.holds(fortyOne.header, chain :+ forty :+ fortyOne)
+      on.reader.getChainWeightByHash(forty.header.hash) shouldBe Some(repaired.increase(forty.header))
+      on.reader.getChainWeightByHash(fortyOne.header.hash) shouldBe Some(
+        repaired.increase(forty.header).increase(fortyOne.header)
+      )
+      on.source.offTheLock.toArray.toSeq shouldBe empty
+    }
+
   it should "be executed on a block behind the held one, as a side branch, and answer ACCEPTED on a parent it does not know" taggedAs
     (UnitTest, ConsensusTest) in {
       val on = new Node
@@ -903,9 +989,15 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
   private def recoveringEngine(
       on: Node,
       recovery: StateRecovery,
-      escalation: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None
+      escalation: Option[com.chipprbots.ethereum.blockchain.sync.EscalationWatch] = None,
+      choices: Option[ForkChoiceManager] = None
   ) =
-    val engine = on.engine(() => on.pathState.anchor.map(_.hash), recovery = Some(recovery), escalation = escalation)
+    val engine = on.engine(
+      () => on.pathState.anchor.map(_.hash),
+      choices = choices.getOrElse(on.node.forkChoiceManager),
+      recovery = Some(recovery),
+      escalation = escalation
+    )
     given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
     (
       (block: Block) => engine.newPayload(payloadOf(block)).unsafeRunSync(),
@@ -1542,6 +1634,53 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.node.forkChoiceManager.getHeadBlockHash shouldBe Some(chain.last.header.hash.value)
     }
 
+  // B-464 (beacon): a fork choice to another head that has moved the head, and not yet recorded the head it followed,
+  // when the adoption finds a block invalid. The head the fork choice followed last is still the old one: moved back to
+  // it, the head would leave the block the consensus client is about to be told VALID for
+  it should "leave the head where a fork choice in flight moved it when a block of it is invalid" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node(overlay = _.copy(maxForwardLayers = 8))
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val branch = blocks.slice(39, 43) // blocks 40 to 43
+      val bad = blocks(43).pipe(b => b.copy(header = b.header.copy(stateRoot = TrieRoot.Empty)))
+      // a competing 40', on 39, which the consensus client goes on to as the adoption commits 44
+      val side = siblingOf(branch.head)
+      val inFlight = new java.util.concurrent.atomic.AtomicBoolean(false)
+      val recovery = new on.Recovery(
+        maxBlocks = 1,
+        fails = block =>
+          Option.when(block.header.hash == bad.header.hash) {
+            // the fork choice to 40', on its own thread: the head it names is recorded as asked for, and the head is
+            // moved to it, and nothing more yet (ForkChoiceManager records the head it followed after the move)
+            val choice = new Thread(() =>
+              on.node.forkChoiceManager.notifyBeaconHead(choiceTo(side))
+              on.writer.moveHeadInPlace(side.header, on.reader, forkChoice = true)
+              inFlight.set(true)
+            )
+            choice.start()
+            choice.join()
+            BlockExecutionError.ValidationAfterExecError("a state root that is not the block's")
+          }
+      )
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      statusOf(choose(chain.last)) shouldBe PayloadStatus.Valid
+      branch.foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      newPayload(side).status shouldBe PayloadStatus.Valid
+      on.writer.storeBlockByHashOnly(bad).commit()
+      // 44 stands on 43, a layer: more than the one block a recovery keeps as layers, so it is committed in place
+      statusOf(choose(bad)) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe a[StateRecovery.Outcome.Invalid]
+      inFlight.get() shouldBe true
+      recovery.adoptedBlocks shouldBe empty
+      // the head is on 40', where the fork choice moved it, and not back on 39, the head it followed before
+      on.holds(side.header, chain :+ side)
+      // the fork choice records the head it followed: 40', the block the head is at
+      on.node.forkChoiceManager.applyForkChoiceState(choiceTo(side)) shouldBe Right(())
+      on.node.forkChoiceManager.getHeadBlockHash shouldBe Some(side.header.hash.value)
+      on.holds(side.header, chain :+ side)
+    }
+
   it should "stop before its next commit when the consensus client names another head" taggedAs
     (UnitTest, ConsensusTest) in {
       val on = tightNode
@@ -1569,6 +1708,175 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       recovery.outcomes.last shouldBe StateRecovery.Outcome.Recovered(1)
       statusOf(choose(branch(4))) shouldBe PayloadStatus.Valid
       on.holds(branch(4).header, chain ++ branch)
+    }
+
+  // B-490: the blocks an adoption makes canonical, by its move up the layers and by its commits in place, took their
+  // weights from their parents' when they were executed, or when the adoption read the parent's weight, before the
+  // commit's lock. A chain-weight repair (ChainWeightReconcile) that rewrote the canonical weights in between, and whose
+  // final step checked the index and set its marker before they were canonical, would leave them their parents' old
+  // ones. The adoption re-derives them, as a fork choice does (B-126).
+  it should "re-derive the weights of the blocks it makes canonical from their parents' as they are then (B-490)" taggedAs
+    (UnitTest, ConsensusTest) in {
+      for during <- Seq(false, true) do
+        withClue(if during then "repaired as block 44 is committed: " else "repaired before the fork choice: ") {
+          val on = tightNode
+          val chain = blocks.take(39)
+          chain.foreach(on.imports)
+          val base = chain.last.header
+          val branch = blocks.slice(39, 44) // blocks 40 to 44
+          val repaired = repairedWeightOf(on, base)
+          val recovery = new on.Recovery(
+            maxBlocks = 1,
+            // the commit of 44, whose parent's weight the adoption has read already
+            adopting = block => if during && block.header.hash == branch(4).header.hash then repairCanonical(on, base)
+          )
+          val (newPayload, choose) = recoveringEngine(on, recovery)
+          branch.take(4).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+          newPayload(branch(4)).status shouldBe PayloadStatus.Accepted
+          if !during then repairCanonical(on, base)
+          // the head is moved up the layers to 42 (40 to 42 made canonical), and 43 and 44 are committed in place
+          statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+          recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(2)
+          on.holds(branch(4).header, chain ++ branch)
+          weightsOf(on, branch) shouldBe weightsOn(repaired, branch)
+          // the next fork choice confirms the head, and leaves them so
+          statusOf(choose(branch(4))) shouldBe PayloadStatus.Valid
+          weightsOf(on, branch) shouldBe weightsOn(repaired, branch)
+        }
+    }
+
+  // B-510: an exception out of a commit in place (not a fault of the state: the recovery's run takes it as this node's
+  // fault) ends the adoption with the blocks it moved the head up to, and those it committed before it, canonical.
+  // Their weights are re-derived all the same, once the hold is let go: the next fork choice's walk stops at them.
+  it should "re-derive the weights of the blocks it made canonical when a commit in place throws (B-510)" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = tightNode
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val base = chain.last.header
+      val branch = blocks.slice(39, 44) // blocks 40 to 44
+      val repaired = repairedWeightOf(on, base)
+      val recovery = new on.Recovery(
+        maxBlocks = 1,
+        // the commit of 44, after 43's
+        adopting = block =>
+          if block.header.hash == branch(4).header.hash then throw new IllegalStateException("the commit of 44 fails")
+      )
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      branch.take(4).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      newPayload(branch(4)).status shouldBe PayloadStatus.Accepted
+      repairCanonical(on, base)
+      // the head is moved up the layers to 42 (40 to 42 made canonical), 43 is committed in place, and 44's commit throws
+      statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe a[StateRecovery.Outcome.LocalFault]
+      on.reader.getBestBlockNumber shouldBe branch(3).header.number.value
+      weightsOf(on, branch.take(4)) shouldBe weightsOn(repaired, branch.take(4))
+    }
+
+  /** An attempt that holds the records above the head, open on a thread of its own until what is returned is called: an
+    * adoption on another thread, as an import's reverse-then-commit is (B-294).
+    */
+  private def anotherAttempt(on: Node): () => Unit =
+    val opened = new java.util.concurrent.CountDownLatch(1)
+    val done = new java.util.concurrent.CountDownLatch(1)
+    val anchor = on.pathState.anchor.get
+    val thread = new Thread(() =>
+      on.pathState.withRecordsHeld(anchor, on.pathState.anchor) {
+        opened.countDown()
+        done.await()
+      }
+    )
+    thread.start()
+    opened.await()
+    () =>
+      done.countDown()
+      thread.join()
+
+  // B-294 (beacon W1): while another thread's adoption holds the records, the hold is refused, asking again. No fault
+  // of this node and no verdict on the branch: superseded, so that it is asked for again at once and not counted
+  it should "be superseded, not failed, while another thread's adoption is open, and committed in place once it ends" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = tightNode
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val recovery = new on.Recovery(maxBlocks = 1)
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      val branch = blocks.slice(39, 44)
+      branch.take(4).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      newPayload(branch(4)).status shouldBe PayloadStatus.Accepted
+      val release = anotherAttempt(on)
+      try
+        statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+        recovery.outcomes.last shouldBe StateRecovery.Outcome.Superseded
+        recovery.adoptedBlocks shouldBe empty
+        on.holds(chain.last.header, chain)
+      finally release()
+      statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(2)
+      on.holds(branch(4).header, chain ++ branch)
+    }
+
+  // B-504 (beacon, after B-463), at the Engine API: the consensus client's fork choice to a branch longer than the
+  // layers is answered SYNCING, and its adoption runs on the recovery's thread. A fork choice's move of the head up the
+  // layers lands between the adoption's read of the head and its hold of the records, and the consensus client names the
+  // branch still. The hold is refused as busy: the adoption ends Superseded, which is no refusal the escalation's watch
+  // counts, however low its threshold; nothing of the adoption is written; and the next fork choice to the branch adopts
+  // it from the head as the move left it.
+  it should "answer SYNCING and count nothing when a fork choice moves the head between the adoption's read of it and its hold, and be committed in place at the next" taggedAs
+    (UnitTest, ConsensusTest) in {
+      import com.chipprbots.ethereum.blockchain.sync.EscalationTrigger
+      import com.chipprbots.ethereum.blockchain.sync.EscalationWatch
+      import com.chipprbots.ethereum.db.storage.pathstate.EscalationKind
+      val on = tightNode
+      val chain = blocks.take(39)
+      chain.foreach(on.imports)
+      val recovery = new on.Recovery(maxBlocks = 1)
+      val branch = blocks.slice(39, 44)
+      // one refusal escalates: a Superseded that was counted would be told at once
+      val told = new java.util.concurrent.LinkedBlockingQueue[EscalationKind]()
+      val said = new java.util.concurrent.LinkedBlockingQueue[String]()
+      val watch = new EscalationWatch(
+        new EscalationTrigger(refusals = 1),
+        () => System.currentTimeMillis(),
+        kind => told.put(kind),
+        (_, why) => said.put(why)
+      )
+      // The adoption asks for the head the node followed after it read the head it may move back to, and before it
+      // holds the records: on the recovery's thread, once armed, the fork choice's move is made then. Through the
+      // writer as `ForkChoiceManager.confirmHeldHead` makes it, so that the consensus client's last fork choice, and the
+      // head it names, stay the branch's
+      val armed = new java.util.concurrent.atomic.AtomicBoolean(false)
+      val raced = new java.util.concurrent.atomic.AtomicBoolean(false)
+      val racing = new ForkChoiceManager(on.reader, on.writer):
+        override def getHeadBlockHash: Option[ByteString] =
+          if armed.get && Thread.currentThread.getName == StateRecovery.ThreadName && !raced.getAndSet(true) then
+            on.writer.moveHeadInPlace(branch(1).header, on.reader, forkChoice = true)
+          super.getHeadBlockHash
+      val (newPayload, choose) = recoveringEngine(on, recovery, Some(watch), Some(racing))
+      // 40 to 42 are kept as layers; 43 does not fit, and is VALID; 44 is ACCEPTED
+      branch.take(4).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      newPayload(branch(4)).status shouldBe PayloadStatus.Accepted
+      recovery.outcomes.last shouldBe a[StateRecovery.Outcome.TooLong]
+      armed.set(true)
+      statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe StateRecovery.Outcome.Superseded
+      raced.get shouldBe true
+      // nothing of the adoption: the head is where the fork choice's move took it, up two layers
+      recovery.adoptedBlocks shouldBe empty
+      on.holds(branch(1).header, chain ++ branch.take(2))
+      on.pathState.headGeneration % 2 shouldBe 0
+      on.pathState.recordsHeld shouldBe false
+      // the next fork choice to the branch: from 41, up to 42 and 43 and 44 committed in place. Its recovery runs on the
+      // same one thread as the first, after the first's end was told to the watch
+      statusOf(choose(branch(4))) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(2)
+      recovery.adoptedBlocks shouldBe Seq(BigInt(43), BigInt(44))
+      on.holds(branch(4).header, chain ++ branch)
+      withClue("the escalation's watch: ") {
+        told.isEmpty shouldBe true
+        said.isEmpty shouldBe true
+      }
+      on.source.offTheLock.toArray.toSeq shouldBe empty
     }
 
   /** A branch from block 39: 40' to 44', the chain's blocks but for their extra data (before Prague a block's state
@@ -1892,7 +2200,254 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       statusOf(choose(blocks(43))) shouldBe PayloadStatus.Valid
     }
 
-  it should "be a head that cannot be reached when it is longer than the catch-up covers" taggedAs (
+  // B-490: a catch-up makes canonical the blocks kept as layers above the head (by its move up to them) and the blocks
+  // it commits in place, a chunk at a time. So does the p2p import path's hand-off of the consensus layer's branch
+  // (`BranchHandOff`, `EngineApiService.handOffBranch`), which asks the same recovery. Their weights are re-derived
+  // from their parents' as they are then, as a fork choice's are (B-126): a repair of the canonical weights between
+  // their execution, or the read of a parent's weight, and their commit leaves none of them the old one.
+  it should "re-derive the weights of the blocks it makes canonical from their parents' as they are then (B-490)" taggedAs
+    (UnitTest, ConsensusTest) in {
+      for
+        byHandOff <- Seq(false, true)
+        during <- Seq(false, true)
+      do
+        withClue(
+          (if byHandOff then "handed off by the p2p import path, " else "for a fork choice, ") +
+            (if during then "repaired as block 47 is committed: " else "repaired before: ")
+        ) {
+          val on = new Node
+          blocks.take(39).foreach(on.imports)
+          val base = blocks(38).header
+          val repaired = repairedWeightOf(on, base)
+          val recovery = new on.Recovery(
+            maxBlocks = 1,
+            maxAdopted = 4,
+            catchUp = 30,
+            chunk = 5,
+            // the first block of the second chunk, whose parent's weight the catch-up has read already
+            adopting = block => if during && block.header.hash == blocks(46).header.hash then repairCanonical(on, base)
+          )
+          val engine =
+            on.engine(() => on.pathState.anchor.map(_.hash), recovery = Some(recovery))
+          given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+          // 40 and 41 executed as layers on the head, with their weights; 42 to 60 stored by their hashes only
+          blocks
+            .slice(39, 41)
+            .foreach(block => engine.newPayload(payloadOf(block)).unsafeRunSync().status shouldBe PayloadStatus.Valid)
+          blocks.slice(41, 60).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+          if !during then repairCanonical(on, base)
+          val tip = blocks(59)
+          if byHandOff then
+            on.node.forkChoiceManager.notifyBeaconHead(choiceTo(tip))
+            engine.handOffBranch(tip.header.hash.value, "a test") shouldBe true
+          else
+            statusOf(
+              engine
+                .forkchoiceUpdated(choiceTo(tip), None)
+                .unsafeRunSync()
+            ) shouldBe PayloadStatus.Syncing
+          // the head is moved up the layers to 41, and 42 to 60 are committed in place
+          recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(19)
+          on.holds(tip.header, blocks.take(60))
+          val above = blocks.slice(39, 60)
+          weightsOf(on, above) shouldBe weightsOn(repaired, above)
+        }
+    }
+
+  // B-510: an exception out of a commit in place of a catch-up's chunk leaves the blocks of the chunk committed before
+  // it canonical; their weights are re-derived all the same. The repair lands as the first of them is committed, its
+  // parent's weight read already: the chunk below, re-derived when it ended, gives no exact weight to stand on
+  it should "re-derive the weights of the blocks a chunk committed before a commit throws (B-510)" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      blocks.take(39).foreach(on.imports)
+      val base = blocks(38).header
+      val repaired = repairedWeightOf(on, base)
+      val recovery = new on.Recovery(
+        maxBlocks = 1,
+        maxAdopted = 4,
+        catchUp = 30,
+        chunk = 5,
+        // the second chunk (47 to 51): repaired as 47 is committed, and 49's commit throws after 47 and 48
+        adopting = block =>
+          if block.header.hash == blocks(46).header.hash then repairCanonical(on, base)
+          if block.header.hash == blocks(48).header.hash then throw new IllegalStateException("the commit of 49 fails")
+      )
+      val engine = on.engine(() => on.pathState.anchor.map(_.hash), recovery = Some(recovery))
+      given cats.effect.unsafe.IORuntime = cats.effect.unsafe.IORuntime.global
+      blocks
+        .slice(39, 41)
+        .foreach(block => engine.newPayload(payloadOf(block)).unsafeRunSync().status shouldBe PayloadStatus.Valid)
+      blocks.slice(41, 60).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+      statusOf(engine.forkchoiceUpdated(choiceTo(blocks(59)), None).unsafeRunSync()) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe a[StateRecovery.Outcome.LocalFault]
+      // 40 and 41 moved up to, 42 to 46 the first chunk, 47 and 48 of the second
+      on.reader.getBestBlockNumber shouldBe blocks(47).header.number.value
+      val made = blocks.slice(39, 48)
+      weightsOf(on, made) shouldBe weightsOn(repaired, made)
+    }
+
+  /** A weight for `base` that is not the one stored: what a chain-weight repair would write. */
+  private def repairedWeightOf(on: Node, base: BlockHeader): ChainWeight =
+    ChainWeight.totalDifficultyOnly(on.reader.getChainWeightByHash(base.hash).get.totalDifficulty.value + 1000)
+
+  /** What a chain-weight repair (ChainWeightReconcile) writes: `base`'s weight repaired, and every canonical block
+    * above it (those the index names, up to the best block) re-derived from it. Blocks the index does not name it never
+    * sees.
+    */
+  private def repairCanonical(on: Node, base: BlockHeader): Unit =
+    val to = repairedWeightOf(on, base)
+    on.storages.chainWeightStorage.put(base.hash.value, to).commit()
+    (base.number.value + 1 to on.reader.getBestBlockNumber)
+      .map(n => on.reader.getBlockHeaderByNumber(n))
+      .takeWhile(_.isDefined)
+      .flatten
+      .foldLeft(to) { (weight, header) =>
+        val next = weight.increase(header)
+        on.storages.chainWeightStorage.put(header.hash.value, next).commit()
+        next
+      }
+
+  /** The stored weight of each of `chain`. */
+  private def weightsOf(on: Node, chain: Seq[Block]): Seq[Option[ChainWeight]] =
+    chain.map(block => on.reader.getChainWeightByHash(block.header.hash))
+
+  /** Each of `chain`'s exact weight, `chain` standing on a block of weight `from`. */
+  private def weightsOn(from: ChainWeight, chain: Seq[Block]): Seq[Option[ChainWeight]] =
+    chain.scanLeft(from)((weight, block) => weight.increase(block.header)).tail.map(Some(_))
+
+  // B-316/B-480 (beacon): after a hand-off the index of blocks by number runs ahead of the anchor, over blocks whose
+  // state no view reaches. A fork choice's walk stops by the records only where the head's chain leaves the index
+  // BEHIND the anchor: a block of the index above it is reached by no record, and a stop there would refuse every
+  // catch-up after a hand-off whose head is not the index's own chain
+  it should "be caught up over in place when the index runs ahead of the head over it, as after a hand-off" taggedAs
+    (UnitTest, ConsensusTest) in {
+      // the head's chain as the index names it (21 to 44), and a branch of it that leaves it at block 30 (31' to 35')
+      val side = blocks
+        .slice(30, 35)
+        .foldLeft(Vector.empty[Block]) { (made, block) =>
+          val parent = made.lastOption.map(_.header.hash).getOrElse(block.header.parentHash)
+          made :+ block
+            .copy(header = block.header.copy(parentHash = parent, extraData = ByteString("a competing head".getBytes)))
+        }
+      for (tip, chainTo, adopted) <- Seq((blocks(43), blocks.take(44), 24), (side.last, blocks.take(30) ++ side, 15))
+      do
+        withClue(s"to block ${tip.header.number.value}: ") {
+          val on = handedOff()
+          side.foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+          // the index names blocks 21 to 44, and the lookups of their transactions name them, as a sync leaves them;
+          // the head and the state are at block 20
+          (21 to 44).foreach(n => on.writer.storeBlock(blocks(n - 1)).commit())
+          on.pathState.anchor.map(_.number) shouldBe Some(BigInt(20))
+          on.pathState.stateAvailable(refOf(blocks(29).header)) shouldBe false
+          // B-482 (beacon): the index above each block committed, and the lookups of the transactions of the old
+          // blocks above it, as the disk holds them right after its commit, read before the next block is committed:
+          // what a node killed between the two would keep
+          val afterEach = scala.collection.mutable.Map.empty[Int, (Seq[Option[ByteString]], Seq[Option[ByteString]])]
+          val recovery = new on.Recovery(
+            maxBlocks = 1,
+            maxAdopted = 4,
+            catchUp = 30,
+            chunk = 5,
+            adopting = block =>
+              val below = block.header.number.value.toInt - 1
+              afterEach(below) = (
+                (below + 1 to 44).map(h => on.reader.getCanonicalHashByNumber(h).map(_.value)),
+                blocks.slice(below, 44).flatMap(on.txsOf).map(on.lookup)
+              )
+          )
+          val (_, choose) = recoveringEngine(on, recovery)
+          statusOf(choose(tip)) shouldBe PayloadStatus.Syncing
+          // walked down to the anchor, and not stopped on the index above it: caught up over, every block
+          recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(adopted)
+          on.pathState.anchor shouldBe Some(refOf(tip.header))
+          on.reader.getBestBlockNumber shouldBe tip.header.number.value
+          on.disk shouldBe stateOf(tip.header)
+          chainTo.foreach(block =>
+            on.reader.getCanonicalHashByNumber(block.header.number.value) shouldBe Some(block.header.hash)
+          )
+          // every transaction of the head's chain above the anchor is looked up in its block there
+          on.lookedUpIn(chainTo.drop(20).map(_.header))
+          // B-482: the chain left the index at block 31'. The old chain's entries above the head are gone, and so are
+          // the lookups of the transactions only those blocks hold (go-ethereum's reorg deletes both)
+          val left = blocks.slice(chainTo.size, 44)
+          if tip eq side.last then
+            left.map(_.header.number.value) shouldBe (36 to 44).map(BigInt(_))
+            left.flatMap(on.txsOf) should not be empty
+          left.foreach(block => on.reader.getCanonicalHashByNumber(block.header.number.value) shouldBe None)
+          left.flatMap(on.txsOf).foreach(tx => on.lookup(tx) shouldBe None)
+          // and so right after the very commit that leaves the index, in its batch: no kill leaves them behind. Where
+          // the chain is the index's own, its entries above the head stay until they are committed over
+          (21 until tip.header.number.value.toInt).foreach { n =>
+            val (above, lookups) = afterEach(n)
+            withClue(s"after block $n: ") {
+              if n <= 30 || (tip eq blocks(43)) then
+                above shouldBe (n + 1 to 44).map(h => Some(blocks(h - 1).header.hash.value))
+                lookups.foreach(_ should not be empty)
+              else
+                above.foreach(_ shouldBe None)
+                lookups.foreach(_ shouldBe None)
+            }
+          }
+        }
+    }
+
+  // B-482: the clean-up is the block's own commit's, whoever commits it. A block imported onto the head, stored by
+  // nothing before its commit, keeps the lookups of the transactions it shares with the block it replaces
+  "A block committed as the head where the index names another block at its height" should "clear the index above it and the lookups only the blocks it drops hold, in its own batch, and keep its own" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      blocks.take(20).foreach(on.imports)
+      // the index names blocks 21 to 25 above the head, with their lookups, as a sync leaves them
+      (21 to 25).foreach(n => on.writer.storeBlock(blocks(n - 1)).commit())
+      val competing = siblingOf(blocks(20))
+      on.reader.getBlockHeaderByHash(competing.header.hash) shouldBe None
+      val writesBefore = on.source.writes.get
+      on.imports(competing)
+      // one batch: the block, its state, and the clean-up
+      on.source.writes.get - writesBefore shouldBe 1
+      on.holds(competing.header, blocks.take(20) :+ competing)
+      (22 to 25).foreach(n => on.reader.getCanonicalHashByNumber(n) shouldBe None)
+      val own = on.txsOf(competing)
+      own should not be empty
+      own.foreach(tx => on.lookup(tx) shouldBe Some(competing.header.hash.value))
+      val dropped = blocks.slice(21, 25).flatMap(on.txsOf)
+      dropped should not be empty
+      dropped.foreach(tx => on.lookup(tx) shouldBe None)
+    }
+
+  // B-492 (vault): a gap at the block's height, left by a removal that stopped at the first height with no entry, with
+  // another chain's entries above it
+  it should "clear the index above it where the index names nothing at its height and names a block above it" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      blocks.take(20).foreach(on.imports)
+      (21 to 25).foreach(n => on.writer.storeBlock(blocks(n - 1)).commit())
+      on.dropIndex(21)
+      val competing = siblingOf(blocks(20))
+      val writesBefore = on.source.writes.get
+      on.imports(competing)
+      on.source.writes.get - writesBefore shouldBe 1
+      on.holds(competing.header, blocks.take(20) :+ competing)
+      (22 to 25).foreach(n => on.reader.getCanonicalHashByNumber(n) shouldBe None)
+      on.txsOf(competing).foreach(tx => on.lookup(tx) shouldBe Some(competing.header.hash.value))
+      val dropped = blocks.slice(21, 25).flatMap(on.txsOf)
+      dropped should not be empty
+      dropped.foreach(tx => on.lookup(tx) shouldBe None)
+    }
+
+  it should "leave the index above it where the index names the block itself: its own chain, committed over in turn" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      blocks.take(20).foreach(on.imports)
+      (21 to 25).foreach(n => on.writer.storeBlock(blocks(n - 1)).commit())
+      on.imports(blocks(20))
+      on.pathState.anchor shouldBe Some(refOf(blocks(20).header))
+      on.index shouldBe blocks.take(25).map(_.header.hash.value)
+      on.lookedUpIn(blocks.take(25).map(_.header))
+    }
+
+  "A straight extension of the head, longer than a branch is adopted over" should "be a head that cannot be reached when it is longer than the catch-up covers" taggedAs (
     UnitTest,
     ConsensusTest
   ) in {
@@ -1929,6 +2484,30 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       val chosen = choose(bad).toOption.get.payloadStatus
       chosen.status shouldBe PayloadStatus.Invalid
       chosen.latestValidHash shouldBe Some(blocks(29).header.hash.value)
+    }
+
+  // B-294 (beacon W1): the move up the executed blocks kept, which a catch-up makes first, is refused, asking again,
+  // while another thread's adoption is open: superseded, as a commit refused on the way up is, and not a fault
+  it should "be superseded, not failed, when its first move is refused while another thread's adoption is open" taggedAs
+    (UnitTest, ConsensusTest) in {
+      val on = new Node
+      blocks.take(39).foreach(on.imports)
+      val recovery = new on.Recovery(maxBlocks = 1, maxAdopted = 2, catchUp = 30, chunk = 5)
+      val (newPayload, choose) = recoveringEngine(on, recovery)
+      // 40 and 41 are kept as layers above the head, and 42 to 44 are stored and never executed: more than a branch is
+      // adopted over, so they are caught up over, and the head is moved up to 41 first
+      blocks.slice(39, 41).foreach(block => newPayload(block).status shouldBe PayloadStatus.Valid)
+      blocks.slice(41, 44).foreach(block => on.writer.storeBlockByHashOnly(block).commit())
+      val release = anotherAttempt(on)
+      try
+        statusOf(choose(blocks(43))) shouldBe PayloadStatus.Syncing
+        recovery.outcomes.last shouldBe StateRecovery.Outcome.Superseded
+        recovery.adoptedBlocks shouldBe empty
+        on.holds(blocks(38).header, blocks.take(39))
+      finally release()
+      statusOf(choose(blocks(43))) shouldBe PayloadStatus.Syncing
+      recovery.outcomes.last shouldBe StateRecovery.Outcome.Adopted(3)
+      on.holds(blocks(43).header, blocks.take(44))
     }
 
   // spec 018 C5a part 10 (beacon C6): told as the move of the head it made, not as the body it stopped at, so that the
@@ -2280,7 +2859,7 @@ class HeadMoveOnTheChainSpec extends ScalaTestWithActorTestKit with AnyFlatSpecL
       on.imports(blocks(4))
       val withFinality =
         ForkChoiceState(chain.last.header.hash.value, chain(1).header.hash.value, chain(1).header.hash.value)
-      on.node.forkChoiceManager.applyForkChoiceState(withFinality) shouldBe Left("SYNCING")
+      on.node.forkChoiceManager.applyForkChoiceState(withFinality) shouldBe Left(ForkChoiceManager.Refusal.Syncing)
       on.pathState.finalizedBlock shouldBe None
       on.storages.appStateStorage.getStateFinalized() shouldBe None
       // one followed names it, in the batch that confirmed the head

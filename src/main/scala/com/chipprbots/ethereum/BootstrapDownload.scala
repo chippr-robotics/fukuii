@@ -8,9 +8,11 @@ import java.nio.file.*
 import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.util.zip.ZipInputStream
+import javax.net.ssl.SSLContext
 
 import org.bouncycastle.util.encoders.Hex
 
+import com.chipprbots.ethereum.tls.OutboundTls
 import com.chipprbots.ethereum.utils.Logger
 
 /** A facility to
@@ -38,10 +40,17 @@ object BootstrapDownload extends Logger:
     )
     leveldbFolder.listFiles(pathname => !pathname.getName.endsWith(".zip")).foreach(_.delete())
 
-  def downloadFile(urlToDownloadFrom: String, outFile: File): String =
+  /** Downloads `urlToDownloadFrom` (`https` only) on `context`, the client context of
+    * `fukuii.bootstrap-download.tls-profile` (spec 030 FR-044), and returns the file's SHA-512. A URL that is not
+    * `https`, or a redirect to one, is refused (FR-043).
+    */
+  def downloadFile(urlToDownloadFrom: String, outFile: File, context: SSLContext = SSLContext.getDefault): String =
 
     val sha512 = MessageDigest.getInstance("SHA-512")
-    val dis = new DigestInputStream(URI.create(urlToDownloadFrom).toURL().openStream(), sha512)
+    val in = OutboundTls
+      .openHttpsStream(urlToDownloadFrom, context, timeout = java.time.Duration.ofMinutes(2))
+      .fold(why => throw new IllegalArgumentException(s"Bootstrap download refused: $why"), identity)
+    val dis = new DigestInputStream(in, sha512)
 
     try
       val out = new FileOutputStream(outFile)
@@ -118,7 +127,14 @@ object BootstrapDownload extends Logger:
     )
 
     log.info(s"Free space check ok, starting download! (this could take some time)")
-    val hash = downloadFile(args(0), downloadedFile)
+    val context = OutboundTls
+      .forSite(
+        com.chipprbots.ethereum.utils.Config.config,
+        "bootstrap-download.tls-profile",
+        new java.security.SecureRandom()
+      )
+      .fold(e => throw new IllegalArgumentException(e.message), identity)
+    val hash = downloadFile(args(0), downloadedFile, context)
 
     log.info(s"Download complete, checking hash against $expectedHash ...")
     assertAndLog(hash == expectedHash, s"The zip file hash $hash did NOT match the expected hash $expectedHash")

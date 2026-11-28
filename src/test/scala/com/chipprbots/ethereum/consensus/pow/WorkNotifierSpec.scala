@@ -27,6 +27,9 @@ class WorkNotifierSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
   implicit override val patienceConfig: PatienceConfig =
     PatienceConfig(timeout = Span(5, Seconds), interval = Span(100, Millis))
 
+  // the URLs here are plain http, which never use it; an https URL is covered by tls.OutboundSitesSpec
+  private val plain = com.chipprbots.ethereum.tls.OutboundTls.pekkoHttpsContext(javax.net.ssl.SSLContext.getDefault)
+
   val testWork: WorkNotifier.WorkPackage = WorkNotifier.WorkPackage(
     powHeaderHash = ByteString(Array.fill(32)(0xab.toByte)),
     dagSeed = ByteString(Array.fill(32)(0xcd.toByte)),
@@ -47,7 +50,7 @@ class WorkNotifierSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     val binding = Await.result(Http().newServerAt("127.0.0.1", 0).bind(route), 5.seconds)
     val port = binding.localAddress.getPort
 
-    WorkNotifier.notify(Seq(s"http://127.0.0.1:$port"), testWork)
+    WorkNotifier.notify(Seq(s"http://127.0.0.1:$port"), testWork, plain)
 
     eventually {
       received.size() shouldEqual 1
@@ -85,7 +88,7 @@ class WorkNotifierSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
     val port1 = binding1.localAddress.getPort
     val port2 = binding2.localAddress.getPort
 
-    WorkNotifier.notify(Seq(s"http://127.0.0.1:$port1", s"http://127.0.0.1:$port2"), testWork)
+    WorkNotifier.notify(Seq(s"http://127.0.0.1:$port1", s"http://127.0.0.1:$port2"), testWork, plain)
 
     eventually {
       received1.size() shouldEqual 1
@@ -102,7 +105,7 @@ class WorkNotifierSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
   it should "not block the caller when a URL is unreachable" taggedAs UnitTest in {
     val start = System.currentTimeMillis()
     // Port 19999 — nothing listening there
-    WorkNotifier.notify(Seq("http://127.0.0.1:19999"), testWork)
+    WorkNotifier.notify(Seq("http://127.0.0.1:19999"), testWork, plain)
     val elapsed = System.currentTimeMillis() - start
     // Fire-and-forget: should return in well under 1 second
     elapsed should be < 500L
@@ -110,7 +113,7 @@ class WorkNotifierSpec extends ScalaTestWithActorTestKit with AnyFlatSpecLike wi
 
   it should "skip notification when URLs list is empty" taggedAs UnitTest in {
     // No exception, no POST attempted — just a no-op
-    WorkNotifier.notify(Seq.empty, testWork)
+    WorkNotifier.notify(Seq.empty, testWork, plain)
     // If we reach here without exception, the test passes
     succeed
   }

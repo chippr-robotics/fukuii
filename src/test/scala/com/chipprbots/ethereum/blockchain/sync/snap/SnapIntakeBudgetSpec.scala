@@ -120,3 +120,50 @@ class SnapIntakeBudgetSpec extends AnyFlatSpec with Matchers:
     a.next shouldBe ByteString(Array.fill(32)(0.toByte))
     a.last shouldBe ByteString(Array.fill(32)(0xff.toByte))
   }
+
+  // B-546: the write-off ran only after the heap-pressure early return, so under pressure stale in-transit work kept
+  // the queues non-empty and the watchdog's max-pause escape could not fire.
+  it should "write off stale in-transit work while heap pressure holds intake closed (B-546)" taggedAs UnitTest in {
+    val clock = Clock(0L)
+    val b = budget(storage = 100L, staleMs = 60000L, clock = clock)
+    b.reserve(10, 3)
+    b.setHeapPressure(true)
+    clock.now += 60001L
+    b.intakeBlockedReason() shouldBe Some("heap pressure")
+    b.storageTasksInTransit shouldBe 0L
+    b.byteCodeHashesInTransit shouldBe 0L
+  }
+
+  it should "let the watchdog's max-pause escape fire once stale in-transit work is written off (B-546)" taggedAs
+    UnitTest in {
+      val clock = Clock(0L)
+      val b = budget(storage = 100L, staleMs = 60000L, clock = clock)
+      val escapes = scala.collection.mutable.ArrayBuffer.empty[HeapWatchdogEscape]
+      val watchdog = new SnapHeapWatchdog(
+        new HeapPressureHysteresis(0.8, 0.5),
+        read = () => Some(OldGenReading(postGcUsed = 90L, currentUsed = 90L, max = 100L)),
+        onChange = (engaged, _) => b.setHeapPressure(engaged),
+        queuesEmpty = () => b.pendingStorageTasks == 0L && b.pendingByteCodeHashes == 0L,
+        policy = HeapWatchdogEscapePolicy(ineffectiveAfterMs = 1000L, maxPauseMs = 5000L),
+        onEscape = (e, _) => escapes += e,
+        nowMs = clock
+      )
+      b.reserve(10, 0) // sent to a coordinator that died before reading it
+      watchdog.evaluate() // engages: the pause starts at t=0
+      b.heapPressureActive shouldBe true
+
+      clock.now += 60001L
+      watchdog.evaluate()
+      escapes shouldBe empty // the lost reservation still reads as queued work
+
+      b.intakeBlockedReason() shouldBe Some("heap pressure") // a producer's poll writes it off
+      watchdog.evaluate() // queues empty from here
+      clock.now += 1000L
+      watchdog.evaluate()
+      // The pause is 61 s old, past the 5 s maximum, so the idle window ends it at once.
+      escapes.toSeq shouldBe Seq(
+        HeapWatchdogEscape.PauseIneffective(pausedMs = 61001L, idleMs = 1000L),
+        HeapWatchdogEscape.ForcedRelease(pausedMs = 61001L)
+      )
+      watchdog.isForceReleased shouldBe true
+    }

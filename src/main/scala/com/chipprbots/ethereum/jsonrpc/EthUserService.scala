@@ -4,6 +4,7 @@ import org.apache.pekko.util.ByteString
 
 import cats.effect.IO
 
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.MptStorage
@@ -39,26 +40,34 @@ class EthUserService(
     val blockchainReader: BlockchainReader,
     val mining: Mining,
     evmCodeStorage: EvmCodeStorage,
-    configBuilder: BlockchainConfigBuilder
+    configBuilder: BlockchainConfigBuilder,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 ) extends ResolveBlock:
+
+  // "safe" and "finalized" are the consensus client's, as in EthBlocksService (B-489)
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
   import configBuilder.*
   import EthUserService.*
 
   def getCode(req: GetCodeRequest): ServiceResponse[GetCodeResponse] =
     IO {
-      resolveBlock(req.block).flatMap { case ResolvedBlock(block, _) =>
-        StateRead.at(blockchainReader, block.header) { state =>
-          val world = InMemoryWorldStateProxy(
-            evmCodeStorage,
-            state,
-            (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
-            blockchainConfig.accountStartNonce,
-            block.header.stateRoot.value,
-            noEmptyAccounts = false,
-            ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
-          )
-          GetCodeResponse(world.getCode(req.address))
-        }
+      resolveHeader(req.block).flatMap {
+        // The pending block's world: the code its build deployed is there and nowhere else, since a build writes no
+        // code (B-230). Read over the stores by the pending header, a contract the pending block creates is missing.
+        case ResolvedHeader(_, Some(pendingWorld)) => Right(GetCodeResponse(pendingWorld.getCode(req.address)))
+        case ResolvedHeader(header, None) =>
+          StateRead.at(blockchainReader, header) { state =>
+            val world = InMemoryWorldStateProxy(
+              evmCodeStorage,
+              state,
+              (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+              blockchainConfig.accountStartNonce,
+              header.stateRoot.value,
+              noEmptyAccounts = false,
+              ethCompatibleStorage = blockchainConfig.ethCompatibleStorage
+            )
+            GetCodeResponse(world.getCode(req.address))
+          }
       }
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
@@ -97,12 +106,13 @@ class EthUserService(
     */
   def getStorageValues(req: GetStorageValuesRequest): ServiceResponse[GetStorageValuesResponse] =
     IO {
-      resolveBlock(req.block).flatMap { case ResolvedBlock(block, _) =>
+      resolveHeader(req.block).flatMap { resolved =>
+        val header = resolved.header
         // one state for every account and slot of the request
-        StateRead.at(blockchainReader, block.header) { state =>
+        StateRead.of(blockchainReader, resolved) { state =>
           val values = req.entries.map { entry =>
             val account = blockchainReader
-              .accountIn(state, block.header, entry.address)
+              .accountIn(state, header, entry.address)
               .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
             val slotValues = entry.slots.map { position =>
               blockchain.getAccountStorageAt(
@@ -132,10 +142,10 @@ class EthUserService(
       makeResponse: (MptStorage, Account) => T
   ): ServiceResponse[T] =
     IO {
-      resolveBlock(blockParam).flatMap { case ResolvedBlock(block, _) =>
-        StateRead.at(blockchainReader, block.header) { state =>
+      resolveHeader(blockParam).flatMap { resolved =>
+        StateRead.of(blockchainReader, resolved) { state =>
           val account = blockchainReader
-            .accountIn(state, block.header, address)
+            .accountIn(state, resolved.header, address)
             .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
           makeResponse(state, account)
         }

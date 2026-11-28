@@ -175,11 +175,11 @@ raise `block-cache-size` cautiously.
 
 | Metric | Type | Meaning | Surfaced in |
 |--------|------|---------|-------------|
-| `app_db_rocksdb_block_cache_hit` | gauge | Cumulative `BLOCK_CACHE_HIT` ticker since DB open. `0.0` when statistics disabled. | SNAP Sync: State Healing (RocksDB Cache Hit Rate) |
-| `app_db_rocksdb_block_cache_miss` | gauge | Cumulative `BLOCK_CACHE_MISS` ticker since DB open. `0.0` when statistics disabled. | SNAP Sync: State Healing (RocksDB Cache Hit Rate) |
+| `app_db_rocksdb_block_cache_hit_total` | counter | Cumulative `BLOCK_CACHE_HIT` ticker since DB open. `0.0` when statistics disabled. | SNAP Sync: State Healing (RocksDB Cache Hit Rate) |
+| `app_db_rocksdb_block_cache_miss_total` | counter | Cumulative `BLOCK_CACHE_MISS` ticker since DB open. `0.0` when statistics disabled. | SNAP Sync: State Healing (RocksDB Cache Hit Rate) |
 | `app_db_rocksdb_block_cache_hit_rate` | gauge | Derived `hit / (hit + miss)`; `0.0` when statistics disabled or the denominator is 0. A low value during a slow walk = the walk is **cache-miss-bound**; raising `max-open-files`/`block-cache-size` may help. | SNAP Sync: State Healing (RocksDB Cache Hit Rate) |
-| `app_db_rocksdb_index_filter_hit` | gauge | Cumulative index- + filter-block cache hits (`BLOCK_CACHE_INDEX_HIT + BLOCK_CACHE_FILTER_HIT`). `0.0` when statistics disabled. | — |
-| `app_db_rocksdb_index_filter_miss` | gauge | Cumulative index- + filter-block cache misses (`BLOCK_CACHE_INDEX_MISS + BLOCK_CACHE_FILTER_MISS`). A high index/filter miss rate points at too few open files / undersized cache for the SST count. | — |
+| `app_db_rocksdb_index_filter_hit_total` | counter | Cumulative index- + filter-block cache hits (`BLOCK_CACHE_INDEX_HIT + BLOCK_CACHE_FILTER_HIT`). `0.0` when statistics disabled. | — |
+| `app_db_rocksdb_index_filter_miss_total` | counter | Cumulative index- + filter-block cache misses (`BLOCK_CACHE_INDEX_MISS + BLOCK_CACHE_FILTER_MISS`). A high index/filter miss rate points at too few open files / undersized cache for the SST count. | — |
 
 ## SNAP peers, requests, and data integrity
 

@@ -37,6 +37,7 @@ import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.HelloCodec
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.InitialHelloReceived
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.LogCapture
 import com.chipprbots.ethereum.testing.Tags.*
 
 // Wave 3 gate: TCP tests require TestActorRef + lastSender — blocked on Typed TCP bridge migration
@@ -122,6 +123,40 @@ class RLPxConnectionHandlerSpec
       max = rlpxConfiguration.waitForTcpAckTimeout + Timeouts.normalTimeout
     )
 
+  it should "close the connection once a Disconnect it wrote is acknowledged (B-405)" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("disconnect encoded"))
+
+    setupIncomingRLPxConnection()
+    rlpxConnectionParent.expectMsgType[InitialHelloReceived]
+
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(
+      com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect(
+        com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect.Reasons.UselessPeer
+      )
+    )
+    connection.expectMsg(Tcp.Write(ByteString("disconnect encoded"), RLPxConnectionHandler.Ack))
+    connection.reply(RLPxConnectionHandler.Ack)
+    // At once, not after the peer actor's 15 s disconnect-poison-pill-timeout: the frame is on the wire.
+    rlpxConnectionParent.expectTerminated(rlpxConnection, max = Timeouts.normalTimeout)
+
+  it should "keep the connection open once an ordinary message is acknowledged" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("ping encoded"))
+
+    setupIncomingRLPxConnection()
+    rlpxConnectionParent.expectMsgType[InitialHelloReceived]
+
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+    connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
+    connection.reply(RLPxConnectionHandler.Ack)
+    rlpxConnection ! RLPxConnectionHandler.SendMessage(Ping())
+    connection.expectMsg(Tcp.Write(ByteString("ping encoded"), RLPxConnectionHandler.Ack))
+
   it should "ignore timeout of old messages" taggedAs (UnitTest, NetworkTest) in new TestSetup:
     mockMessageCodec.encodeMessageHandler = Some(_ => ByteString("ping encoded"))
 
@@ -162,6 +197,32 @@ class RLPxConnectionHandlerSpec
     bridge ! Tcp.Received(data)
     rlpxConnectionParent.expectMsg(RLPxConnectionHandler.ConnectionFailed)
     rlpxConnectionParent.expectTerminated(rlpxConnection)
+
+  // B-415: a failed handshake with a stranger is routine on a public network; it is counted (`+N auth-fail` in the
+  // `Network [60s]` line) and logged at DEBUG, not as a WARN a node writes dozens of times a minute.
+  it should "log a failed AuthHandshake at DEBUG, not at INFO or WARN, and count it" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    val failuresBefore: Int = RLPxConnectionHandler.authFailedCount.get()
+    val (_, events) = LogCapture.capture("com.chipprbots.ethereum.network.rlpx") {
+      rlpxConnection ! RLPxConnectionHandler.ConnectTo(uri)
+      tcpActorProbe.expectMsg(Tcp.Connect(inetAddress))
+      val initPacket: ByteString = ByteString("Init packet")
+      mockHandshaker.initiateHandler = Some(_ => initPacket -> mockHandshaker)
+      tcpActorProbe.reply(Tcp.Connected(inetAddress, inetAddress))
+      tcpActorProbe.expectMsgClass(classOf[Tcp.Register])
+      val outboundBridge = tcpActorProbe.lastSender
+      tcpActorProbe.expectMsg(Tcp.Write(initPacket, RLPxConnectionHandler.Ack))
+      mockHandshaker.handleResponseMessageHandler = Some(_ => AuthHandshakeError)
+      mockHandshaker.handleResponseMessageV4Handler = Some(_ => AuthHandshakeError)
+      outboundBridge ! Tcp.Received(ByteString((0 until AuthHandshaker.ResponsePacketLength).map(_.toByte).toArray))
+      rlpxConnectionParent.expectMsg(RLPxConnectionHandler.ConnectionFailed)
+      rlpxConnectionParent.expectTerminated(rlpxConnection)
+    }
+    LogCapture.atInfoOrAbove(events) shouldBe empty
+    events.exists(_.getFormattedMessage.contains("[Stopping Connection] Auth handshake FAILED")) shouldBe true
+    RLPxConnectionHandler.authFailedCount.get() should be > failuresBefore
 
   it should "close the connection if the AuthHandshake response message's MAC is invalid" taggedAs (
     UnitTest,

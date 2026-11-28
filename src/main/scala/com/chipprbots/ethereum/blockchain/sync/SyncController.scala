@@ -29,6 +29,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.PivotBoot
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartPivotAncestryBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrap
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController.StartRegularSyncBootstrapByHash
+import com.chipprbots.ethereum.blockchain.sync.snap.SnapTaskFileCleanup
 import com.chipprbots.ethereum.blockchain.sync.snap.StateValidator
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageScheme
 import com.chipprbots.ethereum.blockchain.sync.snap.StorageTaskFile
@@ -53,6 +54,8 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
+import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -89,6 +92,14 @@ object SyncController:
   /** How many messages wait while a state that is given up is cleared. */
   private val ClearingStashSize = 256
 
+  /** A clear for a sync begun again on its branch that could not be begun (an adoption held the records, or a recovery
+    * was executing a block: both end soon) is asked for again this many times, this long apart (B-465), before the sync
+    * is begun again over what it wrote.
+    */
+  val BranchRetryClearAgainAfter: FiniteDuration = 10.seconds
+  val BranchRetryClearAsks: Int = 6
+  private val BranchRetryClearAgainKey = "BranchRetryClearAgain"
+
   /** What the controller gives the state up with, on the unified layout (spec 018 C5a part 7b). None on the hash
     * layout, and a request that arrives there is dropped.
     */
@@ -102,8 +113,9 @@ object SyncController:
       * recoveries that wait or run, and the head the fork choice followed (B-307).
       *
       * @return
-      *   false when it could not be begun (a recovery was still executing a block): nothing was cleared and nothing
-      *   recorded, and the next verdict is decided as if this one had not been
+      *   false when it could not be begun (a recovery was still executing a block, or an adoption held the records:
+      *   [[StateEscalationPort.notClearedWhenRefused]]): nothing was cleared and nothing recorded, and the next verdict
+      *   is decided as if this one had not been
       */
     def clear(
         record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
@@ -123,9 +135,38 @@ object SyncController:
       * the attempt (B-307). Called once that sync has stopped; it returns when the rows are gone.
       *
       * @return
-      *   false when it could not be begun: nothing was cleared and nothing counted
+      *   false when it could not be begun (a recovery was still executing a block, or an adoption held the records):
+      *   nothing was cleared and nothing counted
       */
     def clearForBranchRetry(): Boolean
+
+    /** How long after a [[clearForBranchRetry]] that could not be begun it is asked for again (B-465). */
+    def branchRetryClearAgainAfter: FiniteDuration = SyncController.BranchRetryClearAgainAfter
+
+  object StateEscalationPort:
+
+    /** `clear`'s answer when the state refused to be cleared because an attempt held the records (B-465, forge): an
+      * adoption of a heavier branch was moving the head, which the chain may follow from where it ends. Nothing was
+      * written, so it is a clear that could not be begun (false), and `refused` is told why. Anything else `clear`
+      * throws is thrown on.
+      *
+      * `held` is looked at first, and when it is true `clear` is not run at all (vault): what `clear` undoes before the
+      * state's own check (the recoveries that wait, and what is remembered of those that failed) is kept for a clear
+      * that would be refused. The state's check under its lock is still the one that counts.
+      */
+    def notClearedWhenRefused(held: => Boolean, refused: String => Unit)(clear: => Boolean): Boolean =
+      if held then
+        refused(
+          "The state was not cleared for a sync from scratch: an adoption holds the records and is moving the head. " +
+            "Ask again once it has ended"
+        )
+        false
+      else
+        try clear
+        catch
+          case busy: com.chipprbots.ethereum.db.storage.pathstate.StateClearRefused =>
+            refused(busy.getMessage)
+            false
 
   /** A sync on the unified state layout (spec 018 C5a part 10). None on the hash layout. */
   trait PathLiveSyncPort:
@@ -148,13 +189,35 @@ object SyncController:
       */
     def handedOff(): Unit
 
+    /** What the snap-peer precondition at SNAP's start counts against (spec 018 C6, T241/T242). */
+    def snapPeers: PathLiveSync.SnapPeerPrecondition
+
+    /** Whether the node holds its genesis state and nothing else: no SNAP sync done or begun, and no clear of the state
+      * pending. On proof of work such a node may regular-sync from its genesis instead of SNAP
+      * ([[PathLiveSync.snapPeerVerdict]]). Reads the store, briefly.
+      */
+    def holdsOnlyGenesis(): Boolean
+
+    /** What a checkpoint import needs of the unified layout: the position rows, the hand-off that ends it and the clear
+      * that begins it (spec 018 C5c PR3).
+      */
+    def checkpointTarget: com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.UnifiedTarget
+
   /** What [[PathLiveSyncPort.beforeSnap]] answers. */
   enum SnapStartOnGuard:
     /** SNAP begins; `clearedGenesis` when the genesis state was cleared for it. */
     case Begin(clearedGenesis: Boolean)
 
-    /** SNAP does not begin, for `why`; regular sync runs on the state that is held. */
+    /** SNAP does not begin, for `why`; regular sync runs on the state that is held. A refusal that is not expected:
+      * logged at ERROR.
+      */
     case Refused(why: String)
+
+    /** SNAP is not needed: the node holds the state of a block above its genesis, which it followed the chain to (a PoW
+      * guard node that fell back to regular sync, B-386), and regular sync runs on it. Every restart with `do-snap-sync
+      * \= true` lands here, so it is said once at INFO, not at ERROR.
+      */
+    case HoldsState(block: String)
 
     /** Not yet, for `why`: the check is asked again in [[SnapStartRecheckDelay]], and nothing else runs meanwhile. */
     case Wait(why: String)
@@ -278,11 +341,19 @@ object SyncController:
   ) extends Command
   // the clear of a state that is given up ended: done, not begun (a recovery was still running), or failed
   private case object SnapStoppedForBranchRetry extends Command
+  // B-465: the clear for the branch could not be begun; asked for again
+  private case object BranchRetryClearAgain extends Command
   private case class BranchRetryCleared(ended: scala.util.Try[Boolean]) extends Command
+  // B-435: the checkpoint download and import, run off the actor's thread, ended
+  private case class CheckpointSyncEnded(ended: scala.util.Try[Unit]) extends Command
   // spec 018 C5a part 10: what the port answered before a SNAP sync on the unified layout
   private case class SnapStartChecked(minPivotBlock: Option[BigInt], answer: scala.util.Try[SnapStartOnGuard])
       extends Command
   private case class SnapStartRecheck(minPivotBlock: Option[BigInt]) extends Command
+  // spec 018 C6 (T241/T242): the snap peers are counted again (and a count that did not come is given up on), and the
+  // proof-of-work wait for them is over
+  private case object SnapPeersRecount extends Command
+  private case object SnapPeersWaitOver extends Command
 
   private case class StateClearEnded(
       record: com.chipprbots.ethereum.db.storage.pathstate.StateEscalation,
@@ -391,7 +462,14 @@ object SyncController:
       stateEscalation: Option[StateEscalationPort] = None,
       // Spec 018 C5a part 10: a sync on the unified layout, its hand-off and the check before SNAP. None on the hash
       // layout.
-      pathLiveSync: Option[PathLiveSyncPort] = None
+      pathLiveSync: Option[PathLiveSyncPort] = None,
+      // Spec 030 FR-040: the client of `checkpoint-sync-url`, from the outbound TLS factory on the profile
+      // `checkpoint-sync-tls-profile` names; built only when a download is due, and a profile that does not load is
+      // the download's failure.
+      checkpointHttpClient: () => Either[String, java.net.http.HttpClient] = () =>
+        Right(com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader.defaultHttpClient),
+      // The head the tx pool was last reset to, the node's one, shared with the Engine API's fork choice (B-515).
+      txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead = new com.chipprbots.ethereum.transactions.TxPoolHead
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -425,7 +503,9 @@ object SyncController:
           chainWeightReconcileOn,
           peerScoringManager,
           stateEscalation,
-          pathLiveSync
+          pathLiveSync,
+          checkpointHttpClient,
+          txPoolHead
         )
         impl.setup()
         impl.withPostStop(impl.idle())
@@ -471,7 +551,9 @@ object SyncController:
       chainWeightReconcileOn: Boolean,
       peerScoringManager: Option[PeerScoringManager],
       stateEscalation: Option[StateEscalationPort],
-      pathLiveSync: Option[PathLiveSyncPort]
+      pathLiveSync: Option[PathLiveSyncPort],
+      checkpointHttpClient: () => Either[String, java.net.http.HttpClient],
+      txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead
   ):
     // scalastyle:on parameter.number
 
@@ -482,6 +564,11 @@ object SyncController:
     // (context.stop is async — new actors can race with still-stopping ones).
     private var bootstrapGeneration: Long = 0
     private var syncGeneration: Long = 0
+
+    // B-015: the peers client of the regular sync that runs, or ran last. Each start spawns its own, named by its
+    // generation, and nothing stopped it with its regular sync: one leaked per restart, each subscribed to the peer
+    // event bus, and every re-SNAP, bulk recovery or unexpected stop of RegularSync is a restart.
+    private var regularSyncPeersClient: Option[TypedActorRef[PeersClient.Command]] = None
 
     // #1705: regular sync's import lock, ONE for the node's life. Every RegularSync started here and every importer it
     // spawns take this same one, so an import that a stopped importer, or a stopped RegularSync (`ctx.stop` stops
@@ -515,6 +602,10 @@ object SyncController:
     // H3: the block a re-SNAP waiting out its backoff starts from, while regular sync keeps running.
     private var pendingResnap: Option[BigInt] = None
 
+    // B-351: the branch the re-SNAP waiting out its backoff is held to, where the stuck that scheduled it named one (a
+    // heavier chain below the fork recovery's floor, B-346). Set with `pendingResnap`, read when it is due.
+    private var pendingResnapBranch: Option[GivenUpBranch] = None
+
     // The codeHash that sent regular sync into a bulk bytecode recovery, until that recovery hands back to regular sync.
     private var bulkCodeRecoveryTrigger: Option[ByteString] = None
     // That recovery's scan could not run, so its failure says nothing about the code (spec 022 T050a). Read and cleared with it.
@@ -530,6 +621,22 @@ object SyncController:
     // a recent header with a dedicated PivotHeaderBootstrap (inline in `runningSnapSync` — no transition into the
     // deadlock-prone bootstrap state) and reply HealingServeRoot to the child. Only one is serviced at a time.
     private var healingServeRootRequester: Option[TypedActorRef[SNAPSyncController.Command]] = None
+
+    /** The peers this controller's own bootstraps found on another chain than the branch a sync is bound to: the
+      * healing serve-root's and the recovery's recent-root's (B-320, forge). The SNAP child holds those its pivot
+      * bootstraps found; these are held here, and only held: a miss of a bootstrap that is not the pivot's counts
+      * nothing towards the wait for a peer on the branch.
+      */
+    private val bootstrapOffBranch = new snap.PivotAnchor.OffBranchPeers(() => appStateStorage)
+
+    private def snapTargetHeights(
+        peers: Map[
+          com.chipprbots.ethereum.network.Peer,
+          com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+        ]
+    ): Iterable[BigInt] =
+      val now = System.currentTimeMillis()
+      SyncController.snapTargetHeights(peers, peer => bootstrapOffBranch.holds(peer, now))
     private var healingServeRootBootstrap
         : Option[(TypedActorRef[PeersClient.Command], TypedActorRef[PivotHeaderBootstrap.Command])] =
       None // (peersClient, headerBootstrap)
@@ -632,6 +739,15 @@ object SyncController:
       * through the wildcard and match themselves. `WrappedSyncProtocol` preserves the ask `sender()` because callers
       * `.tell` it with the original sender; `WrappedExternal` is fire-and-forget (its arms never read `sender()`).
       */
+    /** B-435: the generic "syncing" answer, from the stored progress alone, for a state that does no sync of its own.
+      */
+    private def replySyncing(replyTo: TypedActorRef[SyncProtocol.Status]): Unit =
+      replyTo ! SyncProtocol.Status.Syncing(
+        startingBlockNumber = appStateStorage.getSyncStartingBlock(),
+        blocksProgress = SyncProtocol.Status.Progress(appStateStorage.getBestBlockNumber(), BigInt(0)),
+        stateNodesProgress = None
+      )
+
     private def unwrap(cmd: Command): Any = cmd match // Any: returns Classic msg from WrappedExternal
       case WrappedExternal(m)     => m
       case WrappedSyncProtocol(m) => m
@@ -752,9 +868,26 @@ object SyncController:
           // Buffer for the eventual SNAP startup; idle predates startSnapSync().
           handleBeaconHead(bh, snapSyncOpt = None)
           Behaviors.same
+        // B-441: JSON-RPC, the TUI and MCP are up before Start is sent, so an ask can come first. Answered as syncing,
+        // never NotSyncing: the miner mines on NotSyncing (a lone miner), and must not before the sync has begun.
+        case msg: SyncProtocol.GetStatus =>
+          replySyncing(msg.replyTo)
+          Behaviors.same
         // a controller that was not started gives no state up: said by the watch, and dropped here (beacon)
         case _: SyncProtocol.StateEscalationRequested => Behaviors.same
         case _                                        => Behaviors.unhandled
+    }
+
+    /** A sync that stopped for good (B-319, beacon on #1873): its children are stopped, and it answers what asks after
+      * the sync with why, so that `eth_syncing`, the admin and MCP status calls say so rather than time out. Everything
+      * else is dropped: nothing is synced until the node is started again.
+      */
+    def stoppedFor(reason: String): Behavior[Command] = Behaviors.receive { (_, cmd) =>
+      unwrap(cmd) match
+        case msg: SyncProtocol.GetStatus =>
+          msg.replyTo ! SyncProtocol.Status.Stopped(reason)
+          Behaviors.same
+        case _ => Behaviors.same
     }
 
     def runningSnapSync(snapSync: TypedActorRef[SNAPSyncController.Command]): Behavior[Command] = Behaviors.receive {
@@ -946,7 +1079,10 @@ object SyncController:
                     "again does not mend that. Not restarting: the sync controller stops. A restart of the node " +
                     "begins the count again."
                 )
-                Behaviors.stopped
+                stoppedFor(
+                  s"the hand-off's sample stopped the sync $n times since the last hand-off, the last at pivot " +
+                    s"$pivot for ${reason.text} ($what); restart the node to sync again"
+                )
 
           case SyncProtocol.HealingImpossible | SyncProtocol.PivotOffTheBranch =>
             restartSnapAfterFailedFinalization(snapSync)
@@ -1008,8 +1144,9 @@ object SyncController:
             healingServeRootRequester = None
             Behaviors.same
 
-          case PivotHeaderBootstrap.Failed(reason, _) if healingServeRootRequester.isDefined =>
+          case PivotHeaderBootstrap.Failed(reason, offBranch) if healingServeRootRequester.isDefined =>
             log.warn(s"[HEAL-SERVE-ROOT] Serve-root bootstrap failed ($reason). Replying None (serve root kept).")
+            bootstrapOffBranch.hold(offBranch, System.currentTimeMillis())
             stopHealingServeRootBootstrap()
             healingServeRootRequester.foreach(_ ! SNAPSyncController.HealingServeRoot(0, None))
             healingServeRootRequester = None
@@ -1118,8 +1255,7 @@ object SyncController:
           com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
         ]
     ): Unit =
-      val snapHeights = peers.values.filter(_.remoteStatus.supportsSnap).map(_.maxBlockNumber)
-      SyncController.recentRootTarget(snapHeights, RecentRootMarginBlocks) match
+      SyncController.recentRootTarget(snapTargetHeights(peers), RecentRootMarginBlocks) match
         case Some(recentBlock) =>
           healingServeRootGeneration += 1
           val gen = healingServeRootGeneration
@@ -1250,8 +1386,10 @@ object SyncController:
           log.error("RegularSync actor terminated unexpectedly — restarting regular sync.")
           startRegularSync(resumeBackfill = false)._2
         case SyncProtocol.MissingCodeNeedsBulkRecovery(blockNumber, _) if onTheGuard =>
-          // spec 018 C5a part 10: the bulk recovery walks the hash-keyed store, which this layout never reads; code is
-          // fetched one hash at a time by the importer (the code store is shared by both layouts).
+          // spec 018 C5a part 10: the bulk recovery was a walk of the hash-keyed store, which this layout never reads;
+          // code is fetched one hash at a time by the importer (the code store is shared by both layouts). B-396: the
+          // bytecode actor now scans the anchor's rows and could run here, but this route (and BlockImporter's gate) stay
+          // closed until a follow-up wires and tests them together.
           log.warn(
             "Ignoring a bulk bytecode recovery request for block {}: on the unified state layout code is fetched one " +
               "hash at a time.",
@@ -1294,6 +1432,7 @@ object SyncController:
           )
           ctx.unwatch(regularSync)
           ctx.stop(regularSync)
+          stopRegularSyncPeersClient()
           stopBackgroundAudit()
           // Un-done until the recovery finishes: if the node stops part-way, the next start resumes the scan. A checkpoint
           // a failed scan left goes: this scan is after code the best state needs, and `recoveryScanRoot` would keep that
@@ -1328,7 +1467,7 @@ object SyncController:
                 StateClearEnded(record, givenUpFor, _)
               )
               clearingState(regularSync, port)
-        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) if onTheGuard =>
+        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash, _) if onTheGuard =>
           // spec 018 C5a part 10 (forge): a re-SNAP would start over the state this node holds. A state it cannot
           // follow the chain with is given up through the escalation, which clears it first.
           log.error(
@@ -1338,8 +1477,10 @@ object SyncController:
             missingHash
           )
           Behaviors.same
-        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) if pendingResnap.isDefined =>
-          // The importer keeps retrying while a re-SNAP waits, and reports each new run of exhausts: nothing new.
+        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash, branch) if pendingResnap.isDefined =>
+          // The importer keeps retrying while a re-SNAP waits, and reports each new run of exhausts: nothing new. A
+          // heavier branch found meanwhile is new (B-351): the re-SNAP, when due, is held to it.
+          branch.foreach(found => pendingResnapBranch = Some(found))
           log.info(
             "Regular sync still stuck on block {} (missing {}); the re-SNAP from block {} is still scheduled",
             blockNumber,
@@ -1347,7 +1488,7 @@ object SyncController:
             pendingResnap.getOrElse(blockNumber)
           )
           Behaviors.same
-        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash) =>
+        case SyncProtocol.RegularSyncStuck(blockNumber, missingHash, branch) =>
           // Regular sync can't make progress: state-node recovery has exhausted on the same hash
           // 3+ times. Local parent state is too far behind canonical tip for any peer's snap-serve
           // window, so trie-node fetches keep returning empty. The recovery is to re-run SNAP from a
@@ -1371,11 +1512,12 @@ object SyncController:
             )
             // The baseline goes until the first regular sync after this SNAP sets it: SNAP's pivot is no import.
             appStateStorage.putRegularSyncStuck(resnaps, baseline = None).commit()
-            resnapNow(regularSync, blockNumber)
+            resnapNow(regularSync, blockNumber, branch)
           else
             appStateStorage.putRegularSyncStuck(resnaps, baseline = Some(best)).commit()
             RegularSyncMetrics.incrementResnapBackoffs()
             pendingResnap = Some(blockNumber)
+            pendingResnapBranch = branch
             timers.startSingleTimer(ResnapDueKey, ResnapDue(blockNumber), wait)
             timers.startTimerWithFixedDelay(ResnapCheckKey, ResnapCheck, SyncController.ResnapCheckInterval)
             log.error(
@@ -1406,7 +1548,7 @@ object SyncController:
               blockNumber
             )
             appStateStorage.putRegularSyncStuck(appStateStorage.regularSyncStuckResnaps(), baseline = None).commit()
-            resnapNow(regularSync, blockNumber)
+            resnapNow(regularSync, blockNumber, pendingResnapBranch)
         case ResnapDue(_) =>
           Behaviors.same
         case SyncProtocol.CalibrateChainWeightFromPeer(peerTD, peerMaxBlock) =>
@@ -1568,6 +1710,7 @@ object SyncController:
             timers.cancel(ResnapDueKey)
             timers.cancel(ResnapCheckKey)
             ctx.stop(regularSync)
+            stopRegularSyncPeersClient()
             stopBackgroundAudit()
             port.escalated(record.kind)
             // On proof of work the pivot is taken no lower than the first block of the refused branch above its fork
@@ -1576,8 +1719,9 @@ object SyncController:
             startSnapSync(minPivotBlock = givenUpFor.map(_.number))
           case StateClearEnded(_, _, scala.util.Success(false)) =>
             log.error(
-              "[STATE-ESCALATION] The state was not cleared: a recovery of the state was still executing a block. " +
-                "Nothing was given up and nothing recorded; regular sync goes on, and no verdict is asked about for a while."
+              "[STATE-ESCALATION] The state was not cleared: a recovery of the state was still executing a block, or " +
+                "an adoption of a heavier branch was moving the head. Nothing was given up and nothing recorded; " +
+                "regular sync goes on, and no verdict is asked about for a while: the clear is asked for again after it."
             )
             port.clearRefused()
             waiting.unstashAll(runningRegularSync(regularSync))
@@ -1603,18 +1747,33 @@ object SyncController:
 
     // B-307: SNAP is stopping, or has stopped and what it wrote is being cleared, before it is begun again with its
     // pivot no lower than the branch. What arrives meanwhile was for the sync that is gone.
-    private def clearingForBranchRetry(port: StateEscalationPort): Behavior[Command] =
+    //
+    // B-465 (vault): a clear that could not be begun is asked for again, a few times, a short while apart. Not regular
+    // sync instead, as for an escalation's clear: here the state was given up already and SNAP had not handed off, so
+    // there is no state for regular sync to import onto. What holds the clear back (an adoption that holds the records,
+    // a recovery executing a block) ends soon. Only when it does not is the sync begun again over what it wrote.
+    private def clearingForBranchRetry(port: StateEscalationPort, asked: Int = 0): Behavior[Command] =
       Behaviors.receive { (_, cmd) =>
         unwrap(cmd) match
-          case SnapStoppedForBranchRetry =>
+          case SnapStoppedForBranchRetry | BranchRetryClearAgain =>
             val blocking = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
             ctx.pipeToSelf(scala.concurrent.Future(port.clearForBranchRetry())(using blocking))(BranchRetryCleared(_))
+            clearingForBranchRetry(port, asked + 1)
+          case BranchRetryCleared(scala.util.Success(false)) if asked < SyncController.BranchRetryClearAsks =>
+            val again = port.branchRetryClearAgainAfter
+            log.warn(
+              s"[STATE-ESCALATION-PIVOT] What the sync wrote was not cleared: a recovery of the state was still " +
+                s"executing a block, or an adoption of a heavier branch was moving the head. Asked again in $again " +
+                s"($asked of ${SyncController.BranchRetryClearAsks})."
+            )
+            timers.startSingleTimer(BranchRetryClearAgainKey, BranchRetryClearAgain, again)
             Behaviors.same
           case BranchRetryCleared(scala.util.Success(cleared)) =>
             if !cleared then
               log.error(
-                "[STATE-ESCALATION-PIVOT] What the sync wrote was not cleared, and the attempt was not counted: the " +
-                  "sync is begun again over it."
+                s"[STATE-ESCALATION-PIVOT] What the sync wrote was not cleared after $asked asks (a recovery of the " +
+                  "state was still executing a block, or an adoption of a heavier branch was moving the head), and the " +
+                  "attempt was not counted: the sync is begun again over it."
               )
             startSnapSync(minPivotBlock = liveSnapPivotFloor())
           case BranchRetryCleared(scala.util.Failure(failed)) =>
@@ -1625,6 +1784,10 @@ object SyncController:
             throw failed
           case bh: ForkChoiceManager.BeaconHead =>
             handleBeaconHead(bh, snapSyncOpt = None)
+            Behaviors.same
+          case msg: SyncProtocol.GetStatus =>
+            // B-435: answered, not dropped (a dropped ask times out for the miner and eth_syncing)
+            replySyncing(msg.replyTo)
             Behaviors.same
           case _ => Behaviors.same
       }
@@ -1675,16 +1838,59 @@ object SyncController:
     /** Re-run SNAP from a recent pivot above `blockNumber`: stop regular sync, clear both SnapSyncDone AND the legacy
       * FastSyncDone (so a restart re-evaluates start() and enters SNAP rather than going straight back to regular
       * sync), then start SNAP.
+      *
+      * With a `branch` (B-351), the re-SNAP is held to it first: see [[holdTheResnapToTheBranch]].
       */
-    private def resnapNow(regularSync: TypedActorRef[RegularSync.Command], blockNumber: BigInt): Behavior[Command] =
+    private def resnapNow(
+        regularSync: TypedActorRef[RegularSync.Command],
+        blockNumber: BigInt,
+        branch: Option[GivenUpBranch]
+    ): Behavior[Command] =
       pendingResnap = None
+      pendingResnapBranch = None
       timers.cancel(ResnapDueKey)
       timers.cancel(ResnapCheckKey)
       ctx.stop(regularSync)
+      stopRegularSyncPeersClient()
       stopBackgroundAudit()
+      branch.foreach(holdTheResnapToTheBranch)
       appStateStorage.clearSnapSyncDone().commitSync() // spec 022 D7: with the invariant marker
       appStateStorage.clearFastSyncDone().commit()
       startSnapSync(minPivotBlock = Some(blockNumber))
+
+    /** B-351: a SNAP re-sync on the hash layout for a heavier chain that leaves this one below the fork recovery's
+      * floor (B-346) takes the heavier chain's blocks above the common block, not this node's. Without this, nothing
+      * bound it to that chain: the header download went on from the cursor an earlier sync left, on the chain this node
+      * leaves where that cursor is above the common block, and refused every header of the heavier one, which does not
+      * stand on it; the pivot was taken from what the download held; and the index above the common block kept this
+      * node's blocks.
+      *
+      * In one synced write, before the sync starts, it does what the clear of an escalation does for the sync after it
+      * on the unified layout (B-307, B-303), with the same records, read by the same code on either layout:
+      *   - the requirement that the sync take its pivot on the branch ([[snap.PivotAnchor.branchCheck]]): its pivot is
+      *     no lower than the branch's first block, the pivot's header is asked of a peer on it, and the header download
+      *     stores nothing of another chain at its height ([[snap.PivotAnchor.branchGate]]);
+      *   - the header download's cursors set back to the common block, so that every height above it is downloaded, and
+      *     its entry in the index written, again from the branch.
+      *
+      * The index above the pivot is cleared at the hand-off, which also ends the requirement. Nothing is deleted here:
+      * regular sync may still be ending an import, and a kill before the sync starts leaves a node that resumes regular
+      * sync with nothing taken from it, to find the fork again. Proof of work only: the branch comes from the
+      * resolver's weighing (B-346), which is the hash layout's on such a chain.
+      */
+    private def holdTheResnapToTheBranch(branch: GivenUpBranch): Unit =
+      log.warn(
+        s"${snap.PivotAnchor.PivotOnBranchTag} The SNAP re-sync for the heavier chain that leaves this one at block " +
+          s"${branch.number - 1} takes its pivot on that chain (its block ${branch.number}, " +
+          s"${com.chipprbots.ethereum.utils.ByteStringUtils.hash2string(branch.hash)}), and downloads the headers above block ${branch.number - 1} " +
+          "again from it"
+      )
+      appStateStorage
+        .holdTheSyncToTheBranch(
+          PivotOnBranch(branch.number, branch.hash),
+          height => blockchainReader.getCanonicalHashByNumber(height).map(_.value)
+        )
+        .commitSync()
 
     /** Internal `Behavior[Command]` self / death-watch markers that must NEVER be forwarded to a Classic child. A
       * watched child can terminate after the parent has already transitioned to a state that does not handle its marker
@@ -1817,6 +2023,8 @@ object SyncController:
           log.info(
             "Received Done from SNAP sync during pivot header bootstrap. Stopping bootstrap and transitioning to regular sync."
           )
+          // a hand-off, as at SnapSyncFinalized and as the legacy Done in runningSnapSync (B-329)
+          pathLiveSync.foreach(_.handedOff())
           ctx.stop(headerBootstrap)
           ctx.stop(peersClient)
           ctx.stop(originalSnapSyncRef)
@@ -2069,10 +2277,7 @@ object SyncController:
       val snapStateRoot = appStateStorage.getSnapSyncStateRoot()
       val bestBlockNum = appStateStorage.getBestBlockNumber()
       val mptStorage = stateStorage.getReadOnlyStorage
-      def rootExists(root: ByteString): Boolean =
-        try
-          mptStorage.get(root.toArray); true
-        catch case _: Exception => false
+      def rootExists(root: ByteString): Boolean = mptStorage.holdsNode(root)
       blockchainReader.getSnapSyncPivotBlock.flatMap(blockchainReader.getBlockHeaderByNumber) match
         case None =>
           log.info(
@@ -2156,6 +2361,13 @@ object SyncController:
             )
           else log.info(s"Bootstrap checkpoint already loaded (block $existingPivot), skipping")
 
+      // A start that finds the checkpoint import key set had an import killed (spec 018 E.1, "A failed or killed
+      // import"): its archive is recorded as refused, and on the unified layout its rows are cleared through the reset
+      // mark, so that SNAP starts from a clean state. Before the import below is decided, so that a refused archive is
+      // not run again.
+      com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter
+        .recoverInterrupted(appStateStorage, pathLiveSync.map(_.checkpointTarget))
+
       // Checkpoint sync: bootstrap a fresh datadir by importing a `.checkpoint` archive instead
       // of running SNAP. Only fires when DB is fresh (best-block == 0 and SNAP not already done).
       // Resolution order:
@@ -2164,7 +2376,9 @@ object SyncController:
       //      (resumable via HTTP Range) and import.
       // On success the importer marks SNAP/bytecode/storage as done; the match below routes to
       // RegularSync. On failure we log and fall through to the normal SNAP/Regular path.
-      if appStateStorage.getBestBlockNumber() == 0 && !appStateStorage.isSnapSyncDone() then
+      // B-435: the download and the import run for minutes. They run off this actor's thread (blocking dispatcher), and
+      // the controller answers `GetStatus` meanwhile (`importingCheckpoint`) instead of leaving every ask to time out.
+      def runCheckpointSync(): Unit =
         val fileOpt: Option[java.nio.file.Path] = syncConfig.checkpointSyncFile.orElse {
           syncConfig.checkpointSyncUrl.flatMap { url =>
             // INFO-5: normalize + validate to prevent path-traversal from a crafted system-property value.
@@ -2180,24 +2394,39 @@ object SyncController:
               None
             else
               log.info("[CHECKPOINT DOWNLOAD] {} -> {}", url, target)
-              val downloader = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader()
-              downloader.download(url, target) match
-                case Right(_) => Some(target)
+              checkpointHttpClient() match
                 case Left(err) =>
-                  log.error("[CHECKPOINT DOWNLOAD] failed: {} — falling through to SNAP/Regular", err)
+                  log.error("[CHECKPOINT DOWNLOAD] no client: {} — falling through to SNAP/Regular", err)
                   None
+                case Right(client) =>
+                  val downloader = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader(client)
+                  downloader.download(url, target) match
+                    case Right(_) => Some(target)
+                    case Left(err) =>
+                      log.error("[CHECKPOINT DOWNLOAD] failed: {} — falling through to SNAP/Regular", err)
+                      None
           }
         }
         fileOpt.foreach { path =>
           val chainIdBig = configBuilder.blockchainConfig.chainId.value
           log.info("[CHECKPOINT IMPORT] starting from {} (chainId={})", path, chainIdBig)
+          // spec 018 E.1 "Trust": the archive must name this chain's id and genesis, and its checkpoint block the
+          // expected hash (the operator's, else the chain config's pinned one).
+          val trust = com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.Trust(
+            configBuilder.blockchainConfig,
+            blockchainReader.genesisHeader,
+            syncConfig.checkpointSyncExpectedHash
+          )
           val importer = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter(
             blockchainWriter,
             stateStorage,
             evmCodeStorage,
-            appStateStorage
+            appStateStorage,
+            trust,
+            unified = pathLiveSync.map(_.checkpointTarget),
+            retryRefused = syncConfig.checkpointSyncRetryRefused
           )
-          importer.importFromFile(path, Some(chainIdBig.toLong)) match
+          importer.importFromFile(path) match
             case Right(result) =>
               log.info(
                 "[CHECKPOINT IMPORT] success: block={} nodes={} bytecodes={} elapsed={}s",
@@ -2206,16 +2435,59 @@ object SyncController:
                 result.bytecodesImported,
                 result.elapsedMs / 1000
               )
+            case Left(err: com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.AlreadyRefused) =>
+              log.warn(
+                "[CHECKPOINT IMPORT] skipped: {} — SNAP/Regular sync runs instead. Set {} = true for one start to retry it.",
+                err,
+                com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.RetryRefusedKey
+              )
             case Left(err) =>
               log.error("[CHECKPOINT IMPORT] failed: {} — falling through to SNAP/Regular", err)
         }
-      else if syncConfig.checkpointSyncFile.isDefined || syncConfig.checkpointSyncUrl.isDefined then
-        log.info(
-          "Checkpoint sync configured but DB already initialized (bestBlock={}, snapDone={}); skipping import",
-          appStateStorage.getBestBlockNumber(),
-          appStateStorage.isSnapSyncDone()
-        )
 
+      val checkpointDue = appStateStorage.getBestBlockNumber() == 0 && !appStateStorage.isSnapSyncDone()
+      val checkpointConfigured = syncConfig.checkpointSyncFile.isDefined || syncConfig.checkpointSyncUrl.isDefined
+      if checkpointDue && checkpointConfigured then
+        val blocking = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
+        ctx.pipeToSelf(scala.concurrent.Future(runCheckpointSync())(using blocking))(CheckpointSyncEnded(_))
+        importingCheckpoint(startMode, floorSetThisStart)
+      else
+        if checkpointConfigured then
+          log.info(
+            "Checkpoint sync configured but DB already initialized (bestBlock={}, snapDone={}); skipping import",
+            appStateStorage.getBestBlockNumber(),
+            appStateStorage.isSnapSyncDone()
+          )
+        continueStart(startMode, floorSetThisStart)
+
+    /** The checkpoint download and import run on the blocking dispatcher (B-435). What is asked meanwhile: `GetStatus`
+      * (`eth_syncing`, the miner, the health check) is answered, not held; a CL head is kept; the rest waits and is
+      * handled once the import has ended and the start goes on.
+      */
+    private def importingCheckpoint(startMode: SyncMode, floorSetThisStart: Option[BigInt]): Behavior[Command] =
+      Behaviors.withStash(SyncController.ClearingStashSize) { waiting =>
+        Behaviors.receive { (_, cmd) =>
+          unwrap(cmd) match
+            case CheckpointSyncEnded(scala.util.Success(_)) =>
+              waiting.unstashAll(continueStart(startMode, floorSetThisStart))
+            case CheckpointSyncEnded(scala.util.Failure(failed)) =>
+              log.error("[CHECKPOINT IMPORT] ended with an exception. The node stops syncing; restart it.", failed)
+              throw failed
+            case msg: SyncProtocol.GetStatus =>
+              replySyncing(msg.replyTo)
+              Behaviors.same
+            case bh: ForkChoiceManager.BeaconHead =>
+              handleBeaconHead(bh, snapSyncOpt = None)
+              Behaviors.same
+            case _ =>
+              if waiting.isFull then
+                log.warn("A message was dropped during the checkpoint import: {}", cmd.getClass.getSimpleName)
+              else waiting.stash(cmd)
+              Behaviors.same
+        }
+      }
+
+    private def continueStart(startMode: SyncMode, floorSetThisStart: Option[BigInt]): Behavior[Command] =
       // Recovery flag: -Dfukuii.snap.clearDoneOnStart=true clears SnapSyncDone to re-enter healing.
       // Use when healing completed prematurely (BUG-006: root mismatch) to resume without a full re-sync.
       // spec 022 D7: this also takes the invariant marker, done or not, so the next SNAP run is a repair pass.
@@ -2223,13 +2495,24 @@ object SyncController:
         if HealInvariant.clearDoneOnStart(appStateStorage) then
           log.warn("fukuii.snap.clearDoneOnStart=true: clearing SnapSyncDone to re-enter SNAP healing")
 
+      // B-523: a SNAP that was killed between its done marker and the task-file clean-up left the files (about 4.4 GB on
+      // ETC mainnet) and their paths. Nothing reads them once done; finish the job. A no-op unless SnapSyncDone is set.
+      SnapTaskFileCleanup.discardFinishedTaskFiles(
+        appStateStorage,
+        scala.util
+          .Try(Config.config.getString("datadir"))
+          .toOption
+          .map(d => StorageTaskFile.dirUnder(java.nio.file.Paths.get(d))),
+        (p, e) => log.warn("Could not delete SNAP task file {}: {}", p, e)
+      )
+
       // #1692: pruning on a store SNAP or a checkpoint filled could delete a trie node another position still used, and
       // a clean audit pass finished before this version says nothing of a hole that came after it. One more full pass
       // per datadir, once, before the audit's gate is read. Its repairs pin the count, so they are never pruned.
       if !onTheGuard && appStateStorage.forceAuditPassOnce() then
         log.info(
-          "[HEAL-AUDIT] One more full audit pass is owed on this datadir (#1692): a trie node pruning deleted by a " +
-            "count that was too low is fetched back and repaired. It runs off the critical path."
+          "[HEAL-AUDIT] One full audit pass will run on this datadir, once (#1692): it fetches back and repairs any " +
+            "trie node that an earlier version's pruning may have deleted. It runs off the critical path."
         )
 
       // FastSyncDone is a legacy flag; nothing sets it any more, and the recovery paths below still clear it. With SNAP
@@ -2251,7 +2534,9 @@ object SyncController:
           startSnapSync(minPivotBlock = floor)
         case (true, SyncMode.Snap) if onTheGuard =>
           // spec 018 C5a part 10: the hand-off wrote the recovery flags with the state, and nothing on this layout
-          // scans or repairs the hash-keyed store they are about
+          // scans or repairs the hash-keyed store they are about. B-369: a flag the hand-off withheld, or a pivot no
+          // clean pass has covered, is paid by the background audit on the position store (one pass per pivot), which
+          // `startRegularSync` starts: no scan, and no block, at this start.
           log.info("SNAP sync completed on this node: regular sync follows the chain from the state that is held")
           startRegularSync()._2
         case (true, SyncMode.Snap) =>
@@ -2310,9 +2595,50 @@ object SyncController:
     def startSnapSync(minPivotBlock: Option[BigInt] = None): Behavior[Command] =
       pathLiveSync match
         case None => spawnSnapSync(minPivotBlock)
+        case Some(port) if HeaderChainCheck.isProofOfWork(configBuilder.blockchainConfig) =>
+          // spec 018 C6 (T241/T242): the snap peers are counted first, before the check, which clears a genesis state
+          // that regular sync from the genesis would still need
+          val holdsOnlyGenesis = port.holdsOnlyGenesis()
+          countSnapPeers()
+          timers.startTimerWithFixedDelay(SnapPeersRecountKey, SnapPeersRecount, SyncController.SnapStartRecheckDelay)
+          if holdsOnlyGenesis then
+            timers.startSingleTimer(SnapPeersWaitOverKey, SnapPeersWaitOver, port.snapPeers.powWait)
+          checkingSnapStart(port, Some(SnapPeersPending(minPivotBlock, holdsOnlyGenesis)))
         case Some(port) =>
           askBeforeSnap(port, minPivotBlock)
-          checkingSnapStart(port)
+          checkingSnapStart(port, None)
+
+    private val SnapPeersRecountKey = "snap-peers-recount"
+    private val SnapPeersWaitOverKey = "snap-peers-wait-over"
+
+    /** The snap-peer precondition under way (spec 018 C6): for the SNAP start of `minPivotBlock`, its last count, and
+      * whether the line that it waits was said.
+      *
+      * The count is asked again every [[SyncController.SnapStartRecheckDelay]] (`ticks` of them so far). A node at its
+      * genesis whose peer manager does not answer is therefore re-asked each time, and said so at WARN: after
+      * [[SnapPeersNoCountWarnTicks]] ticks and then once a minute. The wait is bounded all the same: when `powWait` is
+      * over (`waitOver`) the count is asked once more and decides; if that last count does not come within
+      * [[SnapPeersFinalCountTicks]] ticks either, the last count made decides, and with none ever made SNAP begins
+      * (what its own wait for peers does is what is left), said at WARN.
+      */
+    final private case class SnapPeersPending(
+        minPivotBlock: Option[BigInt],
+        holdsOnlyGenesis: Boolean,
+        count: Option[PathLiveSync.SnapPeerCount] = None,
+        saidWaiting: Boolean = false,
+        ticks: Int = 0,
+        waitOver: Boolean = false,
+        ticksSinceWaitOver: Int = 0
+    )
+
+    private val SnapPeersNoCountWarnTicks = 2
+    private val SnapPeersFinalCountTicks = 2
+    private def snapPeersTicksPerMinute: Int = (1.minute / SyncController.SnapStartRecheckDelay).toInt.max(1)
+
+    private def countSnapPeers(): Unit =
+      networkPeerManager ! com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd(
+        handshakedPeersAdapter
+      )
 
     private def askBeforeSnap(port: PathLiveSyncPort, minPivotBlock: Option[BigInt]): Unit =
       val blocking = ctx.system.dispatchers.lookup(DispatcherSelector.blocking())
@@ -2321,10 +2647,127 @@ object SyncController:
     /** While the port says whether a SNAP sync may begin (spec 018 C5a part 10). A head the consensus client names is
       * kept for the pivot; everything else waits for the sync that follows, which is SNAP or regular sync.
       */
-    private def checkingSnapStart(port: PathLiveSyncPort): Behavior[Command] =
+    private def checkingSnapStart(port: PathLiveSyncPort, peersFirst: Option[SnapPeersPending]): Behavior[Command] =
       Behaviors.withStash(SyncController.ClearingStashSize) { waiting =>
+        var snapPeers = peersFirst
+        // the precondition has said: SNAP's check is asked, or regular sync runs from the genesis
+        def concluded(pending: SnapPeersPending, verdict: PathLiveSync.SnapPeerVerdict): Behavior[Command] =
+          import PathLiveSync.SnapPeerVerdict.*
+          verdict match
+            case Wait =>
+              if !pending.saidWaiting then
+                log.info(
+                  s"[SNAP-PEERS] ${pending.count.fold("No count of the peers yet")(_.describe)}: a proof-of-work " +
+                    s"node at its genesis waits up to ${port.snapPeers.powWait.toMinutes} min for " +
+                    s"${port.snapPeers.minSnapPeers} snap-capable peers before SNAP begins"
+                )
+              snapPeers = Some(pending.copy(saidWaiting = true))
+              Behaviors.same
+            case Begin =>
+              snapPeers = None
+              timers.cancel(SnapPeersRecountKey)
+              timers.cancel(SnapPeersWaitOverKey)
+              val min = port.snapPeers.minSnapPeers
+              pending.count match
+                case None =>
+                  log.warn(
+                    s"[SNAP-PEERS] SNAP starts with an unknown number of peers (no count came from the peer manager); " +
+                      s"min-snap-peers = $min"
+                  )
+                case Some(c) =>
+                  // under the minimum the line says so (EG-12): SNAP begins with the peers there are
+                  val against = if c.snapCapable < min then s"${c.snapCapable} < min $min" else s"min-snap-peers = $min"
+                  log.info(s"[SNAP-PEERS] SNAP starts with ${c.describe}; $against")
+              askBeforeSnap(port, pending.minPivotBlock)
+              Behaviors.same
+            case RegularSyncFromGenesis =>
+              snapPeers = None
+              timers.cancel(SnapPeersRecountKey)
+              timers.cancel(SnapPeersWaitOverKey)
+              log.warn(
+                s"[SNAP-PEERS] No snap-capable peer came in ${port.snapPeers.powWait.toMinutes} min " +
+                  s"(${pending.count.fold("no count")(_.describe)}). On a proof-of-work chain this node syncs by " +
+                  "regular sync from its genesis instead, on the unified state layout. A SNAP sync never starts over the " +
+                  "state it then holds: to sync by SNAP, start again on a fresh datadir with a snap-serving peer " +
+                  "(static-nodes.json or sync.snap-sync.snap-server-peers)."
+              )
+              waiting.unstashAll(startRegularSync()._2)
         Behaviors.receive { (_, cmd) =>
           unwrap(cmd) match
+            case com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers(peers)
+                if snapPeers.isDefined =>
+              val pending = snapPeers.get
+              val count =
+                PathLiveSync.countSnapPeers(peers.map((peer, info) => (peer.nodeId, info)), port.snapPeers.declaredNow)
+              val counted = pending.copy(count = Some(count))
+              snapPeers = Some(counted)
+              concluded(
+                counted,
+                PathLiveSync.snapPeerVerdict(
+                  counted.count,
+                  proofOfWork = true,
+                  counted.holdsOnlyGenesis,
+                  port.snapPeers.minSnapPeers,
+                  waitOver = counted.waitOver
+                )
+              )
+            case SnapPeersRecount if snapPeers.isDefined =>
+              val pending = snapPeers.get
+              val ticked = pending.copy(
+                ticks = pending.ticks + 1,
+                ticksSinceWaitOver = if pending.waitOver then pending.ticksSinceWaitOver + 1 else 0
+              )
+              snapPeers = Some(ticked)
+              if ticked.waitOver && ticked.ticksSinceWaitOver >= SnapPeersFinalCountTicks then
+                // the count asked for at the end of the wait did not come: the last one made decides (bounded)
+                log.warn(
+                  s"[SNAP-PEERS] The peer manager did not answer the final count at the end of the wait; deciding on " +
+                    s"${ticked.count.fold("no count")(_.describe)}"
+                )
+                concluded(
+                  ticked,
+                  PathLiveSync.snapPeerVerdict(
+                    ticked.count,
+                    proofOfWork = true,
+                    ticked.holdsOnlyGenesis,
+                    port.snapPeers.minSnapPeers,
+                    waitOver = true
+                  )
+                )
+              // a node whose genesis state is not what it holds waits for nothing: a count that did not come in this
+              // time is given up on, and the start goes on
+              else if ticked.count.isEmpty && !ticked.holdsOnlyGenesis then
+                concluded(ticked, PathLiveSync.SnapPeerVerdict.Begin)
+              else
+                if ticked.holdsOnlyGenesis && !ticked.waitOver then
+                  val minute = ticked.ticks % snapPeersTicksPerMinute == 0
+                  ticked.count match
+                    case None if ticked.ticks == SnapPeersNoCountWarnTicks || minute =>
+                      log.warn(
+                        s"[SNAP-PEERS] The peer manager has not answered ${ticked.ticks} counts of the snap peers " +
+                          s"(asked every ${SyncController.SnapStartRecheckDelay.toSeconds} s); still asking. The wait of " +
+                          s"${port.snapPeers.powWait.toMinutes} min ends with SNAP beginning on an unknown number of " +
+                          "peers if no count ever comes"
+                      )
+                    case Some(c) if minute =>
+                      log.info(
+                        s"[SNAP-PEERS] Still waiting for ${port.snapPeers.minSnapPeers} snap-capable peers: " +
+                          c.describe
+                      )
+                    case _ => ()
+                countSnapPeers()
+                Behaviors.same
+            case SnapPeersWaitOver if snapPeers.isDefined =>
+              // the count may be up to a tick old: it is made again, and the answer decides (HandshakedPeers, above)
+              snapPeers = Some(snapPeers.get.copy(waitOver = true, ticksSinceWaitOver = 0))
+              countSnapPeers()
+              Behaviors.same
+            case SnapPeersRecount | SnapPeersWaitOver => Behaviors.same
+            case msg: SyncProtocol.GetStatus          =>
+              // B-435: the wait for peers, and the check before SNAP (asked again every 5 s while it says wait), can be
+              // long: eth_syncing and the miner's ask are answered, not stashed until after their timeout
+              replySyncing(msg.replyTo)
+              Behaviors.same
             case SnapStartChecked(minPivot, scala.util.Success(SnapStartOnGuard.Begin(clearedGenesis))) =>
               if clearedGenesis then
                 log.info("[STATE-CLEAR] The genesis state is cleared: the SNAP sync writes the state from scratch")
@@ -2343,6 +2786,12 @@ object SyncController:
               log.error(
                 s"[STATE-PATH-LIVE] A SNAP sync does not begin: $why. Regular sync runs on the state that is held; a " +
                   "state this node cannot follow the chain with is given up through the escalation."
+              )
+              waiting.unstashAll(startRegularSync()._2)
+            case SnapStartChecked(_, scala.util.Success(SnapStartOnGuard.HoldsState(block))) =>
+              log.info(
+                s"[STATE-PATH-LIVE] Regular-syncing on the state it holds (block $block); SNAP not needed. A state " +
+                  "this node cannot follow the chain with is given up through the escalation."
               )
               waiting.unstashAll(startRegularSync()._2)
             case SnapStartChecked(_, scala.util.Failure(failed)) =>
@@ -2433,6 +2882,8 @@ object SyncController:
       * path) use `._1`; callers that just transition use `._2`.
       */
     def startRegularSync(resumeBackfill: Boolean = true): (TypedActorRef[RegularSync.Command], Behavior[Command]) =
+      // The previous regular sync's, whichever way it ended (a stop is async, and the new one is named apart)
+      stopRegularSyncPeersClient()
       syncGeneration += 1
       stateEscalation.foreach(_.regularSyncStarted())
       txGossipGate.stateSyncFinished()
@@ -2531,6 +2982,7 @@ object SyncController:
           s"peers-client-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
         )
+      regularSyncPeersClient = Some(peersClient)
       val regularSync = ctx
         .spawn(
           RegularSync.apply(
@@ -2542,8 +2994,18 @@ object SyncController:
             blockchainReader,
             blockchainWriter,
             stateStorage,
-            evmCodeStorage,
-            { val br = new BranchResolution(blockchainReader, designatedHeadOpt); br.messConfig = messConfig; br },
+            evmCodeStorage, {
+              val br = new BranchResolution(
+                blockchainReader,
+                designatedHeadOpt,
+                backfillStallAfter = syncConfig.backfillStallTimeout,
+                // the consensus's own: a tie a coin decides is decided once for the headers and the branch (B-284)
+                powForkChoice = consensus.powForkChoice,
+                terminalTotalDifficulty = configBuilder.blockchainConfig.terminalTotalDifficulty
+              )
+              br.messConfig = messConfig
+              br
+            },
             validators.blockValidator,
             blacklist,
             syncConfig,
@@ -2554,7 +3016,8 @@ object SyncController:
             ctx.self,
             importLock,
             reorgState,
-            onCaughtUp = () => txGossipGate.markSynced("regular sync reached the best block peers announced")
+            onCaughtUp = () => txGossipGate.markSynced("regular sync reached the best block peers announced"),
+            txPoolHead = txPoolHead
           ),
           s"regular-sync-$syncGeneration",
           DispatcherSelector.fromConfig("sync-dispatcher")
@@ -2573,10 +3036,12 @@ object SyncController:
         else runningRegularSync(regularSync)
       (regularSync, nextBehavior)
 
-    // On the unified layout the audit would fetch the whole trie into the hash-keyed store, which the layout never
-    // reads and its clear never deletes (spec 018 C5a part 10).
+    // On the unified layout the audit walks the position store from the anchor's root and repairs a hole by position
+    // (`repairNodeAt`), never the hash-keyed store, which the layout does not read and its clear never deletes (spec
+    // 018 C5a part 10, C5b, B-369). A guard with no position store has nothing to walk: the hash-store audit would
+    // fetch the whole trie into the store the layout never reads, so the gate is Disabled there, as it was before.
     private def auditGate: BackgroundAudit.Gate =
-      if onTheGuard then BackgroundAudit.Gate.Disabled
+      if onTheGuard && blockchainWriter.positionRepairs.isEmpty then BackgroundAudit.Gate.Disabled
       else BackgroundAudit.gate(backgroundAuditEnabled, stateStorage, appStateStorage)
 
     /** A node on the unified state layout (spec 018 C5a part 10): nothing of the hash-keyed store is repaired, scanned
@@ -2603,7 +3068,8 @@ object SyncController:
                     evmCodeStorage,
                     networkPeerManager,
                     peerEventBus,
-                    syncConfig
+                    syncConfig,
+                    positions = if onTheGuard then blockchainWriter.positionRepairs else None
                   )
                 )
                 .onFailure[Exception](
@@ -2872,12 +3338,14 @@ object SyncController:
       * `None` when there is no root: `startRecovery` then has nothing to scan.
       */
     private def recoveryScanRoot(): Option[(ByteString, BigInt)] =
+      // On the unified layout the state to scan is the anchor's: its rows are the only ones there are (spec 018 T219).
+      val positions = blockchainWriter.positionRepairs
       def readable(root: ByteString, number: BigInt): Boolean =
-        try
-          stateStorage.getBackingStorage(number).get(root.toArray)
-          true
-        catch case _: Exception => false
-      val best = blockchainReader.getBestBlockHeader.map(h => (h.stateRoot.value, h.number.value))
+        RecoveryScanStores.readable(stateStorage, positions, root, number)
+      val best = RecoveryScanStores
+        .anchorOf(positions)
+        .map(held => (held.stateRoot, held.number))
+        .orElse(blockchainReader.getBestBlockHeader.map(h => (h.stateRoot.value, h.number.value)))
       val pivot = for
         root <- appStateStorage.getSnapSyncStateRoot()
         number <- appStateStorage.getSnapSyncPivotBlock()
@@ -2902,6 +3370,11 @@ object SyncController:
               )
               pivot
 
+    // Never on the guard: every caller refuses there first, and the storage recovery actor refuses a start on the
+    // unified layout itself, loudly (B-376; filling holes by position is the deferred rewrite). The bytecode actor no
+    // longer refuses (B-396: it writes only the shared code store), but no route starts it there yet: the bulk request,
+    // BlockImporter's gate (`holdsStateInPlace`) and the start's audit arm are still the guard's, until B-396's
+    // follow-up wires the route.
     def startRecovery(
         needBytecode: Boolean,
         needStorage: Boolean,
@@ -2950,97 +3423,38 @@ object SyncController:
             bfsQueueStorageOpt
           )
 
-          if snapSyncConfig.parallelRecoveryScan then
-            // Combined path: ONE parallel, resumable single-pass scan finds both gap sets; downloads start
-            // once it reports (in `runningCombinedScan`).
-            log.info("Recovery: combined parallel scan enabled — one pass finds bytecode + storage gaps.")
-            // Phase gauges are need-aware: a phase already done in a prior run shows Complete (not idle) while the
-            // combined scan re-verifies it in the same pass.
-            RecoveryMetrics.setBytecodePhase(
-              if needBytecode then RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
-            )
-            RecoveryMetrics.setStoragePhase(
-              if needStorage then RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
-            )
-            ctx.spawn(
-              Behaviors
-                .supervise(
-                  CombinedRecoveryScanActor(
-                    stateRoot,
-                    stateStorage,
-                    evmCodeStorage,
-                    appStateStorage,
-                    combinedScanAdapter,
-                    pivotBlock,
-                    snapSyncConfig
-                  )
+          // ONE parallel, resumable single-pass scan finds both gap sets; downloads start once it reports (in
+          // `runningCombinedScan`). The legacy per-phase scans (`parallel-recovery-scan = false`) stopped at the first
+          // absent node and settled the flags on that partial walk; they were retired (B-217).
+          log.info("Recovery: combined parallel scan — one pass finds bytecode + storage gaps.")
+          // Phase gauges are need-aware: a phase already done in a prior run shows Complete (not idle) while the
+          // combined scan re-verifies it in the same pass.
+          RecoveryMetrics.setBytecodePhase(
+            if needBytecode then RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
+          )
+          RecoveryMetrics.setStoragePhase(
+            if needStorage then RecoveryMetrics.PhaseScanning else RecoveryMetrics.PhaseComplete
+          )
+          ctx.spawn(
+            Behaviors
+              .supervise(
+                CombinedRecoveryScanActor(
+                  stateRoot,
+                  stateStorage,
+                  evmCodeStorage,
+                  appStateStorage,
+                  combinedScanAdapter,
+                  pivotBlock,
+                  snapSyncConfig,
+                  blockchainWriter.positionRepairs
                 )
-                // PR #1378: CombinedRecoveryScanActor owns a full recovery pass that must complete — no cap.
-                .onFailure[Throwable](SupervisorStrategy.restartWithBackoff(1.second, 30.seconds, 0.2)),
-              s"combined-recovery-scan-$syncGeneration",
-              DispatcherSelector.fromConfig("sync-dispatcher")
-            )
-            runningCombinedScan(needBytecode, needStorage, stateRoot, pivotBlock, snapSyncConfig, stateIngest)
-          else
-            // Legacy path: each phase scans the full trie independently, then downloads.
-            val bytecodeActor =
-              if needBytecode then
-                Some(
-                  ctx
-                    .spawn(
-                      Behaviors
-                        .supervise(
-                          BytecodeRecoveryActor(
-                            stateRoot,
-                            stateIngest,
-                            networkPeerManager,
-                            bytecodeRecoveryAdapter,
-                            pivotBlock,
-                            snapSyncConfig
-                          )
-                        )
-                        .onFailure[Throwable](
-                          // PR #1378: state-recovery phase owner — a `.withMaxRestarts` cap would
-                          // stall recovery permanently (silently stops the actor forever). No cap.
-                          SupervisorStrategy.restartWithBackoff(1.second, 30.seconds, 0.2)
-                        ),
-                      s"bytecode-recovery-$syncGeneration",
-                      DispatcherSelector.fromConfig("sync-dispatcher")
-                    )
-                )
-              else None
-            val storageActor =
-              if needStorage then
-                Some(
-                  ctx
-                    .spawn(
-                      Behaviors
-                        .supervise(
-                          StorageRecoveryActor(
-                            stateRoot,
-                            stateIngest,
-                            networkPeerManager,
-                            storageRecoveryAdapter,
-                            pivotBlock,
-                            snapSyncConfig
-                          )
-                        )
-                        .onFailure[Throwable](
-                          // PR #1378: state-recovery phase owner — a `.withMaxRestarts` cap would
-                          // stall recovery permanently (silently stops the actor forever). No cap.
-                          SupervisorStrategy.restartWithBackoff(1.second, 30.seconds, 0.2)
-                        ),
-                      s"storage-recovery-$syncGeneration",
-                      DispatcherSelector.fromConfig("sync-dispatcher")
-                    )
-                )
-              else None
-            beginRecoveryDownloads(
-              bytecodeActor,
-              storageActor,
-              bytecodeComplete = !needBytecode,
-              storageComplete = !needStorage
-            )
+              )
+              // PR #1378: CombinedRecoveryScanActor owns a full recovery pass that must complete — no cap.
+              .onFailure[Throwable](SupervisorStrategy.restartWithBackoff(1.second, 30.seconds, 0.2)),
+            s"combined-recovery-scan-$syncGeneration",
+            DispatcherSelector.fromConfig("sync-dispatcher")
+          )
+          runningCombinedScan(needBytecode, needStorage, stateRoot, pivotBlock, snapSyncConfig, stateIngest)
 
         case None =>
           recoveryCouldNotRun(
@@ -3117,11 +3531,9 @@ object SyncController:
                     Behaviors
                       .supervise(
                         BytecodeRecoveryActor.applyPreloaded(
-                          stateRoot,
                           stateIngest,
                           networkPeerManager,
                           bytecodeRecoveryAdapter,
-                          pivotBlock,
                           snapSyncConfig,
                           effByte
                         )
@@ -3150,7 +3562,8 @@ object SyncController:
                           storageRecoveryAdapter,
                           pivotBlock,
                           snapSyncConfig,
-                          effStor
+                          effStor,
+                          blockchainWriter.positionRepairs
                         )
                       )
                       .onFailure[Throwable](
@@ -3176,6 +3589,10 @@ object SyncController:
 
         case bh: ForkChoiceManager.BeaconHead =>
           handleBeaconHead(bh, snapSyncOpt = None)
+          Behaviors.same
+
+        case msg: SyncProtocol.GetStatus =>
+          replySyncing(msg.replyTo) // B-435: a scan can be long; the ask is answered
           Behaviors.same
 
         case other =>
@@ -3227,14 +3644,13 @@ object SyncController:
       else log.info("All recovery complete. Transitioning to regular sync.")
       startRegularSync()._2
 
-    /** A legacy scan (`parallel-recovery-scan = false`) could not run. Its phase is over for this run and settles
-      * nothing: its actor wrote no flag, and the cap on bulk bytecode recovery is not counted against a scan that never
-      * ran, as [[recoveryCouldNotRun]] has it for the combined scan.
+    /** The storage recovery actor refused to run (the unified layout, B-376). Its phase is over for this run and
+      * settles nothing: the actor wrote no flag, as [[recoveryCouldNotRun]] has it for the combined scan.
       */
-    private def legacyScanCouldNotRun(phase: String): Unit =
+    private def storageRecoveryNotRun(): Unit =
       log.error(
-        s"[SNAP-RECOVERY] The $phase recovery scan could not run (logged above). Its flag is not written, so the next " +
-          "start scans again. Regular sync fetches what it reaches on demand."
+        "[SNAP-RECOVERY] Storage recovery did not run (logged above). Its flag is not written, so the next start scans " +
+          "again. Regular sync fetches what it reaches on demand."
       )
       recoveryScanCouldNotRun = true
 
@@ -3257,13 +3673,8 @@ object SyncController:
           else runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true)
 
         // Over for this run, like a phase that completed, and said for what it is.
-        case BytecodeRecoveryActor.RecoveryNotRun =>
-          legacyScanCouldNotRun("bytecode")
-          if storageComplete then completeRecovery()
-          else runningRecovery(bytecodeActor = None, storageActor, bytecodeComplete = true, storageComplete)
-
         case StorageRecoveryActor.RecoveryNotRun =>
-          legacyScanCouldNotRun("storage")
+          storageRecoveryNotRun()
           if bytecodeComplete then completeRecovery()
           else runningRecovery(bytecodeActor, storageActor = None, bytecodeComplete, storageComplete = true)
 
@@ -3327,8 +3738,9 @@ object SyncController:
           recentRootRequester = None
           Behaviors.same
 
-        case PivotHeaderBootstrap.Failed(reason, _) if recentRootRequester.isDefined =>
+        case PivotHeaderBootstrap.Failed(reason, offBranch) if recentRootRequester.isDefined =>
           log.warn(s"Recovery recent-root bootstrap failed ($reason). Declining the roll; abandon path will run.")
+          bootstrapOffBranch.hold(offBranch, System.currentTimeMillis())
           stopRecentRootBootstrap()
           recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(0, None))
           recentRootRequester = None
@@ -3357,6 +3769,9 @@ object SyncController:
         case msg if isInternalMarker(msg) =>
           // Late self/death-watch marker for a child stopped before this transition — drop silently.
           Behaviors.same
+        case msg: SyncProtocol.GetStatus =>
+          replySyncing(msg.replyTo) // B-435: recovery can be long; the ask is answered
+          Behaviors.same
         case other =>
           // All SNAP response types (ByteCodesResponse, StorageRangesResponse, AccountRangeResponse,
           // TrieNodesResponse) are handled by explicit arms above. This arm fires only for truly
@@ -3375,8 +3790,7 @@ object SyncController:
           com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
         ]
     ): Unit =
-      val snapHeights = peers.values.filter(_.remoteStatus.supportsSnap).map(_.maxBlockNumber)
-      SyncController.recentRootTarget(snapHeights, RecentRootMarginBlocks) match
+      SyncController.recentRootTarget(snapTargetHeights(peers), RecentRootMarginBlocks) match
         case Some(recentBlock) =>
           recentRootGeneration += 1
           val gen = recentRootGeneration
@@ -3417,6 +3831,12 @@ object SyncController:
           log.info("Recovery recent-root: no usable peer height yet; declining the roll.")
           recentRootRequester.foreach(_ ! StorageRecoveryActor.RecentRoot(0, None))
           recentRootRequester = None
+
+    /** Stops the peers client of the regular sync, with the regular sync it served (B-015); no-op when there is none.
+      */
+    private def stopRegularSyncPeersClient(): Unit =
+      regularSyncPeersClient.foreach(ctx.stop)
+      regularSyncPeersClient = None
 
     private def stopRecentRootBootstrap(): Unit =
       recentRootBootstrap.foreach { case (peersClient, bootstrap) =>
@@ -3667,6 +4087,20 @@ object SyncController:
     * SNAP-capable peer head (so the target is inside peers' snapshot serve window), clamped to >= 1. Returns None when
     * no peer height is known yet, so the caller declines the roll and lets the abandon path run. Pure for testability.
     */
+  /** The heights of the SNAP peers a bootstrap's target is taken from: on this node's fork, and not `held` for another
+    * chain than the branch a sync is bound to (B-320), as the SNAP child's pivot choice takes them.
+    */
+  private[sync] def snapTargetHeights(
+      peers: Map[
+        com.chipprbots.ethereum.network.Peer,
+        com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+      ],
+      held: com.chipprbots.ethereum.network.PeerId => Boolean
+  ): Iterable[BigInt] =
+    peers.collect {
+      case (peer, info) if info.remoteStatus.supportsSnap && info.forkAccepted && !held(peer.id) => info.maxBlockNumber
+    }
+
   private[sync] def recentRootTarget(snapPeerHeights: Iterable[BigInt], margin: BigInt): Option[BigInt] =
     snapPeerHeights.filter(_ > 0).maxOption.map(best => (best - margin).max(1))
 

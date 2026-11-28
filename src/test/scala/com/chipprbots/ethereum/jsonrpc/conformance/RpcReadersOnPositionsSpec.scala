@@ -294,7 +294,9 @@ class RpcReadersOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSp
 
   // A transaction that arrives from a peer is judged by the pool itself: it reads the sender's account at the best
   // block, and with no state to read it keeps only senders it already knows. So the same transactions are handed to
-  // the pool of a node on each store, as a peer's, and the pools are compared.
+  // the pool of a node on each store, and the pools are compared. Handed as a head reset takes transactions back
+  // (sender recovery, the stateless filter, then the pool's admission against the head's state, as for a peer's): the
+  // unchecked add this used had no sender left in the node, and was deleted (B-512).
   it should "take a peer's transactions into the pool as the hash store does" taggedAs UnitTest in {
     import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.SignedTransactions.*
     val (peerOnHashes, peerOnPositions) = anchoredAt(_.blockchainReader.getBestBlock.get.header)
@@ -305,7 +307,7 @@ class RpcReadersOnPositionsSpec extends ScalaTestWithActorTestKit with AnyFlatSp
     }
     fromPeer.size should be >= 3
     Seq(peerOnHashes, peerOnPositions).foreach { node =>
-      node.pendingTransactionsManager ! PendingTransactionsManager.AddUncheckedTransactions(fromPeer)
+      node.pendingTransactionsManager ! PendingTransactionsManager.HeadReset(Nil, fromPeer)
     }
     eventually {
       pooled(peerOnHashes) should not be empty

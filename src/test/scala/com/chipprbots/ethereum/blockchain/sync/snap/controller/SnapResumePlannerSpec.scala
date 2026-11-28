@@ -31,6 +31,7 @@ import com.chipprbots.ethereum.blockchain.sync.snap.AccountResumeCheckpoint
 import com.chipprbots.ethereum.blockchain.sync.snap.AccountTask
 import com.chipprbots.ethereum.blockchain.sync.snap.ContractTaskFiles
 import com.chipprbots.ethereum.blockchain.sync.snap.GatedTaskFileReplay
+import com.chipprbots.ethereum.blockchain.sync.snap.PivotAnchor
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPRequestTracker
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncController
@@ -55,6 +56,7 @@ import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.db.storage.SnapStorageDoneStorage
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.PivotOnBranch
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -91,7 +93,8 @@ private[snap] class StubSnapResumePlannerState(
     with StagnationResetApi
     with StagnationScheduleApi
     with ChainDownloadStartApi
-    with SnapServerPeersApi:
+    with SnapServerPeersApi
+    with OffBranchPeersApi:
 
   private val dataSource = EphemDataSource()
 
@@ -190,6 +193,8 @@ private[snap] class StubSnapResumePlannerState(
   def snapServingPeers(): List[Peer] = notUsed("snapServingPeers")
   var snapServerSchedulerStarts: Int = 0
   def startSnapServerPeersScheduler(): Unit = snapServerSchedulerStarts += 1
+  // B-326: the branch floor and the wait for a peer on the branch, over the app-state store above.
+  lazy val offBranchPeers: PivotAnchor.OffBranchPeers = PivotAnchor.OffBranchPeers.of(stateIngest)
 
   private def notUsed(what: String): Nothing =
     throw new UnsupportedOperationException(s"$what is not reached by SnapResumePlannerSpec")
@@ -557,6 +562,121 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.module.parent.hasMessages shouldBe false
     // bootstrapping() commits it, as it commits a fetched header.
     h.kit.selfInbox().receiveMessage() shouldBe BootstrapComplete(Some(bottom))
+  }
+
+  // B-326: proof of work has no CL head; the newer pivot comes from the snap peers' best.
+  it should "not resume healing on a PoW pivot that failed finalization, and retry the start in 30 s with no peer height" taggedAs UnitTest in {
+    val h = new Harness()
+    h.saveRecovery(BigInt(1_000), phasesComplete = true)
+    h.module.failedFinalizationPivot = Some(BigInt(1_000))
+
+    h.recoveryStep() shouldBe false
+
+    h.module.bootstrappingEntries shouldBe 1
+    h.module.syncingEntries shouldBe 0
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 30.seconds))
+    h.module.accountsComplete shouldBe true
+    h.module.storagePhaseComplete shouldBe true
+    h.module.bytecodePhaseComplete shouldBe true
+    h.module.pivotBlock shouldBe None
+    h.module.parent.hasMessages shouldBe false
+    h.module.recoverySpawns shouldBe empty
+  }
+
+  it should "not resume a failed PoW pivot while the snap peers are not ahead of it by the pivot offset" taggedAs UnitTest in {
+    val h = new Harness()
+    val offset = SNAPSyncConfig().pivotBlockOffset
+    h.saveRecovery(BigInt(1_000), phasesComplete = true)
+    h.module.failedFinalizationPivot = Some(BigInt(1_000))
+    h.module.networkBest = Some(BigInt(1_000) + offset)
+
+    h.recoveryStep() shouldBe false
+
+    h.module.syncingEntries shouldBe 0
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 30.seconds))
+    h.module.parent.hasMessages shouldBe false
+    h.module.recoverySpawns shouldBe empty
+  }
+
+  it should "heal a PoW recovery whose pivot failed finalization at the snap peers' best minus the offset" taggedAs UnitTest in {
+    val h = new Harness()
+    val offset = SNAPSyncConfig().pivotBlockOffset
+    h.saveRecovery(BigInt(1_000), phasesComplete = true)
+    h.module.failedFinalizationPivot = Some(BigInt(1_000))
+    // Well inside maxPivotStalenessBlocks: the drift check alone would have resumed on the failed pivot.
+    h.module.networkBest = Some(BigInt(1_200))
+
+    h.recoveryStep() shouldBe false
+
+    h.module.bootstrappingEntries shouldBe 1
+    h.module.syncingEntries shouldBe 0
+    h.module.parent.receiveMessage() shouldBe StartRegularSyncBootstrap(BigInt(1_200) - offset)
+    h.module.parent.hasMessages shouldBe false
+    h.scheduledTimers() shouldBe empty
+    h.module.accountsComplete shouldBe true
+    h.module.storagePhaseComplete shouldBe true
+    h.module.bytecodePhaseComplete shouldBe true
+    // bootstrapping()'s BootstrapComplete commits the new pivot.
+    h.module.pivotBlock shouldBe None
+    h.module.recoverySpawns shouldBe empty
+  }
+
+  it should "take a failed PoW pivot's replacement no lower than the branch's first block" taggedAs UnitTest in {
+    val h = new Harness()
+    h.saveRecovery(BigInt(1_000), phasesComplete = true)
+    h.module.failedFinalizationPivot = Some(BigInt(1_000))
+    h.module.appStateStorage.putPivotOnBranch(PivotOnBranch(BigInt(1_190), savedRoot)).commit()
+    h.module.networkBest = Some(BigInt(1_200))
+
+    h.recoveryStep() shouldBe false
+
+    h.module.parent.receiveMessage() shouldBe StartRegularSyncBootstrap(BigInt(1_190))
+    h.module.syncingEntries shouldBe 0
+  }
+
+  it should "wait, not resume, when every snap peer of a PoW recovery is under the branch's first block" taggedAs UnitTest in {
+    val h = new Harness()
+    h.saveRecovery(BigInt(1_000), phasesComplete = true)
+    h.module.failedFinalizationPivot = Some(BigInt(1_000))
+    h.module.appStateStorage.putPivotOnBranch(PivotOnBranch(BigInt(1_500), savedRoot)).commit()
+    h.module.networkBest = Some(BigInt(1_200))
+
+    h.recoveryStep() shouldBe false
+
+    h.module.syncingEntries shouldBe 0
+    h.module.parent.hasMessages shouldBe false
+    h.scheduledTimers() shouldBe Seq(("bootstrap-check", RetrySnapSyncStart, 30.seconds))
+    // The wait for a peer on the branch is begun, so that it can end.
+    h.module.appStateStorage.getPivotOnBranch().flatMap(_.firstMissMillis) shouldBe defined
+  }
+
+  it should "still resume a PoW recovery whose pivot failed finalization while a download phase is incomplete" taggedAs UnitTest in {
+    val dir = tempDir("snap-resume-planner-b326-incomplete")
+    val h = new Harness()
+    def h32(b: Int): ByteString = ByteString(Array.fill[Byte](32)(b.toByte))
+    val storagePath = dir.resolve("fukuii-contract-storage-b326")
+    val codeHashesPath = dir.resolve("fukuii-unique-codehashes-b326")
+    Files.write(storagePath, (h32(1) ++ h32(0x11)).toArray)
+    Files.write(codeHashesPath, h32(0xc1).toArray)
+    h.saveRecovery(BigInt(1_000), phasesComplete = false)
+    val app = h.module.appStateStorage
+    app
+      .putSnapSyncStorageFilePath(storagePath.toString)
+      .and(app.putSnapSyncStorageFileCount(Some(1L)))
+      .and(app.putSnapSyncCodeHashesPath(codeHashesPath.toString))
+      .and(app.putSnapSyncCodeHashesCount(Some(1L)))
+      .commit()
+    h.module.storageRangeCoordinator = Some(TestInbox[StorageRangeCoordinator.Command]().ref)
+    h.module.bytecodeCoordinator = Some(TestInbox[ByteCodeCoordinator.Command]().ref)
+    h.module.failedFinalizationPivot = Some(BigInt(1_000))
+    h.module.networkBest = Some(BigInt(1_200))
+
+    h.recoveryStep() shouldBe false
+
+    h.module.syncingEntries shouldBe 1
+    h.module.pivotBlock shouldBe Some(BigInt(1_000))
+    h.module.parent.hasMessages shouldBe false
+    deleteDir(dir)
   }
 
   it should "resume the preserved account cursors inside the drift cap, latch the stale-cursor flag and drop the markers" taggedAs UnitTest in {
@@ -1042,3 +1162,46 @@ class SnapResumePlannerSpec extends ScalaTestWithActorTestKit(ManualTime.config)
     h.module.appStateStorage.getSnapAccountResumeCheckpoint() shouldBe defined
     deleteDir(dir)
   }
+
+  // B-547: right after a restart no snap peer has a height, so the resume's drift check cannot run. The resume arms a
+  // re-check for the pivot it resumed on; it is not armed when a height is known or every download phase is complete.
+  private def resumeWithFiles(networkBest: Option[BigInt], phasesComplete: Boolean): Harness =
+    val dir = tempDir("snap-resume-planner-recheck")
+    val h = new Harness()
+    def h32(b: Int): ByteString = ByteString(Array.fill[Byte](32)(b.toByte))
+    val storagePath = dir.resolve("fukuii-contract-storage-recheck")
+    val codeHashesPath = dir.resolve("fukuii-unique-codehashes-recheck")
+    Files.write(storagePath, (h32(1) ++ h32(0x11)).toArray)
+    Files.write(codeHashesPath, h32(0xc1).toArray)
+    h.saveRecovery(BigInt(1_000), phasesComplete = phasesComplete)
+    val app = h.module.appStateStorage
+    app
+      .putSnapSyncStorageFilePath(storagePath.toString)
+      .and(app.putSnapSyncStorageFileCount(Some(1L)))
+      .and(app.putSnapSyncCodeHashesPath(codeHashesPath.toString))
+      .and(app.putSnapSyncCodeHashesCount(Some(1L)))
+      .commit()
+    h.module.storageRangeCoordinator = Some(TestInbox[StorageRangeCoordinator.Command]().ref)
+    h.module.bytecodeCoordinator = Some(TestInbox[ByteCodeCoordinator.Command]().ref)
+    h.module.networkBest = networkBest
+    h.recoveryStep() shouldBe false
+    h
+
+  it should "arm a staleness re-check of the pivot it resumed on when no snap peer had a height (B-547)" taggedAs
+    UnitTest in {
+      val h = resumeWithFiles(networkBest = None, phasesComplete = false)
+      h.module.pivotBlock shouldBe Some(BigInt(1_000))
+      h.scheduledTimers() should contain(
+        (RecoveredPivotDriftKey, RecoveredPivotDriftRecheck(BigInt(1_000)), RecoveredPivotDriftPollInterval)
+      )
+    }
+
+  it should "not arm the re-check when a peer height was known, or every download phase was complete (B-547)" taggedAs
+    UnitTest in {
+      resumeWithFiles(networkBest = Some(BigInt(1_100)), phasesComplete = false)
+        .scheduledTimers()
+        .map(_._1) should not contain
+        RecoveredPivotDriftKey
+      resumeWithFiles(networkBest = None, phasesComplete = true).scheduledTimers().map(_._1) should not contain
+        RecoveredPivotDriftKey
+    }

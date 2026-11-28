@@ -6,12 +6,20 @@ import java.nio.file.Path
 
 import scala.concurrent.duration.*
 
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.testing.Tags.*
+import com.chipprbots.ethereum.testing.TempDirs
 
-class SnapGoodPeersSpec extends AnyFlatSpec with Matchers:
+class SnapGoodPeersSpec extends AnyFlatSpec with Matchers with BeforeAndAfterAll:
+
+  // B-368: the peers files the cases write go once the suite is done
+  private val tempDirs = new TempDirs
+  override protected def afterAll(): Unit =
+    try tempDirs.deleteAll()
+    finally super.afterAll()
 
   private val idA = "aa" * 64
   private val idB = "bb" * 64
@@ -34,7 +42,7 @@ class SnapGoodPeersSpec extends AnyFlatSpec with Matchers:
       file = file
     )
 
-  private def tmpFile(): Path = Files.createTempDirectory("snap-good-peers").resolve("snap-good-peers.v1")
+  private def tmpFile(): Path = tempDirs.create("snap-good-peers").resolve("snap-good-peers.v1")
 
   "SnapGoodPeers" should "rank candidates by decayed served score" taggedAs (UnitTest, NetworkTest) in {
     val s = new SnapGoodPeers(cfg(tmpFile()))
@@ -134,7 +142,7 @@ class SnapGoodPeersSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "not throw when the file cannot be written" taggedAs (UnitTest, NetworkTest) in {
-    val dir = Files.createTempDirectory("snap-good-peers-ro")
+    val dir = tempDirs.create("snap-good-peers-ro")
     val blocker = dir.resolve("blocker")
     Files.write(blocker, Array[Byte](1))
     // parent of the target is a regular file, so createDirectories/write must fail

@@ -1,0 +1,47 @@
+{
+ "id": "review-1769",
+ "agent": "vault",
+ "chain": "both",
+ "source_prs": [
+  1769
+ ],
+ "base_sha": "c5fdbb7e9ee6d0da9d4b77e139dc8999fd376ae4",
+ "prompt": "Review the uncommitted change: a one-time background pass that repairs stored total difficulty from genesis and sets a datadir marker when done.",
+ "expected": {
+  "review_sha": "2f21361f50f13a9575dc82dde4eca552cf3891bf",
+  "review_ref": "pull/1769/head",
+  "files": [
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/ChainWeightReconcile.scala",
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/ChainWeightSeed.scala",
+   "src/main/scala/com/chipprbots/ethereum/db/storage/AppStateStorage.scala",
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/SyncController.scala"
+  ],
+  "must_not": [],
+  "gold_summary": "Phase 2 holds ImportLock and ChainInsertLock for the whole repair, stalling import and the Engine API for its duration on mainnet. The marker is set at a SNAP hand-off over an older datadir, so a datadir that was never repaired is marked repaired. The Engine API path writes chain weight without ChainInsertLock, racing the repair. A seed is accepted at terminal TD 0 (and our TD 0 divides by zero, killing the unsupervised actor). (The divide-by-zero is pre-existing, in NetworkPeerManagerActor; the unlocked writer is EngineApiService.storeChainWeightFor, outside the diff.)"
+ },
+ "rubric": [
+  "Identifies the lock hold for the whole repair and its effect on import/Engine API",
+  "Identifies the marker being set without the repair having run on an older datadir",
+  "Identifies an unlocked concurrent writer of the same weights (Engine API path)",
+  "Identifies that a seed is accepted on a chain proof-of-stake from genesis (terminal TD 0)",
+  "Raises no consensus-rule false alarm"
+ ],
+ "protocol": [
+  "vault: write order and atomicity; name the store",
+  "read-only: no edits"
+ ],
+ "leak_markers": [
+  "#1769",
+  "dcd10f020",
+  "3ad4b9a0",
+  "tailLockLimit",
+  "snapPending",
+  "posFromGenesis",
+  "atSnapHandOff"
+ ],
+ "sprint": "0.12.1",
+ "type": "review",
+ "read_only": true,
+ "budget_usd": 3,
+ "timeout_s": 2400
+}

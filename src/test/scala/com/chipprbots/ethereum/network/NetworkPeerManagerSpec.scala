@@ -10,6 +10,7 @@ import org.apache.pekko.util.ByteString
 
 import scala.concurrent.duration.*
 
+import ch.qos.logback.classic.spi.ILoggingEvent
 import org.bouncycastle.util.encoders.Hex
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
@@ -33,6 +34,7 @@ import com.chipprbots.ethereum.network.PeerEventBusActor.PeerSelector
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscribeCmd
 import com.chipprbots.ethereum.network.PeerEventBusActor.SubscriptionClassifier.*
 import com.chipprbots.ethereum.network.PeerEventBusActor.UnsubscribeCmd
+import com.chipprbots.ethereum.network.p2p.MessageSerializable
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.p2p.messages.Codes
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.BlockHeaders
@@ -42,6 +44,7 @@ import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlock
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.BlockHash
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NewBlockHashes.NewBlockHashes
 import com.chipprbots.ethereum.network.p2p.messages.WireProtocol.Disconnect
+import com.chipprbots.ethereum.testing.LogCapture
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 
@@ -122,6 +125,35 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     requestSender.expectMsg(
       PeerInfoResponse(Some(peer1Info.withBestBlockData(peer1Info.maxBlockNumber + 5, secondBlockHash.hash)))
     )
+
+  // forge W-a (B-284): a peer that told of A at a height and then sent B whole at that height holds B: its head is
+  // recorded as B, so a block this node takes on a tie is not sent back to the peer that sent it. An announcement at
+  // the same height moves nothing
+  it should "record a block a peer sent whole at its known height as its head, and not an announcement at that height" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+
+    val height: BigInt = peer1Info.maxBlockNumber + 3
+    val announced: BlockHash = BlockHash(ByteString(Hex.decode("0a" * 32)), height)
+    val sent: BlockHeader = baseBlockHeader.copy(number = BlockNumber(height), extraData = ByteString("B"))
+    val weight: ChainWeight = ChainWeight.totalDifficultyOnly(300)
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(NewBlockHashes(Seq(announced)), peer1.id))
+    peersInfoHolder ! PeerEventCmd(
+      MessageFromPeer(NewBlock(Block(sent, BlockBody(Nil, Nil)), weight.totalDifficulty.value), peer1.id)
+    )
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    val afterBlock: PeerInfo = requestSender.expectMsgType[PeerInfoResponse].peerInfo.get
+    afterBlock.maxBlockNumber shouldBe height
+    afterBlock.bestBlockHash shouldBe sent.hash.value
+
+    // another announcement at that height: the head stays the block it sent
+    val other: BlockHash = BlockHash(ByteString(Hex.decode("0b" * 32)), height)
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(NewBlockHashes(Seq(other)), peer1.id))
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    requestSender.expectMsgType[PeerInfoResponse].peerInfo.get.bestBlockHash shouldBe sent.hash.value
 
   it should "update max peer block when receiving ETH69 BlockRangeUpdate" taggedAs (
     UnitTest,
@@ -277,6 +309,60 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     requestSender.expectMsg(
       HandshakedPeers(Map(freshPeer -> freshPeerInfo.withBestBlockData(newMaxBlock, firstHeader.hash.value)))
     )
+
+  "B-436 best-block re-probe" should "ask by number above the known head and advance maxBlockNumber when the peer's head moved without an announcement" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+
+    peersInfoHolder ! RefreshPeerBestBlocksTick
+    val sent: PeerManagerActor.SendMessageCmd = peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
+    val probe: GetBlockHeaders = sent.message.underlyingMsg.asInstanceOf[GetBlockHeaders]
+    probe.block shouldBe Left(peer1Info.maxBlockNumber + 1)
+    probe.maxHeaders shouldBe BigInt(NetworkPeerManagerActor.BestBlockProbeHeaders)
+    probe.skip shouldBe BigInt(NetworkPeerManagerActor.BestBlockProbeSkip)
+
+    // The peer replies with a header above its handshake-time head, never announced.
+    val advanced: BlockHeader = baseBlockHeader.copy(number = BlockNumber(peer1Info.maxBlockNumber + 16))
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(BlockHeaders(probe.requestId, Seq(advanced)), peer1.id))
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    val info: PeerInfo = requestSender.expectMsgType[PeerInfoResponse].peerInfo.get
+    info.maxBlockNumber shouldBe peer1Info.maxBlockNumber + 16
+    info.bestBlockHash shouldBe advanced.hash.value
+
+  it should "leave the peer unchanged on an empty reply" taggedAs (UnitTest, NetworkTest) in new TestSetup:
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+    peersInfoHolder ! RefreshPeerBestBlocksTick
+    val probe: MessageSerializable = peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd]).message
+    peersInfoHolder ! PeerEventCmd(
+      MessageFromPeer(BlockHeaders(probe.underlyingMsg.asInstanceOf[GetBlockHeaders].requestId, Seq.empty), peer1.id)
+    )
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    requestSender.expectMsgType[PeerInfoResponse].peerInfo.get shouldBe peer1Info
+
+  it should "never lower maxBlockNumber on a reply with a lower number" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    expectInitialSubscriptions()
+    setupNewPeer(peer1, peer1Probe, peer1Info)
+    peersInfoHolder ! RefreshPeerBestBlocksTick
+    peerManager.expectMsgClass(classOf[PeerManagerActor.SendMessageCmd])
+    val lower: BlockHeader = baseBlockHeader.copy(number = BlockNumber(peer1Info.maxBlockNumber - 5))
+    peersInfoHolder ! PeerEventCmd(MessageFromPeer(BlockHeaders(BigInt(0), Seq(lower)), peer1.id))
+    peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+    requestSender.expectMsgType[PeerInfoResponse].peerInfo.get.maxBlockNumber shouldBe peer1Info.maxBlockNumber
+
+  it should "fall back to the hash probe while the peer's block number is unknown" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    NetworkPeerManagerActor
+      .bestBlockProbe(BigInt(1), peer1Info.copy(maxBlockNumber = 0))
+      .block shouldBe Right(peer1Info.remoteStatus.bestHash)
 
   it should "provide handshaked peers only with best block number determined even if peers best block is its genesis" taggedAs (
     UnitTest,
@@ -571,6 +657,67 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
     requestSender.expectMsg(PeerInfoResponse(Some(peer1Info)))
 
+  // ── B-415: per-peer events are DEBUG; one INFO summary a minute ────────────────────────────────────────────────────
+
+  it should "log a handshaked peer at DEBUG, count it, and sum it into the one-a-minute INFO summary" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    expectInitialSubscriptions()
+    val (_, events) = LogCapture.capture("com.chipprbots.ethereum.network") {
+      setupNewPeer(peer1, peer1Probe, peer1Info)
+      // Handled in mailbox order, so once this is answered the handshake has been logged.
+      peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+      requestSender.expectMsgType[PeerInfoResponse]
+    }
+    events.exists(e =>
+      e.getLevel == ch.qos.logback.classic.Level.DEBUG && e.getFormattedMessage.startsWith("PEER_HANDSHAKE_SUCCESS")
+    ) shouldBe true
+    LogCapture.atInfoOrAbove(events).filter(_.contains("PEER_")) shouldBe empty
+    churnStats.current.connected shouldBe 1
+
+    churnStats.recordClosedByDisconnect(Disconnect.Reasons.TooManyPeers)
+    churnStats.recordClosedByDisconnect(Disconnect.Reasons.TooManyPeers)
+    churnStats.recordClosed(PeerChurnStats.TcpClosed)
+    (1 to 3).foreach(_ => churnStats.recordForkIdRejected())
+    churnStats.recordBlacklisted()
+
+    val (_, tickEvents) = LogCapture.capture("com.chipprbots.ethereum.network") {
+      peersInfoHolder ! LogNetworkSummaryTick
+      peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+      requestSender.expectMsgType[PeerInfoResponse]
+    }
+    val summaries: List[ILoggingEvent] = tickEvents.filter(_.getFormattedMessage.startsWith("Network [60s]"))
+    summaries should have size 1
+    summaries.head.getLevel shouldBe ch.qos.logback.classic.Level.INFO
+    summaries.head.getFormattedMessage should include(
+      "connected=1 closed=3[too-many-peers=2,tcp-closed=1] forkid-rejected=3 blacklisted=1"
+    )
+    // Three fork-id rejections are no "every handshake rejected": a peer is connected.
+    tickEvents.filter(_.getLevel == ch.qos.logback.classic.Level.WARN) shouldBe empty
+    // The window is drained: the next summary starts from zero.
+    churnStats.current shouldBe PeerChurnStats.Snapshot(0, Map.empty, 0, 0)
+
+  it should "summarise at most once a minute and warn when no peer connected and every handshake was rejected" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    NetworkSummaryInterval should be <= 60.seconds
+    expectInitialSubscriptions()
+    (1 to PeerChurnStats.AllRejectingThreshold).foreach(_ => churnStats.recordForkIdRejected())
+    val (_, events) = LogCapture.capture("com.chipprbots.ethereum.network") {
+      peersInfoHolder ! LogNetworkSummaryTick
+      peersInfoHolder ! PeerInfoRequestCmd(peer1.id, requestSender.ref)
+      requestSender.expectMsgType[PeerInfoResponse]
+    }
+    events
+      .filter(_.getLevel == ch.qos.logback.classic.Level.INFO)
+      .count(_.getFormattedMessage.startsWith("Network [60s]")) shouldBe 1
+    val warnings: List[String] =
+      events.filter(_.getLevel == ch.qos.logback.classic.Level.WARN).map(_.getFormattedMessage)
+    warnings should have size 1
+    warnings.head should include("every handshake was rejected")
+
   trait TestSetup extends EphemBlockchainTestSetup:
     implicit override lazy val classicSystem: ActorSystem = ActorSystem("PeersInfoHolderSpec_System")
 
@@ -633,6 +780,9 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
     val peerManager: TestProbe = TestProbe()
     val peerEventBus: TestProbe = TestProbe()
 
+    // Each test's own counters, so a summary asserts exact counts whatever else runs in the JVM.
+    val churnStats: PeerChurnStats = new PeerChurnStats
+
     val peersInfoHolder: ActorRef = classicSystem
       .spawn(
         NetworkPeerManagerActor.behavior(
@@ -640,7 +790,8 @@ class NetworkPeerManagerSpec extends AnyFlatSpec with Matchers:
           peerEventBus.ref.toTyped[PeerEventBusActor.Command],
           storagesInstance.storages.appStateStorage,
           Some(forkResolver),
-          isPoWChain = true
+          isPoWChain = true,
+          churnStats = churnStats
         ),
         s"npma-spec-${java.util.UUID.randomUUID()}"
       )

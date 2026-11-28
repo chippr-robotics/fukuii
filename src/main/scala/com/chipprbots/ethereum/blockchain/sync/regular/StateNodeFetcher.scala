@@ -9,7 +9,6 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.util.ByteString
 
 import cats.effect.unsafe.IORuntime
-import cats.syntax.either.*
 
 import scala.concurrent.duration.*
 import scala.util.Failure
@@ -27,8 +26,6 @@ import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.p2p.Message
 import com.chipprbots.ethereum.network.p2p.messages.ETHPackets
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.GetNodeData
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.GetByteCodes.GetByteCodesEnc
@@ -106,11 +103,6 @@ class StateNodeFetcher(
             requestStateNode(hash, stateRoot, paths, isByteCode, Set.empty)
         Behaviors.same
 
-      // NodeData response (ETHPackets.NodeData.values is Seq[ByteString] directly)
-      case AdaptedMessage(peer, ETHPackets.NodeData(values)) if requester.isDefined =>
-        log.debug("Received state node response from peer {}", peer)
-        handleNodeDataValues(peer, values)
-
       // SNAP TrieNodes response
       case AdaptedMessage(peer, TrieNodes(id, _)) if staleRequestIds.contains(id) =>
         log.debug("Dropping late TrieNodes reply {} from peer {} for an abandoned fetch", id, peer)
@@ -167,8 +159,8 @@ class StateNodeFetcher(
     * import-fail → re-fetch loop can't spin indefinitely.
     *
     * This is the BACKOFF path: it is only reached when there is no un-tried snap peer left (peer-selection returned
-    * NoSuitablePeer / RequestFailed, i.e. [[StateNodeFetcher.RetryStateNodeRequest]]) or on the legacy GetNodeData
-    * path. A bad reply from one peer while other snap peers remain goes through [[rotateToNextPeer]] instead.
+    * NoSuitablePeer / RequestFailed, i.e. [[StateNodeFetcher.RetryStateNodeRequest]]). A bad reply from one peer while
+    * other snap peers remain goes through [[rotateToNextPeer]] instead.
     */
   private def retryOrExhaust(req: StateNodeRequester): Unit =
     val nextAttempt = req.attempts + 1
@@ -178,7 +170,7 @@ class StateNodeFetcher(
         ByteStringUtils.hash2string(req.hash),
         req.attempts
       )
-      req.replyTo ! FetchedStateNode(NodeData(Seq.empty))
+      req.replyTo ! FetchedStateNode(Seq.empty)
       requester = None
     else
       requester = Some(req.copy(attempts = nextAttempt))
@@ -194,27 +186,6 @@ class StateNodeFetcher(
     val updated = req.copy(triedPeers = req.triedPeers + badPeer)
     requester = Some(updated)
     requestStateNode(updated.hash, updated.stateRoot, updated.paths, updated.isByteCode, updated.triedPeers)
-
-  private def handleNodeDataValues(peer: Peer, values: Seq[ByteString]): Behavior[StateNodeFetcherCommand] =
-    requester
-      .map { stateNodeRequester =>
-        val validatedNode = values
-          .asRight[BlacklistReason]
-          .ensure(BlacklistReason.EmptyStateNodeResponse)(_.nonEmpty)
-          .ensure(BlacklistReason.WrongStateNodeResponse)(nodes => stateNodeRequester.hash == kec256(nodes.head))
-
-        validatedNode match
-          case Left(err) =>
-            log.debug("State node validation failed with {}", err.description)
-            peersClient ! BlacklistPeer(peer.id, err)
-            retryOrExhaust(stateNodeRequester)
-            Behaviors.same[StateNodeFetcherCommand]
-          case Right(node) =>
-            stateNodeRequester.replyTo ! FetchedStateNode(NodeData(node))
-            requester = None
-            Behaviors.same[StateNodeFetcherCommand]
-      }
-      .getOrElse(Behaviors.same)
 
   private def handleTrieNodesValues(peer: Peer, nodes: Seq[ByteString]): Behavior[StateNodeFetcherCommand] =
     requester
@@ -252,7 +223,7 @@ class StateNodeFetcher(
                 "Successfully fetched missing state node via SNAP GetTrieNodes ({} nodes in response)",
                 nodes.size
               )
-              stateNodeRequester.replyTo ! FetchedStateNode(NodeData(Seq(nodeData)))
+              stateNodeRequester.replyTo ! FetchedStateNode(Seq(nodeData))
               requester = None
               Behaviors.same[StateNodeFetcherCommand]
             case None =>
@@ -342,7 +313,7 @@ class StateNodeFetcher(
                 "Successfully fetched missing bytecode via SNAP GetByteCodes ({} codes in response)",
                 codes.size
               )
-              stateNodeRequester.replyTo ! FetchedStateNode(NodeData(Seq(code)))
+              stateNodeRequester.replyTo ! FetchedStateNode(Seq(code))
               requester = None
               Behaviors.same[StateNodeFetcherCommand]
             case None =>
@@ -356,7 +327,9 @@ class StateNodeFetcher(
   /** Route the request to the right wire protocol:
     *   - bytecode → SNAP GetByteCodes (every snap-capable peer serves these; works on ETH68+)
     *   - trie node with paths → SNAP GetTrieNodes (preserved root + HP-encoded paths)
-    *   - trie node without paths → legacy GetNodeData (ETH63-67 only; mostly dead on modern nets)
+    *   - trie node without paths or root → nobody to ask: a hash alone is no SNAP request, and GetNodeData is gone
+    *     (EIP-4938, all eth/68..72 reject 0x0d/0x0e). The fetch is answered as exhausted at once, as the importer does
+    *     for a storage node it cannot locate, instead of waiting out its retries on a request no peer can serve.
     */
   private def requestStateNode(
       hash: ByteString,
@@ -375,15 +348,15 @@ class StateNodeFetcher(
           sendGetTrieNodes(root, pathGroups, excludePeers)
 
         case _ =>
-          // Fallback to GetNodeData (pre-ETH68 peers only)
-          log.debug("Requesting missing state node via GetNodeData (no SNAP paths available)")
-          val resp = makeRequest(
-            Request.create(GetNodeData(List(hash)), BestNodeDataPeer),
-            StateNodeFetcher.RetryStateNodeRequest
+          log.warn(
+            "State node {} has no position to ask for (root={}, paths={}): no peer is asked, the fetch is exhausted",
+            ByteStringUtils.hash2string(hash),
+            stateRoot.isDefined,
+            paths.isDefined
           )
-          context.pipeToSelf(resp.unsafeToFuture()) {
-            case Success(res) => res
-            case Failure(_)   => StateNodeFetcher.RetryStateNodeRequest
+          requester.foreach { req =>
+            req.replyTo ! FetchedStateNode(Seq.empty)
+            requester = None
           }
 
   private def sendGetTrieNodes(
@@ -418,7 +391,7 @@ class StateNodeFetcher(
   /** Fetch a single contract bytecode by codeHash via SNAP GetByteCodes. Used when regular sync, running on state that
     * SNAP (or a fast sync from before its removal) downloaded, hits a "Block has invalid gas used" error and
     * findMissingContractCode identifies a missing bytecode. SNAP's GetByteCodes is served by every snap-capable peer
-    * regardless of their ETH version, so this works even when the entire peer set is ETH68+ (no GetNodeData).
+    * regardless of their ETH version, so this works even when the entire peer set is ETH68+.
     */
   private def sendGetByteCodes(codeHash: ByteString, excludePeers: Set[PeerId]): Unit =
     log.info(

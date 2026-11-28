@@ -73,10 +73,11 @@ class Screen:
                 self.d.rectangle([x + xx * k, y + yy * k, x + xx * k + k - 1, y + yy * k + k - 1], fill=rgb(int(i)))
 
     def sprite(self, hi: np.ndarray, lo: np.ndarray, col: int, row: int, cols: int, rows: int, mode: str) -> None:
-        """A sprite in its region of cells: `hi` at one sheet pixel per screen pixel, centred; or `lo` as half-blocks."""
+        """A sprite in its region of cells: `hi` fitted to the cells as pixel mode fits it (8 × 16 pixels a cell at
+        this cell size), centred; or `lo` as half-blocks."""
         if mode == "pixel":
-            h, w = hi.shape
-            self.pixels(hi, col * CW + (cols * CW - w) // 2, row * CH + (rows * CH - h) // 2, 1)
+            im = art.hi_art.resample(Image.fromarray(hi, "RGBA"), cols * 8, rows * 16)
+            self.im.paste(im, (col * CW + (cols * CW - im.width) // 2, row * CH + (rows * CH - im.height) // 2), im)
         else:
             self.pixels(lo, col * CW, row * CH, CW)
 
@@ -214,7 +215,8 @@ def draw(mode: str, state: str) -> Image.Image:
     # The operator.
     pose = "warning" if warn else "watching"
     row = art.POSES.index(pose)
-    hi = sheets["mascot.hi.png"][row * 256 : (row + 1) * 256, 0:256]
+    frame = 32 * art.CELL
+    hi = sheets["mascot.hi.png"][row * frame : (row + 1) * frame, 0:frame]
     lo = sheets["mascot.lo.png"][row * 32 : (row + 1) * 32, 0:32]
     s.sprite(hi, lo, 125, 25, 32, 16, mode)
     s.text(126, 42, "OPERATOR", LABEL)

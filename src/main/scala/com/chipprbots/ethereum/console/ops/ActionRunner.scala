@@ -231,7 +231,8 @@ object ActionRunner:
   val MaxHistory: Int = 50
 
   /** The actions that take time: each writes a line when it starts as well as when it ends. */
-  val LongRunning: Set[String] = Set(Actions.DbCheck.name, Actions.Bundle.name, Actions.DetectIp.name)
+  val LongRunning: Set[String] =
+    Set(Actions.DbCheck.name, Actions.Compact.name, Actions.Bundle.name, Actions.DetectIp.name)
 
   /** The actions the dashboard carries out itself, with no handler from the node: stopping the node is its own quit
     * path, and the sprites, the dependencies and the lookups are screens of its own.

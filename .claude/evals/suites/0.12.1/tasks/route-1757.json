@@ -1,0 +1,38 @@
+{
+ "id": "route-1757",
+ "chain": "ETC",
+ "source_prs": [
+  1757
+ ],
+ "base_sha": "7475a50e870dac3362c1a3ac1c55fd300a8f0c80",
+ "prompt": "After a SNAP hand-off on Mordor, regular sync keeps blacklisting peers with 'UNKNOWN_PARENT: parent header not found'; we lost ~30 peers in a day. Validity rules shouldn't change. Who takes this?",
+ "expected": {
+  "route": [
+   "herald",
+   "forge"
+  ],
+  "gold_summary": "Announce/fetch path and peer blame (herald) plus the consensus-adapter error mapping on a PoW chain reviewed by forge.",
+  "files": [],
+  "must_not": []
+ },
+ "rubric": [
+  "herald owns the peer-blame/blacklist behaviour",
+  "forge reviews because consensus import errors change on a PoW chain",
+  "States that block validity must not change"
+ ],
+ "leak_markers": [
+  "#1757",
+  "#1683",
+  "HeaderParentNotFoundError"
+ ],
+ "sprint": "0.12.1",
+ "type": "route",
+ "agent": "router",
+ "read_only": true,
+ "budget_usd": 2,
+ "timeout_s": 900,
+ "protocol": [
+  "read-only: no edits",
+  "CLAUDE.md routing rules and the Consensus-Critical Change Protocol"
+ ]
+}

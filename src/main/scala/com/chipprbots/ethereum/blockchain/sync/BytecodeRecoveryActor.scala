@@ -9,49 +9,37 @@ import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.util.ByteString
 
-import scala.collection.mutable
-import scala.concurrent.Future
 import scala.concurrent.duration.*
-import scala.util.Failure
-import scala.util.Success
-
-import org.slf4j.Logger
-import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
 import com.chipprbots.ethereum.blockchain.sync.snap.controller.StateIngest
-import com.chipprbots.ethereum.db.storage.EvmCodeStorage
-import com.chipprbots.ethereum.db.storage.MptStorage
-import com.chipprbots.ethereum.domain.Account
-import com.chipprbots.ethereum.domain.CodeHash
-import com.chipprbots.ethereum.mpt.*
-import com.chipprbots.ethereum.mpt.MptVisitors.*
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 
 /** Bytecode recovery actor for Bug 20 hardening.
   *
-  * On startup after SNAP sync, walks the state trie to find contract accounts whose bytecodes are missing from
-  * evmCodeStorage (due to the Bug 20 phase handoff timeout). Collects missing codeHashes and downloads them via SNAP
-  * protocol using ByteCodeCoordinator.
+  * Downloads the contract bytecodes the combined recovery scan (`CombinedRecoveryScanActor`) found missing from
+  * evmCodeStorage (Bug 20: the phase handoff timeout), via the SNAP protocol using ByteCodeCoordinator. It has no scan
+  * of its own: the legacy per-phase scan (`parallel-recovery-scan = false`) stopped at the first absent node and the
+  * flag was then settled on that partial walk, and it was retired (B-217).
   *
   * Pekko Typed actor (`Behavior[Command]`, narrowed S5): SyncController sends both `ByteCodePeerAvailable` and
-  * `ByteCodeSyncComplete` / `ProgressBytecodesDownloaded` to this actor. SyncController holds a Classic-visible ref via
-  * the CAPSTONE co-existence bridge; all inbound messages are members of the sealed `Command` ADT, so `Behavior[Any]`
-  * is no longer needed — all Typed machinery (named behavior functions, `Behaviors.withTimers`, `watchWith`) is active.
+  * `ByteCodeSyncComplete` / `ProgressBytecodesDownloaded` to this actor. SyncController, also Typed, spawns it and
+  * holds a typed `ActorRef[Command]`; every inbound message is a member of the sealed `Command` ADT, and it uses the
+  * Typed machinery throughout (named behavior functions, `Behaviors.withTimers`, `watchWith`).
   *
   * Lifecycle:
-  *   1. Walk state trie, collect missing codeHashes (deduplicated) 2. If none missing → mark recovery done, report to
-  *      SyncController 3. If missing → download via ByteCodeCoordinator, then mark done
+  *   1. If none missing → mark recovery done, report to SyncController 2. If missing → download via
+  *      ByteCodeCoordinator, then mark done
+  *
+  * Both layouts run it: what it writes is the code store, which both share (`ByteCodeResponseHandling`:
+  * `EvmCodeStorage.put`), and the recovery flag and the excluded-set progress of the coordinator, which are app-state
+  * and SNAP-progress rows. Nothing here writes a trie node (B-396).
   */
 object BytecodeRecoveryActor:
 
   sealed trait Command
-  private case class ScanResult(missingCodeHashes: Seq[ByteString]) extends Command
-
-  /** The scan could not run (the root is not in the store, the store failed, the state moved under it). */
-  private case object ScanFailed extends Command
   private case class CheckAbandon(progressSeq: Long) extends Command
   private case object CoordinatorTerminated extends Command
   // SyncController forwards peer-available events here; BCA re-forwards to BCC
@@ -71,169 +59,83 @@ object BytecodeRecoveryActor:
   /** Sent to SyncController when recovery is complete (or skipped) */
   case object RecoveryComplete extends SyncControllerMsg
 
-  /** Sent in its place when the scan could not run: recovery is over for this run, and nothing is settled by it. */
-  case object RecoveryNotRun extends SyncControllerMsg
-
-  def apply(
-      stateRoot: ByteString,
-      stateIngest: StateIngest,
-      networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
-      syncController: TypedActorRef[SyncControllerMsg],
-      pivotBlockNumber: BigInt,
-      snapSyncConfig: SNAPSyncConfig
-  ): Behavior[Command] = scanning(
-    stateRoot,
-    stateIngest,
-    networkPeerManager,
-    syncController,
-    pivotBlockNumber,
-    snapSyncConfig,
-    preloaded = None,
-    coordinatorForTesting = None
-  )
-
-  /** Download-only variant: skip the scan and go straight to downloading the supplied missing codeHashes (produced by
-    * the combined parallel scan). Used by `SyncController` when `parallel-recovery-scan` is on.
+  /** Download the codes the combined scan found missing (`missing`). Used by `SyncController` once that scan reports.
     */
   def applyPreloaded(
-      stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[SyncControllerMsg],
-      pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
       missing: Seq[ByteString]
-  ): Behavior[Command] = scanning(
-    stateRoot,
-    stateIngest,
-    networkPeerManager,
-    syncController,
-    pivotBlockNumber,
-    snapSyncConfig,
-    preloaded = Some(missing),
-    coordinatorForTesting = None
-  )
+  ): Behavior[Command] =
+    starting(stateIngest, networkPeerManager, syncController, snapSyncConfig, missing, coordinatorForTesting = None)
 
-  /** Test entry point: exposes the preloaded-missing and coordinator-injection hooks. */
+  /** Test entry point: exposes the coordinator-injection hook. */
   private[sync] def testApply(
-      stateRoot: ByteString,
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[SyncControllerMsg],
-      pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
-      preloaded: Option[Seq[ByteString]] = None,
+      missing: Seq[ByteString],
       coordinatorForTesting: Option[ActorRef] = None
-  ): Behavior[Command] = scanning(
-    stateRoot,
-    stateIngest,
-    networkPeerManager,
-    syncController,
-    pivotBlockNumber,
-    snapSyncConfig,
-    preloaded,
-    coordinatorForTesting
-  )
+  ): Behavior[Command] =
+    starting(stateIngest, networkPeerManager, syncController, snapSyncConfig, missing, coordinatorForTesting)
 
-  private def scanning(
-      stateRoot: ByteString,
+  private def starting(
       stateIngest: StateIngest,
       networkPeerManager: TypedActorRef[NetworkPeerManagerActor.Command],
       syncController: TypedActorRef[SyncControllerMsg],
-      pivotBlockNumber: BigInt,
       snapSyncConfig: SNAPSyncConfig,
-      preloaded: Option[Seq[ByteString]],
+      missing: Seq[ByteString],
       coordinatorForTesting: Option[ActorRef]
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
-      val asyncLog = LoggerFactory.getLogger(getClass)
-      preloaded match
-        case Some(missing) =>
-          ctx.self ! ScanResult(missing)
-        case None =>
-          ctx.log.info(
-            s"BytecodeRecoveryActor starting: scanning state trie for missing bytecodes " +
-              s"(stateRoot=${stateRoot.take(4).toArray.map("%02x".format(_)).mkString}...)"
-          )
-          ctx.pipeToSelf(
-            Future(
-              scanForMissingBytecodes(
-                stateRoot,
-                stateIngest.stateTries.getBackingStorage(pivotBlockNumber),
-                stateIngest.bytecode,
-                ctx.log
-              )
-            )(using ctx.executionContext)
-          ) {
-            case Success(result) => ScanResult(result)
-            case Failure(ex) =>
-              asyncLog.error("Bytecode recovery scan failed", ex)
-              ScanFailed
+      if missing.isEmpty then
+        ctx.log.info("Bytecode recovery: all contract bytecodes present. Marking recovery complete.")
+        RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
+        stateIngest.appState.bytecodeRecoveryDone().commit()
+        syncController ! RecoveryComplete
+        Behaviors.stopped
+      else
+        ctx.log.warn(
+          s"Bytecode recovery: found ${missing.size} missing bytecodes. Starting download..."
+        )
+        RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseDownloading)
+        val bccAdapter: org.apache.pekko.actor.typed.ActorRef[snap.SNAPSyncController.Command] =
+          ctx.messageAdapter {
+            case snap.SNAPSyncController.ByteCodeSyncComplete           => ByteCodeDownloadComplete
+            case snap.SNAPSyncController.ProgressBytecodesDownloaded(n) => ByteCodeDownloadProgress(n)
+            case _                                                      => DroppedBccMsg
           }
-      Behaviors.receiveMessage {
-        case ScanFailed =>
-          // A scan that could not run has looked at nothing, so it settles nothing. It was taken as a scan that found
-          // nothing missing, and recovery was marked done for good on a state nobody had read. The flag is left
-          // unwritten: the next start scans again, and regular sync fetches what it reaches on demand, as after a
-          // combined scan that could not run (`SyncController.recoveryCouldNotRun`).
-          ctx.log.error(
-            "Bytecode recovery: the scan could not run (logged above), so nothing is settled by it. The recovery " +
-              "flag is not written and the next start scans again."
-          )
-          RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseIdle)
-          syncController ! RecoveryNotRun
-          Behaviors.stopped
-
-        case ScanResult(missing) =>
-          if missing.isEmpty then
-            ctx.log.info("Bytecode recovery: all contract bytecodes present. Marking recovery complete.")
-            RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
-            stateIngest.appState.bytecodeRecoveryDone().commit()
-            syncController ! RecoveryComplete
-            Behaviors.stopped
-          else
-            ctx.log.warn(
-              s"Bytecode recovery: found ${missing.size} missing bytecodes. Starting download..."
-            )
-            RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseDownloading)
-            val bccAdapter: org.apache.pekko.actor.typed.ActorRef[snap.SNAPSyncController.Command] =
-              ctx.messageAdapter {
-                case snap.SNAPSyncController.ByteCodeSyncComplete           => ByteCodeDownloadComplete
-                case snap.SNAPSyncController.ProgressBytecodesDownloaded(n) => ByteCodeDownloadProgress(n)
-                case _                                                      => DroppedBccMsg
-              }
-            val coordinator: org.apache.pekko.actor.typed.ActorRef[snap.actors.ByteCodeCoordinator.Command] =
-              coordinatorForTesting match
-                case Some(testRef) => testRef.toTyped[snap.actors.ByteCodeCoordinator.Command]
-                case None =>
-                  val requestTracker = new snap.SNAPRequestTracker()(using ctx.system.classicSystem.scheduler)
-                  ctx.spawn(
-                    Behaviors
-                      .supervise(
-                        snap.actors.ByteCodeCoordinator(
-                          stateIngest = stateIngest,
-                          networkPeerManager = networkPeerManager,
-                          requestTracker = requestTracker,
-                          batchSize = snap.ByteCodeTask.DEFAULT_BATCH_SIZE,
-                          snapSyncController = bccAdapter
-                        )
-                      )
-                      .onFailure[Throwable](
-                        SupervisorStrategy.restartWithBackoff(1.second, 10.seconds, 0.2).withMaxRestarts(3)
-                      ),
-                    "bytecode-recovery-coordinator",
-                    org.apache.pekko.actor.typed.DispatcherSelector.fromConfig("sync-dispatcher")
+        val coordinator: org.apache.pekko.actor.typed.ActorRef[snap.actors.ByteCodeCoordinator.Command] =
+          coordinatorForTesting match
+            case Some(testRef) => testRef.toTyped[snap.actors.ByteCodeCoordinator.Command]
+            case None =>
+              val requestTracker = new snap.SNAPRequestTracker()(using ctx.system.classicSystem.scheduler)
+              ctx.spawn(
+                Behaviors
+                  .supervise(
+                    snap.actors.ByteCodeCoordinator(
+                      stateIngest = stateIngest,
+                      networkPeerManager = networkPeerManager,
+                      requestTracker = requestTracker,
+                      batchSize = snap.ByteCodeTask.DEFAULT_BATCH_SIZE,
+                      snapSyncController = bccAdapter
+                    )
                   )
-            ctx.watchWith(coordinator, CoordinatorTerminated)
-            coordinator ! snap.actors.ByteCodeCoordinator.StartByteCodeSync(missing)
-            // The whole gap list is known up front. Without this the coordinator waits for more tasks that never come
-            // ("accumulating") and never announces completion, so recovery only ended when the no-progress abandon timer
-            // fired, however quickly the bytecodes had arrived.
-            coordinator ! snap.actors.ByteCodeCoordinator.NoMoreByteCodeTasks
-            downloading(ctx, coordinator, missing.size, syncController, stateIngest, snapSyncConfig)
-
-        case _ => Behaviors.unhandled
-      }
+                  .onFailure[Throwable](
+                    SupervisorStrategy.restartWithBackoff(1.second, 10.seconds, 0.2).withMaxRestarts(3)
+                  ),
+                "bytecode-recovery-coordinator",
+                org.apache.pekko.actor.typed.DispatcherSelector.fromConfig("sync-dispatcher")
+              )
+        ctx.watchWith(coordinator, CoordinatorTerminated)
+        coordinator ! snap.actors.ByteCodeCoordinator.StartByteCodeSync(missing)
+        // The whole gap list is known up front. Without this the coordinator waits for more tasks that never come
+        // ("accumulating") and never announces completion, so recovery only ended when the no-progress abandon timer
+        // fired, however quickly the bytecodes had arrived.
+        coordinator ! snap.actors.ByteCodeCoordinator.NoMoreByteCodeTasks
+        downloading(ctx, coordinator, missing.size, syncController, stateIngest, snapSyncConfig)
     }
 
   private def downloading(
@@ -278,11 +180,12 @@ object BytecodeRecoveryActor:
           RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseComplete)
           finishRecovery()
 
-        case ByteCodeDownloadProgress(_) =>
-          downloadedCount += 1
+        // n is a delta: the codes one response carried, or the ones already present (ByteCodeResponseHandling,
+        // ByteCodeCoordinator). Counting the message instead, twice, ran the log and the gauge at 2x (B-494).
+        case ByteCodeDownloadProgress(n) =>
+          downloadedCount += n
           RecoveryMetrics.setBytecodeDownloaded(downloadedCount)
           recordProgress()
-          downloadedCount += 1
           val (newM, crossed) =
             ProgressMilestones.crossed(downloadedCount, expectedCount.toLong, lastBytecodeRecoveryMilestone)
           lastBytecodeRecoveryMilestone = newM
@@ -319,55 +222,5 @@ object BytecodeRecoveryActor:
         case ForwardByteCodesResponse(msg) =>
           coordinator ! snap.actors.ByteCodeCoordinator.ByteCodesResponseMsg(msg)
           Behaviors.same
-
-        case ScanResult(_) => Behaviors.unhandled
       }
     }
-
-  private[sync] def scanForMissingBytecodes(
-      stateRoot: ByteString,
-      mptStorage: MptStorage,
-      evmCodeStorage: EvmCodeStorage,
-      log: Logger
-  ): Seq[ByteString] =
-    RecoveryMetrics.setBytecodePhase(RecoveryMetrics.PhaseScanning)
-    // the account trie, each node read at the path that leads to it (spec 018 Track C)
-    val accountTrie = mptStorage.forOwner(None)
-    val rootNode = accountTrie.getAt(NibblePath.Empty, stateRoot.toArray)
-
-    val missing = mutable.ArrayBuffer.empty[ByteString]
-    val seen = mutable.HashSet.empty[ByteString]
-    var accountCount = 0L
-    var contractCount = 0L
-
-    val onLeaf: LeafNode => Unit = leafNode =>
-      accountCount += 1
-      if accountCount % 100_000 == 0 then
-        RecoveryMetrics.setBytecodeScanProgress(accountCount, contractCount, missing.size.toLong)
-      if accountCount % 1_000_000 == 0 then
-        log.info(
-          s"Bytecode recovery scan: $accountCount accounts, $contractCount contracts, ${missing.size} missing"
-        )
-
-      Account(leafNode.value) match
-        case Success(account) =>
-          if account.codeHash != Account.EmptyCodeHash && !seen.contains(account.codeHash.value) then
-            seen += account.codeHash.value
-            contractCount += 1
-            if evmCodeStorage.get(account.codeHash.value).isEmpty then missing += account.codeHash.value
-        case Failure(_) => // Skip malformed account RLP
-    try
-      val visitor = new PathTrackingLeafWalkVisitor(accountTrie, ByteString.empty, (_, leaf) => onLeaf(leaf))
-      MptTraversals.dispatch(rootNode, visitor)
-    catch
-      case e: MerklePatriciaTrie.MPTException =>
-        log.error(
-          s"Trie walk failed at account $accountCount — partial results: ${missing.size} missing bytecodes",
-          e
-        )
-
-    log.info(
-      s"Bytecode recovery scan complete: $accountCount accounts, $contractCount contracts, ${missing.size} missing bytecodes"
-    )
-    RecoveryMetrics.setBytecodeScanProgress(accountCount, contractCount, missing.size.toLong)
-    missing.toSeq
