@@ -4815,18 +4815,19 @@ items:
   - id: B-456
     title: "hive adapter: map HIVE_BPO3..5_TIMESTAMP and HIVE_BPO3..5_BLOB_* (hive mapper.jq exports them) in fukuii.sh"
     priority: P3
-    status: claimed
+    status: review
     area: ops
     size: S
     opened: 2026-11-24
     refs: []
-    links: {}
+    links:
+      prs: [2161]
     depends_on: [B-443]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T23:33:38Z
-      heartbeat: 2026-11-27T23:33:38Z
+      heartbeat: 2026-11-28T00:05:49Z
     notes: fukuii.sh maps BPO1/BPO2 only; HiveAdapterForkEnvSpec canonical set needs the hive mapper names, not only forkenv.json.
   - id: B-457
     title: "Ephemery: map genesis bpo3Time..bpo5Time and blobSchedule.bpo3..5 (ChainConfRenderer/EphemeryRelease still refuse them)"
