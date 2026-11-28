@@ -97,13 +97,7 @@ class BlobScheduleSpec extends AnyFlatSpec with Matchers:
     UnitTest
   ) in {
     val raw = shippedRoot.getConfig("fukuii.blockchains.hive")
-    // bpo3..bpo5 are hive's clients/go-ethereum/mapper.jq fallbacks (B-456), inert until a simulator declares them.
-    val mapperBpo = Some(BlobParams(9, 14, BigInt(8832827)))
-    shippedChain("hive").blobSchedule shouldBe BlobSchedule.GethDefaults.copy(
-      bpo3 = mapperBpo,
-      bpo4 = mapperBpo,
-      bpo5 = mapperBpo
-    )
+    shippedChain("hive").blobSchedule shouldBe BlobSchedule.GethDefaults
     // All at genesis, staggered, and the rpc-compat fixture's own schedule.
     val schedules = Seq(
       Seq(0L, 0L, 0L, 0L, 0L, 0L),
@@ -137,36 +131,6 @@ class BlobScheduleSpec extends AnyFlatSpec with Matchers:
     )
     c.blobParamsAt(Timestamp(100L)) shouldBe Some(BlobParams(8, 12, BigInt(6676955)))
     c.blobParamsAt(Timestamp(99L)) shouldBe Some(BlobParams.Cancun) // no prague-timestamp declared
-  }
-
-  it should "take BPO3..BPO5 from fukuii.sh, and fall back to hive's mapper.jq values without blob overrides" taggedAs (
-    UnitTest
-  ) in {
-    val hive = shippedRoot.getConfig("fukuii.blockchains.hive")
-    def at(ts: Long, overrides: (String, AnyRef)*): Option[BlobParams] =
-      val c = overrides.foldLeft(
-        hive
-          .withValue("cancun-timestamp", ConfigValueFactory.fromAnyRef(0L))
-          .withValue("prague-timestamp", ConfigValueFactory.fromAnyRef(0L))
-          .withValue("osaka-timestamp", ConfigValueFactory.fromAnyRef(0L))
-          .withValue("bpo1-timestamp", ConfigValueFactory.fromAnyRef(0L))
-          .withValue("bpo2-timestamp", ConfigValueFactory.fromAnyRef(0L))
-          .withValue("amsterdam-timestamp", ConfigValueFactory.fromAnyRef(0L))
-          .withValue("bpo3-timestamp", ConfigValueFactory.fromAnyRef(100L))
-          .withValue("bpo4-timestamp", ConfigValueFactory.fromAnyRef(200L))
-          .withValue("bpo5-timestamp", ConfigValueFactory.fromAnyRef(300L))
-      ) { case (cfg, (k, v)) => cfg.withValue(k, ConfigValueFactory.fromAnyRef(v)) }
-      BlockchainConfig.fromRawConfig(c).blobParamsAt(Timestamp(ts))
-    at(99L) shouldBe Some(BlobParams.Bpo2)
-    at(100L) shouldBe Some(BlobParams(9, 14, BigInt(8832827)))
-    at(300L) shouldBe Some(BlobParams(9, 14, BigInt(8832827)))
-    val overridden = Seq(
-      "blob-schedule.bpo4.target" -> "21",
-      "blob-schedule.bpo4.max" -> "32",
-      "blob-schedule.bpo4.base-fee-update-fraction" -> "20609697"
-    )
-    at(200L, overridden*) shouldBe Some(BlobParams(21, 32, BigInt(20609697)))
-    at(300L, overridden*) shouldBe Some(BlobParams(9, 14, BigInt(8832827)))
   }
 
   "every ETC-family shipped chain conf" should "carry no blob schedule and resolve no blob parameters" taggedAs (

@@ -93,21 +93,6 @@ class HiveAdapterForkEnvSpec extends AnyWordSpec with Matchers:
     */
   private val GraphqlSimHiveEnv: Set[String] = Set("HIVE_ALLOW_UNPROTECTED_TX")
 
-  /** Blob-parameter-only fork keys hive's own `clients/go-ethereum/mapper.jq` reads (verbatim, ethereum/hive master,
-    * 2026-11-27: `bpo3Time`..`bpo5Time` and `blobSchedule.bpo3`..`bpo5`) that neither fixture above carries yet. The
-    * mapper is the contract every hive client is held to, so a simulator scheduling BPO3..BPO5 (execution-specs'
-    * `BPO2ToBPO3AtTime15k`, `BPO3ToBPO4AtTime15k`) exports these (B-456).
-    */
-  private val MapperBpoHiveEnv: Set[String] =
-    (3 to 5).flatMap { n =>
-      Seq(
-        s"HIVE_BPO${n}_TIMESTAMP",
-        s"HIVE_BPO${n}_BLOB_TARGET",
-        s"HIVE_BPO${n}_BLOB_MAX",
-        s"HIVE_BPO${n}_BLOB_BASE_FEE_UPDATE_FRACTION"
-      )
-    }.toSet
-
   private val adapterPath = "hive/fukuii/fukuii.sh"
 
   /** sbt forks tests with the project base directory as cwd, but walk up anyway so the spec survives being run from a
@@ -133,9 +118,7 @@ class HiveAdapterForkEnvSpec extends AnyWordSpec with Matchers:
   "the hive adapter's fork environment" must {
 
     "reference only names hive actually exports" taggedAs (UnitTest, NetworkTest) in {
-      val invented =
-        referenced -- CanonicalHiveForkEnv -- MapperBpoHiveEnv -- NonForkHiveEnv -- ConsensusSimHiveEnv --
-          GraphqlSimHiveEnv
+      val invented = referenced -- CanonicalHiveForkEnv -- NonForkHiveEnv -- ConsensusSimHiveEnv -- GraphqlSimHiveEnv
       withClue(
         "fukuii.sh reads an environment variable hive never sets, so the value silently falls back to its default: "
       ) {
@@ -147,14 +130,6 @@ class HiveAdapterForkEnvSpec extends AnyWordSpec with Matchers:
       val unread = CanonicalHiveForkEnv.filter(_.startsWith("HIVE_FORK_")) -- referenced
       withClue("a fork hive schedules but fukuii.sh never reads is dropped from the EIP-2124 checksum chain: ") {
         unread shouldBe empty
-      }
-    }
-
-    "read every blob-parameter-only fork key hive exports, BPO1 to BPO5" taggedAs (UnitTest, NetworkTest) in {
-      val bpoKeys = (CanonicalHiveForkEnv ++ MapperBpoHiveEnv).filter(_.startsWith("HIVE_BPO"))
-      bpoKeys should have size 20
-      withClue("a BPO fork hive schedules but fukuii.sh never reads drops out of the fork id and the blob schedule: ") {
-        (bpoKeys -- referenced) shouldBe empty
       }
     }
 

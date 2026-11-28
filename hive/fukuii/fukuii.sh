@@ -41,17 +41,13 @@ SHANGHAI_TS=${HIVE_SHANGHAI_TIMESTAMP:-}
 CANCUN_TS=${HIVE_CANCUN_TIMESTAMP:-}
 PRAGUE_TS=${HIVE_PRAGUE_TIMESTAMP:-}
 OSAKA_TS=${HIVE_OSAKA_TIMESTAMP:-}
-# BPO1..BPO5 (EIP-7892 blob-parameter-only forks). These carry no EVM changes, but
+# BPO1/BPO2 (EIP-7892 blob-parameter-only forks). These carry no EVM changes, but
 # they ARE forks: they must enter the EIP-6122 fork-id checksum chain, and they
 # select the blob target/max and base-fee update fraction. Omitting them made the
 # node advertise a fork id computed over [cancun, prague, osaka] only, which peers
-# reject with "wrong fork ID in status". hive's clients/go-ethereum/mapper.jq maps
-# all five (bpo1Time..bpo5Time); BPO3..BPO5 follow Amsterdam (B-456).
+# reject with "wrong fork ID in status".
 BPO1_TS=${HIVE_BPO1_TIMESTAMP:-}
 BPO2_TS=${HIVE_BPO2_TIMESTAMP:-}
-BPO3_TS=${HIVE_BPO3_TIMESTAMP:-}
-BPO4_TS=${HIVE_BPO4_TIMESTAMP:-}
-BPO5_TS=${HIVE_BPO5_TIMESTAMP:-}
 AMSTERDAM_TS=${HIVE_AMSTERDAM_TIMESTAMP:-}
 
 # go-ethereum's --miner.gaslimit. hive's rpc-compat simulator sets this explicitly
@@ -181,9 +177,6 @@ fi
 [ -n "$BPO1_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.bpo1-timestamp=$BPO1_TS"
 [ -n "$BPO2_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.bpo2-timestamp=$BPO2_TS"
 [ -n "$AMSTERDAM_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.amsterdam-timestamp=$AMSTERDAM_TS"
-[ -n "$BPO3_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.bpo3-timestamp=$BPO3_TS"
-[ -n "$BPO4_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.bpo4-timestamp=$BPO4_TS"
-[ -n "$BPO5_TS" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.bpo5-timestamp=$BPO5_TS"
 
 # EIP-7840 blob schedule (#1637): target/max blobs per block and the blob base-fee update fraction per
 # fork. hive exports these next to the timestamps (forkenv.json); hive-chain.conf carries the same
@@ -208,15 +201,6 @@ blob_param bpo1 base-fee-update-fraction "${HIVE_BPO1_BLOB_BASE_FEE_UPDATE_FRACT
 blob_param bpo2 target "${HIVE_BPO2_BLOB_TARGET:-}"
 blob_param bpo2 max "${HIVE_BPO2_BLOB_MAX:-}"
 blob_param bpo2 base-fee-update-fraction "${HIVE_BPO2_BLOB_BASE_FEE_UPDATE_FRACTION:-}"
-blob_param bpo3 target "${HIVE_BPO3_BLOB_TARGET:-}"
-blob_param bpo3 max "${HIVE_BPO3_BLOB_MAX:-}"
-blob_param bpo3 base-fee-update-fraction "${HIVE_BPO3_BLOB_BASE_FEE_UPDATE_FRACTION:-}"
-blob_param bpo4 target "${HIVE_BPO4_BLOB_TARGET:-}"
-blob_param bpo4 max "${HIVE_BPO4_BLOB_MAX:-}"
-blob_param bpo4 base-fee-update-fraction "${HIVE_BPO4_BLOB_BASE_FEE_UPDATE_FRACTION:-}"
-blob_param bpo5 target "${HIVE_BPO5_BLOB_TARGET:-}"
-blob_param bpo5 max "${HIVE_BPO5_BLOB_MAX:-}"
-blob_param bpo5 base-fee-update-fraction "${HIVE_BPO5_BLOB_BASE_FEE_UPDATE_FRACTION:-}"
 
 # EIP-6110 deposit contract address, as declared by the fixture genesis (see above).
 [ -n "$DEPOSIT_CONTRACT" ] && FLAGS="$FLAGS -Dfukuii.blockchains.hive.deposit-contract-address=$DEPOSIT_CONTRACT"
