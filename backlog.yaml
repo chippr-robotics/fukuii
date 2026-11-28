@@ -6334,17 +6334,18 @@ items:
   - id: B-571
     title: BackgroundAuditSpec 'keep a peer that serves a wrong node to itself' failed once under sbt load (passed 65/65 alone)
     priority: P3
-    status: claimed
+    status: review
     area: tests
     size: S
     opened: 2026-11-27
     refs: ["wave 9C, 2026-11-27"]
-    links: {}
+    links:
+      prs: [2164]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T23:33:15Z
-      heartbeat: 2026-11-27T23:33:15Z
+      heartbeat: 2026-11-28T00:49:20Z
     notes: Seen in a full snap.* run with another sbt process on the host; capture the failure text on recurrence and find the timing it depends on.
   - id: B-572
     title: "Release-hygiene follow-ups: AccountTrieAssembly stale scaladoc, ops logback <if condition=>, PeerActor.props dead code"
