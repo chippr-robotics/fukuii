@@ -151,15 +151,15 @@ from the network.
 
     docker run -d --name fukuii --restart unless-stopped \
       -p 30303:30303/tcp -p 30303:30303/udp \
-      -p 127.0.0.1:8546:8546 \
       -v fukuii-data:/app/data \
       ghcr.io/chippr-robotics/fukuii:<version>
     ```
 
-    The image keeps its data in `/app/data` and binds JSON-RPC to the container's interfaces so Docker can forward the
-    published port. Publishing it on `127.0.0.1` keeps it on the host's loopback.
-    Release images up to v0.12.79 need `-Dfukuii.datadir=/app/data
-    -Dfukuii.network.rpc.http.interface=0.0.0.0` appended after the image name; see the [Quick Start](quickstart.md).
+    The image keeps its data in `/app/data` and JSON-RPC on the container's loopback; `docker exec fukuii curl -s
+    localhost:8546/health` reaches it. Publishing RPC needs `-e FUKUII_RPC_INTERFACE=0.0.0.0` plus TLS or a deliberate
+    plaintext opt-out; see [Exposing JSON-RPC](../deployment/docker.md#exposing-json-rpc).
+    Release images up to v0.12.79 need `-Dfukuii.datadir=/app/data` appended after the image name; see the
+    [Quick Start](quickstart.md).
 
 The datadir defaults to `~/.fukuii/<network>`. Add `--tui` to any launch for the terminal dashboard.
 

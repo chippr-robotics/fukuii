@@ -319,17 +319,21 @@ cosign verify \
   --certificate-oidc-issuer=https://token.actions.githubusercontent.com \
   ghcr.io/chippr-robotics/fukuii:<version>
 
-# Run ETC mainnet. JSON-RPC HTTP is 8546; publishing it on 127.0.0.1 keeps it on the host's loopback.
+# Run ETC mainnet. JSON-RPC stays on the container's loopback; `docker exec fukuii curl localhost:8546/health` reaches it.
 docker run -d --name fukuii \
   -p 30303:30303/tcp -p 30303:30303/udp \
-  -p 127.0.0.1:8546:8546 \
   -v fukuii-data:/app/data \
   ghcr.io/chippr-robotics/fukuii:<version>
 ```
 
-The image keeps its data in `/app/data` (`FUKUII_DATADIR`) and binds JSON-RPC to every container interface
-(`FUKUII_RPC_INTERFACE=0.0.0.0`) so Docker can forward the published port; a `datadir` or `interface` in a conf you
-mount at `/app/conf` takes precedence. For Mordor, append `mordor` after the image name.
+The image keeps its data in `/app/data` (`FUKUII_DATADIR`). JSON-RPC binds the container's loopback, so a published
+`-p 8546:8546` reaches nothing until you choose how to expose it. A plaintext listener on a non-loopback interface
+refuses the start (spec 030), so publishing RPC takes `-e FUKUII_RPC_INTERFACE=0.0.0.0` plus either TLS on the listener
+(see the [TLS runbook](docs/runbooks/tls-operations.md)) or a deliberate plaintext opt-out,
+`-e JAVA_OPTS=-Dfukuii.network.rpc.http.allow-insecure-bind=true`. With the opt-out, publish the port as
+`127.0.0.1:8546:8546` to keep it on the host's loopback; see
+[Exposing JSON-RPC](docs/deployment/docker.md#exposing-json-rpc). A `datadir` or `interface` in a conf you mount at `/app/conf` takes precedence. For
+Mordor, append `mordor` after the image name.
 
 Docker Hub (`chipprbots/fukuii:latest`) is also available as a mirror for environments where GHCR is restricted.
 

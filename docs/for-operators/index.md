@@ -152,8 +152,10 @@ readinessProbe:
   periodSeconds: 60
 ```
 
-The RPC server must listen on the pod's interface for the kubelet to reach it: the container images do this by default
-(`FUKUII_RPC_INTERFACE=0.0.0.0`); otherwise set `fukuii.network.rpc.http.interface`.
+The RPC server must listen on the pod's interface for the kubelet to reach it. The container images keep RPC on
+loopback, so set `FUKUII_RPC_INTERFACE=0.0.0.0` (or `fukuii.network.rpc.http.interface`) together with TLS or
+`fukuii.network.rpc.http.allow-insecure-bind = true`; a plaintext non-loopback listener refuses the start otherwise
+(spec 030). Without that, use an `exec` probe that runs `curl` against `localhost:8546`.
 
 ## Logging
 
