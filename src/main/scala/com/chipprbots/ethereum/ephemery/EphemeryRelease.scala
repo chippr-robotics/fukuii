@@ -96,7 +96,18 @@ object EphemeryRelease:
 
   /** In the order of the forks. */
   private val TimeKeys: List[String] =
-    List("shanghaiTime", "cancunTime", "pragueTime", "osakaTime", "bpo1Time", "bpo2Time", "amsterdamTime")
+    List(
+      "shanghaiTime",
+      "cancunTime",
+      "pragueTime",
+      "osakaTime",
+      "bpo1Time",
+      "bpo2Time",
+      "amsterdamTime",
+      "bpo3Time",
+      "bpo4Time",
+      "bpo5Time"
+    )
 
   private val OtherKeys: Set[String] =
     Set(
@@ -156,6 +167,9 @@ object EphemeryRelease:
         bpo1 = times.bpo1,
         bpo2 = times.bpo2,
         amsterdam = times.amsterdam,
+        bpo3 = times.bpo3,
+        bpo4 = times.bpo4,
+        bpo5 = times.bpo5,
         blobSchedule = blobs,
         depositContract = deposit,
         bootnodes = nodes,
@@ -275,12 +289,16 @@ object EphemeryRelease:
       osaka: Option[Long],
       bpo1: Option[Long],
       bpo2: Option[Long],
-      amsterdam: Option[Long]
+      amsterdam: Option[Long],
+      bpo3: Option[Long],
+      bpo4: Option[Long],
+      bpo5: Option[Long]
   ):
     def named: List[(String, Long)] =
       List("shanghaiTime" -> shanghai, "cancunTime" -> cancun, "pragueTime" -> prague) ++
         osaka.map("osakaTime" -> _) ++ bpo1.map("bpo1Time" -> _) ++ bpo2.map("bpo2Time" -> _) ++
-        amsterdam.map("amsterdamTime" -> _)
+        amsterdam.map("amsterdamTime" -> _) ++ bpo3.map("bpo3Time" -> _) ++ bpo4.map("bpo4Time" -> _) ++
+        bpo5.map("bpo5Time" -> _)
     def declared(fork: String): Boolean = named.exists(_._1 == s"${fork}Time")
 
   /** R6: integers or null; shanghai, cancun and prague are required. */
@@ -309,7 +327,10 @@ object EphemeryRelease:
         times("osakaTime"),
         times("bpo1Time"),
         times("bpo2Time"),
-        times("amsterdamTime")
+        times("amsterdamTime"),
+        times("bpo3Time"),
+        times("bpo4Time"),
+        times("bpo5Time")
       )
     }
 
@@ -329,7 +350,11 @@ object EphemeryRelease:
     val gaps = List(
       ("bpo1Time", times.bpo1, "osakaTime", times.osaka),
       ("bpo2Time", times.bpo2, "bpo1Time", times.bpo1),
-      ("amsterdamTime", times.amsterdam, "osakaTime", times.osaka)
+      ("amsterdamTime", times.amsterdam, "osakaTime", times.osaka),
+      // go-ethereum's CheckConfigForkOrder puts BPO3..BPO5 after Amsterdam
+      ("bpo3Time", times.bpo3, "amsterdamTime", times.amsterdam),
+      ("bpo4Time", times.bpo4, "bpo3Time", times.bpo3),
+      ("bpo5Time", times.bpo5, "bpo4Time", times.bpo4)
     ).collectFirst { case (a, Some(_), b, None) => (a, b) }
     val misordered = named.zip(named.drop(1)).collectFirst { case ((a, ta), (b, tb)) if ta > tb => (a, ta, b, tb) }
     if gaps.isDefined then

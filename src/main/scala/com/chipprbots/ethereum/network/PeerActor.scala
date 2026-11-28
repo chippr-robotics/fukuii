@@ -164,36 +164,6 @@ object PeerActor:
     }
   // scalastyle:on parameter.number method.length
 
-  /** Classic-callable factory: the Typed behavior wrapped in Classic `Props` via `PropsAdapter`. PeerManagerActor is
-    * Typed and spawns [[apply]] directly with `ctx.spawn` (`PeerManagerActor.peerFactory`); nothing in the code base
-    * calls this factory any more.
-    */
-  // scalastyle:off parameter.number
-  def props[R <: HandshakeResult](
-      peerAddress: InetSocketAddress,
-      peerConfiguration: PeerConfiguration,
-      peerEventBus: ActorRef[PeerEventBusCommand],
-      knownNodesManager: ActorRef[KnownNodesManager.Command],
-      incomingConnection: Boolean,
-      handshaker: Handshaker[R],
-      authHandshaker: AuthHandshaker,
-      capabilities: List[Capability],
-      peerScoringManager: Option[PeerScoringManager] = None
-  ): org.apache.pekko.actor.Props =
-    org.apache.pekko.actor.typed.scaladsl.adapter.PropsAdapter(
-      apply(
-        peerAddress,
-        rlpxConnectionFactory(authHandshaker, peerConfiguration.rlpxConfiguration, capabilities),
-        peerConfiguration,
-        peerEventBus,
-        knownNodesManager,
-        incomingConnection,
-        initHandshaker = handshaker,
-        peerScoringManager = peerScoringManager
-      )
-    )
-  // scalastyle:on parameter.number
-
   def rlpxConnectionFactory(
       authHandshaker: AuthHandshaker,
       rlpxConfiguration: RLPxConfiguration,

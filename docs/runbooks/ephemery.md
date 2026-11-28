@@ -190,6 +190,30 @@ bundled iteration has no `testnet/` until you run `fukuii cli ephemery-fetch --r
 fukuii fetches has it. If a `testnet/` is torn (a required file such as `genesis.ssz` is missing or empty), fukuii
 reports it as absent and the same command replaces it, keeping the torn one beside it as `.testnet-torn-<k>`.
 
+### Checkpoint sync right after a reset
+
+For a while after a reset the public checkpoint servers still serve the old iteration's state. Lighthouse, started
+with `--checkpoint-sync-url` on the new `testnet/`, then refuses to start with "Snapshot state appears to be from the
+wrong network" (seen at the `ephemery-166` reset on 2026-11-19, B-403). Restarting does not help until the server
+catches up. Right after a reset, genesis-sync instead: drop `--checkpoint-sync-url` and start on the fresh datadir. The
+chain is only minutes old, so genesis sync is quick, and it is inside the weak-subjectivity period, so Lighthouse
+accepts it without `--allow-insecure-genesis-sync`.
+
+Checkpoint-sync only when the server's `genesis_time` equals `MIN_GENESIS_TIME + GENESIS_DELAY` from the new
+iteration's `testnet/config.yaml`:
+
+```bash
+CFG=/data/ephemery/current/testnet/config.yaml   # <datadir>/current/testnet, or $TESTNET_DIR/config.yaml
+want=$(awk -F': *' '/^(MIN_GENESIS_TIME|GENESIS_DELAY):/ {gsub(/"/, "", $2); t += $2} END {print t}' "$CFG")
+have=$(curl -fsS https://checkpoint-sync.ephemery.ethpandaops.io/eth/v1/beacon/genesis | jq -r .data.genesis_time)
+if [ "$have" = "$want" ]; then echo "checkpoint-sync: the server is on this iteration"
+else echo "genesis-sync: the server has genesis $have, this iteration $want"; fi
+```
+
+The same check applies to the other checkpoint endpoints in [section 3](#3-run-lighthouse). In the companion unit
+above, add `--checkpoint-sync-url` to the `ExecStart` only when the check passes; a unit that always passes it fails
+after every reset until the server has moved on, and `Restart=on-failure` keeps retrying.
+
 ## Paths that move at each reset
 
 Every path derived from `fukuii.datadir` follows the iteration unless you set it as an absolute path:
@@ -283,7 +307,7 @@ goes to `OUT/logs`, so it never touches a node's log. `retention.vars` must carr
 `ITERATION_NUMBER` and `GENESIS_TIMESTAMP` (every release does).
 
 The script refuses (non-zero exit, nothing written) a release whose genesis declares something fukuii
-cannot represent: a non-zero block fork, an unknown fork key (e.g. `bpo3Time`), a non-zero TTD, or a header
+cannot represent: a non-zero block fork, an unknown fork key (e.g. `verkleTime`), a non-zero TTD, or a header
 quantity it cannot re-encode.
 
 **Why a re-encoded genesis.** `GenesisDataLoader` parses `timestamp`, `gasLimit`, `difficulty`,
@@ -353,16 +377,23 @@ docker run -d --name ephemery-lighthouse --network host \
 Other checkpoint endpoints (all served the 164 genesis on 2026-10-17): `https://checkpointz.bordel.wtf`,
 `https://ephemery.beaconstate.ethstaker.cc`, `https://beaconstate-ephemery.chainsafe.dev`.
 
+Right after a reset these servers can still serve the previous iteration, and Lighthouse then refuses the state
+("Snapshot state appears to be from the wrong network"). Check the server first, or genesis-sync: see [Checkpoint sync
+right after a reset](#checkpoint-sync-right-after-a-reset).
+
+
 ## 4. After a reset
 
 At `RESET_TIME` the old chain is gone, and the node (under a supervisor, see [Under a supervisor](#under-a-supervisor))
 restarts onto the next iteration by itself. The consensus client needs a fresh datadir for the new chain: use the
 companion unit above, or stop it, wipe or drop its datadir (it holds the old chain's state) and start it on
-`<datadir>/current/testnet`. fukuii's datadir is per iteration (`<datadir>/ephemery-N`), so the new iteration starts
-empty; a datadir holding another iteration's genesis is refused at startup ("Genesis data present in the database does
-not match"). fukuii never deletes the old `<datadir>/ephemery-N/` and `releases/ephemery-N/` directories: delete them
-yourself when done. With a prepared directory (section 1) nothing restarts for you: re-run `fetch-genesis.sh`, then
-restart both clients.
+`<datadir>/current/testnet`, genesis-syncing until the checkpoint server has the new iteration ([Checkpoint sync right
+after a reset](#checkpoint-sync-right-after-a-reset)). fukuii's datadir is per iteration (`<datadir>/ephemery-N`), so
+the new iteration starts empty; a datadir holding another iteration's genesis is refused at startup ("Genesis data
+present in the database does not match"). fukuii never deletes the old `<datadir>/ephemery-N/` and
+`releases/ephemery-N/` directories: delete them yourself when done. With a prepared directory (section 1) nothing
+restarts for you: re-run `fetch-genesis.sh`, then restart both clients.
+
 
 ## 5. Run a validator on fukuii
 
@@ -436,7 +467,7 @@ limit in header validation and block building, `BLOBBASEFEE`, `eth_blobBaseFee`,
 | BPO1 | 8 / 12 / 6676955 | 10 / 15 / 8346193 |
 | BPO2 | 10 / 15 / 8346193 | 14 / 21 / 11684671 |
 
-The script refuses a schedule entry for a fork fukuii cannot schedule (bpo3 and later) or with a missing
+The script refuses a schedule entry for a fork fukuii cannot schedule (beyond bpo5) or with a missing
 or non-integer field. fukuii itself refuses to load a chain config whose schedule lacks an entry for a
 declared blob fork, has max < target, target or update fraction 0, out-of-order blob-fork timestamps, or
 an `osaka` entry different from Prague's (go-ethereum ignores `osaka`, so a differing value would split

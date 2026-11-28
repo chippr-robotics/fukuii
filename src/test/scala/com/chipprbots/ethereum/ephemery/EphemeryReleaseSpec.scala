@@ -123,12 +123,47 @@ class EphemeryReleaseSpec extends AnyFlatSpec with Matchers:
     refusesWith[Inconsistent](notEphemery, "is not an Ephemery chain id")
   }
 
-  "R3" should "refuse a config key it cannot map, such as bpo3Time" taggedAs (UnitTest) in {
-    val r = refused(base.editConfig(_.set("bpo3Time", num(1795114800L))))
+  "R3" should "refuse a config key it cannot map, such as verkleTime" taggedAs (UnitTest) in {
+    val r = refused(base.editConfig(_.set("verkleTime", num(1795114800L))))
     r shouldBe a[CannotRepresent]
     r.exitCode shouldBe 78
-    r.message should include("genesis config declares keys fukuii cannot map: bpo3Time")
+    r.message should include("genesis config declares keys fukuii cannot map: verkleTime")
     r.message should include("a newer fukuii")
+  }
+
+  it should "map bpo3Time..bpo5Time and blobSchedule.bpo3..bpo5 into the chain configuration (B-457)" taggedAs (
+    UnitTest
+  ) in {
+    // 165 has Amsterdam at genesis (1792695600); BPO3..BPO5 follow it. Forks after genesis leave the header shape, and
+    // so the published hash, as they are.
+    def entry(t: Int, m: Int, f: Long): JObj =
+      JObj(Vector("target" -> num(t), "max" -> num(m), "baseFeeUpdateFraction" -> num(f)))
+    val in = base.editConfig(
+      _.set("bpo3Time", num(1792700000L))
+        .set("bpo4Time", num(1792800000L))
+        .set("bpo5Time", num(1792900000L))
+        .edit("blobSchedule")(
+          _.set("bpo3", entry(21, 32, 20609697L))
+            .set("bpo4", entry(14, 21, 13739630L))
+            .set("bpo5", entry(9, 14, 8832827L))
+        )
+    )
+    val v = valid(in)
+    v.chainConf should include(
+      "  bpo3-timestamp = 1792700000\n  bpo4-timestamp = 1792800000\n  bpo5-timestamp = 1792900000\n"
+    )
+    v.chainConf should include(
+      "    bpo3 { target = 21, max = 32, base-fee-update-fraction = 20609697 }\n" +
+        "    bpo4 { target = 14, max = 21, base-fee-update-fraction = 13739630 }\n" +
+        "    bpo5 { target = 9, max = 14, base-fee-update-fraction = 8832827 }\n"
+    )
+    // valid() already loaded it as a node does (N3); read it back without the genesis include to see the values
+    val withoutGenesis =
+      v.chainConf.replace("""custom-genesis-file = { include required("ephemery-genesis.json") }""", "")
+    val chain = BlockchainConfig.fromRawConfig(ConfigFactory.parseString(withoutGenesis))
+    chain.forkTimestamps.bpo3Timestamp shouldBe Some(1792700000L)
+    chain.forkTimestamps.bpo5Timestamp shouldBe Some(1792900000L)
+    chain.blobSchedule.bpo4.map(_.target) shouldBe Some(14)
   }
 
   "R4" should "refuse a block fork that is not 0" taggedAs (UnitTest) in {
@@ -236,10 +271,10 @@ class EphemeryReleaseSpec extends AnyFlatSpec with Matchers:
     refusesWith[CannotRepresent](
       base.editConfig(
         _.edit("blobSchedule")(
-          _.set("bpo3", JObj(Vector("target" -> num(1), "max" -> num(2), "baseFeeUpdateFraction" -> num(3))))
+          _.set("bpo6", JObj(Vector("target" -> num(1), "max" -> num(2), "baseFeeUpdateFraction" -> num(3))))
         )
       ),
-      "blobSchedule declares fork(s) fukuii has no blob fork for: bpo3"
+      "blobSchedule declares fork(s) fukuii has no blob fork for: bpo6"
     )
   }
 
@@ -655,6 +690,15 @@ class EphemeryReleaseSpec extends AnyFlatSpec with Matchers:
     refusesWith[CannotRepresent](
       base.editConfig(_.without("osakaTime")),
       "is declared but config.osakaTime is not"
+    )
+    // BPO3 follows Amsterdam (go-ethereum's fork order); 164 has no Amsterdam
+    refusesWith[CannotRepresent](
+      raw(164).editConfig(_.set("bpo3Time", num(1795000000L))),
+      "config.bpo3Time is declared but config.amsterdamTime is not"
+    )
+    refusesWith[CannotRepresent](
+      base.editConfig(_.set("bpo4Time", num(1795000000L))),
+      "config.bpo4Time is declared but config.bpo3Time is not"
     )
     valid(raw(164)).iteration shouldBe 164
   }
