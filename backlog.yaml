@@ -6488,10 +6488,15 @@ items:
   - id: B-587
     title: "release.yml: an images-only full-tier path for a version whose patch release is already published (immutable)"
     priority: P1
-    status: open
+    status: claimed
     area: ci
     size: S
     opened: 2026-11-28
     refs: ["#2168 r4727332388"]
     links: {}
+    claim:
+      by: cloud-719c6644
+      agent: main
+      since: 2026-11-28T14:09:43Z
+      heartbeat: 2026-11-28T14:09:43Z
     notes: "0.13.1 full re-run failed: Cannot delete asset from an immutable release; Docker skipped."
