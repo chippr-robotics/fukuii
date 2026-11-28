@@ -935,17 +935,18 @@ items:
   - id: B-082
     title: "Ratchet: format src/evmTest, src/rpcTest and src/benchmark (no format alias covers them)"
     priority: P3
-    status: claimed
+    status: review
     area: build
     size: M
     opened: 2026-11-05
     refs: [H12, CHASE F]
-    links: {}
+    links:
+      prs: [2163]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T23:32:59Z
-      heartbeat: 2026-11-27T23:32:59Z
+      heartbeat: 2026-11-28T00:08:55Z
     notes: Expect a large one-time diff in its own commit.
   - id: B-083
     title: Report the scalameta 4.17.4 continuation-line template parse bug upstream; note the workaround in testing-protocol.md
