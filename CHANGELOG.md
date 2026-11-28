@@ -660,13 +660,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   loads unchanged.
 
 ### Fixed
-- **The Docker images write the chain to the `/app/data` volume (#2144).** They set `FUKUII_DATA_DIR`, which nothing
-  read, so the chain landed in the container layer. The node now reads `FUKUII_DATADIR` (`datadir =
-  ${?FUKUII_DATADIR}`), and every image sets it to `/app/data`. Distroless creates `/app/data` and `/app/conf` owned by
-  `nonroot`. EXPOSE names 8546 (HTTP JSON-RPC), 8552 (WebSocket) and 30303 tcp/udp, and the healthcheck probes 8546.
-  JSON-RPC stays on the container's loopback: `FUKUII_RPC_INTERFACE` (read by `rpc.http`/`ws.interface`) is unset in
-  the images, and publishing RPC takes `FUKUII_RPC_INTERFACE=0.0.0.0` plus TLS or `allow-insecure-bind = true`
-  (spec 030; `docs/deployment/docker.md#exposing-json-rpc`).
 - **The P2P node allowlist's metrics were never exported (spec 030, B-400).** Its meters were created when the start-up
   check first read the allowlist, before the node configured its metrics, so `p2p_allowlist_rejections_total`,
   `p2p_allowlist_size`, `p2p_allowlist_reload_failures_total` and `p2p_allowlist_edits_total` went to a throwaway
