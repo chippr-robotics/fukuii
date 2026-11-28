@@ -274,6 +274,43 @@ class ExcludedAccountsSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecL
       withClue("the entry left once the account was complete: ")(rig.progress.hasExcluded shouldBe false)
     }
 
+  // B-080 (T061a, not proven live): the partial download of an abandoned account left more than its leaf. Here it also
+  // wrote the root of the storage trie and one child, and never the other child, so on Path the trie has a node present
+  // over an absent one. The heal start deletes the account trie positions on the key and no storage position, so this
+  // root is still on disk when the entry is resolved, and the entry must not read it as a complete trie.
+  "A healing coordinator on Path" should "heal the absent child of a storage root the partial download did write, before it lets the account go (T029)" taggedAs UnitTest in {
+    val trie = fixture()
+    val rig = new Rig(
+      StorageScheme.Path,
+      trie,
+      absent = Set("s0b"),
+      excluded = Seq(ExcludedAccount(a0, ExcludedReason.StorageAbandoned, claimedStorageRoot = trie("s0").hash))
+    )
+    withClue("the root and one child of the storage trie are on disk to begin with: ") {
+      rig.onDisk(trie("s0")) shouldBe true
+      rig.onDisk(trie("s0a")) shouldBe true
+      rig.onDisk(trie("s0b")) shouldBe false
+    }
+    rig.start()
+    withClue("the heal start deleted the positions on the key of the account, and only those: ") {
+      readAtPath(rig.pns, rig.trie("acct0")) shouldBe None
+      rig.onDisk(trie("s0")) shouldBe true
+    }
+    withClue("nothing is served, so no completion: ") {
+      rig.peerAvailable()
+      rig.drive()
+      rig.seen() should not contain SNAPSyncController.StateHealingComplete
+      rig.progress.hasExcluded shouldBe true
+    }
+    rig.serve(rig.trie)
+    rig.peerAvailable()
+    rig.peer.manual.receiveMessages(1, 30.seconds).foreach(rig.peer.answerFrom(_, rig.trie.served))
+    rig.awaitComplete()
+    withClue("the missing child was fetched, not assumed: ")(rig.onDisk(trie("s0b")) shouldBe true)
+    trie.nodes.foreach(n => withClue(s"${n.label} on disk: ")(rig.onDisk(n) shouldBe true))
+    withClue("the entry left once the account was complete: ")(rig.progress.hasExcluded shouldBe false)
+  }
+
   for scheme <- Schemes do
     "A healing coordinator" should s"not complete over a clean walk while a bytecode the download gave up on is missing, on $scheme (T029, T030)" taggedAs UnitTest in {
       val rig =

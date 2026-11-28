@@ -2456,6 +2456,36 @@ class StorageRangeCoordinatorSpec
     finally taskFilePointer = None
   }
 
+  // B-080 (T061a): the same loss as above, ended by a force-complete instead of a clean end. The live run that was meant to
+  // show this had no task file (PC2), and the other force-complete cases here run on a coordinator that was never given
+  // the tasks, not on one that has been through a supervisor restart.
+  it should "read the task file back at a force-complete too, and report it only once what the restart lost is durable" taggedAs UnitTest in {
+    val lost = StorageTask.createStorageTask(fileAccount("forced-lost"), fileRoot("forced-lost"))
+    val finished = (fileAccount("forced-done"), fileRoot("forced-done"))
+    val source = EphemDataSource()
+    val appState = new AppStateStorage(source)
+    val file = writeTaskFile(Seq(lost.accountHash -> lost.storageRoot, finished))
+    appState.putSnapSyncStorageFilePath(file.toString).commit()
+    new SnapStorageDoneStorage(source).markDone(Seq(finished)).commit()
+    taskFilePointer = Some(appState)
+    try
+      val controller = testKit.createTestProbe[SNAPSyncController.Command]()
+      val coordinator = restartedWithoutARecord(controller.ref, source, lost)
+      coordinator ! StorageRangeCoordinator.ForceCompleteStorage
+      controller.fishForMessage(30.seconds) {
+        case SNAPSyncController.StorageRangeSyncForceCompleted =>
+          org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.complete
+        case _ => org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes.continueAndIgnore
+      }
+      withClue("durable before the force-complete is reported to the controller: ") {
+        excluded(lost.accountHash).map(_.claimedStorageRoot) shouldBe Some(lost.storageRoot)
+      }
+      withClue("an account with its done marker was finished, and is not owed: ") {
+        excluded(finished._1) shouldBe None
+      }
+    finally taskFilePointer = None
+  }
+
   it should "wait for the task file's pointer: it is persisted just after the account phase's end reaches this actor" taggedAs UnitTest in {
     val lost = StorageTask.createStorageTask(fileAccount("late-pointer"), fileRoot("late-pointer"))
     val source = EphemDataSource()
