@@ -6499,3 +6499,13 @@ items:
     notes: |-
       0.13.1 full re-run failed: Cannot delete asset from an immutable release; Docker skipped.
       2026-11-28 done: images_only dispatch run 46155619540 pushed ghcr.io/chippr-robotics/fukuii:0.13.1 and chipprbots/fukuii:0.13.1 (sha256:d4235cc2...), signed. The OCI revision label reads the workflow ref (ce86de8e), not the tag; cosmetic.
+  - id: B-588
+    title: "release.yml: OCI revision label/annotation uses github.sha (the dispatch ref), not the tag's commit"
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-28
+    refs: [run 46155619540]
+    links: {}
+    notes: v0.13.1 images are built from v0.13.1 but labelled revision ce86de8e (staging head at dispatch).
