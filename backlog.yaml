@@ -6460,3 +6460,13 @@ items:
     refs: ["#2166 r4725013077"]
     links: {}
     notes: Copilot on the 0.13.0 promotion (B-265 follow-up). Add a test with an explicit INFO child logger.
+  - id: B-585
+    title: AdaptiveResponseBytesSpec fixtures never close their LogCapture; close in teardown
+    priority: P3
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-28
+    refs: ["#2166 r4725013099"]
+    links: {}
+    notes: Copilot on the 0.13.0 promotion (B-468 follow-up). Open captures stay in LogCapture.openCaptures for the JVM.
