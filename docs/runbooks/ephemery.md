@@ -307,7 +307,7 @@ goes to `OUT/logs`, so it never touches a node's log. `retention.vars` must carr
 `ITERATION_NUMBER` and `GENESIS_TIMESTAMP` (every release does).
 
 The script refuses (non-zero exit, nothing written) a release whose genesis declares something fukuii
-cannot represent: a non-zero block fork, an unknown fork key (e.g. `bpo3Time`), a non-zero TTD, or a header
+cannot represent: a non-zero block fork, an unknown fork key (e.g. `verkleTime`), a non-zero TTD, or a header
 quantity it cannot re-encode.
 
 **Why a re-encoded genesis.** `GenesisDataLoader` parses `timestamp`, `gasLimit`, `difficulty`,
@@ -467,7 +467,7 @@ limit in header validation and block building, `BLOBBASEFEE`, `eth_blobBaseFee`,
 | BPO1 | 8 / 12 / 6676955 | 10 / 15 / 8346193 |
 | BPO2 | 10 / 15 / 8346193 | 14 / 21 / 11684671 |
 
-The script refuses a schedule entry for a fork fukuii cannot schedule (bpo3 and later) or with a missing
+The script refuses a schedule entry for a fork fukuii cannot schedule (beyond bpo5) or with a missing
 or non-integer field. fukuii itself refuses to load a chain config whose schedule lacks an entry for a
 declared blob fork, has max < target, target or update fraction 0, out-of-order blob-fork timestamps, or
 an `osaka` entry different from Prague's (go-ethereum ignores `osaka`, so a differing value would split
