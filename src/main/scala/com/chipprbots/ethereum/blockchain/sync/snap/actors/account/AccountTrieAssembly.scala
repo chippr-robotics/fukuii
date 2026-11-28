@@ -355,9 +355,10 @@ private[actors] trait AccountTrieAssembly extends AccountTrieCommitApi:
   /** Get-or-create the per-task [[SnapTrie]] for the StackTrie path. Each task gets its own streaming trie keyed by
     * `task.last` (the end-of-range boundary, unique per task).
     *
-    * HashScheme (default): nodes flush to `mptStorage` via `storeRawNodes`, routing through `FastSyncNodeStorage` with
-    * pivot-block-number tagging for pruning. PathScheme: nodes are written path-keyed to `PathNodeStorage`, with
-    * left-boundary skip when `resumeProgress` has a cursor for this task.
+    * HashScheme (default): nodes flush to `mptStorage` via `storeRawNodes`, into the pruning mode's backing storage for
+    * the pivot block (`StateStorage.getBackingStorage`: `ArchiveNodeStorage`, or `ReferenceCountNodeStorage` tagged
+    * with the pivot block number). PathScheme: nodes are written path-keyed to `PathNodeStorage`, with left-boundary
+    * skip when `resumeProgress` has a cursor for this task.
     */
   private def getOrCreateTaskStackTrie(task: AccountTask): SnapTrie =
     taskStackTries.getOrElseUpdate(
