@@ -4,10 +4,12 @@ import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Clock
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
 
 import org.apache.pekko.actor.ActorRef
 import org.apache.pekko.actor.ActorSystem
+import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
@@ -54,6 +56,7 @@ import com.chipprbots.ethereum.network.ForkResolver
 import com.chipprbots.ethereum.network.KnownNodesManager
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
+import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.Command
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -196,7 +199,7 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     override val maxPendingPeers = 5
     override val pruneIncomingPeers = 0
     override val minPruneAge: FiniteDuration = 1.minute
-    override val networkId: Long = 1L
+    override val networkId: Long = fakePeerCustomConfig.networkId
     override val p2pVersion: Int = Config.Network.peer.p2pVersion
 
     override val updateNodesInitialDelay: FiniteDuration = 5.seconds
@@ -338,9 +341,25 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
     val currentWeight = blockchainReader.getChainWeightByHash(bestBlock.hash).get
     BlockchainState(bestBlock, currentWorldState, currentWeight)
 
+  /** How many handshakes this peer has seen end because the other side is on another network or genesis. */
+  val wrongNetworkHandshakes = new AtomicInteger(0)
+
   def startPeer(): IO[Unit] =
     for
       _ <- IO {
+        val wrongNetworkWatch = system.spawn(
+          Behaviors.receiveMessage[PeerEventBusActor.PeerEvent] {
+            case PeerEventBusActor.PeerEvent.PeerOnWrongNetwork(_, _) =>
+              wrongNetworkHandshakes.incrementAndGet()
+              Behaviors.same
+            case _ => Behaviors.same
+          },
+          "wrong-network-watch"
+        )
+        peerEventBus ! PeerEventBusActor.SubscribeCmd(
+          PeerEventBusActor.SubscriptionClassifier.WrongNetworkPeersClassifier,
+          wrongNetworkWatch
+        )
         peerManager ! PeerManagerActor.StartConnectingCmd
         // listenAddress is a concrete (non-wildcard) address, so detection is never attempted regardless of
         // mode — DetectionMode.None documents that intent explicitly.
@@ -356,6 +375,49 @@ abstract class CommonFakePeer(peerName: String, fakePeerCustomConfig: FakePeerCu
       _ <- IO.fromFuture(IO(system.terminate()))
       _ <- IO(storagesInstance.dataSource.destroy())
     yield ()
+
+  private val askScheduler = system.toTyped.scheduler
+
+  /** The peers this peer's PeerManager holds as handshaked, with their connection direction. */
+  def handshakedPeers(): IO[Seq[Peer]] =
+    IO.fromFuture(
+      IO(peerManager.ask[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_))(using akkaTimeout, askScheduler))
+    ).map(_.handshaked)
+
+  /** Every peer the PeerManager holds, handshaked or not (a dial under way, a handshake that has not finished). */
+  def allPeers(): IO[Seq[Peer]] =
+    IO.fromFuture(
+      IO(peerManager.ask[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_))(using akkaTimeout, askScheduler))
+    ).map(_.peers.keys.toSeq)
+
+  /** What the network layer recorded of each handshaked peer: the STATUS it sent, and the fork verdict. */
+  def handshakedPeerInfos(): IO[Map[Peer, PeerInfo]] =
+    IO.fromFuture(
+      IO(
+        etcPeerManager
+          .toTyped[NetworkPeerManagerActor.Command]
+          .ask[NetworkPeerManagerActor.HandshakedPeers](NetworkPeerManagerActor.GetHandshakedPeersCmd(_))(using
+            akkaTimeout,
+            askScheduler
+          )
+      )
+    ).map(_.peers)
+
+  /** Block until exactly `count` peers are handshaked, polling every `delay` for at most `maxRetries` polls. A
+    * condition on the PeerManager's own state, with no wait of a fixed length.
+    */
+  def waitForHandshakedPeers(count: Int, maxRetries: Int = 600, delay: FiniteDuration = 100.millis): IO[Seq[Peer]] =
+    val lastSeen = new AtomicReference[Seq[Peer]](Seq.empty)
+    retryUntilWithDelay(handshakedPeers().flatTap(peers => IO(lastSeen.set(peers))), delay, maxRetries)(
+      _.size == count
+    ).adaptError { case _: java.util.concurrent.TimeoutException =>
+      new java.util.concurrent.TimeoutException(
+        s"$peerName: wanted $count handshaked peers, the last look found ${lastSeen.get.size}: " +
+          lastSeen.get
+            .map(p => s"${p.id.value.take(8)} incoming=${p.incomingConnection} ${p.remoteAddress}")
+            .mkString("; ")
+      )
+    }
 
   /** Ask the PeerManager to dial the given nodes and block until every requested node has been persisted as a known
     * node (which only happens after a successful *outgoing* handshake).

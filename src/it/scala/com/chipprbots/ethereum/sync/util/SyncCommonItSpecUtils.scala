@@ -36,7 +36,10 @@ object SyncCommonItSpecUtils:
         maxMptComponentsPerMessage = random.nextInt(100, 201)
       )
 
-  final case class FakePeerCustomConfig(hostConfig: HostConfig)
+  /** @param networkId
+    *   what the peer's STATUS says, and what it demands of the STATUS it receives (a peer on another one is dropped)
+    */
+  final case class FakePeerCustomConfig(hostConfig: HostConfig, networkId: Long = 1L)
 
   object FakePeerCustomConfig:
     val defaultConfig: FakePeerCustomConfig = FakePeerCustomConfig(HostConfig(200, 200, 200, 200))

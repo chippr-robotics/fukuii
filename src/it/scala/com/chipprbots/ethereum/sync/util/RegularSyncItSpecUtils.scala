@@ -440,3 +440,14 @@ object RegularSyncItSpecUtils:
         peer1 <- start1FakePeerRes(fakePeerCustomConfig1, "Peer1")
         peer2 <- start1FakePeerRes(fakePeerCustomConfig2, "Peer2")
       yield (peer1, peer2)
+
+    def start3FakePeersRes(
+        fakePeerCustomConfig1: FakePeerCustomConfig = defaultConfig,
+        fakePeerCustomConfig2: FakePeerCustomConfig = defaultConfig,
+        fakePeerCustomConfig3: FakePeerCustomConfig = defaultConfig
+    ): Resource[IO, (FakePeer, FakePeer, FakePeer)] =
+      for
+        peer1 <- start1FakePeerRes(fakePeerCustomConfig1, "Peer1")
+        peer2 <- start1FakePeerRes(fakePeerCustomConfig2, "Peer2")
+        peer3 <- start1FakePeerRes(fakePeerCustomConfig3, "Peer3")
+      yield (peer1, peer2, peer3)
