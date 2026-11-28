@@ -6205,17 +6205,18 @@ items:
   - id: B-560
     title: "E2EStateTestSpec 'detect and reject invalid state roots' rejects nothing: harness validators accept any root"
     priority: P3
-    status: claimed
+    status: review
     area: tests
     size: M
     opened: 2026-11-26
     refs: [B-018 follow-up]
-    links: {}
+    links:
+      prs: [2164]
     claim:
       by: cloud-719c6644
       agent: main
       since: 2026-11-27T23:33:07Z
-      heartbeat: 2026-11-27T23:33:07Z
+      heartbeat: 2026-11-28T00:49:13Z
     notes: Test only compares headers of identical chains. Needs the IT harness to run the real block validator (main-code seam) to test rejection; also 'persist across restarts' and 'peer disconnection' neither restart nor disconnect.
   - id: B-561
     title: Open spec tasks still say to write CHANGELOG [Unreleased] entries; switch them to changelog.d fragments
