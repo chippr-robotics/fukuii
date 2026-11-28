@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-28
+
 ### Security
 - **CVE-2026-114938 ("Java4Shell"): mitigated (B-418).** Crafted input to the x86-64 HotSpot Base64 decoder can corrupt
   memory (CVSS 8.1, unauthenticated, network). Affected: Java SE 21.0.13.0.3, 25.0.5.0.3 and the other October 2026
@@ -470,6 +472,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pwgen` or `keytool`. HTTPS stays off by default (`certificate = null`); a config that points at the old files must
   point at the generated ones. The Gate Integrity check (C15) now rejects committed keystores, private keys and
   `.env` files.
+- **CHANGELOG entries are fragments, assembled at release (B-144).** Nearly every open PR conflicted only in this
+  file's `[Unreleased]` section, and without force-push each conflict cost a replacement PR. A PR now adds
+  `changelog.d/<id>.<section>.md` (`<id>` the backlog id, PR number or a slug; `<section>` one of `security`,
+  `breaking`, `changed`, `added`, `deprecated`, `removed`, `fixed`, `known-issues`) holding the bullet as it would
+  appear here. `scripts/changelog/assemble.py` merges the fragments in heading order and natural id order and deletes
+  them: at release prep `--version X.Y.Z` also turns `[Unreleased]` into the version section; `--check` validates the
+  fragments (run by the non-required Changelog Fragments workflow) and `--dry-run` prints the diff. Entries already
+  under `[Unreleased]` stay as they are.
+- **Hive suites are required gates (B-550, B-551, B-557).** `.github/gates.yml` promotes `smoke-genesis`,
+  `smoke-network`, `sync`, `engine` and `consume-rlp`, plus `EEST Amsterdam`, to `tier: required`. Each one cites as
+  `evidence:` a green run on `main` that met its `min_tests`. `required_contexts` now lists the exact check-run names,
+  such as `run / engine` and `Build Main Docker Image`; there is no check named `Docker Build`. Every required Hive
+  and EEST workflow now runs on each PR and has a `changes` job (`_hive-changes.yml`, ported from main with #2145's
+  `skipped` stand-in job in `_hive-sim.yml`) in place of a `paths:` filter. When a PR changes nothing the suite
+  depends on, the job skips the suite and the required check still reports as passed. `hive-prague.yml` and
+  `hive-osaka.yml` are deleted. Osaka ran zero tests and passed, because its fixtures held no Osaka test. Prague is
+  covered by the `consume-engine` shards. The `main` ruleset must drop `Consume-engine Prague sweep` and
+  `Consume-engine Osaka sweep` before 0.13.0 merges (`.github/BRANCH_PROTECTION.md`).
+- **The hive client definition has one source (B-569).** `hive/fukuii/` is now identical to the fukuii
+  definition proposed to ethereum/hive (`clients/fukuii/`). The Dockerfile takes `baseimage`/`tag` build
+  args, `Dockerfile.git` builds from source, and `hive.yaml` declares the `eth1` role. A new nightly workflow,
+  `hive-upstream-definition.yml`, fails when the two copies drift. It also smoke-tests hive's own copy
+  against the candidate build, so a change the published definition would not survive is caught before it
+  reaches `chipprbots/fukuii:latest`.
 
 ### Added
 - **EIP-7892 BPO3, BPO4 and BPO5 (B-443).** An ETH-family chain conf may now declare `bpo3-timestamp` ..
@@ -611,6 +637,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GraphQL `Block` gains `slotNumber` and `blockAccessListHash` (#1629, #1668).** They carry geth's names, types and
   nullability (`Long` and `Bytes32`, both nullable) and are null before Amsterdam, so always null on ETC. No other field
   changes, so a client that does not select them sees the same output.
+- **ETH chains run on Windows: a blst backend for the EIP-2537 BLS12-381 precompiles (B-151).** eth_pairings
+  (`org.hyperledger.besu:bls12-381`) ships no Windows build, so since B-135 a node on a chain with the precompiles
+  (0x0b-0x11, ETH Prague onward and ETC Olympia) refused to start there. The precompiles now run on supranational blst
+  through `tech.pegasys:jblst` 0.3.18 (Apache-2.0) wherever eth_pairings does not load; Linux and macOS keep
+  eth_pairings. blst gives the same bytes as eth_pairings and Besu's gnark on all 3,636 inputs of the EIP-2537
+  differential corpus, invalid-input rejections included. `fukuii.vm.bls12-381-backend` (`FUKUII_BLS12381_BACKEND`)
+  forces `eth-pairings` or `blst`; `auto` is the default. A chain whose chosen library does not load still refuses to
+  start (ADR VM-008).
+- **ETC checkpoint archive published and pinned (B-379).** A fresh ETC node can start from block 25,808,558
+  instead of syncing from genesis: set `fukuii.sync.checkpoint-sync-url =
+  "https://storage.googleapis.com/fukuii-checkpoints/etc/etc-25808558.checkpoint"` (17.7 GB, SHA-256 `39a5dc64…fe95`)
+  on an empty datadir. `etc-chain.conf` now pins the block hash (`0x7b3be997…9422`), so the node imports that
+  archive without the operator supplying a hash and refuses any other. The archive is the spec 018 EG-12 export,
+  verified on import (root equal, block 25,808,559 executed on it equals the network's).
+- **Ephemery releases may schedule BPO3 to BPO5 (B-457).** The Ephemery release engine (`fukuii ephemery`,
+  `fukuii cli ephemery-fetch`) refused a genesis declaring `bpo3Time`..`bpo5Time` or a `blobSchedule.bpo3`..`bpo5`
+  entry ("cannot map"), so the node could not follow an iteration that schedules them. It now maps them to the chain
+  configuration's `bpo3-timestamp`..`bpo5-timestamp` and `blob-schedule.bpo3`..`bpo5`, in go-ethereum's fork order
+  (BPO3 after Amsterdam, each BPO after the previous one). Every generated `ephemery-chain.conf` now carries the three
+  timestamp keys, `null` when the release does not declare them; a cached iteration written by an older fukuii still
+  loads unchanged.
 
 ### Fixed
 - **The P2P node allowlist's metrics were never exported (spec 030, B-400).** Its meters were created when the start-up
@@ -1087,6 +1134,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The transaction sender cache is keyed by chain id as well as hash (#1629, #1668).** A legacy EIP-155 transaction
   whose `v` names another chain recovers a garbage sender, or none, under a mismatched config, and that result was then
   served to callers on the right config. On a single-chain node the new key is a relabelling, so nothing changes there.
+- **The TUI's first frame is no longer overprinted by a JDK warning (B-125).** On JDK 24 and newer, the first
+  `sun.misc.Unsafe` call made by a Scala 3 lazy val printed a four-line warning on stderr across the TUI. The
+  launchers now pass `--sun-misc-unsafe-memory-access=allow`: `bin/fukuii` and `ops/start.sh`/`ops/entrypoint.sh`
+  only after checking the `java` they run accepts it (JDK 22 and older refuse it), the Docker images through
+  `JDK_JAVA_OPTIONS` (JDK 25), the Chocolatey wrapper when it has picked a Java 25, and forked test JVMs when sbt
+  runs on JDK 24+. If you start fukuii with your own `java` command on JDK 24+, add the flag to silence the warning.
+- **KZG 0x0a follows the Cancun timestamp, and a halt restores the TUI (B-155).** The point-evaluation precompile is
+  enabled from the fork config, not from whether the header carries blob fields, so an `eth_call` with a time override
+  into Cancun has 0x0a as go-ethereum does (B-159), and one back before Cancun does not. A halt for a missing precompile backend under `--tui` now restores
+  the terminal before it prints its message.
+- **`fukuii cli` commands no longer write to a node's log file (B-241).** Every `fukuii cli` subcommand now logs to the
+  console only, as `cli ephemery-fetch` already did (spec 028): before, the others appended to the default network's
+  log (for example `~/.fukuii/etc/logs/fukuii.log`), and `cli ephemery-fetch` wrote its "Loading network
+  configuration" line there. The launcher still creates that log file, empty, if it is missing.
+- **Node start no longer prints logback's configuration status (B-264).** Any warning while logback reads
+  `logback.xml` makes it print its whole status, and the shipped file raised several, so every start (and every
+  `fukuii` command) began with about 150 status lines. The console's `<if>` was nested in its `<appender>` and used
+  the deprecated `condition` attribute; it is now a top-level `<if>` with a `<condition>` element. The log file's
+  rolling window asked for 50 archives, more than logback allows, so logback cut it to 21: it now asks for 21. With
+  `logging.json-output = true`, an `<includeMdcKeyNames>` block that the JSON encoder does not accept raised an error
+  and was ignored; it is removed, so the JSON lines still carry every MDC key. Measured with
+  `bin/fukuii cli --help`: 150 status lines before and none after (151 and none with JSON output). Logging is otherwise
+  unchanged: plain text by default, JSON with `logging.json-output = true`, the same log file and rotation.
+- **The shipped compose files and systemd units give the node time to close its database (B-444).** A stop runs bounded
+  steps that can take up to about 119 s, then closes RocksDB, which has no bound. Docker's default of 10 s, and
+  systemd's 90 s, could SIGKILL the node in the middle of that close. Every fukuii service in `docker/*/` and `ops/`
+  compose files now has `stop_grace_period: 180s`, the systemd units in the runbooks set `TimeoutStopSec=180`, and the
+  runbooks' `docker stop` commands pass `-t 180`. If you run fukuii under your own compose file or unit, set the same.
+- **EIP-1898 `requireCanonical` is honoured (B-484).** `{"blockHash": ..., "requireCanonical": true}` was parsed and
+  then dropped, so a state read named a stored side block and answered from its state (since B-210). It now answers
+  `-32000 hash is not currently canonical` for a block that is not the canonical one of its height, as geth and
+  core-geth do (`HeaderByNumberOrHash`, `StateAndHeaderByNumberOrHash`). A `requireCanonical` that is not a boolean is
+  `-32602`.
+- **A hash that names no block answers geth's error (B-485).** A state read by block hash of an unknown block answered
+  `-32602 Block not found for hash`; it now answers `-32000 header for hash not found`, as geth does and as the
+  by-number read has answered `-32000 header not found` since B-210.
+- **"safe" and "finalized" state reads work on a PoS chain (B-489).** Only `eth_getBlockByNumber` and `eth_getProof`
+  were given the consensus client's fork choice, so `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
+  `eth_getTransactionCount`, `eth_call`, `eth_estimateGas`, `eth_simulateV1`, `trace_*` and `debug_trace*` answered
+  `-32602 safe block not available` at those tags even with the fork choice set. Every service that names a block now
+  gets the fork choice.
+- **SNAP resume no longer holds the bytecode coordinator while it checks the carried code hashes (B-543).** A resumed
+  run replays the carried code-hash file with `skipPresent`, and `ByteCodeCoordinator` looked every hash up in the
+  bytecode store one `get` at a time on its own thread (about 300 per second), so its queue, progress answers and
+  completion check waited behind the replay. The lookups now run on the blocking dispatcher in batched `multiGet`
+  calls of 1,024 hashes, and the answer comes back as a message. Batches are still applied in arrival order, the phase
+  does not end while one is waiting, and a force-complete looks up what is unanswered before it abandons anything. No
+  hash is skipped that was not skipped before, and a failed lookup fetches the batch again.
+- **The SNAP heap watchdog's max-pause escape can fire when work was lost in transit (B-546).** The intake gate
+  wrote off in-transit work that no consumer had acknowledged for two minutes only when no heap pressure was
+  reported, so under pressure a reservation lost to a stopped coordinator kept the queues reading non-empty and the
+  watchdog never saw them idle. The write-off now runs first, under pressure too.
+- **A SNAP accounts-complete recovery checks the saved pivot's staleness once a snap peer has a height (B-547).**
+  Right after a restart `networkBest` is 0, so the recovery skipped its drift check and resumed bytecodes and storage
+  on a pivot that could be far past `max-pivot-staleness-blocks`. It now re-checks every 30 s until a snap peer is
+  polled, and a pivot past the bound restarts SNAP sync, whose recovery then takes its stale-pivot branch (heal at a
+  newer pivot when every download phase is complete, otherwise a fresh start). A pivot within the bound is kept.
+- **ETC Olympia has no KZG point-evaluation precompile (B-548, #1444).** ECIP-1121 defers EIP-4844, so 0x0a is no
+  longer in the Olympia precompile set or its EIP-2929 pre-warmed list, matching Besu's ETC Olympia registry and
+  core-geth. An Olympia node no longer requires the c-kzg native library. Olympia is not scheduled on ETC, Mordor or
+  Gorgoroth (`olympia-block-number = 10^18`), so no shipped chain changes. Cross-client vectors pin 0x0a's
+  cold access and empty-account CALL on Olympia, and EIP-7623's floor applied after the refund.
+- **Tier 1 no longer fails on a slow runner's wall clock, and gets back its TUI minutes (B-555).** The TUI render
+  benchmark's medians (`TuiRenderBenchmarkSpec`, under 3 ms) ran in `testEssential` because its alias did not exclude
+  `BenchmarkTest`, and slow CI runners failed them (3.09, 6.16 and 3.92 ms) with no change to the code. `testEssential`
+  now excludes the tag, as ADR TEST-002 has it; `testComprehensive`, `sbt pp` and `testOnly *TuiRender*` still run the
+  timed cases, and an untimed case (every timed frame renders all 48 rows; the idle frame does not move) stays in
+  Tier 1. The test terminal behind `TuiGraphicsSpec` decoded its whole output on every write to look for the
+  terminal questions; since the pixel art grew to 3.2 MB (#2143) that made the suite take 105 s locally and 328 s on
+  a CI runner, and Tier 1 reached 22.7 of its 25 minutes. It now searches only the bytes it has not looked at.
+- **Other clients could not snap-sync storage from fukuii (B-566).** A `StorageRanges` reply that covered several
+  contracts carried a Merkle proof for the first contract, then went on with more. A client checks the proof against
+  the last slot-set (go-ethereum `sync.go`, and fukuii's own client), so go-ethereum and nethermind rejected the reply
+  ("invalid proof, want hash …, got …") and dropped fukuii; in hive's snapsync suite they stayed at head 0. fukuii now
+  follows go-ethereum's server: a proof only for a partial range (non-zero origin, or capped by the byte budget, the
+  deadline or the limit), from the origin to the last slot returned, and the proved contract ends the reply. An
+  account whose storage cannot be read ends the reply too, instead of reading as "no storage".
+- **The scalafmt autofix job no longer pushes code that does not compile (B-576).** On PR #2160 it pushed a commit in
+  which scalafmt 3.8.3 had joined a lambda's one-line `try ... catch case ...` body with the next argument, which does
+  not parse; a local `sbt scalafmtAll` writes the same bytes, so it is a scalafmt bug, not a CI difference. The job
+  now formats in two passes, then re-checks every module and runs `compile-all` on the result, and pushes nothing if
+  either fails. The changed files are touched before each re-run, since sbt-scalafmt's cache skips a file it has just
+  written and would pass the broken one.
 
 ### Known issues
 - **`eth_simulateV1`: expect some differences from go-ethereum (#1727, planned for 0.12.0). Both chains.** The
