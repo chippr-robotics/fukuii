@@ -6448,3 +6448,13 @@ items:
     refs: [PR for ci/b576-ci-tooling (B-082)]
     links: {}
     notes: The two settings inside lazy val node = {...} never applied since Mantis; Evm/compile compiles nothing. Fix the 5 errors, then wire the settings. Also update CLAUDE.md's format-alias table (evmTest/rpcTest/benchmark are now formatted).
+  - id: B-582
+    title: "P2P: a second same-host dial to one listener left all three peers with no connections (seen in the E2E harness, cause unknown)"
+    priority: P2
+    status: open
+    area: p2p
+    size: S
+    opened: 2026-11-28
+    refs: [B-559 commit c8ac7475e0]
+    links: {}
+    notes: "Two fake peers (both 127.0.0.1) dialing one listener: after the second dial all three PeerManagers were empty, including the first dialer's connection. Possibly a same-host/IP dedupe rule in PeerManager. herald: reproduce in the IT harness, decide if it affects real peers behind one NAT/IP."
