@@ -6450,3 +6450,13 @@ items:
     refs: ["#2166 r4725013052"]
     links: {}
     notes: Copilot on the 0.13.0 promotion. Only multi-node-per-JVM (tests) is affected; production runs one node.
+  - id: B-584
+    title: "TUI Logs title: root level is an inherited default, not the ring minimum; explicitly-INFO child loggers still reach the ring"
+    priority: P3
+    status: open
+    area: tui
+    size: S
+    opened: 2026-11-28
+    refs: ["#2166 r4725013077"]
+    links: {}
+    notes: Copilot on the 0.13.0 promotion (B-265 follow-up). Add a test with an explicit INFO child logger.
