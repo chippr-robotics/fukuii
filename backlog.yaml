@@ -6402,18 +6402,14 @@ items:
   - id: B-576
     title: Apply scalafmt workflow pushed a commit that does not parse (lambda ending in try/catch + trailing arg); its result differs from local scalafmtAll
     priority: P2
-    status: review
+    status: done
     area: ci
     size: S
     opened: 2026-11-27
+    closed: 2026-11-28
     refs: ["PR #2160, commit 4044fdd671"]
     links:
       prs: [2163]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-27T23:32:47Z
-      heartbeat: 2026-11-28T00:08:44Z
     notes: Local scalafmtAll left FatalErrors.scala as is; the bot rewrote it into a parse error. Check the workflow's scalafmt version/config vs the repo's, and make the bot compile (or scalafmtCheck) before it pushes.
   - id: B-577
     title: Reject blob fields before Cancun (and Shanghai-shaped headers before Shanghai) in validateExtraFields and Engine V1, as geth does
