@@ -38,7 +38,7 @@ matrix schedules the promotions; this file records what is true today.
 |---|---|---|---|
 | I | Consensus Determinism Is Sacred | partial | see rows below |
 | I.1 | State roots, block hashes, gas costs match the governing spec | `enforced` | `gate:ci-test-build` — ethereum/tests integration job + Tier-1/Tier-2 suites |
-| I.2 | Consensus changes designed and reviewed before implementation | `aspirational` | Human: `forge` (ETC) / `beacon` (ETH) consultation per `.github/agents/`; PR review verifies the impact analysis exists. Not machine-checkable — the artifact is a judgement, not a diff property. |
+| I.2 | Consensus changes designed and reviewed before implementation | `aspirational` | Human: `forge` (ETC) / `beacon` (ETH) consultation per `.claude/agents/`; PR review verifies the impact analysis exists. Not machine-checkable — the artifact is a judgement, not a diff property. |
 | I.3 | ETC and ETH code paths do not mix (`OlympiaOpCodes`/`forBlock()` vs `OsakaOpCodes`/`forTimestamp()`) | `enforced` | `gate:ci-test-build` — `ChainIsolationSpec` (Tier-1) asserts the invariant for every shipped chain config |
 | I.4 | ETC remains Proof-of-Work; PoS logic must not enter the ETC path | `enforced` | `gate:ci-test-build` — `ChainIsolationSpec` asserts `terminalTotalDifficulty` is absent on every ETC-typed config |
 | I.5 | ETH/Sepolia must not inherit ECIP-1017 / Ethash assumptions | `enforced` | `gate:ci-test-build` — `ChainIsolationSpec` asserts ETC-only emission parameters are inert on ETH-typed configs |

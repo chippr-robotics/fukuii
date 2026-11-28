@@ -165,6 +165,75 @@ class ClearForResyncSpec extends AnyFlatSpec with Matchers:
     chain.state.anchor shouldBe Some(chain.refOf(chain.head))
   }
 
+  // B-465 (forge): an adoption on proof of work holds the records on the import's thread while the escalation's clear
+  // is asked for on another. The state it moves the head to may be one the chain follows: the clear is refused, with
+  // nothing written, the escalation's port answers it as a clear that could not begin (regular sync goes on), and it is
+  // asked for again once the adoption has ended.
+  it should "be refused while an attempt holds the records, with nothing written, and clear once the attempt has ended" taggedAs
+    UnitTest in {
+      val source = new Recording
+      val chain = followed(source)
+      val held = chain.refOf(chain.head)
+      val before = rowsLeft(source)
+      // on a thread of its own, and waited for: the import's thread holds the records
+      def elsewhere[A](body: => A): scala.util.Try[A] =
+        val result = new java.util.concurrent.atomic.AtomicReference[scala.util.Try[A]]()
+        val thread = new Thread(() => result.set(scala.util.Try(body)))
+        thread.start()
+        thread.join()
+        result.get
+      def clear(): Boolean =
+        chain.state.clearForResync(genesisHash, escalation.atMillis, Some(escalation))
+        true
+      val said = new java.util.concurrent.ConcurrentLinkedQueue[String]()
+      def tell(why: String): Unit =
+        val _ = said.add(why)
+      chain.state.withRecordsHeld(held, chain.state.anchor) {
+        source.writes = Vector.empty
+        elsewhere(chain.state.recordsHeld).get shouldBe true
+        elsewhere(clear()).failed.get shouldBe a[StateClearRefused]
+        elsewhere(chain.state.clearForBranchRetry(genesisHash, escalation.atMillis)).failed.get shouldBe
+          a[StateClearRefused]
+        // as the escalation's port answers it: not cleared, and why. The look before the clear finds the hold, and the
+        // clear is not run: what it would undo first (the recoveries that wait, and the failures remembered) is kept
+        var resetRan = false
+        elsewhere(
+          com.chipprbots.ethereum.blockchain.sync.SyncController.StateEscalationPort
+            .notClearedWhenRefused(chain.state.recordsHeld, tell) { resetRan = true; clear() }
+        ).get shouldBe false
+        resetRan shouldBe false
+        // and an attempt the look missed (begun just after it) is refused by the clear itself, under its lock
+        elsewhere(
+          com.chipprbots.ethereum.blockchain.sync.SyncController.StateEscalationPort
+            .notClearedWhenRefused(held = false, tell)(clear())
+        ).get shouldBe false
+        // and from the attempt's own thread
+        a[StateClearRefused] should be thrownBy clear()
+        source.writes shouldBe Vector.empty
+        rowsLeft(source) shouldBe before
+        chain.state.anchor shouldBe Some(held)
+        chain.appState.getStateAnchor() shouldBe Some(held)
+        chain.appState.isSnapSyncDone() shouldBe true
+        chain.appState.isStateResetPending() shouldBe false
+        chain.appState.getStateEscalationLast() shouldBe None
+      }
+      said.toArray.toList.map(_.toString) match
+        case List(looked, locked) =>
+          looked should include("holds the records")
+          locked should include("holds the records")
+        case other => fail(s"told $other")
+      chain.state.recordsHeld shouldBe false
+      // asked again once the attempt has ended: cleared
+      elsewhere(
+        com.chipprbots.ethereum.blockchain.sync.SyncController.StateEscalationPort
+          .notClearedWhenRefused(chain.state.recordsHeld, tell)(clear())
+      ).get shouldBe true
+      rowsLeft(source) shouldBe Map("v" -> 0, "t" -> 0, "u" -> 0)
+      chain.state.anchor shouldBe None
+      chain.appState.getStateEscalationLast() shouldBe Some(escalation)
+      said.size() shouldBe 2
+    }
+
   "The genesis state as a sync starts" should "be cleared when it is the state held, and no other state be touched" taggedAs
     UnitTest in {
       // a datadir whose state is the block its chain began at: what a node holds before it has synced

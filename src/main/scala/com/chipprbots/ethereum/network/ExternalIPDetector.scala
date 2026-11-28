@@ -9,6 +9,7 @@ import java.nio.ByteBuffer
 import java.nio.charset.StandardCharsets
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
 
 import scala.jdk.CollectionConverters.*
 import scala.util.Try
@@ -23,6 +24,7 @@ import org.jupnp.registry.Registry
 import org.jupnp.registry.RegistryListener
 import org.jupnp.support.igd.callback.GetExternalIP
 
+import com.chipprbots.ethereum.tls.OutboundTls
 import com.chipprbots.ethereum.utils.Logger
 
 /** How aggressively [[ExternalIPDetector.detect]] is allowed to probe for this node's external address.
@@ -332,17 +334,26 @@ object ExternalIPDetector extends Logger:
 
   // Step 3: HTTPS probe — reads at most HttpMaxBodyBytes of the response body and parses the first line
   // as a strict IPv4 literal. `urls` is injectable for tests.
-  private[network] def tryHttp(urls: List[String] = HttpProbeUrls): Option[InetAddress] =
+  private[network] def tryHttp(
+      urls: List[String] = HttpProbeUrls,
+      context: SSLContext = SSLContext.getDefault
+  ): Option[InetAddress] =
     urls.iterator
-      .flatMap(url => httpProbe(url).toOption)
+      .flatMap(url => httpProbe(url, context).toOption)
       .flatMap(addr => validate("http", addr))
       .nextOption()
 
-  private def httpProbe(url: String): Try[Inet4Address] = Try {
-    val conn = new java.net.URI(url).toURL().openConnection()
-    conn.setConnectTimeout(HttpTimeoutMs)
-    conn.setReadTimeout(HttpTimeoutMs)
-    Using.resource(conn.getInputStream()) { in =>
+  /** The HTTPS step on the client context of `fukuii.network.server-address.external-ip-tls-profile` (spec 030 FR-044),
+    * for [[detect]]'s `httpProbe`.
+    */
+  def httpProbeOn(context: SSLContext): () => Option[InetAddress] = () => tryHttp(context = context)
+
+  // through the outbound factory: https only, host name checked, https-only redirects (spec 030 FR-041, FR-043)
+  private def httpProbe(url: String, context: SSLContext): Try[Inet4Address] = Try {
+    val stream = OutboundTls
+      .openHttpsStream(url, context, timeout = java.time.Duration.ofMillis(HttpTimeoutMs.toLong))
+      .fold(why => throw new IllegalStateException(why), identity)
+    Using.resource(stream) { in =>
       val buf = new Array[Byte](HttpMaxBodyBytes)
       val n = in.read(buf)
       if n <= 0 then throw new IllegalStateException("Empty HTTP probe response body")

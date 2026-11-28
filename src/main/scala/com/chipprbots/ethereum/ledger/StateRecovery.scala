@@ -15,8 +15,10 @@ import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderParentNotFoundError
 import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
+import com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan
 import com.chipprbots.ethereum.db.storage.pathstate.PathStateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.db.storage.pathstate.StateMetrics
 import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
@@ -299,12 +301,15 @@ class StateRecovery(
     // a fork choice walks as far as an extension of the head is caught up over; a payload, as far as its blocks are
     // kept as layers
     val reach = if authority == Authority.ForkChoice then maxCatchUp else maxBlocks
-    walk(head, reach) match
+    // a fork choice's walk also ends where the head's chain meets the chain whose state is held, however far behind
+    // what a view reaches: the head is moved there by the records (B-316)
+    val byRecords = authority == Authority.ForkChoice
+    walk(head, reach, byRecords) match
       case Left(outcome) =>
         logEnd(head, why, outcome)
         outcome
-      case Right((_, Nil)) => Outcome.AlreadyHeld
-      case Right((held, chain)) if authority == Authority.ForkChoice && chain.size > maxAdoptedBlocks =>
+      case Right(Walked(_, Nil, _)) => Outcome.AlreadyHeld
+      case Right(Walked(held, chain, _)) if authority == Authority.ForkChoice && chain.size > maxAdoptedBlocks =>
         // Beyond what a branch is adopted over (C5a part 8; the user's decision of 2026-11-15): only a straight
         // extension of the head, which is what stands between a sync's hand-off and the consensus client's head.
         // A branch that leaves the chain keeps its bound: its way back is kept in records, which reach that far.
@@ -317,12 +322,14 @@ class StateRecovery(
             )
         logEnd(head, why, outcome)
         outcome
-      case Right((held, chain))
+      case Right(Walked(held, chain, viewless))
           if authority == Authority.ForkChoice &&
-            chain.size + state.heldDepth(refOf(held)).getOrElse(0) > maxBlocks =>
-        // more than the layers may hold, with those it stands on: committed in place, as a long branch is (C4d part 4)
+            (viewless || chain.size + state.heldDepth(refOf(held)).getOrElse(0) > maxBlocks) =>
+        // more than the layers may hold, with those it stands on: committed in place, as a long branch is (C4d part 4).
+        // So too a branch whose fork no view reaches: nothing can be executed on a view of it, and the head is moved
+        // down to it by the records first, as the import path adopts a heavier chain that forks that deep (C4e part 4)
         adopt(head, held, chain, sink, why)
-      case Right((_, chain)) =>
+      case Right(Walked(_, chain, _)) =>
         log.info(
           s"[STATE-RECOVERY] Executing ${chain.size} stored block(s) again, ${chain.head.number.value} to " +
             s"${chain.last.number.value}, for head ${hex(head)} ($why): their state is not held"
@@ -341,9 +348,9 @@ class StateRecovery(
                 Outcome.Superseded
               case Done(Outcome.NotKept(_)) if authority == Authority.ForkChoice =>
                 // a layer did not fit: what is left is committed in place, as a long branch is (beacon)
-                walk(head, reach) match
-                  case Right((_, Nil))     => Outcome.AlreadyHeld
-                  case Right((held, rest)) => adopt(head, held, rest, sink, why)
+                walk(head, reach, byRecords) match
+                  case Right(Walked(_, Nil, _))     => Outcome.AlreadyHeld
+                  case Right(Walked(held, rest, _)) => adopt(head, held, rest, sink, why)
                   case Left(outcome) =>
                     logEnd(head, why, outcome)
                     outcome
@@ -353,11 +360,24 @@ class StateRecovery(
 
   /** The highest block of `head`'s chain whose state is held, and the blocks above it, oldest first: no more than
     * `reach` of them.
+    *
+    * With `byRecords`, for a fork choice that may move the head: or the block where `head`'s chain meets the chain
+    * whose state is held (the index of blocks by number, I6), when no view of it can be made (B-316). In the archive
+    * mode the records lead further back than a view reaches (`state.archive.view-reach`), and in the basic mode they
+    * can when the floor lags: a branch that forks there is otherwise walked down past its fork to no state, and is
+    * adopted by no one. Whether the records do lead there is the move's to say ([[adopt]]): it is refused, with nothing
+    * written, when they do not.
     */
-  private def walk(head: ByteString, reach: Int): Either[Outcome, (BlockHeader, List[BlockHeader])] =
+  private def walk(head: ByteString, reach: Int, byRecords: Boolean): Either[Outcome, Walked] =
     @tailrec
-    def down(at: BlockHeader, above: List[BlockHeader]): Either[Outcome, (BlockHeader, List[BlockHeader])] =
-      if state.stateAvailable(refOf(at)) then Right((at, above))
+    def down(at: BlockHeader, above: List[BlockHeader]): Either[Outcome, Walked] =
+      if state.stateAvailable(refOf(at)) then Right(Walked(at, above, viewless = false))
+      // Only where the head's chain leaves the index: the block above it is not of the index. Never the head itself,
+      // nor a block of a head that is an ancestor of the head, which a fork choice does not move the head down to (the
+      // walk goes on down, and finds no state). And behind the anchor, where the index is the anchor's ancestry: it
+      // may run ahead of the anchor (after a sync's hand-off), and a block there is reached by no record (B-480)
+      else if byRecords && above.headOption.exists(child => !ofTheIndex(child)) && behindTheAnchor(at) then
+        Right(Walked(at, above, viewless = true))
       else if above.size >= reach then
         Left(
           Outcome.TooLong(
@@ -371,6 +391,8 @@ class StateRecovery(
         reader.getBlockHeaderByHash(BlockHash(at.parentHash.value)) match
           case Some(parent) => down(parent, at :: above)
           case None         => Left(Outcome.MissingHeader(at.parentHash.value))
+    def ofTheIndex(at: BlockHeader): Boolean = reader.getCanonicalHashByNumber(at.number.value).contains(at.hash)
+    def behindTheAnchor(at: BlockHeader): Boolean = state.anchor.exists(_.number > at.number.value) && ofTheIndex(at)
     reader.getBlockHeaderByHash(BlockHash(head)) match
       case None         => Left(Outcome.MissingHeader(head))
       case Some(header) => down(header, Nil)
@@ -482,38 +504,70 @@ class StateRecovery(
             else
               // from the fork, where the chain the head leaves meets the branch, to the branch's tip (beacon)
               adopting = Some(Progress(fork.number.value, held.number.value, chain.last.number.value))
-              try
-                state.withRecordsHeld(refOf(holdFrom)) {
-                  val movedTo =
-                    try
-                      // a fork choice to another head meanwhile refuses the move before any of it is written: the head
-                      // is not taken off a head the consensus client has gone on to (beacon)
-                      if !state.isApplied(held.hash.value) then
-                        writer.moveHeadInPlace(
-                          held,
-                          reader,
-                          refuse = _ => Option.when(closed || !asked())("another head is named, or the node stops"),
-                          admit = ahead.admit
-                        )
-                      None
-                    catch
-                      // nothing was written: the head is past `held` on the branch, and the next fork choice goes on
-                      case _: StateFault if ahead.met => Some(Outcome.Superseded)
-                      case refused: StateFault        =>
-                        // a move of more than one batch may have written some of them: the head goes back, unless
-                        // the consensus client has named another head, whose fork choice moves it
-                        if asked() && state.anchor != from then moveBack(sink, from)
-                        Some(if asked() then Outcome.NotAdopted(refused.getMessage) else Outcome.Superseded)
-                  movedTo.getOrElse {
-                    commitEach(head, blocks, sink) match
-                      case refused @ (Outcome.Invalid(_, _) | Outcome.LocalFault(_)) =>
-                        moveBack(sink, from)
-                        refused
-                      case other => other
+              // whether the hold was taken: one that was refused held nothing and wrote nothing
+              var holding = false
+              // what the move up to `held` makes canonical, read before it while the index is the old head's ancestry,
+              // and the blocks committed above it: their weights are re-derived once the hold is let go (B-490), however
+              // the adoption ends, an exception out of a commit included (B-510). A block's exact weight depends only on
+              // its ancestry: right whether or not the head stays on it
+              val madeCanonical = notCanonicalBelow(held)
+              val committed = scala.collection.mutable.ListBuffer.empty[BlockHash]
+              rederivingAfter(madeCanonical ++ committed) {
+                try
+                  // on the head read as `from`, which a move back leads to: a block committed on it, or a move of it,
+                  // since refuses the hold as busy, nothing written, and the next fork choice reads the head again
+                  // (B-463)
+                  state.withRecordsHeld(refOf(holdFrom), expectedAnchor = from) {
+                    holding = true
+                    val movedTo =
+                      try
+                        // a fork choice to another head meanwhile refuses the move before any of it is written: the head
+                        // is not taken off a head the consensus client has gone on to (beacon)
+                        if !state.isApplied(held.hash.value) then
+                          writer.moveHeadInPlace(
+                            held,
+                            reader,
+                            refuse = _ => Option.when(closed || !asked())("another head is named, or the node stops"),
+                            admit = ahead.admit
+                          )
+                        None
+                      catch
+                        // nothing was written: the head is past `held` on the branch, and the next fork choice goes on
+                        case _: StateFault if ahead.met => Some(Outcome.Superseded)
+                        case refused: StateFault        =>
+                          // a move of more than one batch may have written some of them: the head goes back, unless
+                          // the consensus client has named another head, whose fork choice moves it
+                          if asked() && state.anchor != from then moveBack(sink, from)
+                          Some(if asked() then Outcome.NotAdopted(refused.getMessage) else Outcome.Superseded)
+                    movedTo.getOrElse {
+                      // the block this adoption's own writes leave the head on: `held`, then each block it commits
+                      var leftOn = held.hash.value
+                      commitEach(
+                        head,
+                        blocks,
+                        sink,
+                        asked = None,
+                        onCommitted = block =>
+                          leftOn = block.header.hash.value
+                          committed += block.header.hash
+                      ) match
+                        case refused @ (Outcome.Invalid(_, _) | Outcome.LocalFault(_)) =>
+                          // only from there (B-464): a fork choice to another head may have moved the head meanwhile,
+                          // and not yet recorded it as the head it followed
+                          moveBack(sink, from, leftOn = Some(leftOn))
+                          refused
+                        case other => other
+                    }
                   }
-                }
-              catch case refused: ReorgTooDeep => Outcome.NotAdopted(refused.getMessage)
-              finally adopting = None
+                catch
+                  case refused: ReorgTooDeep => Outcome.NotAdopted(refused.getMessage)
+                  // another thread's adoption is moving the head (B-294): no fault of this node, and no verdict on the
+                  // branch. Superseded, as a state that moved under it: asked for again at once, with no cool-down,
+                  // and not counted by the escalation's watch (beacon). The hold refused is a `StateBusy` (B-462); so it
+                  // is for a block committed on the head, or a move of it, since `from` was read (B-463)
+                  case _: StateBusy if !holding => Outcome.Superseded
+                finally adopting = None
+              }
     logEnd(head, why, outcome)
     outcome
 
@@ -567,7 +621,12 @@ class StateRecovery(
           // committed thousands of blocks would be counted as a refusal
           case Left(missing) => if committed > 0 then Outcome.Adopted(committed) else missing
           case Right(blocks) =>
-            commitEach(head, blocks, sink, Some(asked)) match
+            val chunkCommitted = scala.collection.mutable.ListBuffer.empty[BlockHash]
+            // what the chunk committed, once its commits have returned or one has thrown (B-510): on the chunk below,
+            // re-derived already (B-490)
+            rederivingAfter(chunkCommitted.toList) {
+              commitEach(head, blocks, sink, Some(asked), onCommitted = chunkCommitted += _.header.hash)
+            } match
               case Outcome.Adopted(count)              => next(rest, committed + count)
               case invalid @ Outcome.Invalid(found, _) =>
                 // The blocks of the chunk above it were handed to the sink with it. Those of the chunks not read yet,
@@ -582,9 +641,14 @@ class StateRecovery(
     else
       adopting = Some(Progress(held.number.value, held.number.value, chain.last.number.value))
       val ahead = aheadOfHeld(chain)
+      // what the move up to `held` makes canonical, read before it while the index is the old head's ancestry (B-490)
+      val madeCanonical = notCanonicalBelow(held)
       try
-        // the executed blocks kept beside the disk, up to the block the chain stands on, become the head first
-        val refused =
+        // the executed blocks kept beside the disk, up to the block the chain stands on, become the head first. Their
+        // weights are re-derived once the move has returned or thrown (a move of more than one batch may have written
+        // some of them, B-510), and before the first chunk reads the weight of `held`; a block's exact weight depends
+        // only on its ancestry, so it is right whether or not the move was made
+        val refused = rederivingAfter(madeCanonical) {
           try
             if !state.isApplied(held.hash.value) then
               writer.moveHeadInPlace(
@@ -596,7 +660,14 @@ class StateRecovery(
             None
           catch
             case _: StateFault if ahead.met => Some(Outcome.Superseded)
+            // refused while another thread's adoption moves the head (B-294, a `StateBusy`: B-462), or moved by another
+            // writer between two of its batches (a `StateUnavailable` asking again): the head is where it was, or on the
+            // extension, and nothing is to be moved back. Superseded, as for a commit refused on the way up: asked
+            // again at once, and not counted (beacon)
+            case _: StateBusy                            => Some(Outcome.Superseded)
+            case busy: StateUnavailable if busy.askAgain => Some(Outcome.Superseded)
             case fault: StateFault => Some(if asked() then Outcome.NotAdopted(fault.getMessage) else Outcome.Superseded)
+        }
         refused.getOrElse(next(chain, 0))
       finally adopting = None
 
@@ -640,13 +711,15 @@ class StateRecovery(
     }
 
   /** The blocks, each committed in place as the head, in order, while the consensus client still names `head` or a
-    * block its chain leads to.
+    * block its chain leads to. `onCommitted` is told each block once its commit has returned: the caller re-derives
+    * their weights (B-490).
     */
   private def commitEach(
       head: ByteString,
       blocks: List[Block],
       sink: Sink,
-      asked: Option[() => Boolean] = None
+      asked: Option[() => Boolean],
+      onCommitted: Block => Unit
   ): Outcome =
     def stillAsked: Boolean = asked.fold(this.stillAsked(head, sink))(_())
     @tailrec
@@ -671,6 +744,7 @@ class StateRecovery(
               result match
                 case Left(_) => Outcome.Superseded
                 case Right(Right(_)) =>
+                  onCommitted(block)
                   adopting = adopting.map(_.copy(current = block.header.number.value))
                   StateMetrics.reexecuted(1)
                   next(rest, committed + 1)
@@ -695,6 +769,25 @@ class StateRecovery(
                   Outcome.Invalid(ref, error.describe)
     next(blocks, 0)
 
+  /** '''Re-derives the weights of the blocks an adoption or a catch-up made canonical''' (B-490;
+    * [[AdoptedChainWeights.rederive]]): those the move up to `held` made canonical kept the weights derived when they
+    * were executed, and each block committed in place took its parent's as read before the commit's lock. A
+    * chain-weight repair (`ChainWeightReconcile`) that rewrote a parent's weight in between, and whose final step
+    * checked the index before they were canonical, would leave them the old one under its marker. Run once the move or
+    * the commits have returned, or one of them has thrown (B-510: a block committed before an exception is canonical
+    * all the same), outside the hold of the records: the chain insert lock (shared) is taken after them, never inside.
+    */
+  private def rederivingAfter[A](madeCanonical: => Seq[BlockHash])(body: => A): A =
+    AdoptedChainWeights.rederivingAfter(madeCanonical, reader, writer, WeightsBy)(body)
+
+  /** What a move of the head up to `held` makes canonical ([[AdoptedChainWeights.notCanonicalBelow]]): nothing when the
+    * head is on it already.
+    */
+  private def notCanonicalBelow(held: BlockHeader): Seq[BlockHash] =
+    if state.isApplied(held.hash.value) then Nil else AdoptedChainWeights.notCanonicalBelow(held, reader, WeightsBy)
+
+  private val WeightsBy = "[STATE-RECOVERY] A commit in place (B-490)"
+
   /** One block committed in place as the head, as an import commits it. A test stands here. */
   protected def adoptBlock(
       block: Block,
@@ -706,23 +799,42 @@ class StateRecovery(
   /** The head moved back after a branch failed: to the head of the last fork choice followed, or to where the adoption
     * found it. A way back that cannot be taken (its records unreadable) leaves the head on the last block committed,
     * all of whose blocks are valid: said at ERROR, and the state does not fail closed.
+    *
+    * '''Only from `leftOn`''', when it is given: the block the adoption's own writes left the head on (B-464). A fork
+    * choice moves the head while an adoption is open, and records the head it followed (`followedHead`) only once its
+    * move has returned. One to another head that moved the head after the branch failed, and has not recorded it yet,
+    * has the head where the consensus client is about to be told it is: moved back to the head followed before, the
+    * head would leave it until the next fork choice. `stillAsked` does not close that: the fork choice may name its
+    * head right after it is read. So the move back is refused when its plan finds the head elsewhere: the plan is made
+    * under the lock that keeps other moves out, and no fork choice moves the head between that look and the move's
+    * write. The head is then left where the fork choice put it.
     */
-  private def moveBack(sink: Sink, from: Option[BlockRef]): Unit =
+  private def moveBack(sink: Sink, from: Option[BlockRef], leftOn: Option[ByteString] = None): Unit =
     val targets = (sink.followedHead.toList ++ from.map(_.hash).toList).distinct
+    // the block the head was found on, when it was not `leftOn`
+    val movedTo = new java.util.concurrent.atomic.AtomicReference[Option[BlockRef]](None)
+    val stillLeftOn: HeadMovePlan => Option[String] = plan =>
+      Option.when(leftOn.exists(_ != plan.anchor.hash)) {
+        movedTo.set(Some(plan.anchor))
+        s"the head is at ${plan.anchor.show}, where another writer moved it after the branch failed"
+      }
     val back = targets.iterator.flatMap(hash => reader.getBlockHeaderByHash(BlockHash(hash))).find { header =>
-      state.isApplied(header.hash.value) || (
+      movedTo.get.isEmpty && (state.isApplied(header.hash.value) || (
         try
-          writer.moveHeadInPlace(header, reader)
+          writer.moveHeadInPlace(header, reader, admit = stillLeftOn)
           true
         catch
           case NonFatal(refused) =>
-            log.warn(s"[STATE-RECOVERY] The head was not moved back to ${refOf(header).show}: ${refused.getMessage}")
+            if movedTo.get.isEmpty then
+              log.warn(s"[STATE-RECOVERY] The head was not moved back to ${refOf(header).show}: ${refused.getMessage}")
             false
-      )
+      ))
     }
-    back match
-      case Some(header) => log.info(s"[STATE-RECOVERY] The head is back at ${refOf(header).show}")
-      case None =>
+    (back, movedTo.get) match
+      case (Some(header), _) => log.info(s"[STATE-RECOVERY] The head is back at ${refOf(header).show}")
+      case (None, Some(at)) =>
+        log.info(s"[STATE-RECOVERY] The head is not moved back: a fork choice moved it to ${at.show} meanwhile")
+      case (None, None) =>
         log.error(
           s"[STATE-RECOVERY] The head could not be moved back after the branch failed: it is left at " +
             s"${state.anchor.map(_.show).getOrElse("no block")}, whose blocks are valid"
@@ -888,6 +1000,11 @@ object StateRecovery:
     val admit: com.chipprbots.ethereum.db.storage.pathstate.HeadMovePlan => Option[String] = plan =>
       met = above(plan.anchor.hash) || standsOnTheTip(plan.anchor)
       Option.when(met)(s"the head is at ${plan.anchor.show}, on the chain above the block it was to be moved to")
+
+  /** What [[StateRecovery.walk]] found: `held`, the highest block of the head's chain whose state is held, and the
+    * blocks above it, oldest first. `viewless` when no view of `held` can be made: it is reached by the records only.
+    */
+  final private case class Walked(held: BlockHeader, chain: List[BlockHeader], viewless: Boolean)
 
   sealed private trait Step
   private case object Moved extends Step

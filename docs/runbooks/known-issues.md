@@ -106,7 +106,7 @@ cp -r ~/keystore.backup ~/.fukuii/etc/keystore/
    # Or for systemd:
    systemctl stop fukuii
    # Or for Docker:
-   docker stop fukuii  # Sends SIGTERM by default
+   docker stop -t 180 fukuii  # SIGTERM, then up to 180 s to close the database (the default 10 s is too short)
    ```
 
 2. **Enable journaling filesystem** (ext4 journal, XFS):

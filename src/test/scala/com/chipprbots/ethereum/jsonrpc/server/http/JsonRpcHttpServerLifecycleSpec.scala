@@ -152,16 +152,17 @@ class JsonRpcHttpServerLifecycleSpec extends AnyFlatSpec with Matchers with Befo
   "Two starts at once" should "be one bind, and both get the binding" taggedAs (UnitTest, RPCTest) in {
     val binds = new AtomicInteger(0)
     val stats = new RpcCallStats
-    // The bind is held until both starts are made: a loopback bind on port 0 can complete before the second `start`,
-    // which then finds the server `Bound` and answers with a new future, so "at once" would depend on timing.
+    // The bind is held open until both starts are made, so the second one meets the lifecycle while it is still
+    // binding. Bound at once, it could settle first: the second start then finds it bound and answers with the binding
+    // in a new future, which is right, but not the case this test is about (B-374).
     val release = Promise[Unit]()
     def countedBind(): Future[Http.ServerBinding] =
       binds.incrementAndGet()
-      release.future.flatMap { _ =>
+      release.future.flatMap(_ =>
         Http(system)
           .newServerAt("127.0.0.1", 0)
           .bind(org.apache.pekko.http.scaladsl.server.Route.toFunction(complete("ok"))(using system))
-      }
+      )
     val lifecycle = new ServerLifecycle(RpcCallStats.Http, () => countedBind(), stats, 1.second)
     try
       val first = lifecycle.start()

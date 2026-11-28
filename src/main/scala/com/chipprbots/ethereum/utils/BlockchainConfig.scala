@@ -26,7 +26,11 @@ object NetworkType:
     case "eth" => ETH
     case other => throw new IllegalArgumentException(s"Unknown network-type: $other (expected 'etc' or 'eth')")
 
-/** Timestamp-based fork activation for post-Merge Ethereum forks. */
+/** Timestamp-based fork activation for post-Merge Ethereum forks.
+  *
+  * The EIP-7892 blob-parameter-only forks are go-ethereum's `BPO1Time`..`BPO5Time` (chain conf `bpo1-timestamp` ..
+  * `bpo5-timestamp`); [[bpoTimestamps]] is the same five in fork order, for code that treats them alike.
+  */
 case class ForkTimestamps(
     shanghaiTimestamp: Option[Long] = None,
     cancunTimestamp: Option[Long] = None,
@@ -34,8 +38,22 @@ case class ForkTimestamps(
     osakaTimestamp: Option[Long] = None,
     amsterdamTimestamp: Option[Long] = None,
     bpo1Timestamp: Option[Long] = None,
-    bpo2Timestamp: Option[Long] = None
-)
+    bpo2Timestamp: Option[Long] = None,
+    bpo3Timestamp: Option[Long] = None,
+    bpo4Timestamp: Option[Long] = None,
+    bpo5Timestamp: Option[Long] = None
+):
+
+  /** BPO1..BPO5 activation timestamps, in fork order (index 0 is BPO1). Always [[ForkTimestamps.BpoForkCount]] long. */
+  def bpoTimestamps: List[Option[Long]] =
+    List(bpo1Timestamp, bpo2Timestamp, bpo3Timestamp, bpo4Timestamp, bpo5Timestamp)
+
+object ForkTimestamps:
+
+  /** go-ethereum's BPO1..BPO5 (`params.ChainConfig.BPO{1..5}Time`): the most blob-parameter-only forks a chain config
+    * can schedule.
+    */
+  val BpoForkCount: Int = 5
 
 case class BlockchainConfig(
     powTargetTime: Option[Long] = None,
@@ -48,7 +66,6 @@ case class BlockchainConfig(
     chainId: ChainId,
     networkId: Long,
     monetaryPolicyConfig: MonetaryPolicyConfig,
-    gasTieBreaker: Boolean,
     ethCompatibleStorage: Boolean,
     bootstrapNodes: Set[String],
     dnsDiscoveryDomains: Seq[String] = Seq.empty,
@@ -72,7 +89,11 @@ case class BlockchainConfig(
     // EIP-7840 / EIP-7892 blob parameters per fork (#1637). Read from the chain conf's `blob-schedule`; a conf without
     // one gets BlobSchedule.Empty and may declare no blob fork. The default here applies only to configs built in
     // code (tests, fixture replays): go-ethereum's default Cancun/Prague/BPO1/BPO2 values, the pre-#1637 constants.
-    blobSchedule: BlobSchedule = BlobSchedule.GethDefaults
+    blobSchedule: BlobSchedule = BlobSchedule.GethDefaults,
+    // The block hash a checkpoint archive must have to be imported on this chain, when the operator gives none (chain
+    // conf `checkpoint-expected-block-hash`; spec 018 data-model E.1 "Trust"). ETH and ETC share a genesis hash, so
+    // the chain id and this hash are what tell their archives apart. `None`: the operator must give one.
+    checkpointExpectedBlockHash: Option[ByteString] = None
 ):
   def isPoS(totalDifficulty: BigInt): Boolean =
     terminalTotalDifficulty.exists(ttd => totalDifficulty >= ttd)
@@ -115,6 +136,14 @@ case class BlockchainConfig(
   /** EIP-7892 BPO2: second blob-target bump. Sepolia activated 2025-10-28. */
   def isBpo2Timestamp(timestamp: Timestamp): Boolean =
     forkTimestamps.bpo2Timestamp.exists(ts => timestamp.isAtOrAfter(ts))
+
+  /** The highest EIP-7892 BPO fork (1..5) active at `timestamp`, or `None` before the first scheduled one. Ordered
+    * timestamps (enforced by [[BlobSchedule.validate]] for a chain conf) make this the latest BPO in time as well.
+    */
+  def latestBpoAt(timestamp: Timestamp): Option[Int] =
+    forkTimestamps.bpoTimestamps.zipWithIndex.reverse.collectFirst {
+      case (Some(ts), i) if timestamp.isAtOrAfter(ts) => i + 1
+    }
 
   /** The blob parameters (target, max, base-fee update fraction) in force at `timestamp`: go-ethereum
     * `eip4844.latestBlobConfig` over this chain's `blob-schedule`. `None` before the chain's first blob fork.
@@ -293,8 +322,6 @@ object BlockchainConfig:
 
     val monetaryPolicyConfig = MonetaryPolicyConfig(blockchainConfig.getConfig("monetary-policy"))
 
-    val gasTieBreaker: Boolean = blockchainConfig.getBoolean("gas-tie-breaker")
-
     val ethCompatibleStorage: Boolean = blockchainConfig.getBoolean("eth-compatible-storage")
 
     val bootstrapNodes: Set[String] = blockchainConfig.getStringList("bootstrap-nodes").asScala.toSet
@@ -359,6 +386,14 @@ object BlockchainConfig:
         BigInt(blockchainConfig.getString("gpo-default-price"))
       )
 
+    val checkpointExpectedBlockHash: Option[ByteString] =
+      Option
+        .when(blockchainConfig.hasPath("checkpoint-expected-block-hash"))(
+          blockchainConfig.getString("checkpoint-expected-block-hash").trim
+        )
+        .filter(_.nonEmpty)
+        .map(BlockchainConfig.parseBlockHash("checkpoint-expected-block-hash", _))
+
     val forkTimestamps: ForkTimestamps = ForkTimestamps(
       shanghaiTimestamp = Try(blockchainConfig.getLong("shanghai-timestamp")).toOption,
       cancunTimestamp = Try(blockchainConfig.getLong("cancun-timestamp")).toOption,
@@ -366,11 +401,14 @@ object BlockchainConfig:
       osakaTimestamp = Try(blockchainConfig.getLong("osaka-timestamp")).toOption,
       amsterdamTimestamp = Try(blockchainConfig.getLong("amsterdam-timestamp")).toOption,
       bpo1Timestamp = Try(blockchainConfig.getLong("bpo1-timestamp")).toOption,
-      bpo2Timestamp = Try(blockchainConfig.getLong("bpo2-timestamp")).toOption
+      bpo2Timestamp = Try(blockchainConfig.getLong("bpo2-timestamp")).toOption,
+      bpo3Timestamp = Try(blockchainConfig.getLong("bpo3-timestamp")).toOption,
+      bpo4Timestamp = Try(blockchainConfig.getLong("bpo4-timestamp")).toOption,
+      bpo5Timestamp = Try(blockchainConfig.getLong("bpo5-timestamp")).toOption
     )
 
     // Throws BlobSchedule.InvalidBlobSchedule on a schedule fukuii would mis-execute (missing entry for a declared
-    // blob fork, max < target, zero fraction, unordered blob-fork timestamps, unsupported bpo3+).
+    // blob fork, max < target, zero fraction, unordered blob-fork timestamps, a BPO fork beyond bpo5).
     val blobSchedule: BlobSchedule = BlobSchedule.fromConfig(blockchainConfig, forkTimestamps)
 
     val messConfig: MESSConfig = Try {
@@ -426,7 +464,6 @@ object BlockchainConfig:
       chainId = chainId,
       networkId = networkId,
       monetaryPolicyConfig = monetaryPolicyConfig,
-      gasTieBreaker = gasTieBreaker,
       ethCompatibleStorage = ethCompatibleStorage,
       bootstrapNodes = bootstrapNodes,
       dnsDiscoveryDomains = dnsDiscoveryDomains,
@@ -440,9 +477,20 @@ object BlockchainConfig:
       depositContractAddress = depositContractAddress,
       forkTimestamps = forkTimestamps,
       gasPriceOracleDefault = gasPriceOracleDefault,
-      blobSchedule = blobSchedule
+      blobSchedule = blobSchedule,
+      checkpointExpectedBlockHash = checkpointExpectedBlockHash
     )
   // scalastyle:on method.length
+
+  /** A 32-byte block hash written as hex, with or without `0x`; anything else is a configuration error. */
+  def parseBlockHash(key: String, raw: String): ByteString =
+    val digits = raw.stripPrefix("0x").stripPrefix("0X")
+    require(
+      digits.length == 64 && digits.forall(Character.digit(_, 16) >= 0),
+      s"$key must be a 32-byte block hash in hex, found '$raw'"
+    )
+    ByteString(Hex.decode(digits))
+
   private def readPubKeySet(blockchainConfig: TypesafeConfig, path: String): Set[ByteString] =
     val keys: Seq[String] = ConfigUtils
       .getOptionalValue(blockchainConfig, _.getStringList, path)

@@ -2,9 +2,11 @@ package com.chipprbots.ethereum.db.storage.pathstate
 
 import org.apache.pekko.util.ByteString
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Spec 018 Track C, C3b (T096): what a canonical commit tells the metrics (data-model 11). */
@@ -12,8 +14,8 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
   import PathStateStorage.*
   import PathStateTestKit.*
 
-  private val registry = StateMetrics.metrics.registry
-  private val prefix = StateMetrics.metrics.metricsPrefix
+  private def registry = Metrics.get().registry
+  private def prefix = Metrics.get().metricsPrefix
   private def gauge(name: String): Double = registry.get(s"$prefix.$name").gauge().value()
   private def counter(name: String, tags: String*): Double =
     registry.get(s"$prefix.$name").tags(tags*).counter().count()
@@ -159,4 +161,46 @@ class StateMetricsSpec extends AnyFlatSpec with Matchers:
     val again = registry.get(s"$prefix.db.state.recovery.reexecuted.blocks").counter().count()
     StateMetrics.reexecuted(7)
     registry.get(s"$prefix.db.state.recovery.reexecuted.blocks").counter().count() shouldBe again + 7
+  }
+
+  it should "register its meters in the registry that becomes the default after it was touched (B-425)" taggedAs UnitTest in {
+    // the storages touch the object while the node is still building, before Metrics.configure installs the exported
+    // registry, which becomes the default; stood in for here so that the JVM's default is put back after
+    StateMetrics.anchorAt(None)
+    val exported = Metrics("app", new SimpleMeterRegistry())
+    Metrics.usingDefault(exported) {
+      StateMetrics.register()
+      val registry = exported.registry
+      Seq("db.state.anchor.number", "db.state.overlay.forward.layers").foreach { name =>
+        withClue(s"$name: ")(registry.find(s"app.$name").gauge() should not be null)
+      }
+      Seq("db.state.commit.seconds", "db.state.move.seconds").foreach { name =>
+        withClue(s"$name: ")(registry.find(s"app.$name").timer() should not be null)
+      }
+      registry.find("app.db.state.reorg.refused").tag("reason", ReorgRefusal.values.head.toString).counter() should
+        not be null
+      // and what happens afterwards is counted there, with no call of register
+      StateMetrics.committed(commit(5))
+      registry.get("app.db.state.commit.seconds").timer().count() shouldBe 1L
+      registry.get("app.db.state.anchor.number").gauge().value() shouldBe 5d
+    }
+  }
+
+  // B-462: the age of the oldest attempt that holds the records, read from the store by its own clock; 0 for none
+  it should "read the age of the open attempt from the store, by the store's clock, and 0 once none is" taggedAs UnitTest in {
+    StateMetrics.register()
+    val now = new java.util.concurrent.atomic.AtomicLong(5000000L)
+    val source = new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty)
+    val state = new PathStateStorage(
+      new com.chipprbots.ethereum.db.storage.PathNodeStorage(source),
+      new com.chipprbots.ethereum.db.storage.AppStateStorage(source),
+      settings = CommitSettings(observer = StateMetrics, nowMillis = () => now.get)
+    )
+    StateMetrics.attemptAgeSeconds shouldBe 0d
+    state.withRecordsHeld(block(5, EmptyRoot), state.anchor) {
+      now.addAndGet(90000L)
+      StateMetrics.attemptAgeSeconds shouldBe 90d
+      registry.find(s"$prefix.db.state.attempt.age.seconds").gauge().value() shouldBe 90d
+    }
+    StateMetrics.attemptAgeSeconds shouldBe 0d
   }

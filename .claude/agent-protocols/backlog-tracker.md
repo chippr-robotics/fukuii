@@ -36,6 +36,7 @@ from WSL: Windows git opens a credential window and hangs.
 | Not worth doing | `backlog drop B-012 --reason "..."` | dropped |
 | Found more work | `backlog add --title "..." --priority P2 --area sync [--ref H4] [--issue N] [--note ...]` | open |
 | Re-triage | `backlog priority B-012 P1 --reason "blocks every release PR"` | unchanged |
+| Record a finding | `backlog note B-012 --text "repro: two syncs in a row"` | unchanged |
 
 - **Claim first.** `claim` exits 3 when someone else holds a live claim and prints who and since when. Pick another
   item or ask the holder. Never work on an item another holder has claimed.
@@ -50,7 +51,15 @@ from WSL: Windows git opens a credential window and hangs.
   spec. Use `refs` for old ids (H4, 10e, `#1654-B`, CHASE rows) and `depends_on` when an item cannot start earlier.
 - **Priority is triage, not ownership.** Anyone may change it with `priority`, claimed or not; the claim stays as it
   is. The reason is required and lands in the item's notes, since a change moves the item on the burn-down.
+- **A note is not ownership either.** `note` appends a dated line (`YYYY-MM-DD note by NODE: ...`) to any live item,
+  claimed or not, and leaves its status, priority and claim alone. `status --note` needs an item you hold; use `note`
+  for an open one or someone else's. Notes keep their last 3 lines, so the detail still goes in the PR, issue or spec.
 - **Never delete or reuse an id.** Close it as `dropped` with a reason.
+- **Prune at each release retro:** `backlog prune [--before DATE] [--dry-run]` moves done and dropped items from
+  `backlog.yaml` to `archive.yaml` on the same branch. Their ids stay taken (`add` and `check` read both files),
+  `show` and `list --all` still find them, and the page still counts them (scope, done, recently done). A closed
+  item that something in `backlog.yaml` depends on (directly or through a chain) is kept there, because a
+  `backlog.py` older than the archive checks `depends_on` against `backlog.yaml` alone and would refuse every write.
 
 Priorities: P0 blocks production or loses data; P1 production readiness or this sprint's commitment; P2 should be
 done; P3 polish or opportunistic.

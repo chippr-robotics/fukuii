@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-28
+
 ### Security
 - **CVE-2026-114938 ("Java4Shell"): mitigated (B-418).** Crafted input to the x86-64 HotSpot Base64 decoder can corrupt
   memory (CVSS 8.1, unauthenticated, network). Affected: Java SE 21.0.13.0.3, 25.0.5.0.3 and the other October 2026
@@ -19,28 +21,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     with the encoding of the expected HMAC, and a token over 4096 characters is refused. A signature with non-zero
     unused trailing bits, which no consensus client sends, is now refused.
   - DNS discovery checks a tree root's `sig=` is exactly 87 characters, and an ENR at most 400, before decoding them.
+### Breaking
+- **A plaintext listener on a non-loopback interface refuses the start (spec 030 S6, B-359).** JSON-RPC HTTP and WS,
+  the Engine API and metrics, when their `interface` is not loopback (`0.0.0.0`, `::`, a LAN address, or a name that
+  resolves to one), need `tls.enabled = true`, or the new per-listener `allow-insecure-bind = true` to accept plaintext
+  there deliberately; the refusal names both keys, and the opt-out logs a WARN line at every start. A name that does
+  not resolve refuses the start too. With S5's loopback default for metrics, this is the 0.13.0 "Read before
+  upgrading" item (`docs/releases/0.13.0.md`, `docs/runbooks/tls-operations.md#migration`). The repository's own
+  deployments (hive's `fukuii.sh`, the `ops/` confs and compose files, `custom-config-example.conf`) set the opt-out
+  explicitly. ADR OPS-005 records the posture.
 
 ### Changed
-- **The distroless image runs with the launcher's heap and memory envelope.** It set `JAVA_OPTS="-Xms2g -Xmx4g"`,
-  which its `java` entrypoint never read, so it ran with the JVM's defaults (a heap of a quarter of the container's
-  memory, no direct-memory cap, no heap dump or exit on `OutOfMemoryError`). The entrypoint now passes the flags of
-  `src/universal/conf/application.ini`: `-Xmx3g -Xms1g -Xss1M -XX:MaxDirectMemorySize=512M -XX:+UseG1GC
-  -XX:MaxGCPauseMillis=200 -XX:+HeapDumpOnOutOfMemoryError -XX:HeapDumpPath=/app/data/logs/heapdump.hprof
-  -XX:+ExitOnOutOfMemoryError`. They follow `JDK_JAVA_OPTIONS` and `JAVA_TOOL_OPTIONS` on the command line, so they win
-  over both; override the entrypoint to change them. A distroless container with more than 12 GiB of memory gets a
-  smaller heap than before. The other images are unchanged.
-- **Container images: data lands on the `/app/data` volume and a published JSON-RPC port is reachable.** The images
-  set `FUKUII_DATA_DIR=/app/data`, which nothing read, so the node wrote to `/home/fukuii/.fukuii/<network>` in the
-  container layer, and RPC bound `localhost` inside the container, so a published port reached nothing.
-  `conf/base/fukuii.conf` now takes `datadir` from the new `FUKUII_DATADIR` (a separate name, as `FUKUII_DATA_DIR`
-  is already the test wrapper's log root and a compose variable in `ops/barad-dur`), and `network.conf` takes the HTTP and WebSocket
-  `interface` from `FUKUII_RPC_INTERFACE`, which the images set to `0.0.0.0`; a `datadir` or `interface` in an
-  operator's conf still wins, so the `ops/` stacks are unchanged. Outside a container neither variable is set and
-  nothing changes. **Upgrade note:** a container run from an earlier image without its own `datadir` kept its chain in
-  the container layer; a new container from this image starts from an empty `/app/data`. The images now `EXPOSE` 8546
-  (HTTP), 8552 (WebSocket) and 30303 TCP/UDP instead of 8545, 8546 and 30303, and the built-in healthcheck probes
-  8546 (it probed 8545, where nothing listens, and always fell back to the process check). Publish RPC as
-  `127.0.0.1:8546:8546` to keep it on the host's loopback.
+- **The operator's IP block reaches discovery and can be configured (B-288, B-286).** `network.peer.blocked-ips` (IP
+  literals, empty by default) is read at start; an entry that is not an IP address refuses the start. A blocked
+  address, configured or added with `admin_blockIP` or the TUI's peer block, now also loses discovery: its UDP packets
+  are dropped before they are decoded, and no ping, FINDNODE or ENR request is sent to it. A block added at run time
+  still lasts until the node restarts unless it is also in the config.
+- **Per-peer routine events are DEBUG; one INFO line a minute sums them (B-415).** A mining node on Mordor wrote 12.5 GB
+  of log in about ten hours, almost all of it INFO lines per peer or per discovered record: `FORKID_VALIDATION: Validation
+  result` (once per handshake and per ENR or DNS record), `PEER_HANDSHAKE_SUCCESS`, `PEER_DISCONNECTED`,
+  `HANDSHAKE_FAILURE`, `DISCONNECT_SENT`, `DISCONNECT_DEBUG`, `TCP_CLOSED`, `COMPRESSION_POLICY`, the
+  `[Stopping Connection]` lines, `ETH69_BRU_RECEIVED`, `Blacklisting peer`, `WRONG_NETWORK`, `GENESIS_HEAD_EVICT`,
+  `STALE_HANDSHAKE` and discv4's `Storing the ENR`. They are DEBUG now. The existing `Network [60s]` line gains
+  `connected=N closed=N[reason=n,...] forkid-rejected=N blacklisted=N`, and warns when no peer connected and every
+  handshake was rejected. A refusal by a maintained peer is a WARN. A grep for `PEER_HANDSHAKE_SUCCESS` needs
+  `logging.logs-level = DEBUG` for `com.chipprbots.ethereum.network`; the `Network [60s]` line carries the counts.
+- **`engine_newPayload` answers SYNCING, not ACCEPTED, for a payload it cannot execute that extends the chain being
+  followed (B-005, B-271). ETH chains only.** A payload stored and not executed (its parent unknown or never executed,
+  or its parent's state missing) was always ACCEPTED. It is now SYNCING when its parent is canonical, or is the head the
+  consensus client last named in `engine_forkchoiceUpdated`, and ACCEPTED otherwise, a side branch's (execution-apis
+  paris.md `engine_newPayloadV1` point 6; go-ethereum's `delayPayloadImport` answers SYNCING when the payload extends
+  the sync under way). A hole in the state under a canonical parent (#1694) is now SYNCING. Consensus clients import on
+  either answer as before; `app_engine_newpayload_syncing` now counts. Inside the node, why a fork choice was not
+  followed is a typed value, not the start of a message (`LOCAL FAULT: ` and the others); nothing a client sees changes.
+- **DNS discovery trees are walked again every 30 minutes (B-035).** fukuii walked each EIP-1459 tree once, at start,
+  so a long-running node kept the nodes the tree listed that day. It now walks every tree again 30 minutes after the
+  last walk ended, as go-ethereum re-checks its roots (`recheckInterval`), and adds the nodes it had not seen. Set
+  `network.discovery.dns-recheck-interval` to change the interval.
 - **`app_engine_newpayload_invalid` counts INVALID answers alone (B-193).** It also counted every `engine_newPayload`
   answered ACCEPTED, and any status it did not know. ACCEPTED has its own series, `app_engine_newpayload_accepted`
   (since 0.10.0). A dashboard panel on the invalid series drops by the number of ACCEPTED answers, and its history
@@ -455,8 +472,105 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `pwgen` or `keytool`. HTTPS stays off by default (`certificate = null`); a config that points at the old files must
   point at the generated ones. The Gate Integrity check (C15) now rejects committed keystores, private keys and
   `.env` files.
+- **CHANGELOG entries are fragments, assembled at release (B-144).** Nearly every open PR conflicted only in this
+  file's `[Unreleased]` section, and without force-push each conflict cost a replacement PR. A PR now adds
+  `changelog.d/<id>.<section>.md` (`<id>` the backlog id, PR number or a slug; `<section>` one of `security`,
+  `breaking`, `changed`, `added`, `deprecated`, `removed`, `fixed`, `known-issues`) holding the bullet as it would
+  appear here. `scripts/changelog/assemble.py` merges the fragments in heading order and natural id order and deletes
+  them: at release prep `--version X.Y.Z` also turns `[Unreleased]` into the version section; `--check` validates the
+  fragments (run by the non-required Changelog Fragments workflow) and `--dry-run` prints the diff. Entries already
+  under `[Unreleased]` stay as they are.
+- **Hive suites are required gates (B-550, B-551, B-557).** `.github/gates.yml` promotes `smoke-genesis`,
+  `smoke-network`, `sync`, `engine` and `consume-rlp`, plus `EEST Amsterdam`, to `tier: required`. Each one cites as
+  `evidence:` a green run on `main` that met its `min_tests`. `required_contexts` now lists the exact check-run names,
+  such as `run / engine` and `Build Main Docker Image`; there is no check named `Docker Build`. Every required Hive
+  and EEST workflow now runs on each PR and has a `changes` job (`_hive-changes.yml`, ported from main with #2145's
+  `skipped` stand-in job in `_hive-sim.yml`) in place of a `paths:` filter. When a PR changes nothing the suite
+  depends on, the job skips the suite and the required check still reports as passed. `hive-prague.yml` and
+  `hive-osaka.yml` are deleted. Osaka ran zero tests and passed, because its fixtures held no Osaka test. Prague is
+  covered by the `consume-engine` shards. The `main` ruleset must drop `Consume-engine Prague sweep` and
+  `Consume-engine Osaka sweep` before 0.13.0 merges (`.github/BRANCH_PROTECTION.md`).
+- **The hive client definition has one source (B-569).** `hive/fukuii/` is now identical to the fukuii
+  definition proposed to ethereum/hive (`clients/fukuii/`). The Dockerfile takes `baseimage`/`tag` build
+  args, `Dockerfile.git` builds from source, and `hive.yaml` declares the `eth1` role. A new nightly workflow,
+  `hive-upstream-definition.yml`, fails when the two copies drift. It also smoke-tests hive's own copy
+  against the candidate build, so a change the published definition would not survive is caught before it
+  reaches `chipprbots/fukuii:latest`.
 
 ### Added
+- **EIP-7892 BPO3, BPO4 and BPO5 (B-443).** An ETH-family chain conf may now declare `bpo3-timestamp` ..
+  `bpo5-timestamp` with matching `blob-schedule.bpo3` .. `bpo5` entries (go-ethereum's `BPO3Time`..`BPO5Time`); they
+  were refused before. Each one sets the blob target, max and base-fee update fraction from its timestamp, enters the
+  EIP-2124/6122 fork id, and is listed by `eth_config` and the console. The loader keeps go-ethereum's fork order
+  (cancun <= prague <= osaka <= bpo1 <= bpo2 <= amsterdam <= bpo3 <= bpo4 <= bpo5) and refuses `bpo6-timestamp`. On a
+  chain without Amsterdam, BPO3/BPO4 payloads use the Osaka Engine API methods (newPayloadV4, forkchoiceUpdatedV3,
+  getPayloadV5), as execution-specs' `BPO2ToBPO3AtTime15k` / `BPO3ToBPO4AtTime15k` fixtures do. No shipped network
+  schedules BPO3, so mainnet, Sepolia, Hoodi and Platåberget are unchanged. Not yet mapped: Ephemery's `bpo3Time` and
+  hive's `HIVE_BPO3_*` variables (both still refused or ignored).
+- **TLS on the Engine API and the metrics endpoint; metrics binds loopback by default (spec 030 S5, B-358).**
+  `network.engine-api.tls { enabled, profile }` serves the authrpc port over server TLS; JWT stays mandatory, the
+  listener never asks for a client certificate, and a `client-auth` key there refuses the start. `metrics.tls { enabled,
+  profile, client-auth }` serves `/metrics` over TLS with `none`, `want` or `need`, refused handshakes counted in
+  `app_tls_handshake_failures_total{listener="metrics", …}`, and both reload with their profile. **`metrics.interface`
+  is new and defaults to `localhost`: the endpoint bound every interface before.** A Prometheus server on another host
+  needs `metrics.interface` set (to an address or `0.0.0.0`), preferably with TLS. The repository's container
+  deployments (`ops/barad-dur`, `ops/cirith-ungol`) set `interface = "0.0.0.0"`; scripts that scrape `127.0.0.1` need
+  nothing.
+- **Runtime edits of the P2P node allowlist (spec 030 S10, B-363).** `admin_addNodesToAllowlist([enodes])`,
+  `admin_removeNodesFromAllowlist([enodes])` and `admin_getNodesAllowlist()`, modelled on Besu's `perm_` node methods.
+  Add and remove are all-or-nothing and need `node-allowlist.file`: the file is re-read if edited by hand, the edit
+  written to a temporary file in the same directory, flushed and renamed over the file before the call answers, so a
+  crash leaves the old list or the new one; the next reload sees no change. An entry listed only by config, a static
+  node or a bootnode cannot be removed at runtime. The methods are in `admin`, which no HTTP or WS default serves:
+  reach them over IPC, or where an `apis` key or an identity rule grants `admin`. Every edit is logged at INFO with
+  the caller's identity rule (or transport) and counted in `app_p2p_allowlist_edits_total{op, result}`.
+- **TLS material and identity rules reload without a restart (spec 030 S4, B-357).** Each TLS profile re-reads its
+  keystore, truststore and password files when their content changes (`reload { enabled = true, interval =
+  1.minute }`; a SHA-256 of the content, so a same-second edit and a Kubernetes `..data` symlink swap are both seen).
+  A replacement that validates serves every new handshake, open connections keep theirs, and no session from before
+  it is resumed, so a client whose CA was removed is refused at once. One that does not validate keeps the material in
+  service, logs an ERROR and counts in `app_tls_reload_failures_total{profile}`; successes count in
+  `app_tls_reloads_total{profile}`. `app_tls_certificate_expiry_seconds{profile, role}` follows the certificate in
+  service, and a WARN is logged once a day within the profile's `expiry-warning` (14 days). Identity rules may live in
+  `network.rpc.client-identities-file`, re-read on the listeners' reload interval: a change applies to new HTTP
+  requests and new WebSockets, an open WebSocket keeps its identity, and setting the file and an inline list together
+  refuses the start.
+- **Client-certificate identities select the JSON-RPC namespaces (spec 030 S3, B-356).** On an HTTP or WS listener
+  with `tls.client-auth = want` or `need`, `fukuii.network.rpc.client-identities = [ { name, match { san-dns,
+  san-uri, subject-cn, sha256 }, apis } ]` maps a verified client certificate to the namespaces it is served. The
+  first matching rule wins, and all of its match keys must hold (exact match). A rule's `apis` is a grant: it may name
+  namespaces the listener's own `apis` does not, such as `admin` or `debug`. A caller with no certificate, or one no
+  rule matches, is served the listener's own `apis`. `graphql` in a rule grants `POST /graphql`; a matched caller
+  whose rule does not list it is answered as if GraphQL were off. A refused call answers `-32601`, as a disabled
+  namespace does, and counts in `app_rpc_namespace_denials_total{identity_rule, namespace}` (a rule name, `anonymous`
+  or `unmatched`). `rpc_modules` lists the caller's own set. On WebSocket the identity is fixed at the upgrade. The
+  start-up line of each such listener lists every rule's grant. A rule that names `graphql` while GraphQL is off, or a
+  rule list with no `want` or `need` listener enabled, refuses the start. The non-loopback warning still reads the
+  listener's own `apis` only.
+- **One outbound TLS factory (spec 030 S7, B-360).** `tls/OutboundTls` makes the TLS of the node's outbound HTTPS
+  clients from a profile named in config, or `system` (the JDK's default trust, no client certificate): host names are
+  always checked, a profile's truststore is its only trust, its keystore is presented when the server asks for a
+  client certificate, and no redirect from https to http is followed. The faucet's `rpc-client` takes
+  `faucet.rpc-client.tls-profile` (the deprecated `certificate` block still maps, removed in 0.13.0; both together
+  refuse the start); the checkpoint download takes `sync.checkpoint-sync-tls-profile`; the Ephemery release fetch,
+  which runs before the node's configuration is read, uses `system`. `scripts/check-outbound-tls.sh`, run in CI, fails
+  on TLS made outside the factory where `scripts/outbound-tls-allowlist.txt` does not allow it.
+- **Every outbound client on the factory (spec 030 S8, B-361).** The PoW work notifier takes
+  `mining.notify-tls-profile`, the external-IP lookup's HTTPS step `network.server-address.external-ip-tls-profile`,
+  and `download-bootstrap` `bootstrap-download.tls-profile` (default `system` for all three). `download-bootstrap` now
+  fetches `https` URLs only. The dashboard's endpoint test presents the listener's own keystore to an HTTPS listener
+  with `client-auth = "need"`, and verifies the listener's certificate on `tui.probe.tls-profile` when that is set.
+  The legacy `security/` TLS code (`SSLContextBuilder`, `SSLContextFactory`, `SSLConfig`, `KeyStoreUtils`), which
+  served the single HTTPS listener and the faucet client, is removed; the outbound-TLS allowlist holds no S8 line.
+- **Mutual TLS on the JSON-RPC HTTP and WebSocket listeners (spec 030 S2, B-355).** `network.rpc.http.tls.client-auth`
+  and the new `network.rpc.ws.tls { enabled, profile, client-auth }` take `none`, `want` or `need`. Under `want` and
+  `need` the profile's `truststore` verifies every presented client certificate; `need` also refuses a client with
+  none, during the handshake, before any HTTP is read. A refused handshake counts in
+  `app_tls_handshake_failures_total{listener, reason}` (`no_client_cert`, `untrusted_client_cert`,
+  `expired_client_cert`, `protocol`, `other`) and is logged at WARN at most once per remote address per minute, with
+  the number suppressed. HTTP and WS on one port must take the same TLS setting, or the node refuses to start. A WSS
+  listener that cannot bind stops the node. `tls/gen-cert.sh ca`, `server --ca` and `client --ca` issue a test CA (with
+  a truststore) and the certificates it signs; the command-less form still writes a self-signed server certificate.
 - **The `--tui` dashboard can act on the node (spec 029 slice 7, ADR OPS-004).** The Ops view (`9`) lists the
   actions; each can be typed at the `:` prompt from any view, and `a` acts on the selected peer, miner or action.
   - **What it can do.** Read: `config [filter]` (the effective configuration, secrets hidden), `tunables`, `deps`,
@@ -523,8 +637,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **GraphQL `Block` gains `slotNumber` and `blockAccessListHash` (#1629, #1668).** They carry geth's names, types and
   nullability (`Long` and `Bytes32`, both nullable) and are null before Amsterdam, so always null on ETC. No other field
   changes, so a client that does not select them sees the same output.
+- **ETH chains run on Windows: a blst backend for the EIP-2537 BLS12-381 precompiles (B-151).** eth_pairings
+  (`org.hyperledger.besu:bls12-381`) ships no Windows build, so since B-135 a node on a chain with the precompiles
+  (0x0b-0x11, ETH Prague onward and ETC Olympia) refused to start there. The precompiles now run on supranational blst
+  through `tech.pegasys:jblst` 0.3.18 (Apache-2.0) wherever eth_pairings does not load; Linux and macOS keep
+  eth_pairings. blst gives the same bytes as eth_pairings and Besu's gnark on all 3,636 inputs of the EIP-2537
+  differential corpus, invalid-input rejections included. `fukuii.vm.bls12-381-backend` (`FUKUII_BLS12381_BACKEND`)
+  forces `eth-pairings` or `blst`; `auto` is the default. A chain whose chosen library does not load still refuses to
+  start (ADR VM-008).
+- **ETC checkpoint archive published and pinned (B-379).** A fresh ETC node can start from block 25,808,558
+  instead of syncing from genesis: set `fukuii.sync.checkpoint-sync-url =
+  "https://storage.googleapis.com/fukuii-checkpoints/etc/etc-25808558.checkpoint"` (17.7 GB, SHA-256 `39a5dc64…fe95`)
+  on an empty datadir. `etc-chain.conf` now pins the block hash (`0x7b3be997…9422`), so the node imports that
+  archive without the operator supplying a hash and refuses any other. The archive is the spec 018 EG-12 export,
+  verified on import (root equal, block 25,808,559 executed on it equals the network's).
+- **Ephemery releases may schedule BPO3 to BPO5 (B-457).** The Ephemery release engine (`fukuii ephemery`,
+  `fukuii cli ephemery-fetch`) refused a genesis declaring `bpo3Time`..`bpo5Time` or a `blobSchedule.bpo3`..`bpo5`
+  entry ("cannot map"), so the node could not follow an iteration that schedules them. It now maps them to the chain
+  configuration's `bpo3-timestamp`..`bpo5-timestamp` and `blob-schedule.bpo3`..`bpo5`, in go-ethereum's fork order
+  (BPO3 after Amsterdam, each BPO after the previous one). Every generated `ephemery-chain.conf` now carries the three
+  timestamp keys, `null` when the release does not declare them; a cached iteration written by an older fukuii still
+  loads unchanged.
 
 ### Fixed
+- **The Docker images write the chain to the `/app/data` volume (#2144).** They set `FUKUII_DATA_DIR`, which nothing
+  read, so the chain landed in the container layer. The node now reads `FUKUII_DATADIR` (`datadir =
+  ${?FUKUII_DATADIR}`), and every image sets it to `/app/data`. Distroless creates `/app/data` and `/app/conf` owned by
+  `nonroot`. EXPOSE names 8546 (HTTP JSON-RPC), 8552 (WebSocket) and 30303 tcp/udp, and the healthcheck probes 8546.
+  JSON-RPC stays on the container's loopback: `FUKUII_RPC_INTERFACE` (read by `rpc.http`/`ws.interface`) is unset in
+  the images, and publishing RPC takes `FUKUII_RPC_INTERFACE=0.0.0.0` plus TLS or `allow-insecure-bind = true`
+  (spec 030; `docs/deployment/docker.md#exposing-json-rpc`).
+- **The P2P node allowlist's metrics were never exported (spec 030, B-400).** Its meters were created when the start-up
+  check first read the allowlist, before the node configured its metrics, so `p2p_allowlist_rejections_total`,
+  `p2p_allowlist_size`, `p2p_allowlist_reload_failures_total` and `p2p_allowlist_edits_total` went to a throwaway
+  registry (found by a three-node run on dev-node). They are now looked up in the registry in use and registered once
+  metrics are up. The refusals, logged at DEBUG one by one, are also summed at INFO each minute (FR-051):
+  `P2P node allowlist refused <n> inbound and <m> outbound connection(s) since the last summary`.
+- **JSON-RPC over IPC answered methods with parameters `-32602` and every call `id: null`.** json4s's reflective
+  extract of the request left `params` and `id` empty on Scala 3; the IPC server now reads the fields itself. It also
+  read requests 32 characters at a time and stopped at the first prefix that parsed, cutting long requests; it now
+  reads each whole value, with or without a newline after it. Found running spec 030's quickstart
+  (`admin_addNodesToAllowlist` over IPC).
 - **`admin_blockIP` blocks the address (B-277).** It only added the address to a list that nothing read, so it blocked
   nothing. The node now refuses inbound connections from the address, never dials it (any path: discovery, snap
   redials, `admin_addPeer` and trusted peers, `net_connectToPeer`), and disconnects the peers connected from it when
@@ -988,6 +1141,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The transaction sender cache is keyed by chain id as well as hash (#1629, #1668).** A legacy EIP-155 transaction
   whose `v` names another chain recovers a garbage sender, or none, under a mismatched config, and that result was then
   served to callers on the right config. On a single-chain node the new key is a relabelling, so nothing changes there.
+- **The TUI's first frame is no longer overprinted by a JDK warning (B-125).** On JDK 24 and newer, the first
+  `sun.misc.Unsafe` call made by a Scala 3 lazy val printed a four-line warning on stderr across the TUI. The
+  launchers now pass `--sun-misc-unsafe-memory-access=allow`: `bin/fukuii` and `ops/start.sh`/`ops/entrypoint.sh`
+  only after checking the `java` they run accepts it (JDK 22 and older refuse it), the Docker images through
+  `JDK_JAVA_OPTIONS` (JDK 25), the Chocolatey wrapper when it has picked a Java 25, and forked test JVMs when sbt
+  runs on JDK 24+. If you start fukuii with your own `java` command on JDK 24+, add the flag to silence the warning.
+- **KZG 0x0a follows the Cancun timestamp, and a halt restores the TUI (B-155).** The point-evaluation precompile is
+  enabled from the fork config, not from whether the header carries blob fields, so an `eth_call` with a time override
+  into Cancun has 0x0a as go-ethereum does (B-159), and one back before Cancun does not. A halt for a missing precompile backend under `--tui` now restores
+  the terminal before it prints its message.
+- **`fukuii cli` commands no longer write to a node's log file (B-241).** Every `fukuii cli` subcommand now logs to the
+  console only, as `cli ephemery-fetch` already did (spec 028): before, the others appended to the default network's
+  log (for example `~/.fukuii/etc/logs/fukuii.log`), and `cli ephemery-fetch` wrote its "Loading network
+  configuration" line there. The launcher still creates that log file, empty, if it is missing.
+- **Node start no longer prints logback's configuration status (B-264).** Any warning while logback reads
+  `logback.xml` makes it print its whole status, and the shipped file raised several, so every start (and every
+  `fukuii` command) began with about 150 status lines. The console's `<if>` was nested in its `<appender>` and used
+  the deprecated `condition` attribute; it is now a top-level `<if>` with a `<condition>` element. The log file's
+  rolling window asked for 50 archives, more than logback allows, so logback cut it to 21: it now asks for 21. With
+  `logging.json-output = true`, an `<includeMdcKeyNames>` block that the JSON encoder does not accept raised an error
+  and was ignored; it is removed, so the JSON lines still carry every MDC key. Measured with
+  `bin/fukuii cli --help`: 150 status lines before and none after (151 and none with JSON output). Logging is otherwise
+  unchanged: plain text by default, JSON with `logging.json-output = true`, the same log file and rotation.
+- **The shipped compose files and systemd units give the node time to close its database (B-444).** A stop runs bounded
+  steps that can take up to about 119 s, then closes RocksDB, which has no bound. Docker's default of 10 s, and
+  systemd's 90 s, could SIGKILL the node in the middle of that close. Every fukuii service in `docker/*/` and `ops/`
+  compose files now has `stop_grace_period: 180s`, the systemd units in the runbooks set `TimeoutStopSec=180`, and the
+  runbooks' `docker stop` commands pass `-t 180`. If you run fukuii under your own compose file or unit, set the same.
+- **EIP-1898 `requireCanonical` is honoured (B-484).** `{"blockHash": ..., "requireCanonical": true}` was parsed and
+  then dropped, so a state read named a stored side block and answered from its state (since B-210). It now answers
+  `-32000 hash is not currently canonical` for a block that is not the canonical one of its height, as geth and
+  core-geth do (`HeaderByNumberOrHash`, `StateAndHeaderByNumberOrHash`). A `requireCanonical` that is not a boolean is
+  `-32602`.
+- **A hash that names no block answers geth's error (B-485).** A state read by block hash of an unknown block answered
+  `-32602 Block not found for hash`; it now answers `-32000 header for hash not found`, as geth does and as the
+  by-number read has answered `-32000 header not found` since B-210.
+- **"safe" and "finalized" state reads work on a PoS chain (B-489).** Only `eth_getBlockByNumber` and `eth_getProof`
+  were given the consensus client's fork choice, so `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`,
+  `eth_getTransactionCount`, `eth_call`, `eth_estimateGas`, `eth_simulateV1`, `trace_*` and `debug_trace*` answered
+  `-32602 safe block not available` at those tags even with the fork choice set. Every service that names a block now
+  gets the fork choice.
+- **SNAP resume no longer holds the bytecode coordinator while it checks the carried code hashes (B-543).** A resumed
+  run replays the carried code-hash file with `skipPresent`, and `ByteCodeCoordinator` looked every hash up in the
+  bytecode store one `get` at a time on its own thread (about 300 per second), so its queue, progress answers and
+  completion check waited behind the replay. The lookups now run on the blocking dispatcher in batched `multiGet`
+  calls of 1,024 hashes, and the answer comes back as a message. Batches are still applied in arrival order, the phase
+  does not end while one is waiting, and a force-complete looks up what is unanswered before it abandons anything. No
+  hash is skipped that was not skipped before, and a failed lookup fetches the batch again.
+- **The SNAP heap watchdog's max-pause escape can fire when work was lost in transit (B-546).** The intake gate
+  wrote off in-transit work that no consumer had acknowledged for two minutes only when no heap pressure was
+  reported, so under pressure a reservation lost to a stopped coordinator kept the queues reading non-empty and the
+  watchdog never saw them idle. The write-off now runs first, under pressure too.
+- **A SNAP accounts-complete recovery checks the saved pivot's staleness once a snap peer has a height (B-547).**
+  Right after a restart `networkBest` is 0, so the recovery skipped its drift check and resumed bytecodes and storage
+  on a pivot that could be far past `max-pivot-staleness-blocks`. It now re-checks every 30 s until a snap peer is
+  polled, and a pivot past the bound restarts SNAP sync, whose recovery then takes its stale-pivot branch (heal at a
+  newer pivot when every download phase is complete, otherwise a fresh start). A pivot within the bound is kept.
+- **ETC Olympia has no KZG point-evaluation precompile (B-548, #1444).** ECIP-1121 defers EIP-4844, so 0x0a is no
+  longer in the Olympia precompile set or its EIP-2929 pre-warmed list, matching Besu's ETC Olympia registry and
+  core-geth. An Olympia node no longer requires the c-kzg native library. Olympia is not scheduled on ETC, Mordor or
+  Gorgoroth (`olympia-block-number = 10^18`), so no shipped chain changes. Cross-client vectors pin 0x0a's
+  cold access and empty-account CALL on Olympia, and EIP-7623's floor applied after the refund.
+- **Tier 1 no longer fails on a slow runner's wall clock, and gets back its TUI minutes (B-555).** The TUI render
+  benchmark's medians (`TuiRenderBenchmarkSpec`, under 3 ms) ran in `testEssential` because its alias did not exclude
+  `BenchmarkTest`, and slow CI runners failed them (3.09, 6.16 and 3.92 ms) with no change to the code. `testEssential`
+  now excludes the tag, as ADR TEST-002 has it; `testComprehensive`, `sbt pp` and `testOnly *TuiRender*` still run the
+  timed cases, and an untimed case (every timed frame renders all 48 rows; the idle frame does not move) stays in
+  Tier 1. The test terminal behind `TuiGraphicsSpec` decoded its whole output on every write to look for the
+  terminal questions; since the pixel art grew to 3.2 MB (#2143) that made the suite take 105 s locally and 328 s on
+  a CI runner, and Tier 1 reached 22.7 of its 25 minutes. It now searches only the bytes it has not looked at.
+- **Other clients could not snap-sync storage from fukuii (B-566).** A `StorageRanges` reply that covered several
+  contracts carried a Merkle proof for the first contract, then went on with more. A client checks the proof against
+  the last slot-set (go-ethereum `sync.go`, and fukuii's own client), so go-ethereum and nethermind rejected the reply
+  ("invalid proof, want hash …, got …") and dropped fukuii; in hive's snapsync suite they stayed at head 0. fukuii now
+  follows go-ethereum's server: a proof only for a partial range (non-zero origin, or capped by the byte budget, the
+  deadline or the limit), from the origin to the last slot returned, and the proved contract ends the reply. An
+  account whose storage cannot be read ends the reply too, instead of reading as "no storage".
+- **The scalafmt autofix job no longer pushes code that does not compile (B-576).** On PR #2160 it pushed a commit in
+  which scalafmt 3.8.3 had joined a lambda's one-line `try ... catch case ...` body with the next argument, which does
+  not parse; a local `sbt scalafmtAll` writes the same bytes, so it is a scalafmt bug, not a CI difference. The job
+  now formats in two passes, then re-checks every module and runs `compile-all` on the result, and pushes nothing if
+  either fails. The changed files are touched before each re-run, since sbt-scalafmt's cache skips a file it has just
+  written and would pass the broken one.
 
 ### Known issues
 - **`eth_simulateV1`: expect some differences from go-ethereum (#1727, planned for 0.12.0). Both chains.** The

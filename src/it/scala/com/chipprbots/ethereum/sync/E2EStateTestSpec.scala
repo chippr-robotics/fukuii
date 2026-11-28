@@ -1,21 +1,26 @@
 package com.chipprbots.ethereum.sync
 
+import org.apache.pekko.util.ByteString
+
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.*
 
 import com.typesafe.config.ConfigValueFactory
+import org.scalatest.Assertion
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.FreeSpecBase
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.domain.*
-import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
+import com.chipprbots.ethereum.sync.util.RegularSyncItSpecUtils.ExecutedChain.*
 import com.chipprbots.ethereum.sync.util.RegularSyncItSpecUtils.FakePeer
-import com.chipprbots.ethereum.sync.util.SyncCommonItSpec.*
+import com.chipprbots.ethereum.sync.util.SyncCommonItSpecUtils.FakePeerCustomConfig
+import com.chipprbots.ethereum.sync.util.SyncCommonItSpecUtils.retryUntilWithDelay
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 
@@ -33,6 +38,11 @@ import com.chipprbots.ethereum.utils.Config
   *   - Contract storage synchronization
   *   - State healing and recovery mechanisms
   *   - State integrity during blockchain operations
+  *
+  * Every state change is a real transaction. A block carries the state root its own execution gives, and the syncing
+  * peer re-executes each block on the state of the one before it. A header that names a root the syncing peer never
+  * computed makes the next block unimportable (a missing trie node), so injecting state without transactions cannot be
+  * synced (B-018). Each test therefore reads the synced state back: balances, nonces and contract storage.
   *
   * These tests ensure that fukuii correctly synchronizes and maintains blockchain state across peers, preventing issues
   * with state divergence, corruption, or loss that would break consensus.
@@ -61,57 +71,51 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
     // No need to shutdown IORuntime.global
   }
 
-  /** Helper to create state updates at specific blocks */
-  def updateStateAtBlock(
-      blockNumber: Int
-  )(currentBlockNumber: BigInt, world: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
-    if currentBlockNumber == blockNumber then
-      val accountAddress = Address(currentBlockNumber.toByteArray)
-      val account = Account(
-        nonce = 1,
-        balance = UInt256(currentBlockNumber * BigInt(1000000000))
-      )
-      InMemoryWorldStateProxy.persistState(world.saveAccount(accountAddress, account))
-    else world
+  private val Wei = BigInt(1000000000)
 
-  /** Helper to create state updates at multiple blocks */
-  def updateStateAtMultipleBlocks(
-      blockNumbers: Set[Int]
-  )(currentBlockNumber: BigInt, world: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
-    if blockNumbers.contains(currentBlockNumber.toInt) then
-      val accountAddress = Address(currentBlockNumber.toByteArray)
-      val account = Account(
-        nonce = UInt256(currentBlockNumber),
-        balance = UInt256(currentBlockNumber * BigInt(1000000000))
-      )
-      InMemoryWorldStateProxy.persistState(world.saveAccount(accountAddress, account))
-    else world
+  /** A transfer of `n * 1e9` to the account whose address is `n`, at each block number in `blocks`. */
+  private def transfersAt(blocks: Set[Int])(n: BigInt): Seq[TxPlan] =
+    if blocks.contains(n.toInt) then Seq(transferTo(Address(n), n * Wei)) else Nil
 
-  /** Helper to create complex state with storage */
-  def createComplexStateWithStorage(
-      currentBlockNumber: BigInt,
-      world: InMemoryWorldStateProxy
-  ): InMemoryWorldStateProxy =
-    if currentBlockNumber % 50 == 0 && currentBlockNumber > 0 then
-      val accountAddress = Address(currentBlockNumber.toByteArray)
-      val account = Account(
-        nonce = UInt256(currentBlockNumber),
-        balance = UInt256(currentBlockNumber * BigInt(1000000000)),
-        storageRoot = Account.EmptyStorageRootHash,
-        codeHash = Account.EmptyCodeHash
-      )
+  /** A transfer in every block after the first, the one that funds the sender. */
+  private def transferEveryBlock(n: BigInt): Seq[TxPlan] =
+    if n > 1 then Seq(transferTo(Address(n), n * Wei)) else Nil
 
-      var updatedWorld = world.saveAccount(accountAddress, account)
+  /** At every 50th block, a contract creation that stores `(i, n * i)` for i in 1 to 5. */
+  private def storageContractEvery50(n: BigInt): Seq[TxPlan] =
+    if n % 50 == 0 && n > 0 then Seq(TxPlan(None, 0, storingInitCode((1 to 5).map(i => (BigInt(i), n * i)))))
+    else Nil
 
-      // Add some storage entries
-      val storage = updatedWorld.getStorage(accountAddress)
-      val updatedStorage = (1 to 5).foldLeft(storage) { (s, i) =>
-        s.store(BigInt(i), BigInt(currentBlockNumber.toLong * i))
-      }
-      updatedWorld = updatedWorld.saveStorage(accountAddress, updatedStorage)
+  /** The contract `storageContractEvery50` creates at block `n`: the sender's `n / 50`th transaction. */
+  private def storageContractAt(n: Int): Address = contractAddress(Sender, BigInt(n / 50 - 1))
 
-      InMemoryWorldStateProxy.persistState(updatedWorld)
-    else world
+  private def assertSameBestBlock(peer1: FakePeer, peer2: FakePeer): Assertion =
+    val best1 = peer1.blockchainReader.getBestBlock.get
+    val best2 = peer2.blockchainReader.getBestBlock.get
+    best1.hash shouldBe best2.hash
+    best1.header.stateRoot shouldBe best2.header.stateRoot
+
+  private def assertSameBlockAt(peer1: FakePeer, peer2: FakePeer, number: Int): Assertion =
+    val block1 = peer1.blockchainReader.getBlockByNumber(peer1.blockchainReader.getBestBranch, number).get
+    val block2 = peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch, number).get
+    block1.hash shouldBe block2.hash
+    block1.header.stateRoot shouldBe block2.header.stateRoot
+
+  /** `peer` holds, in its own state, the transfer made at each of `blocks`. */
+  private def assertTransfers(peer: FakePeer, blocks: Iterable[Int]): Assertion =
+    blocks.foreach { n =>
+      peer.accountAtBest(Address(n)).map(_.balance) shouldBe Some(UInt256(BigInt(n) * Wei))
+    }
+    succeed
+
+  /** `peer` holds, in its own state, every storage contract created at the multiples of 50 up to `last`. */
+  private def assertStorageContracts(peer: FakePeer, last: Int): Assertion =
+    (50 to last by 50).foreach { n =>
+      val contract = storageContractAt(n)
+      peer.accountAtBest(contract) shouldBe defined
+      (1 to 5).foreach(i => peer.storageAtBest(contract, i) shouldBe BigInt(n) * i)
+    }
+    succeed
 
   "E2E State Test" - {
 
@@ -129,32 +133,17 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         val stateBlockNumber = 100
 
         for
-          // Peer1 creates blockchain with state at specific block
-          _ <- peer1.importBlocksUntil(blockNumber)(updateStateAtBlock(stateBlockNumber))
-
-          // Peer2 syncs from peer1
+          // Peer1 builds a chain whose block 100 carries a transfer
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(transfersAt(Set(stateBlockNumber)))
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
         yield
-          // Verify state synchronization
-          val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
-          val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
-
-          // Block hashes should match
-          peer1BestBlock.hash shouldBe peer2BestBlock.hash
-
-          // State roots should match
-          peer1BestBlock.header.stateRoot shouldBe peer2BestBlock.header.stateRoot
-
-          // Verify state at the specific block
-          val peer1StateBlock =
-            peer1.blockchainReader.getBlockByNumber(peer1.blockchainReader.getBestBranch, stateBlockNumber).get
-          val peer2StateBlock =
-            peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch, stateBlockNumber).get
-
-          peer1StateBlock.header.stateRoot shouldBe peer2StateBlock.header.stateRoot
+          assertSameBestBlock(peer1, peer2)
+          assertSameBlockAt(peer1, peer2, stateBlockNumber)
+          assertTransfers(peer2, Seq(stateBlockNumber))
+          peer2.accountAtBest(Sender).map(_.nonce) shouldBe Some(UInt256(1))
       }
 
       "should maintain state trie consistency across multiple state updates" taggedAs (
@@ -169,25 +158,15 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         val stateBlocks = Set(50, 100, 150, 200, 250)
 
         for
-          // Create blockchain with multiple state snapshots
-          _ <- peer1.importBlocksUntil(blockNumber)(updateStateAtMultipleBlocks(stateBlocks))
-
-          // Peer2 syncs from peer1
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(transfersAt(stateBlocks))
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
         yield
-          // Verify state roots match at all state blocks
-          stateBlocks.foreach { blockNum =>
-            val peer1Block =
-              peer1.blockchainReader.getBlockByNumber(peer1.blockchainReader.getBestBranch, blockNum).get
-            val peer2Block =
-              peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch, blockNum).get
-
-            peer1Block.header.stateRoot shouldBe peer2Block.header.stateRoot
-          }
-          succeed
+          stateBlocks.foreach(assertSameBlockAt(peer1, peer2, _))
+          assertTransfers(peer2, stateBlocks)
+          peer2.accountAtBest(Sender).map(_.nonce) shouldBe Some(UInt256(stateBlocks.size))
       }
 
       "should handle large state tries efficiently" taggedAs (
@@ -201,20 +180,16 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         val blockNumber = 500
 
         for
-          // Create blockchain with frequent state updates
-          _ <- peer1.importBlocksUntil(blockNumber)(createComplexStateWithStorage)
-
-          // Peer2 syncs from peer1
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(storageContractEvery50)
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
         yield
-          val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
-          val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
-
-          peer1BestBlock.header.stateRoot shouldBe peer2BestBlock.header.stateRoot
+          assertSameBestBlock(peer1, peer2)
+          assertStorageContracts(peer2, blockNumber)
       }
+
     }
 
     "State Root Validation" - {
@@ -230,20 +205,15 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         val stateBlockNumber = 75
 
         for
-          _ <- peer1.importBlocksUntil(blockNumber)(updateStateAtBlock(stateBlockNumber))
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(transfersAt(Set(stateBlockNumber)))
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
         yield
-          // Verify state root at specific block
-          val peer1Block =
-            peer1.blockchainReader.getBlockByNumber(peer1.blockchainReader.getBestBranch, stateBlockNumber).get
-          val peer2Block =
-            peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch, stateBlockNumber).get
-
-          peer1Block.header.stateRoot shouldBe peer2Block.header.stateRoot
-          peer1Block.hash shouldBe peer2Block.hash
+          assertSameBlockAt(peer1, peer2, stateBlockNumber)
+          assertSameBestBlock(peer1, peer2)
+          assertTransfers(peer2, Seq(stateBlockNumber))
       }
 
       "should detect and reject invalid state roots" taggedAs (
@@ -252,19 +222,39 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         StateTest,
         SlowTest
       ) in customTestCaseResourceM(
-        FakePeer.start2FakePeersRes()
+        // Peer2 checks the state root and gas used of each block against its own execution of it, as import does; the
+        // default harness validators accept any root
+        FakePeer.start2FakePeersRes(
+          fakePeerCustomConfig2 = FakePeerCustomConfig.defaultConfig.copy(validateStateRoots = true)
+        )
       ) { case (peer1, peer2) =>
-        val blockNumber = 100
+        val validBlocks = 20
+        val badBlock = validBlocks + 1
+        val bogusRoot = TrieRoot(kec256(ByteString("a state root that no execution of the block gives")))
 
         for
-          _ <- peer1.importBlocksUntil(blockNumber)(IdentityUpdate)
-          _ <- peer2.importBlocksUntil(blockNumber)(IdentityUpdate)
+          // Peer1 builds a valid chain, and then one block whose header names a state root its transactions do not give
+          _ <- peer1.importExecutedBlocksUntil(validBlocks)(transferEveryBlock)
+          forged <- peer1.importForgedBlock(Seq(transferTo(Address(badBlock), BigInt(badBlock) * Wei)))(
+            _.copy(stateRoot = bogusRoot)
+          )
+          _ <- peer1.startRegularSync()
+          _ <- peer2.startRegularSync()
+          _ <- peer2.connectToPeers(Set(peer1.node))
+          // The blocks before it are valid and go in
+          _ <- peer2.waitForRegularSyncLoadLastBlock(validBlocks)
+          // The bad one is rejected, and its peer is blamed for it
+          blamed <- retryUntilWithDelay(IO(peer2.blacklist.keys), 100.millis, 600)(_.nonEmpty)
         yield
-          // Both peers should have the same state roots
-          val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
-          val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
-
-          peer1BestBlock.header.stateRoot shouldBe peer2BestBlock.header.stateRoot
+          peer1.blockchainReader.getBestBlock.get.hash shouldBe forged.hash
+          forged.header.stateRoot shouldBe bogusRoot
+          // Peer2 holds the valid chain, with its state, and nothing of the block with the root it could not reproduce
+          peer2.blockchainReader.getBestBlockNumber shouldBe validBlocks
+          peer2.blockchainReader.getBlockHeaderByHash(forged.hash) shouldBe None
+          peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch, badBlock) shouldBe None
+          assertSameBlockAt(peer1, peer2, validBlocks)
+          assertTransfers(peer2, 2 to validBlocks)
+          blamed should not be empty
       }
 
       "should maintain state root consistency during chain reorganization" taggedAs (
@@ -277,31 +267,38 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         FakePeer.start2FakePeersRes()
       ) { case (peer1, peer2) =>
         val commonBlocks = 100
+        val peer2ForkBlocks = 5
         val peer1ExtraBlocks = 20
+        val abandoned = Address(0xdead)
 
         for
-          // Both peers sync to a common point with state updates
-          _ <- peer1.importBlocksUntil(commonBlocks)(updateStateAtBlock(50))
-          _ <- peer2.importBlocksUntil(commonBlocks)(updateStateAtBlock(50))
+          // Both peers hold the same chain, with state
+          _ <- peer1.importExecutedBlocksUntil(commonBlocks)(transfersAt(Set(50)))
+          _ <- peer2.importExecutedBlocksUntil(commonBlocks)(transfersAt(Set(50)))
 
-          // Peer1 mines additional blocks with more state updates
-          _ <- peer1.mineNewBlocks(100.milliseconds, peer1ExtraBlocks)(updateStateAtBlock(110))
+          // Peer2 forks off it: a different miner, and a transfer to an account the main chain never touches
+          _ <- peer2.importExecutedBlocksUntil(commonBlocks + peer2ForkBlocks, OtherMiner)(_ =>
+            Seq(transferTo(abandoned, 7))
+          )
+          peer2ForkTip = peer2.blockchainReader.getBestBlock.get
 
-          // Start sync
+          // Peer1 mines on through its running regular sync, until its chain is the heavier one
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
-          _ <- peer2.connectToPeers(Set(peer1.node))
+          _ <- peer1.mineExecutedBlocks(peer1ExtraBlocks)(transfersAt(Set(110)))
 
-          // Peer2 should sync to peer1's chain
+          _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(commonBlocks + peer1ExtraBlocks)
         yield
-          // Verify state roots match after reorganization
-          val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
-          val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
-
-          peer1BestBlock.header.stateRoot shouldBe peer2BestBlock.header.stateRoot
-          peer1BestBlock.hash shouldBe peer2BestBlock.hash
+          assertSameBestBlock(peer1, peer2)
+          // Peer2's fork is no longer canonical, and its state is gone from the best block's
+          peer2.blockchainReader
+            .getBlockByNumber(peer2.blockchainReader.getBestBranch, commonBlocks + peer2ForkBlocks)
+            .map(_.hash) should not be Some(peer2ForkTip.hash)
+          peer2.accountAtBest(abandoned) shouldBe None
+          assertTransfers(peer2, Seq(50, 110))
       }
+
     }
 
     "Account State Propagation" - {
@@ -315,22 +312,17 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         FakePeer.start2FakePeersRes()
       ) { case (peer1, peer2) =>
         val blockNumber = 200
+        val stateBlocks = Set(50, 100, 150)
 
         for
-          // Create blockchain with account state changes
-          _ <- peer1.importBlocksUntil(blockNumber)(updateStateAtMultipleBlocks(Set(50, 100, 150)))
-
-          // Peer2 syncs from peer1
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(transfersAt(stateBlocks))
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
         yield
-          // Verify account states match at all blocks
-          val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
-          val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
-
-          peer1BestBlock.header.stateRoot shouldBe peer2BestBlock.header.stateRoot
+          assertSameBestBlock(peer1, peer2)
+          assertTransfers(peer2, stateBlocks)
       }
 
       "should handle rapid account state updates" taggedAs (
@@ -343,28 +335,19 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
       ) { case (peer1, peer2) =>
         val blockNumber = 300
 
-        def rapidStateUpdates(currentBlockNumber: BigInt, world: InMemoryWorldStateProxy): InMemoryWorldStateProxy =
-          if currentBlockNumber > 0 then
-            val accountAddress = Address(currentBlockNumber.toByteArray)
-            val account = Account(
-              nonce = UInt256(currentBlockNumber),
-              balance = UInt256(currentBlockNumber * BigInt(1000000000))
-            )
-            InMemoryWorldStateProxy.persistState(world.saveAccount(accountAddress, account))
-          else world
-
         for
-          _ <- peer1.importBlocksUntil(blockNumber)(rapidStateUpdates)
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(transferEveryBlock)
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
         yield
-          val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
-          val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
-
-          peer1BestBlock.header.stateRoot shouldBe peer2BestBlock.header.stateRoot
+          assertSameBestBlock(peer1, peer2)
+          assertTransfers(peer2, 2 to blockNumber)
+          // One transfer per block from block 2
+          peer2.accountAtBest(Sender).map(_.nonce) shouldBe Some(UInt256(blockNumber - 1))
       }
+
     }
 
     "Contract Storage Synchronization" - {
@@ -380,19 +363,14 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         val blockNumber = 250
 
         for
-          // Create blockchain with contract storage
-          _ <- peer1.importBlocksUntil(blockNumber)(createComplexStateWithStorage)
-
-          // Peer2 syncs from peer1
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(storageContractEvery50)
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
         yield
-          val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
-          val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
-
-          peer1BestBlock.header.stateRoot shouldBe peer2BestBlock.header.stateRoot
+          assertSameBestBlock(peer1, peer2)
+          assertStorageContracts(peer2, blockNumber)
       }
 
       "should handle storage updates across multiple blocks" taggedAs (
@@ -406,24 +384,16 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         val blockNumber = 400
 
         for
-          _ <- peer1.importBlocksUntil(blockNumber)(createComplexStateWithStorage)
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(storageContractEvery50)
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
         yield
-          // Verify storage at multiple blocks
-          val storageBlocks = Seq(50, 100, 150, 200, 250, 300, 350, 400)
-          storageBlocks.foreach { blockNum =>
-            val peer1Block =
-              peer1.blockchainReader.getBlockByNumber(peer1.blockchainReader.getBestBranch, blockNum).get
-            val peer2Block =
-              peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch, blockNum).get
-
-            peer1Block.header.stateRoot shouldBe peer2Block.header.stateRoot
-          }
-          succeed
+          (50 to blockNumber by 50).foreach(assertSameBlockAt(peer1, peer2, _))
+          assertStorageContracts(peer2, blockNumber)
       }
+
     }
 
     "State Healing and Recovery" - {
@@ -440,17 +410,15 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         val blockNumber = 200
 
         for
-          _ <- peer1.importBlocksUntil(blockNumber)(updateStateAtBlock(100))
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(transfersAt(Set(100)))
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
         yield
           // Peer2 should have recovered the full state
-          val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
-          val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
-
-          peer1BestBlock.header.stateRoot shouldBe peer2BestBlock.header.stateRoot
+          assertSameBestBlock(peer1, peer2)
+          assertTransfers(peer2, Seq(100))
       }
 
       "should handle state synchronization with missing peers" taggedAs (
@@ -465,19 +433,16 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         val blockNumber = 150
 
         for
-          _ <- peer1.importBlocksUntil(blockNumber)(updateStateAtBlock(75))
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(transfersAt(Set(75)))
           _ <- peer2.startRegularSync()
+          // connectToPeers returns once the handshake is done, with peer1's sync not yet started
           _ <- peer2.connectToPeers(Set(peer1.node))
-          // Wait a moment for connection
-          _ <- IO.sleep(1.second)
           // Start peer1 sync after peer2 is already trying to sync
           _ <- peer1.startRegularSync()
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
         yield
-          val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
-          val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
-
-          peer1BestBlock.hash shouldBe peer2BestBlock.hash
+          assertSameBestBlock(peer1, peer2)
+          assertTransfers(peer2, Seq(75))
       }
 
       "should maintain state integrity during peer disconnection" taggedAs (
@@ -490,27 +455,41 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
       ) { case (peer1, peer2) =>
         val initialBlocks = 100
         val finalBlocks = 200
+        val transfers = transfersAt(Set(50, 150))
 
         for
           // Partial sync with state
-          _ <- peer1.importBlocksUntil(initialBlocks)(updateStateAtBlock(50))
+          _ <- peer1.importExecutedBlocksUntil(initialBlocks)(transfers)
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer1.startRegularSync()
           _ <- peer2.waitForRegularSyncLoadLastBlock(initialBlocks)
+          bestBeforeDisconnect = peer2.blockchainReader.getBestBlock.get
 
-          // Add more blocks with state while still connected
-          _ <- peer1.importBlocksUntil(finalBlocks)(updateStateAtBlock(150))
+          // The connection ends, as seen by both peers
+          _ <- peer2.disconnectAllPeers()
+          _ <- peer2.waitForHandshakedPeers(0)
+          _ <- peer1.waitForHandshakedPeers(0)
 
-          // Continue sync
+          // Peer1 moves on while they are apart
+          _ <- peer1.importExecutedBlocksUntil(finalBlocks)(transfers)
+          bestWhileApart = peer2.blockchainReader.getBestBlock.get
+          stateWhileApart = (50 :: Nil).map(n => peer2.accountAtBest(Address(n)).map(_.balance))
+
+          // They meet again, and peer2 continues from where it was
+          _ <- peer2.connectToPeers(Set(peer1.node))
+          _ <- peer2.waitForHandshakedPeers(1)
           _ <- peer2.waitForRegularSyncLoadLastBlock(finalBlocks)
         yield
-          val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
-          val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
-
-          peer1BestBlock.header.stateRoot shouldBe peer2BestBlock.header.stateRoot
-          peer1BestBlock.hash shouldBe peer2BestBlock.hash
+          // Apart, peer2 neither advanced nor lost anything: the state it had is the state it kept
+          bestWhileApart.hash shouldBe bestBeforeDisconnect.hash
+          bestWhileApart.number.value shouldBe initialBlocks
+          stateWhileApart shouldBe List(Some(UInt256(BigInt(50) * Wei)))
+          // Together again, it has what peer1 has, with the state of both stretches
+          assertSameBestBlock(peer1, peer2)
+          assertTransfers(peer2, Seq(50, 150))
       }
+
     }
 
     "State Integrity" - {
@@ -527,23 +506,15 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         val blockNumber = 300
 
         for
-          _ <- peer1.importBlocksUntil(blockNumber)(createComplexStateWithStorage)
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(storageContractEvery50)
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
         yield
           // Verify state integrity at every 50th block
-          (50 to blockNumber by 50).foreach { blockNum =>
-            val peer1Block =
-              peer1.blockchainReader.getBlockByNumber(peer1.blockchainReader.getBestBranch, blockNum).get
-            val peer2Block =
-              peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch, blockNum).get
-
-            peer1Block.header.stateRoot shouldBe peer2Block.header.stateRoot
-            peer1Block.hash shouldBe peer2Block.hash
-          }
-          succeed
+          (50 to blockNumber by 50).foreach(assertSameBlockAt(peer1, peer2, _))
+          assertStorageContracts(peer2, blockNumber)
       }
 
       "should verify state consistency after blockchain reorganization with state changes" taggedAs (
@@ -556,36 +527,39 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         FakePeer.start2FakePeersRes()
       ) { case (peer1, peer2) =>
         val commonBlocks = 100
+        val peer2ForkBlocks = 5
         val peer1ExtraBlocks = 15
+        val commonTransfers = Set(25, 50, 75)
+        val abandoned = Address(0xdead)
 
         for
-          // Both peers sync to a common point with state
-          _ <- peer1.importBlocksUntil(commonBlocks)(updateStateAtMultipleBlocks(Set(25, 50, 75)))
-          _ <- peer2.importBlocksUntil(commonBlocks)(updateStateAtMultipleBlocks(Set(25, 50, 75)))
+          // Both peers hold the same chain, with state
+          _ <- peer1.importExecutedBlocksUntil(commonBlocks)(transfersAt(commonTransfers))
+          _ <- peer2.importExecutedBlocksUntil(commonBlocks)(transfersAt(commonTransfers))
 
-          // Peer1 mines additional blocks with new state
-          _ <- peer1.mineNewBlocks(100.milliseconds, peer1ExtraBlocks)(updateStateAtBlock(105))
+          // Peer2 forks off it: a different miner, and a transfer to an account the main chain never touches
+          _ <- peer2.importExecutedBlocksUntil(commonBlocks + peer2ForkBlocks, OtherMiner)(_ =>
+            Seq(transferTo(abandoned, 7))
+          )
+          peer2ForkTip = peer2.blockchainReader.getBestBlock.get
 
-          // Sync
+          // Peer1 mines on through its running regular sync, until its chain is the heavier one
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
+          _ <- peer1.mineExecutedBlocks(peer1ExtraBlocks)(transfersAt(Set(105)))
+
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(commonBlocks + peer1ExtraBlocks)
         yield
-          // Verify all common blocks still have matching state
-          Seq(25, 50, 75).foreach { blockNum =>
-            val peer1Block =
-              peer1.blockchainReader.getBlockByNumber(peer1.blockchainReader.getBestBranch, blockNum).get
-            val peer2Block =
-              peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch, blockNum).get
-
-            peer1Block.header.stateRoot shouldBe peer2Block.header.stateRoot
-          }
-
-          // Verify final state matches
-          val peer1BestBlock = peer1.blockchainReader.getBestBlock.get
-          val peer2BestBlock = peer2.blockchainReader.getBestBlock.get
-          peer1BestBlock.header.stateRoot shouldBe peer2BestBlock.header.stateRoot
+          assertSameBestBlock(peer1, peer2)
+          // Peer2's fork is no longer canonical, and its state is gone from the best block's
+          peer2.blockchainReader
+            .getBlockByNumber(peer2.blockchainReader.getBestBranch, commonBlocks + peer2ForkBlocks)
+            .map(_.hash) should not be Some(peer2ForkTip.hash)
+          peer2.accountAtBest(abandoned) shouldBe None
+          // The blocks below the fork still match
+          commonTransfers.foreach(assertSameBlockAt(peer1, peer2, _))
+          assertTransfers(peer2, commonTransfers + 105)
       }
 
       "should persist state correctly across peer restarts" taggedAs (
@@ -598,24 +572,44 @@ class E2EStateTestSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll
         FakePeer.start2FakePeersRes()
       ) { case (peer1, peer2) =>
         val blockNumber = 200
+        val stateBlocks = Set(50, 100, 150)
+        val laterBlocks = 215
+        val laterTransfers = transfersAt(Set(210))
 
         for
-          _ <- peer1.importBlocksUntil(blockNumber)(updateStateAtMultipleBlocks(Set(50, 100, 150)))
+          _ <- peer1.importExecutedBlocksUntil(blockNumber)(transfersAt(stateBlocks))
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
           _ <- peer2.connectToPeers(Set(peer1.node))
           _ <- peer2.waitForRegularSyncLoadLastBlock(blockNumber)
-        yield
-          // Verify state persistence at specific blocks
-          Seq(50, 100, 150, 200).foreach { blockNum =>
-            val peer1Block =
-              peer1.blockchainReader.getBlockByNumber(peer1.blockchainReader.getBestBranch, blockNum).get
-            val peer2Block =
-              peer2.blockchainReader.getBlockByNumber(peer2.blockchainReader.getBestBranch, blockNum).get
+          syncedBest = peer2.blockchainReader.getBestBlock.get
 
-            peer1Block.header.stateRoot shouldBe peer2Block.header.stateRoot
+          // Peer2 ends the way a process does, with its database closed and nothing else of it running...
+          _ <- peer2.stop()
+          // ...and starts again on the same data directory, with no connection to anyone
+          outcome <- FakePeer.restartedRes(peer2, "Peer2Restarted").use { restarted =>
+            for
+              reopenedBest <- IO(restarted.blockchainReader.getBestBlock.get)
+              // What it holds is what the first one wrote: the chain, and the state, readable without any sync
+              _ <- IO {
+                Seq(50, 100, 150, 200).foreach(assertSameBlockAt(peer1, restarted, _))
+                assertTransfers(restarted, stateBlocks)
+                restarted.accountAtBest(Sender).map(_.nonce) shouldBe Some(UInt256(stateBlocks.size))
+              }
+              // And it carries on from there: the blocks peer1 made since come in on top of the state it kept
+              _ <- peer1.importExecutedBlocksUntil(laterBlocks)(laterTransfers)
+              _ <- restarted.startRegularSync()
+              _ <- restarted.connectToPeers(Set(peer1.node))
+              _ <- restarted.waitForRegularSyncLoadLastBlock(laterBlocks)
+            yield
+              reopenedBest.hash shouldBe syncedBest.hash
+              reopenedBest.number.value shouldBe blockNumber
+              assertSameBestBlock(peer1, restarted)
+              assertTransfers(restarted, stateBlocks + 210)
           }
-          succeed
+        yield outcome
       }
+
     }
+
   }

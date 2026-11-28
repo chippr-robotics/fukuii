@@ -35,18 +35,24 @@ object EthereumTestExecutor:
     *   The blockchain test to execute
     * @param baseConfig
     *   Base blockchain configuration
+    * @param unified
+    *   on the unified state layout, the guard on (spec 018 T117), rather than the hash store;
+    *   `FUKUII_ETHTEST_LAYOUT=unified` by default
     * @return
     *   Either error message or success
     */
   def executeTest(
       test: BlockchainTest,
-      baseConfig: BlockchainConfig
+      baseConfig: BlockchainConfig,
+      unified: Boolean = EthereumTestHelper.unifiedByDefault
   ): Either[String, TestExecutionResult] =
     given BlockchainConfig = TestConverter.networkToConfig(test.network, baseConfig)
 
     // Use the helper which will handle both state setup and block execution
     // using the same storage instance
-    val helper = new EthereumTestHelper(using summon[BlockchainConfig])
+    val onUnified = unified
+    val helper = new EthereumTestHelper(using summon[BlockchainConfig]):
+      override protected def unified: Boolean = onUnified
 
     for
       finalWorld <- helper.setupAndExecuteTest(test.pre, test.blocks, test.genesisBlockHeader)
@@ -110,7 +116,7 @@ object EthereumTestExecutor:
       }
 
       // Persist the initial state
-      val persistedWorld = InMemoryWorldStateProxy.persistState(world)
+      val persistedWorld = InMemoryWorldStateProxy.persistStateAndWriteCode(world)
       Right(persistedWorld)
     catch case e: Exception => Left(s"Failed to setup initial state: ${e.getMessage}")
 

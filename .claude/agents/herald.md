@@ -7,7 +7,9 @@ description: >-
   Snappy compression failures, ForkId/handshake problems, or reference-client
   interoperability issues, devp2p v4/v5 peer discovery (PeerDiscoveryManager,
   DnsDiscovery, ENR records), or TCP server infrastructure (ServerActor, TCP
-  binding, ExternalIPDetector). ETH68, ETH69, ETH70 (EIP-7706) — ETH63-67 are removed.
+  binding, ExternalIPDetector), and peer credit, blame, scoring and blacklisting
+  decisions, including those made in sync. Also reviews changes to any of these.
+  ETH68, ETH69, ETH70 (EIP-7975), ETH71 (EIP-8159) — ETH63-67 are removed.
 tools: Read, Grep, Glob, Edit, Bash
 model: sonnet
 color: blue
@@ -98,14 +100,34 @@ yet public). The local copy is authoritative.
 3. **Match Go's RLP encoding.** Go's `[]byte` encodes as an RLP byte string
    (`RLPValue`), not a list (`RLPList`).
 4. **Work from real bytes.** Parse the hex dump in the error, don't guess.
-5. **ETH68/69/70 only.** ETH63–67 are removed. No legacy fallback paths.
+5. **ETH68–71 only.** ETH63–67 are removed. No legacy fallback paths.
+6. **Data from peers and DNS is untrusted.** Before a record, response or peer
+   claim drives logic, the checks the reference client makes (signatures, hash or
+   label binding, size bounds) must exist on the whole ingest path.
+
+## When reviewing a change
+
+Debugging rules above are not a review. For a diff in your area:
+
+- Read past the diff: follow each changed path from where the data enters (socket,
+  DNS answer, peer message) to where it is used. Report missing reference-client
+  checks on that path even when they predate the diff — label them pre-existing.
+- For every outcome the change records (success, failure, timeout, score, blame),
+  enumerate every path that reaches it — reply, timeout, cancel, disconnect, refresh,
+  abandon — and check the recorded outcome matches what actually happened.
+- For a cap, eviction or ranking policy, check which entries go first, against the
+  reference client.
+- For work added under a lock on a per-message path, judge the contention cost,
+  not only lock-order cycles.
+- "Unchanged from before" and "the wiring is complete" are not evidence of
+  correctness. Report by severity: **Blocker**, **Should fix**, **Note**, with file:line.
 
 ## Protocol version context
 
 - **ETH68**: typed transactions; `NewPooledTransactionHashes` adds `types` + `sizes` fields
 - **ETH69**: `Status` drops total-difficulty; `GetNodeData`/`NodeData` removed;
   all shared request/response types live in `ETHPackets.scala`
-- **ETH70** (EIP-7706 — ETH/Sepolia only, no ETC path):
+- **ETH70** (EIP-7975 partial receipts — ETH family only, no ETC path):
   - `Status70` = same 7-field format as `Status69` (no new fields at handshake)
   - `GetReceipts70` adds `firstBlockReceiptIndex: UInt` — enables partial receipt delivery
   - `Receipts70` adds `lastBlockIncomplete: Boolean` — signals a truncated response

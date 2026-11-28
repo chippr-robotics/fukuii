@@ -36,10 +36,10 @@
       "pc":6,
       "op":"CREATE",
       "gas":99991,
-      "gasCost":111991,
+      "gasCost":12000,
       "depth":1,
       "stack":["0x0","0x0","0x0"],
-      "error":"OutOfGas"
+      "error":"out of gas"
     }]
   },
   "structLogWithMemory":{
@@ -74,11 +74,11 @@
       "pc":6,
       "op":"CREATE",
       "gas":99991,
-      "gasCost":111991,
+      "gasCost":12000,
       "depth":1,
       "stack":["0x0","0x0","0x0"],
       "memory":[],
-      "error":"OutOfGas"
+      "error":"out of gas"
     }]
   },
   "callTracer":{

@@ -12,6 +12,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+import com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter
 import com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -84,6 +85,30 @@ class HeaderValidationBlacklistSpec extends AnyFlatSpec with Matchers:
 
     blacklist.isBlacklisted(maintainedPeer.id) shouldBe false
     helper.peersToDownloadFrom.keySet shouldBe Set(maintainedPeer.id)
+  }
+
+  // B-143: the importer blames a peer for orphan announces through the peers client, with this reason
+  it should "not be blacklisted for orphan announces whose parent never arrived" taggedAs UnitTest in {
+    val blacklist = CacheBasedBlacklist.empty(10)
+    val helper = helperWithMaintainedPeer(blacklist)
+    val reason = BlockImporter.orphanStrikesReason(BlockImporter.OrphanAnnounceStrikeThreshold, "0xabc")
+
+    helper.blacklistIfHandshaked(maintainedPeer.id, reason.duration(60.seconds), reason)
+
+    blacklist.isBlacklisted(maintainedPeer.id) shouldBe false
+    helper.peersToDownloadFrom.keySet shouldBe Set(maintainedPeer.id)
+  }
+
+  "A peer that is not maintained" should "be blacklisted for orphan announces whose parent never arrived" taggedAs UnitTest in {
+    val blacklist = CacheBasedBlacklist.empty(10)
+    val helper = helperWithMaintainedPeer(blacklist)
+    val other = maintainedPeer.copy(id = PeerId("other"), nodeId = Some(ByteString(Array.fill(64)(0x11.toByte))))
+    helper.handleHandshakedPeers(Map(maintainedPeer -> peerInfo, other -> peerInfo))
+    val reason = BlockImporter.orphanStrikesReason(BlockImporter.OrphanAnnounceStrikeThreshold, "0xabc")
+
+    helper.blacklistIfHandshaked(other.id, reason.duration(60.seconds), reason)
+
+    blacklist.isBlacklisted(other.id) shouldBe true
   }
 
   "HeaderChainCheck.rejectionReason" should "name the error's type, without the object suffix" taggedAs UnitTest in {

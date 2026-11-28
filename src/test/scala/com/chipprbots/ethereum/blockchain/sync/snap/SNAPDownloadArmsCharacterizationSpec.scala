@@ -233,6 +233,27 @@ class SNAPDownloadArmsCharacterizationSpec
     f.appStateStorage.isSnapSyncAccountsComplete() shouldBe false
   }
 
+  it should "count a store fault as a critical failure and restart SNAP sync on a fresh pivot (B-488)" taggedAs UnitTest in {
+    val f = new SnapControllerFixture(testKit)
+    val entry = f.enterAccountSync(height = 1_000)
+    val snap = entry.snap
+    f.pollWith(snap, f.peersAt(height = 1_200))
+    val pivot = BigInt(1_200) - Offset
+
+    Using.resource(new SnapLogCapture) { log =>
+      snap ! SNAPSyncController.SnapStoreFaulted("bytecode (2 codes)", "injected")
+      f.parent.fishForMessage(10.seconds) {
+        case SNAPSyncController.StartRegularSyncBootstrap(`pivot`) => FishingOutcomes.complete
+        case _                                                     => FishingOutcomes.continueAndIgnore
+      }
+      f.awaitProcessed(snap)
+      log.contains("Critical SNAP sync failure (1/") shouldBe true
+      log.contains("store fault in bytecode (2 codes): injected") shouldBe true
+    }
+    f.stops.receiveMessages(3, 10.seconds).map(_.kind).toSet shouldBe
+      Set(ChildStopped.Account, ChildStopped.ByteCode, ChildStopped.Storage)
+  }
+
   // ── Backpressure ──────────────────────────────────────────────────────────────────────────────
 
   "SNAPSyncController's backpressure arms" should

@@ -55,6 +55,7 @@ import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler
 import com.chipprbots.ethereum.network.rlpx.RLPxConnectionHandler.RLPxConfiguration
 import com.chipprbots.ethereum.nodebuilder.PruningConfigBuilder
 import com.chipprbots.ethereum.security.SecureRandomBuilder
+import com.chipprbots.ethereum.testing.LogCapture
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.Config
@@ -452,6 +453,30 @@ class PeerActorSpec extends ScalaTestWithActorTestKit(ManualTime.config) with An
     )
 
     rlpxConnection.expectMessage(RLPxConnectionHandler.SendMessage(Disconnect(Disconnect.Reasons.UselessPeer)))
+
+  // B-415: a handshake a stranger fails (wrong network, fork id) is the commonest event on a public node. Its
+  // HANDSHAKE_FAILURE and DISCONNECT_SENT lines are DEBUG; the close is counted by reason for the `Network [60s]` line.
+  it should "log a rejected handshake at DEBUG and count the close as useless-peer" taggedAs (
+    UnitTest,
+    NetworkTest
+  ) in new TestSetup:
+    val before: Long =
+      com.chipprbots.ethereum.network.PeerChurnStats.global.current.closedByReason.getOrElse("useless-peer", 0L)
+    val (_, events) = LogCapture.capture("com.chipprbots.ethereum.network") {
+      peer ! PeerActor.ConnectTo(new URI("encode://localhost:9000"))
+      rlpxConnection.expectMessageType[RLPxConnectionHandler.ConnectTo]
+      peer ! RLPxConnectionHandler.ConnectionEstablished(remoteNodeId)
+      eth68Handshake(
+        remoteHello = Hello(4, "test-client", Seq(Capability.ETH68), 9000, ByteString("unused")),
+        remoteStatus = etcStatus68(genesisHash = genesisHash.drop(2))
+      )
+      rlpxConnection.expectMessage(RLPxConnectionHandler.SendMessage(Disconnect(Disconnect.Reasons.UselessPeer)))
+    }
+    LogCapture.atInfoOrAbove(events) shouldBe empty
+    events.exists(_.getFormattedMessage.startsWith("HANDSHAKE_FAILURE")) shouldBe true
+    events.exists(_.getFormattedMessage.startsWith("DISCONNECT_SENT")) shouldBe true
+    com.chipprbots.ethereum.network.PeerChurnStats.global.current.closedByReason
+      .getOrElse("useless-peer", 0L) should be >= (before + 1)
 
   it should "disconnect from non-ETC peer (when node is before fork)" taggedAs (
     UnitTest,

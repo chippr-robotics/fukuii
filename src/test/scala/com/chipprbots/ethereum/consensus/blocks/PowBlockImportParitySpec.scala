@@ -170,6 +170,14 @@ class PowBlockImportParitySpec extends AnyFlatSpec with Matchers:
         Some(config.chainId.value)
       )
 
+    /** A message from the sender: a creation when `to` is None. */
+    def message(nonce: BigInt, to: Option[Address], data: ByteString): SignedTransaction =
+      SignedTransaction.sign(
+        LegacyTransaction(nonce, GasPrice(Gwei * 2), GasAmount(100_000), to, 0, data),
+        senderKeyPair,
+        Some(config.chainId.value)
+      )
+
   /** Mines the next block, checks its header against the header rules and imports it on top. */
   private def mineAndImport(chain: Chain, parent: Block, transactions: Seq[SignedTransaction]): Block =
     val block = chain.mine(parent, transactions)
@@ -195,6 +203,39 @@ class PowBlockImportParitySpec extends AnyFlatSpec with Matchers:
     )
     // ECIP-1017's era 7 reward, and the whole gas price
     chain.balance(Miner, block) shouldBe MordorEra7Reward + Gwei * 2 * 21_000
+  }
+
+  // B-230: a build writes no contract code. A mined block's code reaches the code store when block import executes the
+  // block, ahead of the state that refers to it; the next block the generator builds on it runs the contract.
+  "A contract a block mined on Mordor deploys" should "reach the code store with the block's import, not its build, and run in the next block" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    val chain = new Chain(mordor)
+    val parent = chain.saveParent(BigInt(14_999_998))
+    // runtime: return the word 42; the init code returns those 10 bytes
+    val runtime = ByteString(Hex.decode("602a60005260206000f3"))
+    val initCode = ByteString(Hex.decode("69" + "602a60005260206000f3" + "600052600a6016f3"))
+    val codeHash = com.chipprbots.ethereum.crypto.kec256(runtime)
+    val codeStore = chain.storagesInstance.storages.evmCodeStorage
+    val contract = com.chipprbots.ethereum.jsonrpc.CallErrors.createAddress(Sender, mordor.accountStartNonce.toBigInt)
+
+    val deploy = chain.message(0, None, initCode)
+    val block1 = chain.mine(parent, Seq(deploy))
+    block1.body.transactionList shouldBe Seq(deploy)
+    // the generator deployed it and wrote it nowhere
+    codeStore.get(codeHash) shouldBe None
+    chain.validateHeader(block1, parent) shouldBe Right(BlockHeaderValid)
+    chain.importBlock(block1) shouldBe a[BlockImportedToTop]
+    codeStore.get(codeHash) shouldBe Some(runtime)
+    chain.blockchainReader
+      .getAccount(chain.blockchainReader.getBestBranch, contract, block1.number.value)
+      .map(_.codeHash.value) shouldBe Some(codeHash)
+
+    // the next block calls it: the generator and import both read its code
+    val block2 = mineAndImport(chain, block1, Seq(chain.message(1, Some(contract), ByteString.empty)))
+    block2.body.transactionList should have size 1
+    block2.header.gasUsed.value should be > BigInt(21_000)
   }
 
   // ── ETH configs ─────────────────────────────────────────────────────────────

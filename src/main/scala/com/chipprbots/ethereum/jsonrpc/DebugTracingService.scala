@@ -6,9 +6,9 @@ import cats.effect.IO
 
 import org.json4s.JValue
 
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
-import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
@@ -46,6 +46,13 @@ import com.chipprbots.ethereum.vm.StructLogTracer
   * PrestateTracer (pre-tx state snapshot) any other string → unsupported; return error
   */
 object DebugTracingService:
+
+  /** The most blocks one debug_traceChain answers (`toBlock - fromBlock`). go-ethereum streams the range over a
+    * subscription and holds no more than a bounded number of blocks in flight; this node answers in one response, with
+    * every block's trace in memory, and a structLog or callTracer trace is far larger than the flat Parity trace of
+    * trace_filter (which caps at 1000). So the cap is lower: 100 blocks. A longer range is asked for in pieces.
+    */
+  val MaxTraceChainRange: Long = 100L
 
   /** Tracer configuration, mirroring go-ethereum's eth/tracers/logger.Config.
     *
@@ -120,8 +127,12 @@ class DebugTracingService(
     // go-ethereum --rpc.gascap, as for eth_call (TraceCall runs CallDefaults with the backend's RPCGasCap)
     gasCap: BigInt = CallTxBuilder.DefaultGasCap,
     // the rules of the chain the blocks are replayed under: the node's, unless a caller serves another chain
-    chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
+    chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 ) extends ResolveBlock:
+
+  // "safe" and "finalized" are the consensus client's, as in EthBlocksService (B-489)
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
 
   import DebugTracingService.*
 
@@ -143,13 +154,9 @@ class DebugTracingService(
     StateRead
       .reading {
         for
-          location <- transactionMappingStorage
-            .get(req.txHash)
+          found <- CanonicalTxLookup(transactionMappingStorage, blockchainReader, req.txHash)
             .toRight(JsonRpcError.LogicError("Transaction not found"))
-          TransactionLocation(blockHash, txIndex) = location
-          block <- blockchainReader
-            .getBlockByHash(BlockHash(blockHash))
-            .toRight(JsonRpcError.LogicError(s"Block not found for hash ${blockHash.toHex}"))
+          CanonicalTxLookup.Found(block, txIndex) = found
           parentHeader <- blockchainReader
             .getBlockHeaderByHash(block.header.parentHash)
             .toRight(JsonRpcError.LogicError("Parent block not found"))
@@ -262,8 +269,9 @@ class DebugTracingService(
     * every prior tx from the parent state root, so calling it once per index makes this method O(n^2) in the
     * transaction count. replayTransaction already returns the post-tx world in TxResult.worldState, so we carry that
     * into the next iteration and only build the genuine parent-state world once (matches core-geth's traceBlock, which
-    * steps one statedb forward); for an Amsterdam block that first world already holds the block's system-call
-    * preamble. advanceWorldToTx itself is untouched — traceTransaction legitimately uses it for a single index.
+    * steps one statedb forward); that first world already holds the block's preamble (DAO drain, EIP-4788, EIP-2935),
+    * as block import applies it. advanceWorldToTx itself is untouched — traceTransaction legitimately uses it for a
+    * single index.
     */
   private def traceAllTxsInBlock(block: Block, config: TraceConfig): Either[JsonRpcError, Seq[TxTraceResult]] =
     blockchainReader
@@ -380,6 +388,36 @@ class DebugTracingService(
         Left(JsonRpcError.NodeNotFound)
       }
 
+  /** One block of debug_traceChain, on its parent's state. A read of that state that the disk moved under is run again
+    * on a fresh view, the whole block of it ([[StateRead.attempting]]), so one stale read does not fail the range; a
+    * state that stays unreadable ends the range with the error [[StateRead.unavailable]] says.
+    */
+  private def traceChainBlock(
+      blockNum: Long,
+      config: TraceConfig
+  ): Either[JsonRpcError, Option[TraceChainBlockResult]] =
+    val branch = blockchainReader.getBestBranch
+    blockchainReader.getBlockByNumber(branch, blockNum) match
+      case None => Right(None)
+      case Some(block) =>
+        blockchainReader.getBlockHeaderByHash(block.header.parentHash) match
+          case None => Right(None)
+          case Some(parentHeader) =>
+            val stxs =
+              SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
+            // One scope of reads for each attempt at a block of the range: the state the block is traced on is its
+            // parent's, which is behind the head, and is held for this block and no longer.
+            StateRead
+              .attempting {
+                stxs.zipWithIndex.map { case (stx, txIndex) =>
+                  val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
+                  val tracer = selectTracer(config, Some(world))
+                  stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
+                  tracer.getResult
+                }
+              }
+              .map(traces => Some(TraceChainBlockResult(block.header.number.value, block.header.hash.value, traces)))
+
   /** Returns traced results for all blocks in [fromBlock+1, toBlock], one entry per block. Used by debug_traceChain
     * (streaming via WebSocket).
     *
@@ -398,23 +436,15 @@ class DebugTracingService(
         fromNum = fromResolved.block.header.number.toLong
         toNum = toResolved.block.header.number.toLong
         _ <- Either.cond(toNum > fromNum, (), JsonRpcError.InvalidParams("end block must come after start block"))
-        results = ((fromNum + 1) to toNum).flatMap { blockNum =>
-          val branch = blockchainReader.getBestBranch
-          blockchainReader.getBlockByNumber(branch, blockNum).flatMap { block =>
-            blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
-              val stxs =
-                SignedTransactionWithSender.getSignedTransactionsOfBlock(block.header, block.body.transactionList)
-              // One scope of reads for each block of the range: the state the block is traced on is its parent's,
-              // which is behind the head, and is held for this block and no longer.
-              val traces = StateRead.scoped(stxs.zipWithIndex.map { case (stx, txIndex) =>
-                val world = stxLedger.advanceWorldToTx(block.header, stxs, txIndex, parentHeader)
-                val tracer = selectTracer(config, Some(world))
-                stxLedger.replayTransaction(stx, block.header, world, Some(tracer))
-                tracer.getResult
-              })
-              TraceChainBlockResult(block.header.number.value, block.header.hash.value, traces)
-            }
-          }
+        _ <- Either.cond(
+          toNum - fromNum <= MaxTraceChainRange,
+          (),
+          JsonRpcError.InvalidParams(s"Requested range exceeds max of $MaxTraceChainRange blocks")
+        )
+        results <- ((fromNum + 1) to toNum).foldLeft[Either[JsonRpcError, Vector[TraceChainBlockResult]]](
+          Right(Vector.empty)
+        ) { case (acc, blockNum) =>
+          acc.flatMap(done => traceChainBlock(blockNum, config).map(done ++ _))
         }
       yield results
     }.recover { case _: MissingNodeException =>

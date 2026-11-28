@@ -203,7 +203,7 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
         w.saveAccount(contract, Account(balance = UInt256(1), codeHash = CodeHash(crypto.kec256(code))))
           .saveCode(contract, code)
       }
-      InMemoryWorldStateProxy.persistState(deployed).stateRootHash
+      InMemoryWorldStateProxy.persistStateAndWriteCode(deployed).stateRootHash
 
     val genesisHeader: BlockHeader = BlockHeader(
       parentHash = BlockHash(ByteString(new Array[Byte](32))),
@@ -478,6 +478,43 @@ class EngineApiProposerBuildSpec extends AnyWordSpec with Matchers:
         block1.header.blobGasUsed shouldBe Some(BlobGasUtils.GAS_PER_BLOB * 6)
         expectValid(block1)
       )
+
+    // B-230: a build writes no contract code. The proposer's own block becomes the chain through engine_newPayload,
+    // which executes it again and writes its code before its state; the next build, on that block, runs the contract.
+    "leave a contract its own block deploys in the code store once newPayload accepts the block, for the next build" taggedAs (
+      UnitTest,
+      ConsensusTest
+    ) in (new ParisSetup:
+      // runtime: PUSH1 1 PUSH1 0 SSTORE STOP; init code returns those 6 bytes
+      val runtime: ByteString = ByteString(org.bouncycastle.util.encoders.Hex.decode("600160005500"))
+      val initCode: ByteString = ByteString(org.bouncycastle.util.encoders.Hex.decode("656001600055006000526006601af3"))
+      val codeHash: ByteString = crypto.kec256(runtime)
+      val codeStore: com.chipprbots.ethereum.db.storage.EvmCodeStorage = storagesInstance.storages.evmCodeStorage
+      val aliceAddress: Address = Address(crypto.kec256(crypto.pubKeyFromKeyPair(alice)))
+      val contract: Address = com.chipprbots.ethereum.jsonrpc.CallErrors.createAddress(aliceAddress, 0)
+      def tx(nonce: BigInt, to: Option[Address], data: ByteString): SignedTransaction =
+        SignedTransaction.sign(
+          LegacyTransaction(nonce, GasPrice(BigInt("30000000000")), GasAmount(200_000), to, 0, data),
+          alice,
+          None
+        )
+
+      poolContents.set(Seq(tx(0, None, initCode) -> 1L))
+      val block1: Block = buildOn(genesisHeader)
+      block1.body.transactionList should have size 1
+      // the build deployed it and wrote it nowhere
+      codeStore.get(codeHash) shouldBe None
+      expectValid(block1)
+      // newPayload executed the block and wrote its code
+      codeStore.get(codeHash) shouldBe Some(runtime)
+
+      // the next build, on block 1 (forkchoiceUpdated makes it the head), calls the contract: its code is read
+      val call: SignedTransaction = tx(1, Some(contract), ByteString.empty)
+      poolContents.set(Seq(call -> 2L))
+      val block2: Block = buildOn(block1.header)
+      block2.body.transactionList shouldBe Seq(call)
+      expectValid(block2)
+    )
   }
 
   /** execution-apis paris.md, engine_getPayloadV1: "MUST return the most recent version of the payload that is

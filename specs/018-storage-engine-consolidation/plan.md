@@ -5,19 +5,70 @@
 **Input**: Feature specification from `/specs/018-storage-engine-consolidation/spec.md`; evaluation in
 [research.md](./research.md).
 
-**Status**: Drafted ahead of implementation so `/speckit-tasks` can run once the gates report. Phase 0 can start after
-spec 016 completes; Track E after spec 017 completes and GT-1 has chosen the engine; Track F after Track E's SC-001;
-Track H after GT-3. **Revised 2026-10-17**: engine chosen by bake-off (not fixed to libmdbx); gigablock harness; cold
-tier (Track H); ETC on the unified layout is decided, not gated. **Revised again 2026-10-17 (read-serving)**: Track R (bounded read executors, streaming codecs,
-fixed-width `UInt256`), the GT-1 RPC read-load arm against Geth, Besu, Erigon and Reth, the `dbLock` close-fence as a
-standalone fix PR, and the deployment topology (DC-16); see research §16 for the assessment that prompted them.
-**Revised 2026-11-06 (after T063; spec Clarifications, session 2026-11-06):**
-- **Track C** (Phase 1b), the unified path-live layout for both chains, runs first after 0.11.0, on RocksDB, ahead of
-  Track E and of spec 017. Spec 017 is parked until execution-specs releases `ExecutionWitness`, and only items 7 and 9
-  depend on it.
-- Track F's items 6 and 8 and the copy and Hash-scheme retirement of item 10 move into Track C.
-- Under the user's standing rule (one infrastructure for both chains, no staged or release-level transitions, no external
-  users of old versions), the transition windows in this plan are removed.
+**Order of the tracks.** **Track C** (Phase 1b), the unified path-live layout for both chains, runs first, after 0.11.0,
+on RocksDB, ahead of Track E and of spec 017 (spec 017 is parked until execution-specs releases `ExecutionWitness`;
+only items 7 and 9 depend on it). Track F's items 6 and 8 and the copy and Hash-scheme retirement of item 10 are in
+Track C. Phase 0 is research off the node host; Track E follows Track C and GT-1 (the engine is chosen by a measured
+bake-off); Track F follows Track E's SC-001; Track H follows GT-3; Track R follows Phase 0. Under the user's standing
+rule (one infrastructure for both chains, no staged or release-level transitions, no external users of old versions)
+this plan has no transition windows. How each of these was decided is in the "Decision log" at the end.
+
+**Companions**: [data-model.md](./data-model.md) (Track C's formats and design record) and
+[implementation-log.md](./implementation-log.md) (the dated build record of Track C: the S0 reviews and every slice's
+and part's record, moved out of this file on 2026-11-21).
+
+## Status (2026-11-21, staging `ad7c768354`, 0.12.76)
+
+**Track C: code for C1 to C6 is merged; C7 (the soak and exit gate) is in progress; C8a and C8b have not started.**
+Tracks E, F, H and R and Phase 0 (GT-0 to GT-3, T-000 to T-013 of spec.md) have no merged code; `dbLock` is still a
+read/write lock, so T-010 (the close-fence, OQ-7) has not shipped.
+
+| Slice | Backlog | State | Merged PRs (merge date) |
+| --- | --- | --- | --- |
+| C0 | B-053 (open) | in progress: docs and measurements | #1729, #1732 (11-07); #1794 (11-15, live Mordor check of C1, `baselines/m7-c1.md`); #1888 (11-17, oracle jar pinned at v0.12.1, `baselines/pinned-jar.md`) |
+| C1 | B-054 (done) | done; jar gates open (B-203) | #1788, #1790 (11-10) |
+| C2a | B-055 (done) | done; jar and ethereum/tests halves open (B-203, B-207) | #1791, #1792 (11-11) |
+| C2b | B-056 (done) | done; T052's jar half open (B-212) | #1796, #1797, #1798, #1799 (11-11) |
+| C3a | B-057 (done) | done | #1793, #1795 (11-11) |
+| C3b | B-058 (done) | done; recorded values and figures open (B-203) | #1800 (11-11) |
+| C3c | B-059 (done) | done, linear subset (decision of 2026-11-12); B-219 done (#1901), B-220 done (2026-11-24) | #1801–#1804 (11-11); #1805 (11-12) |
+| C4a | B-060 (done) | done | #1806–#1809, #1811, #1813, #1815 (11-12) |
+| C4b | B-061 (done) | done | #1816, #1818 (11-12); #1824–#1829 (11-13) |
+| C4c | — | withdrawn (`inmemory` retired, 2026-11-06) | none |
+| C4d | B-062 (done) | done; T156's crash test open (B-255) | #1830–#1832 (11-13); #1833, #1838, #1840, #1841, #1843 (11-14) |
+| C4e | B-063 (done) | done, with its carried gates B-293, B-295, B-296, B-297, B-300 | #1846 (11-14); #1849–#1853 (11-15); gates #1872, #1874, #1876 (11-16), #1882, #1908, #1909 (11-17) |
+| C5a | B-064 (blocked) | code done; T209 and EG-4 (fresh Sepolia sync plus 24 h) open | parts 1 to 7b #1855–#1864 (11-15); #1865–#1876, #1878, and #1880 (part 10, refusals lifted) (11-16); follow-ups #1887, #1896–#1898, #1900, #1910 (11-17), #1922 (11-18). v0.12.0 was cut after part 10 (B-312) |
+| C5b | B-065 (done) | done; B-373, B-375 open | #1921, #1929, #1930 (11-18); follow-ups #1945, #1947, #1950 (11-18), #1948 (11-19), #1962, #1963 (11-20) |
+| C5c | B-066 (done) | done; B-377, B-379, T233 (M9), T234 (user) open | #1931, #1932, #1935 (11-18); follow-ups #1939, #1944 (11-18), #1976 (11-20) |
+| C6 | B-067 (done) | code done; live gates in B-393 | #1936, #1937, #1938, #1940, #1942 (11-18); follow-ups #1943, #1946, #1949 (11-18), #1965, #1966, #1971 (11-20), #1977 (11-21) |
+| C7 | B-068 (open); B-393 (in progress) | in progress: live gates | #1969, #1972, #1974, #1975 (11-20: T248's results and `baselines/c7-gate-report.md`). No soak build cut (T250) |
+| C8a | B-069 (open) | not started; waits for C7 and EG-12 | none |
+| C8b | B-070 (open) | not started; waits for C8a | none |
+| C9a | B-552 (open, P1) | not started; designed 2026-11-27 ("C9: history expiry" below); independent of C7, C8a and C8b, can start now | none |
+| C9b | B-552 (open, P1) | not started; after C9a; operator opt-in | none |
+
+**What remains**, by what it waits for:
+- **C0** (B-053): the jar's keeper and its NFS path (user), and T003 to T007, T009, T011 to T013, T016, T017: the fixed
+  ranges' recorded roots, the hive and EEST baselines on the pinned jar, M1 and M14, beacon's sign-off of the EIP-8246
+  read (T008), and the size estimate set again (T016).
+- **Jar comparisons of done slices**: B-203 (T025, T033, T034 and the other DC-14 figures), B-207 (T026), B-212 (T052),
+  B-375 (T214), B-381 (T238). Each needs the pinned jar; B-203 and B-381 also need a live host.
+- **C7 live gates** (B-068, B-393): T248 passed on dev-node on 2026-11-20 (the Mordor rehearsal passed every node-side
+  criterion); the Mordor half of EG-6 has run on dev-node since 2026-11-21; EG-12 (T264) waits for the NVMe drive
+  (user, 2026-11-20); EG-6's private Olympia net was skipped (user, 2026-11-20); EG-4 (B-064), EG-9, EG-14 and the other
+  EG rows have not run. Also live: B-073 (Mordor gate runs and the archive to the NAS), B-255 (T156), B-314 (hive engine
+  re-org suites with the guard on), B-379 (pinned checkpoint hashes, from EG-9 and EG-12 archives).
+- **C8a** (B-069), after C7 and EG-12; **C8b** (B-070), after C8a. B-292 (fault injection for reverse-then-commit at the
+  cap) is to land before the guard goes.
+- **C9a and C9b** (B-552, P1, the user, 2026-11-27): history expiry, then an optional tiered freezer for history. They
+  wait for nothing in Track C's gate. EG-4 is accepted without them, its disk figure marked without expiry (open
+  item 7, decided 2026-11-27).
+- Code follow-ups that need no host are listed in the backlog (spec 018, area storage/sync).
+
+**The guard.** `fukuii.state.path-live` is **`false` by default** (`src/main/resources/conf/base/state.conf`) in every
+release so far, including v0.12.0 and the pinned oracle v0.12.1: the unified layout runs only on nodes and harnesses that
+set it (the C7 gate runs, the hive switch of #1910). It never becomes an operator default: C8b deletes the key with the
+Hash-scheme code, after which the unified layout is the only layout (see "Order" under Phase 1b).
 
 ## Summary
 
@@ -32,7 +83,10 @@ The zkVM guest (spec 019) never sees any of it.
 
 ## Technical Context
 
-**Language/Version**: Scala 3.3.8 (3.3 LTS) on JDK 25; sbt 1.10.7 today. The LTS audit of 2026-10-17 (`docs/reports/LTS_TOOLCHAIN_AUDIT_2026-10.md`) recommends moving to **Scala 3.9 LTS** and sbt 1.12.x before spec 017 starts (its R-1, R-2; stubbed as spec 020, `specs/020-scala-3-9-lts-migration/`); if that lands, the bake-off harness and every Track E/F/H slice target 3.9 and the JDK 25 FFM API is unaffected. JDK 25 is the current LTS and stays.
+**Language/Version**: Scala 3.9.0 (3.9 LTS) on JDK 25; sbt 1.13.0 (`build.sbt`, `project/build.properties`; the move
+from 3.3.8 is spec 020, `specs/020-scala-3-9-lts-migration/`, as the LTS audit of 2026-10-17,
+`docs/reports/LTS_TOOLCHAIN_AUDIT_2026-10.md` R-1 and R-2, recommended). The bake-off harness and every Track E/F/H
+slice target 3.9; the JDK 25 FFM API is unaffected. JDK 25 is the current LTS and stays.
 
 **Primary Dependencies**: the hot-tier engine GT-1 selects. Candidates and their routes (research §12): libmdbx
 (amalgamated C source vendored under `db/<engine>/native/`, bound through `java.lang.foreign` with `jextract`-generated
@@ -164,8 +218,8 @@ two in `ledger/`, plus the deletion in `snap/`. Track H touches one file in `jso
 | FFM bindings over vendored source (if an FFM-bound engine wins) | No stable Maven artifact for libmdbx exists (research §8); a snapshot from a dormant repo is not a dependency a consensus client can carry | `lmdbjava` is published and is in the bake-off; it loses only if its measured properties lose |
 | An append-only segment store we own | Immutable chain data must not compete with state for engine pages at gigablock volumes (DC-13); reth and Erigon both converged on this | keeping chain data in the state engine is the status quo being measured against |
 | An optional networked cold store | Logs over long ranges, witnesses and aged history are scans, not point reads (research §13); the hot tier should not carry them | files only (era + witness files) is the GT-3 alternative and may win |
-| Two engines compiled in, within Track E only *(revised 2026-11-06)* | CI needs both for SC-001's differential while Track E is in development | the "one minor release" operator window is removed under the user's standing rule: no external operator relies on old datadirs. RocksDB is removed in the same track once SC-001 and the soaks are green |
-| A pinned pre-track jar as the oracle *(Track C, 2026-11-06)* | Track C deletes the Hash scheme, so no in-tree build can serve as the roots-equal oracle after C8 | keeping the Hash scheme in tree as an oracle would keep two layouts, which the standing rule rules out |
+| Two engines compiled in, within Track E only | CI needs both for SC-001's differential while Track E is in development | the "one minor release" operator window is removed under the user's standing rule: no external operator relies on old datadirs. RocksDB is removed in the same track once SC-001 and the soaks are green |
+| A pinned pre-track jar as the oracle (Track C) | Track C deletes the Hash scheme, so no in-tree build can serve as the roots-equal oracle after C8 | keeping the Hash scheme in tree as an oracle would keep two layouts, which the standing rule rules out |
 
 ## Phase 0 — Research and measurement (after spec 016; off the node host)
 
@@ -200,17 +254,20 @@ on the OQs.
   FR-026), `StorageMetrics`, `ColdStore`, the `StorageScheme` deprecation behaviour (DC-9), the datadir layout
   detection message.
 - `quickstart.md`: per-chain resync procedure, sizing formula (DC-10), operator checklist, rollback to RocksDB during
-  the transition window.
+  Track E (both engines compile in only within that track).
 - GT-2: constitution amendment + INF-007 merged.
 - Re-run the Constitution Check.
 
 ## Phase 1b — Track C: the unified path-live layout (after 0.11.0; before Track E and spec 017)
 
-**Status**: design **revised after S0 review rounds 1 and 2** (`beacon` for ETH, `forge` for ETC). Round 1 (2026-11-06): 3 REJECTs
-resolved, every SIGN WITH CHANGES applied. **Round 2 (2026-11-07): no REJECT; every SIGN WITH CHANGES applied** (see "S0 record
-round 1" and "round 2" below). There is no round 3: each reviewer verifies the applied changes at the owning slice's PR, and
-"S0 prerequisites per slice" says which text each slice waits on. C1 to C3a wait on nothing. Written by `vault`. Companion: [data-model.md](./data-model.md) (formats, overlay, design record A
-to I). Evidence base: `wt/plan-018-021` at staging `49dd46d1b` (v0.10.47). Nothing here is implemented.
+**Status**: C1 to C6 are built and merged; C7 is running its live gates; C8a and C8b have not started (see "Status" at
+the top). The design passed two S0 review rounds before code (`beacon` for ETH, `forge` for ETC): round 1 (2026-11-06)
+resolved 3 REJECTs, round 2 (2026-11-07) had none, and every SIGN WITH CHANGES of both was applied; each reviewer verified
+the applied changes at the owning slice's PR (the records are in [implementation-log.md](./implementation-log.md)).
+Written by `vault`. Companion: [data-model.md](./data-model.md) (formats, overlay, design record A to I). The design was
+first drawn against `wt/plan-018-021` at staging `49dd46d1b` (v0.10.47); file:line references in the slice tables are
+to that tree unless a later date is given. Where a slice's build differed from the first design, the slice sections
+below and data-model.md state the design as built; how each difference was reached is in the implementation log.
 
 Track C runs first, after 0.11.0, on RocksDB with today's `DataSource`, ahead of Track E and of spec 017. It depends on
 neither, nor on GT-1 or the constitution amendment.
@@ -224,15 +281,13 @@ neither, nor on GT-1 or the constitution amendment.
   10a/10b split. Consensus rules still differ per chain by config (`forBlock` versus `forTimestamp`); only the storage
   infrastructure is shared.
 - **No legacy-datadir machinery.** One layout marker. A datadir without it, on either chain, is refused at start with a resync
-  message unless it is empty. No adoption, no migration, no legacy reader, no finished-copy versus mid-copy detection. This
-  reverses the user's earlier adopt-in-place choice.
+  message unless it is empty. No adoption, no migration, no legacy reader, no finished-copy versus mid-copy detection.
 - **No release-level transition.** No flag ships default-off for a release and flips later; no "one minor release" windows.
   The only flag is an in-development guard that keeps staging green between PRs and is deleted, together with the Hash-scheme
   code, in the last slice.
 - Kept: Option Y, write-through (no journal), the changeset record, checkpoint import funded and required, T064's intent on a
   fresh datadir, the overlay budget left to M1 and M2. **Two pruning modes on both chains, `basic` and `archive`: `inmemory` is
-  retired** (user, later on 2026-11-06, reversing "keep all three") and rejected at start on both chains with a clear message,
-  with no deprecation window.
+  retired** and rejected at start on both chains with a clear message, with no deprecation window (#1739, 2026-11-07).
 
 ### Summary
 
@@ -241,17 +296,21 @@ neither, nor on GT-1 or the constitution amendment.
 | 8, path-aware node resolution | C1, C2a, C2b | The trie reports positions; a position store resolves by `(owner, path)` with hash verification; every reader can be handed it; the typed `StateFault`s exist |
 | 6, changesets | C3a, C3b, C3c, C4a, C4b, C4d, C4e (C4c is withdrawn; its id is not reused) | The `BlockDiff` record and CF `v`; the in-place canonical commit under the state lock; the proposer view, the bypass writers and the ported test harnesses; the overlay; head moves planned from the anchor; the PoS arms (Engine API, local recovery, finality-aware retention) and the PoW arms (pinned branches, `SYNC-FORK`, result mapping) |
 | 10, one gate | C5a, C5b, C5c, C6, C7, C8a, C8b | Hand-off without a copy, with the ancestor window; the layout guard; the audit, on-demand fetch and recovery scans by position; the checkpoint v2 format and importer; ETC enablement and mainnet readiness; the soak and exit gate; then deletion of the exporter and the Hash scheme and removal of the guard flag |
+| 19, history expiry and tiered history (B-552, #1483; added 2026-11-27) | C9a, C9b | A history cutoff (the backfill stops there, stored history below it is pruned, the earliest block is recorded and advertised, and RPC and devp2p answer for expired ranges as geth does); then an optional second path for frozen bodies and receipts. One design for every chain, ETC included (the user, 2026-11-27). It touches history only (namespaces `b`, `r`, `l`), not the state layout, so it runs with the guard on or off |
 
 **Order.** Item 6 lands before item 10, as decided. Because C3 and C4 cannot be soaked on a live chain without a hand-off that
 does not publish, the hand-off (C5) is built behind the same in-development guard before the soak (C7). The guard
-`fukuii.state.path-live` is `false` while slices land, selects the unified layout when `true`, and is removed in C8b; no
-release is cut from the track with the guard as an operator option, and the soak runs with it on. **The harness port (C3c) is
+`fukuii.state.path-live` is `false` by default while slices land, selects the unified layout when `true`, and is removed in
+C8b; it is never an operator option and never flips to `true` as a default: releases cut during the track (v0.12.0 onward)
+carry it at `false`, the soak and the gate runs set it on, and after C8b there is no flag and no second layout. **The harness port (C3c) is
 before every slice that claims a roots-equal check**, because a gate that ran on the Hash-scheme harnesses would prove nothing
-about the position store (S0 record, item 14).
+about the position store (S0 item 14).
 
 **The oracle.** The Hash scheme is deleted in this track, so no in-tree build can serve as the differential oracle after C8.
-Before C1 the last pre-track release is **pinned as a jar outside the tree** (SHA-256 recorded), with recorded roots for the
-fixed Mordor, Sepolia and Platåberget ranges, **and the ETH hive and EEST baselines (pass lists per suite)**, and kept until
+A release is **pinned as a jar outside the tree** (SHA-256 recorded): **v0.12.1** (the user's choice of 2026-11-17; it holds
+C1 to C5a with the guard off, so it runs the Hash scheme), with v0.11.0, the last pre-track release, as the fallback
+(`baselines/pinned-jar.md`). With it go recorded roots for the fixed Mordor, Sepolia and Platåberget ranges, **and the ETH
+hive and EEST baselines (pass lists per suite)** (C0, still to record), and the jar is kept until
 EG-12 passes and the first ETC v2 archive has been re-imported on a second datadir, and at least one release past C8b. Every
 "roots equal" check below is against it. For ETC mainnet there is no pre-state to record: its oracle is the chain itself,
 through an import from genesis validated block by block against the canonical headers (EG-1).
@@ -268,11 +327,13 @@ guard (C5a, +10 / +20) and the ancestor-window chaining plus the genesis-anchor 
 reviews priced and the first draft had not: the ported harnesses (C3c), the by-hash in-block layer, the state lock and the anchor
 compare-and-set, per-block reset tracking, local recovery, the PoS and PoW arms split out of one slice, the
 ancestor window, and the larger checkpoint format. Research 17's "about 1,100 for Option X plus 1.5-2.5k for item 6" priced
-none of it. (`inmemory` was costed at about 450 main and 400 test lines in C4c and is withdrawn.) Nothing here is measured; M1 to M14 (data-model 13) replace the guesses, and the sizes are set again at the end of C0.
+none of it. (`inmemory` was costed at about 450 main and 400 test lines in C4c and is withdrawn.) These are estimates, not
+measurements: M1 to M15 (data-model 13) replace the guesses, and the sizes have not yet been set again against what merged
+(T016, C0, open).
 
 | Slice | Content | Owner / review |
 | --- | --- | --- |
-| **C0** | **S0**: rounds 1 and 2 are done (records below). Golden vectors 1 to 3 (verified independently by both reviewers) and the oracle tests frozen; the pre-track jar pinned with the hive and EEST baselines and the fixed ranges' roots recorded; the **EIP-8246 text read from an EIPs clone, and the pass count of the 658 `eip8246_selfdestruct_no_burn` EEST fixtures recorded** (on the pinned jar's harness now, on the ported harness at C3c); the source of the ETC 0-5.1M blocks named or listed open (it gates C7, not code); M14 measured; M1 reports the largest observed diff against `max-record-bytes`. Docs and measurements only | vault authors; the reviewers have signed (no round 3); user accepts the remaining open items |
+| **C0** | **S0**: rounds 1 and 2 are done (records in [implementation-log.md](./implementation-log.md#s0-c0-the-review-records)). Golden vectors 1 to 3 (verified independently by both reviewers) and the oracle tests frozen; the pre-track jar pinned with the hive and EEST baselines and the fixed ranges' roots recorded; the **EIP-8246 text read from an EIPs clone, and the pass count of the 658 `eip8246_selfdestruct_no_burn` EEST fixtures recorded** (on the pinned jar's harness now, on the ported harness at C3c); the source of the ETC 0-5.1M blocks named (it gates C7, not code; named 2026-11-07: this project's own ETC sync and export, T010); M14 measured; M1 reports the largest observed diff against `max-record-bytes`. Docs and measurements only | vault authors; the reviewers have signed (no round 3); user accepts the remaining open items |
 | **C1** | Item 8a. `NibblePath`; position threading through `MerklePatriciaTrie.put`, `remove` and `fix`; reporting of replaced and absorbed nodes only; the first-event prior rule; `MptTraversals.collapseTrieAt`; the additive `MptStorage` members (`getAt`, `forOwner`, `resetOwner`, `updateNodesAt`, `rawNodesAt`); `MptStorageDecorator`. Consensus byte-identical on both chains. **M7 on Mordor within the spec 007 allocation budget is a merge gate** | vault; **forge and beacon before code**, both review the PR; wraith; eye |
 | **C2a** | Item 8b. The position store's read side: `PathMptStorage` (verifying, owner-scoped), the stale / corrupt / absent classification, the `StateFault` hierarchy, the anchor-only `StateView`, `PathStateStorage` read members, owner threading in `InMemoryWorldStateProxy` **and in the genesis loader's storage tries**, `PathPrefetchReader` over `view(parent)`, the seven implementors on the decorator base. Wired behind the in-development guard | vault; beacon (execution read path, BAL prefetch); forge (shared `InMemoryWorldStateProxy`, genesis); prism |
 | **C2b** | Item 8c. The readers: `Blockchain` and `BlockchainReader` state reads, `eth_getStorageAt` / `eth_getProof` / GraphQL signatures, the four readers the first table omitted, `StxLedger` and simulate, SNAP serving by root view and the served-root window clamp, checkpoint export (v1 here), the four recovery walkers, the hash-only mpt walkers, the **allow-list grep ratchet** on the four state accessors, `GetNodeData`, RPC stale-view retry | vault; **conduit** (RPC signatures); **herald** (SNAP serving); beacon; eye |
@@ -282,15 +343,17 @@ none of it. (`inmemory` was costed at about 450 main and 400 test lines in C4c a
 | **C4a** | Item 6c. `StateOverlay`: forward layers, the reverse index, the full `StateView`, move-log reads, eviction, **pinned layers**, metrics | vault; beacon (isolation); forge reviews; prism |
 | **C4b** | Item 6d. The **move core**: `HeadMove` planned from the anchor's records, `HeadMovePrepared` carried into `promoteToCanonicalHead` and `rewriteCanonicalIndex`, chunked deep moves, startup reconciliation I1 and the index check I6, the sampled post-move check, the `ConsensusStateFault` results and `Consensus.isLocalStateFault`; **`saveLastBlock` a no-op on a path-live store and `executeAndValidateBlocks` stopping at the first commit that no longer extends the anchor; the refusal on reverse depth with `reorg.max-depth` defaulting to the retention floor** | vault; **beacon and forge before code**; eye |
 | **C4c** | **Withdrawn: the `inmemory` mode is retired** (user, 2026-11-06). Its work (the undo ring, the persisted tail, the clean-shutdown flush, the restart-reach rules, the mode's durability tests) is not done. What the remaining modes needed from it is already elsewhere: the state-move lock and the crash matrix (C3b, C4b), the finalization durability test (C5a). The id is not reused, so the references to C4d and C4e stay valid. The mode's rejection at start (a one-line config check with a test) is part of C5a | n/a |
-| **C4d** | Item 6f, **PoS arms**. `forkchoiceUpdated` ordering; the designated-head arm as reverse-then-commit; `StateRecovery` (local re-execution); the Engine API answer table and the INVALID layer drop; finality-aware retention; **the escalation route: a direct `StateEscalationRequested` message to `SyncController` with PoS hysteresis (64 consecutive refusals), the cool-down and loop guard, the ordered clear (one synced batch with `clearSnapSyncDone`, then CF `v`, `t`, `u`, with a `state.reset-pending` key)**; builder stale-view retry | vault; **beacon before code**; forge reviews the shared `ConsensusImpl`; eye |
-| **C4e** | Item 6g, **PoW arms**. `reorganise` with pinned branch layers and the up-front refusal **on reverse depth, not branch length**; the `SYNC-FORK` clamp; the PoW result mapping; `fork.parentSideChain` re-execution; `REORG-PARTIAL` layer reuse; escalation through `RegularSyncStuck` (with the cool-down and loop guard); `archive` moves unbounded and chunked, **with block generation paused for the move** | vault; **forge before code**; beacon reviews; eye |
-| **C5a** | Item 10 (hand-off). Hand-off without a publish (both chains); `PathHandoffSample`; `StateLayoutGuard` (one marker, one rule, **refusing a marked datadir too while the in-development flag is off**); the synced finalization commit carrying the anchor; the genesis clear and `HealInvariant.isEmpty`; **`AncestorWindow.ensure` (256 headers, 6 bodies) as a hand-off precondition**; **`pruning.mode = "inmemory"` rejected at start on both chains** | vault; beacon; forge (ETC SNAP wiring, ancestor window); eye; the 016 ratchet stays green |
+| **C4d** | Item 6f, **PoS arms**. `forkchoiceUpdated` ordering; `StateRecovery` (local re-execution); the Engine API answer table and the INVALID layer drop; finality-aware retention. **Built in C5a instead** (the user, 2026-11-14): the designated-head arm went to C4e, and **the escalation route: a direct `StateEscalationRequested` message to `SyncController` with PoS hysteresis (64 consecutive refusals), the cool-down and loop guard, the ordered clear (one synced batch with `clearSnapSyncDone`, then CF `v`, `t`, `u`, with a `state.reset-pending` key)** went to C5a. Also: builder stale-view retry | vault; **beacon before code**; forge reviews the shared `ConsensusImpl`; eye |
+| **C4e** | Item 6g, **PoW arms**. `reorganise` with pinned branch layers and the up-front refusal **on reverse depth, not branch length**; `SYNC-FORK` moves no state (the user, 2026-11-15: the fetcher restarts from the common block and the reorganisation judges the branch by weight, so there is no rewind to clamp); the PoW result mapping; `fork.parentSideChain` re-execution; `REORG-PARTIAL` layer reuse; the designated-head arm (from C4d); `archive` moves unbounded and chunked, **with block generation paused for the move** | vault; **forge before code**; beacon reviews; eye |
+| **C5a** | Item 10 (hand-off). Hand-off without a publish (both chains); `PathHandoffSample`; `StateLayoutGuard` (one marker, one rule, **refusing a marked datadir too while the in-development flag is off**); the synced finalization commit carrying the anchor; the genesis clear and `HealInvariant.isEmpty`; **`AncestorWindow.ensure` (256 headers, up to 5 bodies after B-302) as a hand-off precondition**; **`pruning.mode = "inmemory"` rejected at start on both chains** (done ahead of the track by #1739, 2026-11-07); **the escalation on both chains** (from C4d and C4e: trigger, hysteresis, cool-down, permanent PoW loop guard, the ordered clear); the PoS catch-up after a hand-off as an in-place adoption; **the SNAP and sync refusals on the guard lifted** (part 10) | vault; beacon; forge (ETC SNAP wiring, ancestor window); eye; the 016 ratchet stays green |
 | **C5b** | Item 10 (audit and recovery). The audit, `repairNodeAt` / `deleteBadNodeAt` (position-scoped, with a real `stillReached`), both on-demand writes of the importer, the recovery scans | vault; beacon; forge (PoW importer path); eye |
-| **C5c** | Item 10 (checkpoint), **required**. Checkpoint format version 2: genesis hash in the header, the ancestor-window entries **chained by hash to the checkpoint header and matched to their bodies**, CRC32C, the trust check, the importer's assertions and code completeness, **a genesis anchor cleared at import start**, the golden stream; version 1 refused | vault; **forge and beacon sign the format** (one-way door); eye |
+| **C5c** | Item 10 (checkpoint), **required**. Checkpoint format version 2, **byte layout pinned 2026-11-18 (B-066; data-model E.1 table)**. The header block binds the chain id (u64), the genesis hash and a TD-exact flag. The ancestor window comes right after it: headers **chained by hash to the checkpoint header**, then on ETC only B-302's bodies (`C..C-4` with ommers) **matched to their headers**. Then nodes (no hash), codes sorted by hash, the end tag and CRC32C. Also: the trust checks (expected hash pinned per public chain; an estimated TD accepted with a WARN; PoS finalized-only, TD >= TTD) and the **five** importer assertions with code completeness at threshold 0. **Vault's mark-first clear** comes before begin, and the final batch goes through `commitHandoff`. A failed or killed import is cleared and **not retried**. The golden streams; version 1 refused. **Three PRs, one release:** PR1 codec, exporter and golden streams (the format is signed); PR2 importer; PR3 atomicity, no-retry, config refusal lifted, docs | vault (PR3); **forge and beacon sign the format at PR1** (one-way door); eye |
 | **C6** | **ETC enablement and ETC mainnet readiness.** The ETC SNAP guard (`SyncController.scala:476-480`) and Hash wiring bypassed under the guard; the peer precondition and its logging; the PoW-specific hand-off checks; the private ETC-config PoW net and its scripts; the ETC reorg matrix; the rewards and era-boundary differential harness; the EG-12 run harness | vault; **forge signs the ETC side before code**; eye |
 | **C7** | **Soak and exit gate** (below), run with the guard on. **C7 runs EG-12.** No code | eye; user |
 | **C8a** | Retirement 1. Delete `PathToHashExporter` and the publish plumbing (destructive block below), `StorageScheme` and every Hash branch in `snap/`, the `PathPublish*` messages and their specs. **Merges only after EG-12 passes** | vault; beacon; forge (ETC SNAP); prism; the 016 ratchet |
 | **C8b** | Retirement 2, **the last slice.** Delete the Hash-scheme storages in `db/`, `getBackingStorage` and `getReadOnlyStorage` as state accessors, the pruning caches and config blocks; migrate or delete the remaining tests that use them; **remove the guard flag**; rewrite the operator docs, skills and `storage-rocksdb.md`; re-run the EG-1 subset on the final tree | vault; beacon; forge; prism; eye |
+| **C9a** | **History expiry** (B-552, P1; added 2026-11-27; design in "C9: history expiry" below). **One design for every chain** (the user, 2026-11-27: ETC follows ETH). The cutoff `fukuii.history.chain`: `none`, a named fork point (ETH: `merge`, `prague`, `osaka`, from geth's table; ETC and Mordor: activated forks, at least `spiral`, the set and its hashes forge's), `"<number>:<hash>"`, or **`pivot`** (a fukuii extension: history from the sync's pivot on); **default `none` on every chain** (geth's `all`); refusals at start before any side effect; one floor under every backfill cursor write; headers all kept; a bounded, kill-safe background prune (intent first under `commitSync`, `l` rows deleted only when they name the pruned block, compaction in slices with a pending marker); the earliest block recorded and advertised as `max(cutoff, L)`; one RPC predicate (4444 below the cutoff, geth's -32000 "block body not found" in a not-yet-backfilled gap) over every block-reading method; `BlockRangeUpdate` at the intent write; the transaction-index window `history.transactions` (default 0); `GetBlockBodies` and `GetReceipts` stop at the first block not held (already so). SNAP serving is unaffected; `none` is inert on every chain. Independent of C7, C8a and C8b; touches no state code | vault (owner; prune write and delete order, the floor); **beacon** (ETH points, `pivot` on PoS) and **forge** (ETC points and hashes, `pivot` and the ommer window on PoW) **before code**; **conduit** (RPC); **herald** (devp2p, advertising, peer choice); prism; eye |
+| **C9b** | **Tiered freezer** (operator opt-in; after C9a; every chain). A second path for frozen canonical bodies and receipts (geth's ancient store and `--datadir.ancient`); data at or below `max(finalized, head - 90,000)` migrated from the hot RocksDB (append, fsync of the files and the directory, synced high-water mark, then the hot delete); each record carries its block hash and a CRC32C; a repair that would truncate below the high-water mark refuses the start; reads fall through in `BlockchainReader` with a hash check; orphans stay hot; `l` stays hot and windowed. Built as a simple append-only freezer in the format FR-022's segment store will use, **not** on the `ColdStore` seam (FR-024, lossy by design). Expiry then truncates the freezer's tail. Track E's E1b and Track H's H2 build on it | vault (owner; crash order); beacon (PoS threshold); forge (PoW threshold, reorg depth); conduit and herald (fall-through answers); prism; eye |
 
 #### Files, size and tests per slice
 
@@ -306,21 +369,25 @@ none of it. (`inmemory` was costed at about 450 main and 400 test lines in C4c a
 | C4b | `storage/pathstate/HeadMove.scala`; `domain/BlockchainWriter.scala`; `consensus/ReorgStateHandler.scala`, `Consensus.scala`, `ConsensusImpl.scala` (result types); `blockchain/sync/regular/BlockImporter.scala` (`isLocalStateFault`) | 710 / 700 | plan from the anchor even when the index is ahead or behind; the batch contains the index, the pointer and the state; chunked moves; I1 rules 1 to 4 and I6; the writer table as a test; the sampled post-move check catches an injected interior fault; **a competing head move between blocks 2 and 3 of a 5-block batch leaves best equal to the anchor, commits 1 and 2 and reports a fault for 3 to 5; a fork at `best - 2` with a 300-block branch is accepted and one at `best - retained - 1` is refused `Deep`; a reorg at the finalized lag (about 90) is not refused** |
 | C4c | *(withdrawn: `inmemory` retired)* | 0 / 0 | |
 | C4d | `consensus/engine/EngineApiService.scala`, `ForkChoiceManager.scala`; `storage/pathstate/StateRecovery.scala` (new); `consensus/ConsensusImpl.scala` (designated-head arm); `blockchain/sync/SyncController.scala` (escalation); `AppStateStorage` | 850 / 880 | the answer table; **kill -9 between `newPayload` and FCU, restart with no peers, the consensus client reaches VALID with no resync**; FCU refused leaves `currentState`, safe and finalized, payload id unchanged; INVALID_REQUESTS drops the layer and the gate memo; a designated-head branch longer than `max-forward-layers`; a side-payload chain longer than the budget, then FCU; reorg at the finalized lag (about 90); fault injection into `newPayload`, FCU and the builder; **escalation: each trigger induced; 63 consecutive refusals do not escalate and the 64th does; a second trigger inside the cool-down does not (and survives a restart); a re-offered branch is dropped at ERROR by the loop guard; kill -9 at every step of the ordered clear recovers to a clean SNAP; the anchor is never deleted before `SnapSyncDone` is cleared; healing over a tombstone-skipped dead trie (one test)**; hive Engine API suites |
-| C4e | `consensus/ConsensusImpl.scala`, `ConsensusAdapter.scala`; `blockchain/sync/regular/BlockImporter.scala`, `BlockQueue`; `storage/pathstate/StateOverlay.scala` (pin); the miner and builder pause hook | 530 / 540 | a heavier branch of 33, 50 and 64 blocks adopted, **and one of 300 blocks forking at `best - 2`**; a branch above the pinned bytes raises the retryable `BranchTooLarge`, a fork deeper than the retained depth is refused `Deep` (reverse depth, not length), never invalid; **block generation waits during a chunked archive move**; `REORG-PARTIAL` layers re-used; `fork.parentSideChain` with a lost layer re-executed; the `SYNC-FORK` rewind clamped and escalating; result mapping never reaches `reportIfProvenInvalid`; archive moves of thousands of blocks in chunks, interrupted and recovered |
+| C4e | `consensus/ConsensusImpl.scala`, `ConsensusAdapter.scala`; `blockchain/sync/regular/BlockImporter.scala`, `BlockQueue`; `storage/pathstate/StateOverlay.scala` (pin); the miner and builder pause hook | 530 / 540 | a heavier branch of 33, 50 and 64 blocks adopted, **and one of 300 blocks forking at `best - 2`**; a branch above the pinned bytes raises the retryable `BranchTooLarge`, a fork deeper than the retained depth is refused `Deep` (reverse depth, not length), never invalid; **block generation waits during a chunked archive move**; `REORG-PARTIAL` layers re-used; `fork.parentSideChain` with a lost layer re-executed; fork detection (`SYNC-FORK`) moves no state and the fetcher restarts from the common block; result mapping never reaches `reportIfProvenInvalid`; archive moves of thousands of blocks in chunks, interrupted and recovered |
 | C5a | `blockchain/sync/snap/controller/SnapFinalization.scala`; `storage/PathHandoffSample.scala`, `StateLayoutGuard.scala`, `AncestorWindow.scala` (new); `nodebuilder/NodeBuilder.scala`; `snap/heal/HealInvariant.scala` | 810 / 670 | guard table (empty, marked, other version, any non-empty unmarked datadir, each chain; **a marked datadir with the flag off, an unmarked one with it on**); finalization crash matrix; the sample on a seeded store (port of `PathToHashExportCheckSpec`); genesis clear idempotence; **the ancestor window: BLOCKHASH in the first 256 blocks and an ommer whose parent is below the pivot**; `StateIngestDurabilitySpec` order under `basic` and `archive`, and kill -9 right after the synced finalization commit leaves the rows, the anchor and the pointer; `inmemory` rejected at start on both chains; `snap-split/verify.py` green |
 | C5b | `blockchain/sync/BackgroundAudit.scala`, `snap/heal/AuditWalk.scala`; `storage/pathstate/` repair members; `regular/BlockImporter.scala`; `StorageRecoveryActor`, `BytecodeRecoveryActor`, `CombinedRecoveryScanner`/`Actor` | 910 / 650 | audit over a store with injected absent, bad-keccak and moved positions; a stale read never deletes; **a decodable node that differs from the expected one is never deleted**; on-demand fetch by position fills a hole mid-import (ETH and PoW importer); both `saveNode` call sites are `repairNodeAt`; recovery scans match the pinned jar's verdicts |
-| C5c | `blockchain/checkpoint/CheckpointArchive.scala` (v2), `CheckpointExporter.scala`, `CheckpointImporter.scala` | 860 / 680 | export then import: every root equal, on seeded tries, Mordor, Sepolia; slot-0-leaf shared across tries; identical storage roots across owners; corrupt entry, hash mismatch, CRC32C, truncation, the four assertions; wrong genesis hash and wrong expected block hash refused; **an ancestor window that does not chain (a wrong `parentHash`, a gap, a body that does not match its header) refused `BadFormat`, and `min(256, N)` headers accepted when N < 256; a crash mid-import after a genesis commit leaves no anchor**; the golden stream (data-model E.1); code completeness; version 1 refused; M9 |
+| C5c | `blockchain/checkpoint/CheckpointArchive.scala` (v2), `CheckpointExporter.scala`, `CheckpointImporter.scala`; `db/storage/pathstate/SyncHandoff.scala` (checkpoint variant), `AppStateStorage.scala` (refused-archive record), `blockchain/sync/SyncController.scala` (no retry), `ConfigValidator.scala` (refusal lifted) | 860 / 680 | export then import: every root equal, on seeded tries, Mordor, Sepolia; slot-0 leaf shared across tries and identical storage roots across owners, one row per (owner, path), with the owner the leaf's full key and not hashed again; corrupt entry, keccak mismatch, CRC32C, truncation, section order, **the five assertions**; wrong chain id, genesis hash and expected block hash refused; **an ancestor window that does not chain (a wrong `parentHash`, a gap, a non-consecutive number) or whose ETC bodies are not exactly B-302's set or do not match their headers refused `BadFormat`, `min(256, N)` headers accepted when N < 256, the last at genesis**; PoS: no bodies, finalized-only export, TD >= TTD; an estimated TD accepted with a WARN; byte-reproducible export; the three golden streams (data-model E.1); code completeness at threshold 0; vault's write order and a kill at each step; a failed or killed import cleared and not retried; version 1 refused; M9 (outside a container) |
 | C6 | `blockchain/sync/SyncController.scala` (guard); the peer-count logging; `consensus/pow/*` (if the PoW paths need changes beyond C3c); test harnesses and `scripts` | 440 / 550 | ETC PoW reorg matrix on Mordor and the **private ETC-config PoW net** (two or three fukuii miners plus a core-geth, Olympia at a low block); mined root equals import root; rewards and era-boundary differential; ETC ethereum/tests; the EG-12 harness; M10, M13 |
 | C8a | delete `snap/PathToHashExporter.scala` and 3 specs; `StorageScheme`, `SnapHashTrie` and every `StorageScheme.Hash` arm (64 references, 18 files); `PathPublish*` in `SNAPSyncController` and two dispatch specs | about -2,000 / -1,000 | `sbt pp`; 016 ratchet; the EG-1 subset |
 | C8b | delete `ReferenceCountNodeStorage` (520), `CachedReferenceCountedStorage` (292), `FastSyncNodeStorage`, the Hash classes of `StateStorage.scala`, pruning caches and config; remove the guard; migrate the remaining tests | about -1,300 / -2,500, plus 700 migrated | `sbt pp`; `grep` for every removed symbol is empty; EG-1 subset on the final tree |
+| C9a | `storage/history/HistoryPolicy.scala`, `HistoryRange.scala`, `HistoryPruner.scala`, `TxIndexWindow.scala` (new); `storage/AppStateStorage.scala` (the floor in the cursor writers); `conf/base/history.conf` (new) and the named points in `conf/base/chains/{eth,sepolia,hoodi,etc,mordor}-chain.conf`; `nodebuilder/NodeBuilder.scala` (start-up checks); `blockchain/sync/snap/ChainDownloader.scala`, `HeaderChainCheck.scala`, `snap/controller/SnapFinalization.scala` (the `pivot` record), `blockchain/sync/StoredBodyRepair.scala`, `blockchain/checkpoint/CheckpointImporter.scala` (outside `db/`); `jsonrpc/ResolveBlock.scala`, `EthBlocksService.scala`, `EthTxService.scala`, `DebugTracingService.scala`, `TraceService.scala`, `FilterManager.scala`, `EthFilterService.scala`, `McpService.scala`, `JsonRpcError.scala`, `jsonrpc/graphql/GraphQLSchema.scala`; `consensus/engine/EngineApiController.scala` (payload bodies); `network/handshaker/EthNodeStatus69ExchangeState.scala`, `EthNodeStatus70ExchangeState.scala`, `blockchain/sync/regular/BlockBroadcast.scala`, `network/NetworkPeerManagerActor.scala` (peer ranges) | about 1,600 / 1,900 (a guess; set again after T293) | the policy table against geth's points and the ETC points; `pivot` cases; start-up refusals before any side effect; the floor under every cursor writer, with reset and re-peg; the prune killed at each step; `l` compare-hash; compaction resume; the RPC predicate over every method; `eth_getLogs` up front; `Status` and `BlockRangeUpdate`; body and receipt serving; the transaction-index window; `none` inert on ETH and ETC; SNAP serving unchanged; live Sepolia and Mordor runs (SC-017, SC-020) |
+| C9b | `db/freezer/HistoryFreezer.scala`, `FreezerTable.scala`, `FreezeMigrator.scala` (new); `domain/BlockchainReader.scala` (fall-through with the hash check in `getBlockBodyByHash`, `getReceiptsByHash`, `hasReceipts`); `conf/base/db.conf`; data-model.md (the freezer format) | about 1,200 / 1,200 (a guess) | append, fsync (files and directory) and repair, refusing below the high-water mark; per-record hash and CRC32C; the migration killed at each step; fall-through answers equal to hot-only, and a side-chain hash at a frozen height reads nothing; the threshold per chain; expiry through the freezer; the path refusals; a live SSD and HDD Sepolia run (SC-018) |
 
 #### S0 prerequisites per slice (round 2)
 
 "Satisfied" means the text is in data-model.md or this plan as of this revision; the named reviewer verifies it at that slice's
 PR, and a deviation reopens the item.
 
-- **C0:** read the EIP-8246 text (EIPs clone) and record the 658-fixture pass count; name or list open the ETC block source; M14; M1 with the
-  largest diff against `max-record-bytes`; pin the jar, the baselines and the golden vectors. Prerequisites: none.
+- **C0:** read the EIP-8246 text (EIPs clone) and record the 658-fixture pass count (read 2026-11-07,
+  `baselines/eip-8246-check.md`; beacon's sign-off pending, T008); name the ETC block source (named 2026-11-07, T010); M14;
+  M1 with the largest diff against `max-record-bytes`; pin the jar (v0.12.1, 2026-11-17), the baselines and the golden
+  vectors. Prerequisites: none.
 - **C1, C2a, C2b, C3a:** none. Round 2 confirms nothing blocks them (item 1 signed, golden vectors verified).
 - **C3b:** beacon item 3 (iii), the no-anchor rule (data-model 7.0), and forge item 5, the reset-owner prior (3.6). Satisfied.
 - **C3c:** forge item 12, MockedMiner waits for the import (data-model E). Satisfied.
@@ -332,11 +399,15 @@ PR, and a deviation reopens the item.
 - **C4e:** forge item 3 (b), (c) and (d): reverse-depth refusal, loop guard and cool-down, generation pause (6.4, 7.3, D). Satisfied.
 - **C5a:** forge item 7, the symmetric flag-off refusal (data-model 5.3). Satisfied.
 - **C5b:** none.
-- **C5c:** forge item 8 (a) and (b), the one-way door: the window chained by hash and the genesis-anchor clear (E.1). Satisfied;
-  **both reviewers sign the format again at the C5c PR before merge**, as for any one-way door.
+- **C5c:** forge item 8 (a) and (b), the one-way door: the window chained by hash and the genesis-anchor clear (E.1). Satisfied.
+  The byte layout is pinned in data-model E.1 (2026-11-18, B-066), before any code, with the user's four decisions of that
+  day (window after the header; TD-exact flag, estimate accepted with a WARN; PoS rules; failed import cleared and not
+  retried) and the forge and beacon corrections. The import's write order is vault's mark-first order (data-model E.1,
+  "Atomicity and failure order"), not 8 (b)'s "clear, then delete the anchor". Both reviewers signed the format at C5c's
+  PR1 (#1932), before it merged, as for any one-way door.
 - **C6:** none beyond C5a.
-- **C7:** beacon item 5 (i) and the escalation (d) in the gate (EG-4, EG-15, EG-14; satisfied); **the ETC 0 to 5.1M block source named
-  (open item 1; not satisfied)**, for EG-1's ETC half.
+- **C7:** beacon item 5 (i) and the escalation (d) in the gate (EG-4, EG-14; satisfied; EG-15 was dropped on 2026-11-25); the ETC 0 to 5.1M block source named, for
+  EG-1's ETC half (satisfied 2026-11-07: this project's own ETC mainnet sync and `fukuii etc export`, T010).
 - **C8a:** EG-12 passes. **C8b:** none new (the symmetric guard goes with the flag).
 
 #### Test matrices (C3b, C3c, C4a to C4e, C5a, C6)
@@ -351,12 +422,12 @@ designated-head arm with a branch **longer than `max-forward-layers`**; a **side
 unchanged; an `INVALID_REQUESTS` payload whose layer is dropped and whose gate memo is forgotten; `forkchoiceUpdated` **with
 attributes racing a move**; a **heavier PoW branch of 33, 50 and 64 blocks** adopted, a **300-block branch forking at `best - 2`**
 adopted (a shallow fork is never refused on length), one above the pinned bytes refused retryably (`BranchTooLarge`), and a fork
-deeper than the retained depth refused `Deep`; a `saveLastBlock` after a degraded commit writes nothing; the `SYNC-FORK` blind rewind of 128 against a reach of 64; a fork point at the SNAP pivot (the lowest legal one).
+deeper than the retained depth refused `Deep`; a `saveLastBlock` after a degraded commit writes nothing; fork detection (`SYNC-FORK`) moving no state (the blind rewind of 128 is gone, 2026-11-15); a fork point at the SNAP pivot (the lowest legal one).
 
 **ETC PoW matrix** (C6, on Mordor, on the private ETC-config PoW net, and on recorded ETC blocks; forge reviews each case): a
 heavier fork of depth 1 and 2 (the routine case); a heavier fork of depth `history`; `REORG-PARTIAL`, where the executed prefix
 does not outweigh the head and the old head stays, **and its side blocks are re-enqueued**; a fork whose blocks carry ommers
-that reference the abandoned branch; the `SYNC-FORK` rewind; an import batch of many blocks each adopted in turn; a mined block
+that reference the abandoned branch; fork detection (`SYNC-FORK`), which moves no state; an import batch of many blocks each adopted in turn; a mined block
 imported via `MinedBlockImport`, **with ommers**; a proposer run on a stale parent; MockedMiner across several head moves; a
 range spanning an ECIP-1017 era boundary with every miner and ommer balance compared; **SELFDESTRUCT on every ETC fork,
 EIP-161 touch-deletion from Atlantis (block 8,772,000) including an "empty" account with non-empty storage, and the CREATE2
@@ -388,8 +459,11 @@ Assert: never INVALID, never `markInvalidRecursive`, never `reportInvalid`, neve
 
 ### S0 review checklist: decisions `forge` and `beacon` must sign before any code
 
-"Sign" means: agree, or say what changes. **Rounds 1 (2026-11-06) and 2 (2026-11-07) are done; the rows below state the design as revised by both,
-and the two S0 records after this table hold each reviewer's verdict per item.** Items 1 to 5 can change a block's outcome or the
+"Sign" means: agree, or say what changes. **Rounds 1 (2026-11-06) and 2 (2026-11-07) are done; the rows below state the design as revised by both, and
+the two S0 records ([implementation-log.md](./implementation-log.md#s0-c0-the-review-records)) hold each reviewer's
+verdict per item.** The table is the signed record: where a later decision changed a row (for example `SYNC-FORK`,
+the escalation's home, the ETC window bodies after B-302), the slice tables above, data-model.md and the "Decision log"
+give the current design. Items 1 to 5 can change a block's outcome or the
 chain a node follows; 6 to 15 are consequences to accept. `forge` signs the ETC side of every item before code and `beacon`
 the ETH side; where both are named, both sign.
 
@@ -399,1796 +473,43 @@ the ETH side; where both are named, both sign.
 | 2 | **Commit timing and state availability**: `newPayload` executes into the overlay; state reaches disk at `forkchoiceUpdated`; `parentValidated` becomes "state available"; the Engine API claims table (VALID, ACCEPTED, SYNCING, INVALID) is pinned; an unavailable parent is **re-executed locally**, with no peer; a post-execution INVALID drops the layer; the new faults never extend `MPTException` | data-model 6.3.2, 7.2, Part 2 D | Changes what the Engine API can claim about a parent after a crash, and which errors can ever become INVALID | beacon; forge reviews the shared code |
 | 3 | **Head moves**: planned **from the anchor's records**, never the index; **one state lock with an anchor compare-and-set** over every in-place batch; the state batch is **contributed into** `promoteToCanonicalHead` and `rewriteCanonicalIndex` before their commit; `currentState` is set only after a successful move; a block that is a forward layer is **promoted**, not dropped; the designated-head arm is reverse-then-commit; PoW branches are **pinned**; chunked deep moves; runtime refusals escalate and never apply I1 rule 4; the corrected writer audit (importer lenient path, test mode); the `SYNC-FORK` clamp; PoW result mapping. **Round 2:** the refusal is on **reverse depth** (`best - fork`), not branch length, and `reorg.max-depth` defaults to the retention floor; **an absent anchor refuses every in-place writer**; `saveLastBlock` writes nothing on a path-live store and the batch stops at the first commit that no longer extends the anchor; block generation pauses during a chunked move | data-model 5.1, 6.4, 7.0, 7.1, 7.3, Part 2 A, C, D | A reorg that moves the pointer without the state, or the state without the pointer, or a diff applied onto the wrong base, forks the node from its own history | forge (PoW) and beacon (PoS) |
 | 4 | **Isolation**: every in-place batch is a state move that publishes pre-batch values and bumps the epoch; "anchor view" is decided at read time; the importer's delete is position-scoped with a real `stillReached`; the fault hierarchy and the caller mapping are pinned by fault injection; RPC retries a stale view; the lock is the fallback | data-model 6.3 | The missing-node machinery deletes and refetches; a stale read mistaken for corruption would delete a node the head needs, and a storage fault must never become INVALID | beacon; forge reviews |
-| 5 | **Replaced storage tries**: account removal, recreation, EIP-161 touch-deletion, ETC's SELFDESTRUCT (no EIP-6780 on any ETC fork), Amsterdam's clear: **per-block reset tracking; enumeration by prefix scan of CF `u`**; ordering within a block; above the bound the deletion is **skipped and the record is an incomplete tombstone**, so a valid block is never failed; reverse across a tombstone is refused. **Round 2:** for a reset owner every prior is the scanned parent row (overriding the first-event prior), the tombstone refusal is required, and EG-4 and EG-15 assert zero tombstones | data-model 3 rule 6, 4.2, 10, 13 (M15) | A local resource bound must not fail a canonical block (a mining node would mine a minority fork) | beacon (EIP-6780, EIP-8246) and forge (ETC semantics) |
+| 5 | **Replaced storage tries**: account removal, recreation, EIP-161 touch-deletion, ETC's SELFDESTRUCT (full SELFDESTRUCT deletion before Olympia, and EIP-6780 from Olympia (ECIP-1121)), Amsterdam's clear: **per-block reset tracking; enumeration by prefix scan of CF `u`**; ordering within a block; above the bound the deletion is **skipped and the record is an incomplete tombstone**, so a valid block is never failed; reverse across a tombstone is refused. **Round 2:** for a reset owner every prior is the scanned parent row (overriding the first-event prior), the tombstone refusal is required, and EG-4 and EG-15 assert zero tombstones | data-model 3 rule 6, 4.2, 10, 13 (M15) | A local resource bound must not fail a canonical block (a mining node would mine a minority fork) | beacon (EIP-6780, EIP-8246) and forge (ETC semantics) |
 | 6 | **Genesis on the unified layout and `HealInvariant.isEmpty`**: owner-scoped, insert-only, **no BlockDiff for genesis**; test mode uses the same commit; non-empty genesis storage is refused when `ethCompatibleStorage = false`; SNAP start clears `t`/`u` and the anchor | data-model 5.4 | Otherwise every fresh datadir is pre-invariant and pays the walk spec 022 removes | beacon; forge for ETC |
 | 7 | **The layout guard**: one marker, refuse any non-empty unmarked datadir on either chain, no adoption, no probe of CF `n`. **Round 2:** while the in-development flag exists, a build with it off also refuses a datadir that has the marker | data-model 5.2, 5.3 | A wrong refusal strands a node; a wrong stamp runs on a half-state | beacon; forge; user |
 | 8 | **Checkpoint format v2 and the importer**: genesis hash in the header, the **256-header and 6-body ancestor window** as tags 0x03 and 0x04, CRC32C, the operator-supplied expected block hash and the stated trust in total difficulty, the importer's four assertions, code completeness, a golden stream; v1 refused. **Round 2:** the ancestor window is chained by `parentHash` to the checkpoint header and each body matches its header (`min(256, N)` when N < 256); a genesis anchor is cleared at import start | data-model E.1 | A one-way door, and ETC's resync path | forge and beacon |
 | 9 | **`get(hash)` on a position store** answers the account root and overlay nodes only; the recorder sits **above** the cache and records parent-state reads only; every hash-only walker is converted or allow-listed under a grep ratchet; a hit by hash can mask a positional hole | data-model 6.5, 9 | The witness recorder must see every parent-state read | beacon; herald confirms |
 | 10 | **Owner threading and RPC signatures**: `forOwner`, `getAt`; the four omitted readers; an allow-list ratchet on the four state accessors; RPC retries a stale view | data-model 8, Part 2 E | The one RPC-visible code change | conduit, beacon; forge |
-| 11 | **ETC consensus unchanged on the unified layout**: the evidence is **an offline import of ETC blocks 0 to 5.1M from genesis (the block source is an open item)**, validated per header, with pinned-jar node-set equality every 100k blocks**, a Mordor import from genesis across 2,000,000 and 2,520,000, the ETC ethereum/tests job on the ported harness, `ForkChoiceBlockchainTestsSpec` under `basic` and `archive`, a private ETC-config net for Olympia, and M7. **Round 2:** the block source is logistics and gates EG-1's ETC half (C7), not code; forge signed without it | plan EG-1, EG-2, EG-6 | The track moves ETC's storage with no Hash fallback in tree, and no ETC mainnet pre-state exists | forge |
+| 11 | **ETC consensus unchanged on the unified layout**: the evidence is **an offline import of ETC blocks 0 to 5.1M from genesis (the block source was then an open item; named 2026-11-07, T010)**, validated per header, with pinned-jar node-set equality every 100k blocks**, a Mordor import from genesis across 2,000,000 and 2,520,000, the ETC ethereum/tests job on the ported harness, `ForkChoiceBlockchainTestsSpec` under `basic` and `archive`, a private ETC-config net for Olympia, and M7. **Round 2:** the block source is logistics and gates EG-1's ETC half (C7), not code; forge signed without it | plan EG-1, EG-2, EG-6 | The track moves ETC's storage with no Hash fallback in tree, and no ETC mainnet pre-state exists | forge |
 | 12 | **Block generation and mining**: a proposer view, content-addressed and fresh per attempt, for **every** proposer path; MockedMiner rebuilds from the mined block **and waits for that block's import (round 2)**; cached worlds are never committed or read stale; a stale view retries the build; the mined root equals the import root, with ommers and on the Olympia net | data-model E table | A proposer write in place would corrupt the head | forge (PoW) and beacon (builder) |
 | 13 | **Moot: the `inmemory` mode is retired** (user, 2026-11-06). The mode is rejected at start on both chains, and the ring, the persisted tail and the restart-reach rules are not designed. Nothing remains to sign | data-model 4.6 | n/a | none |
 | 14 | **Retirement scope**: what is deleted and what stays (the hash-keyed store over `EphemDataSource`); the harnesses are **ported in C3c, before any gate**; both `saveNode` call sites become `repairNodeAt` before `FastSyncNodeStorage` goes; the pinned jar keeps its hive and EEST baselines and its retention | plan C3c, C5b, C8a, C8b | Nothing in tree can be the oracle after C8, and a gate on the Hash-scheme harnesses proves nothing | forge, beacon |
 | 15 | **ETC SNAP on the unified layout and the EG-12 route**: guard removal; **the ancestor window** as a hand-off precondition (C5a); the peer precondition; Mordor proven in the dev loop (`tasks.md:391,480`), ETC mainnet never | data-model G | The ETC resync path before a checkpoint archive exists | forge |
 
-### S0 record (round 1, 2026-11-06)
-
-Reviews: `beacon` (ETH side: 3 SIGN, 11 SIGN WITH CHANGES, 1 REJECT, plus the golden vectors) and `forge` (ETC side: 8 SIGN
-WITH CHANGES, 2 REJECT, 3 no objection), both read-only, both against the tree at `49dd46d1b`. Neither could read a
-reference-client clone or the EIPs; their go-ethereum and EIP claims are from memory and the code's own citations, and the
-design marks them "verify" (C0 checks the EIP-8246 text against execution-specs). "Not reviewed" means the reviewer's table did
-not list the item. Every finding is applied, except where the last column says otherwise. The letters are the reviewers' own.
-
-| # | beacon | forge | Change made | Where | Round 2 |
-| --- | --- | --- | --- | --- | --- |
-| 1 | SIGN WITH CHANGES: 1a prior at first touch; 1b only replaced or absorbed nodes; 1c in-block layer by hash; 1d multi-persist and multi-block reverse oracles; 1e empty trie; 1f EEST fixtures | SIGN WITH CHANGES: pre-Atlantis intermediate-root receipts; genesis storage owner threading; genesis emits no vanished positions; M7 a C1 merge gate | All applied. The prior is fixed at the first event; `fix` reports only absorbed nodes; the staged layer answers by hash then by position; the empty trie has no rows; the oracle list grew; genesis tries are owner-scoped | data-model 2, 3, 5.4, 6.1-6.2, 8; plan C1, C2a, C3b | **beacon, forge** (a consensus-adjacent rule changed) |
-| 2 | SIGN WITH CHANGES: 2a claims table; 2b one answer for "parent stored, state unavailable"; 2c recover locally; 2d INVALID drops the layer; 2e not an `MPTException`; 2f overlay commit | no objection | The table is pinned (ACCEPTED for `newPayload`, SYNCING for `forkchoiceUpdated`); `StateRecovery` re-executes locally on a bounded dispatcher, never inline; `dropLayer` and `BlockImportGate.forget`; the `StateFault` hierarchy sits outside `MPTException`; `adoptEachBlock = false` is an overlay commit | data-model 6.3.2, 7.2, D; plan C4d | **beacon** |
-| 3 | **REJECT**: 3a corrected writer table; 3b plan from the anchor; 3c state lock and compare-and-set; 3d batch-contributing hook; 3e FCU ordering; 3f forward-layer promotion; 3g designated-head arm; 3h ETH reach and recovery | SIGN WITH CHANGES: pin PoW branch layers; clamp the `SYNC-FORK` rewind and never apply rule 4; PoW result mapping; `parentSideChain` re-execution; index check I6; `REORG-PARTIAL` layer reuse | **Resolution of the REJECT:** the writer table is corrected (importer lenient path, test mode) and an unstaged `executeBlock` throws; every plan is made from the anchor's records; one state lock with an anchor compare-and-set guards every in-place batch, a commit that finds the anchor moved becomes an overlay commit; `HeadMovePrepared` is `.and`ed into the pointer batch before its commit; `currentState` is set after the move; a forward-layer block is promoted; the designated-head arm is reverse-then-commit; the retention floor follows the finality lag; refusals escalate. PoW: pinned layers and an up-front refusal, the clamp, new `ConsensusResult`s, local re-execution of lost side blocks, I6, layer reuse | data-model 5.1, 6.4, 7.0, 7.1, 7.3, A, C, C.1, D; plan C3b, C4b, C4d, C4e | **beacon, forge** |
-| 4 | SIGN WITH CHANGES: 4a every in-place batch is a move; 4b pre-batch bytes; 4c anchor view at read time; 4d position-scoped delete; 4e fault mapping; 4f memory-model note; 4g RPC retry; 4h M5 under catch-up | no objection (a second stale failure must map to a retryable non-invalid result on PoW) | All applied; the PoW mapping is in the fault table | data-model 6.3.1-6.3.3, 7.0; plan C3b, C4a | **beacon** (forge reviews) |
-| 5 | SIGN WITH CHANGES: 5a the guard never fails a valid block; 5b per-block reset tracking; 5c enumerate outside the EVM path; 5d holes do not block import; 5e tests; 5f verify EIP-8246 | **REJECT**: skip above the bound and mark incomplete; enumerate by prefix scan of CF `u`; in-block ordering; ETC vectors; fix risk 6 | **Resolution of the REJECT:** above the bound the dead trie's deletion is skipped and the record becomes an incomplete tombstone (flag bit 1); the block commits; a reverse across a tombstone is refused; the owner's rows are listed by prefix scan, so a hole cannot fail a block; reset tracking is per block and across transactions; the ordering and ETC test vectors are in the matrix; risk 6 is corrected (no EIP-161 on ETC before Atlantis) | data-model 3 rule 6, 4.2, 4.3 vector 3, 10, 14; plan C3a, C3b, C6 | **beacon, forge**; C0 checks the EIP-8246 text |
-| 6 | SIGN WITH CHANGES (minor): 6a test-mode genesis; 6b empty-alloc root | SIGN WITH CHANGES: owner-scoped genesis; no genesis BlockDiff; harnesses seed through the genesis commit; `ethCompatibleStorage = false` mismatch | Applied: the genesis commit has no BlockDiff, is owner-scoped and insert-only; test mode and the harnesses use it (C3c); the mismatch is resolved by **refusing** non-empty genesis storage on such a net (a private-net case) | data-model 5.4, 2; plan C3c | **beacon, forge** |
-| 7 | SIGN | not reviewed | No change | data-model 5.2, 5.3 | **forge** (not reviewed in round 1) |
-| 8 | SIGN WITH CHANGES (minor): 8a golden stream; 8b code completeness | SIGN WITH CHANGES: genesis hash in the header; ancestor window (tags 0x03, 0x04); trusted total difficulty and an expected block hash; the four importer assertions; checksum decided | All applied; CRC32C chosen | data-model E.1; plan C5c | **beacon, forge** (one-way door) |
-| 9 | SIGN WITH CHANGES: 9a recorder above the cache; 9b parent-state reads only; 9c hash-only walker ratchet; 9d positional holes | no objection | All applied; `GetNodeData` removal by eth/67 recorded | data-model 6.5, 9; plan C2b | **beacon** |
-| 10 | SIGN WITH CHANGES: 10a four omitted readers; 10b allow-list ratchet; 10c RPC retry | not reviewed | All applied | data-model E; plan C2b | **beacon, conduit, forge** (not reviewed) |
-| 11 | SIGN (no ETH impact) | SIGN WITH CHANGES: offline import of ETC 0-5.1M from genesis; Mordor import across 2,000,000 and 2,520,000; ethereum/tests on the ported harness; `ForkChoiceBlockchainTestsSpec`; a private net for Olympia | All applied to the gate; **the source of the 0-5.1M blocks is not named: an open item** | plan EG-1, EG-2, EG-6; open items | **forge** |
-| 12 | SIGN WITH CHANGES: 12a content-addressed, fresh per attempt; 12b stale view retries; 12c Amsterdam test; 12d `testing_commitBlockV1` | SIGN WITH CHANGES: every proposer path named; MockedMiner chaining; the cached world rule; context; mined root with ommers and Olympia | All applied | data-model E, 6.2; plan C3c | **beacon, forge** |
-| 13 | SIGN WITH CHANGES: 13a persisted floor or re-pivot; 13b matrix | **REJECT**: persist a tail of K diffs; optional shutdown flush; `ReorgTooDeep(restart)` must escalate; M11 against fork depths | **Moot: mode retired** (user, later on 2026-11-06). Round 1's resolution (a persisted tail of K = 16 and a shutdown flush) is withdrawn with the mode. What survives, because it is not specific to `inmemory`: `ReorgTooDeep` and `StateUnavailable` escalate through the stuck-sync escape valve, never strand | data-model 4.6, D | **none** (moot; dropped from both lists) |
-| 14 | SIGN WITH CHANGES: 14a port the harnesses before the gate; 14b baselines in the jar | SIGN WITH CHANGES: migrate before C7; both `saveNode` sites; jar retention until EG-12 and a second import | All applied: the harness port is in C3c; `repairNodeAt` replaces both sites in C5b; the jar keeps hive and EEST pass lists and is kept until EG-12 passes and past C8b | plan oracle paragraph, C3c, C5b, C8a, C8b; data-model 7.5 | **beacon, forge** |
-| 15 | SIGN (no ETH impact; ETH's Path selection must be unchanged) | SIGN WITH CHANGES: the EG-12 route; the ancestor window; C6 renamed | Applied: `AncestorWindow.ensure` is a hand-off precondition (C5a); C6 is "ETC enablement and ETC mainnet readiness"; the peer precondition | data-model G; plan C5a, C6, EG-12 | **forge** |
-| GV-1 | SIGN WITH CHANGES: vector 2's 2-byte prior breaks the inline rule | n/a | Vector 2 now has a 37-byte extension-node prior (219 bytes, CRC `707894bf`); the codec is stated to check structure only (the inline rule is a writer assertion); vector 3, an incomplete tombstone, is added (144 bytes, CRC `ae4e831f`). Vector 1 is unchanged | data-model 3, 4.2, 4.3 | **beacon** re-derives, **forge** |
-
-**The reviews' unlisted risks, each as a design change, a slice task or a gate item.**
-
-| Risk | Resolution |
-| --- | --- |
-| beacon R1, forge 8: harnesses and the lenient import bypass the position store | C3c ports them; an unstaged `executeBlock` throws; the lenient import is converted (data-model 7.6, A) |
-| beacon R2: concurrent writers, no compare-and-set | the state lock and compare-and-set (data-model 7.0); a deterministic interleaving test is a gate item (EG-3) |
-| beacon R3: Amsterdam BAL before/after reads | the by-hash in-block layer (data-model 6.2); the Amsterdam test in C3b and C3c |
-| beacon R4: storage exceptions on the INVALID path | the `StateFault` hierarchy and the caller table; the fault-injection matrix (EG-3) |
-| beacon R5, 11: ETH reach below the finality lag; reorg across the pivot | finality-aware retention; `ReorgTooDeep(Pivot)`; escalation (data-model 4.5, B, D) |
-| beacon R6: FCU sets `currentState` before the move | order reversed (data-model 7.3) |
-| beacon R7: coalescing and `fix` | rules 1 and 5 of data-model 3 |
-| beacon R8, forge 1: layers against long branches | pinned layers; the designated-head arm without a stack; the up-front refusal (data-model 6.4) |
-| beacon R9: BAL prefetch unplaced | `PathPrefetchReader` in C2a |
-| beacon R10: system calls | EG-1 includes Prague and Amsterdam ranges with request activity |
-| forge 2: recovery paths deeper than the reach | the `SYNC-FORK` clamp; escalation instead of rule 4 |
-| forge 3: PoW error mapping | the PoW `ConsensusResult`s (data-model C.1) |
-| forge 4, 5: the size guard fails a valid block; replaced-trie walk meets holes | tombstone; prefix scan (data-model 3 rule 6) |
-| forge 6: index ahead of state during `reorganise` | invariant I6 (data-model 5.1) |
-| forge 7: archive reach 1024 against a 3,700 to 7,000-block ETC reorg | archive moves are unbounded and chunked; only views are bounded (data-model 4.6, 7.3) |
-| forge 8: EG-2 does not test the unified layout | C3c; EG-2 is valid only after it |
-| forge 9: MockedMiner and getWork worlds | data-model E, block generation |
-| forge 10: `ethCompatibleStorage = false` is not ETC | the wording and the test are scoped to private nets |
-| both: wrong file:line or fact (`walkTrie` at `:274-306`; ETC's trie is about 90M nodes; no EIP-161 on ETC before Atlantis; the first reader table omitted four readers; the SYNCING versus ACCEPTED answer) | corrected in data-model E.1, 14, 3, E and D |
-
-**Round 2 re-sign list (as set after round 1; round 2 is done, see its record below).** `beacon`: items 1, 2, 3, 4, 5, 6, 8, 9, 10, 12, 14 and the golden vectors (GV-1, vectors 1 to 3
-re-derived independently). `forge`: items 1, 3, 5, 6, 8, 11, 12, 14, 15, and items 7 and 10 (not reviewed in round 1). **Item 13
-is moot and is on neither list.**
-Items 7, 11 and 15 stand signed by `beacon`, and 2, 4 and 9 by `forge`; both are asked to read the changes to those items for ETH
-or ETC impact. `conduit` and `herald` confirm C2b (item 10) and the `GetNodeData` answer (item 9). **Open in round 2 beyond the
-re-signs:** the EIP-8246 text against execution-specs (beacon 5f, C0), and the source of the ETC 0-5.1M blocks (open item 1).
-
-### S0 record (round 2, 2026-11-07)
-
-Reviews, both read-only, both of the revised design: `beacon` (ETH side: **10 SIGN, 3 SIGN WITH CHANGES, 0 REJECT**; the three are
-item 3, item 5 and the escalation route; items 7, 11 and 15 stand from round 1; item 13 moot) and `forge` (ETC side: **5 SIGN**
-(1, 6, 10, 14, 15), **6 SIGN WITH CHANGES** (3, 5, 7, 8, 11, 12), **0 REJECT**; no objection to 2, 4 and 9 after reading their
-changes). Both re-derived golden vectors 1 to 3 independently (153 bytes CRC32C `8d0afd3e`, 219 bytes `707894bf`, 144 bytes
-`ae4e831f`; each pinned string equals its field-by-field construction). **Every change below is applied** (the text is in
-data-model.md and in this plan); "applied" does not mean re-reviewed: each reviewer verifies the applied text at the PR of the slice
-that owns it (the next section), and there is no round 3. The letters are the reviewers' own.
-
-| # | beacon | forge | Change made | Where | Status |
-| --- | --- | --- | --- | --- | --- |
-| 1 | SIGN (note: rule 6's scan takes physical rows as priors, a departure from rule 3's logical prior; say so) | SIGN | The exception is stated in rule 3: harmless, because a forward move deletes the junk and a reverse writes it back unreachable | data-model 3 rule 3 | applied |
-| 2 | SIGN (nit: the dedupe row said "canonical entry present"; the code needs header plus receipts and admits side payloads) | no objection | The row is aligned with `EngineApiService.scala:407-416` | data-model D | applied |
-| 3 | SIGN WITH CHANGES: (i) the reorg depth is the retention floor, not `pruning.history`, and the measure is reverse depth, not branch length; (ii) the PoS escalation trigger (see ESC); (iii) an absent anchor refuses every in-place writer | SIGN WITH CHANGES: (a) `importToTop` and `saveLastBlock`; (b) refuse on fork depth, not branch length; (c) escalation loop guard and cool-down (see ESC); (d) pause block generation during a chunked archive move | (i, b) `reorg.max-depth` defaults to the retention floor; a move is refused up front only when `best - fork.number` exceeds the retained depth; branch length is bounded by pinned bytes only. (iii) "No anchor" fails the compare-and-set for 7.1, 7.3 and 7.5; only the writers that create the anchor run without one. (a) `saveLastBlock` writes nothing on a path-live store and `executeAndValidateBlocks` stops at the first commit that no longer extends the anchor (`ConsensusStateFault` for the rest). (d) Generation waits during a chunked move | data-model 6.4, 7.0, 7.1, 7.3, 10, A, C.1; plan C3b, C4b, C4e | applied |
-| 4 | SIGN | no objection | none | | |
-| 5 | SIGN WITH CHANGES: (i) gate on zero tombstones (EG-4, EG-15; C0/M1 shows the largest diff well below `max-record-bytes`); (ii) recommended: keep a record-size-only diff resident as a reverse diff until finalized; (iii) the EIP-8246 text is still open | SIGN WITH CHANGES: for a reset owner the prior of every scanned position is the parent row's bytes, overriding the first-event prior; **keep the reverse refusal across a tombstone** (required: no priors, and later blocks record prior None over leftovers); add a measurement of rows per deleted owner | (i) EG-4 and EG-15 assert zero tombstones; ETC and Mordor runs record the count and explain any non-zero one; M1 reports the largest diff. (ii) recorded as recommended, **not built**. (iii) a C0 task. Forge: the prior rule and the two reasons for the refusal are in rule 6; new measurement **M15** (rows per deleted owner, tombstones, on the ETC import and the Mordor imports) sets `max-entries-per-owner-delete` | data-model 3 rule 6, 13 (M15), 14; plan EG-1, EG-4, EG-15, C0, C3b | applied |
-| 6 | SIGN | SIGN | none | | |
-| 7 | stands | SIGN WITH CHANGES (development only): a build with the in-development flag off must also refuse a datadir that has the marker | One line in `StateLayoutGuard`, removed with the flag in C8b; a test starts a marked datadir with the flag off and an unmarked one with it on | data-model 5.3; plan C5a | applied |
-| 8 | SIGN | SIGN WITH CHANGES (one-way door): (a) bind the ancestor window by hash; (b) clear a genesis anchor at import start | (a) the `0x03` headers chain by `parentHash` to the checkpoint header and each `0x04` body matches its header, else `BadFormat`; `min(256, N)` when N < 256; a second golden stream does not chain. (b) `beginCheckpointImport` clears `t`/`u` and the genesis anchor first, idempotently | data-model E.1, 5.4; plan C5c | applied |
-| 9, 10 | SIGN | no objection (9); SIGN (10) | none | | |
-| 11 | stands | SIGN WITH CHANGES: (a) the stale text "`basic` and `inmemory`"; (b) open item 1 said the sign-off depends on the block source (it does not); recommendation: a core-geth export primary, fukuii's own sync acceptable | (a) fixed to `basic` and `archive` (checklist row 11). (b) open item 1 reworded: the source is logistics and **gates C7 and EG-1's ETC half, not code**; both candidates and forge's preference are recorded; the user left the choice open | plan checklist 11, open item 1, EG-1 | applied |
-| 12 | SIGN | SIGN WITH CHANGES (minor): MockedMiner must wait for the import of the mined block (or retry), because `MiningFailed` drops the run to `waiting()` | The E table row says so, with a test of two blocks one second apart and a slow import | data-model E; plan C3c | applied |
-| 14, 15 | SIGN | SIGN | none | | |
-| GV 1 to 3 | SIGN, re-derived | verified | none | | |
-| ESC | SIGN WITH CHANGES (vault's escalation re-SNAP): (a) the PoS trigger does not exist (`handleBeaconHead` only records the head and hints a running SNAP, and an FCU-side refusal produces no importer strikes), so add a direct message with hysteresis; (b) the anchor delete goes in the same synced batch as `clearSnapSyncDone()` or strictly after it, under the state lock after clearing the overlay, the gate memo and pending recovery; (c) clear `t` and `u` too; (d) EG-14 gains an induced escalation | SIGN WITH CHANGES (R2.3): a loop guard; a cool-down; note: tombstone leftovers keep "present means complete" only while a dead owner's rows are untouched (add one test); note: `ReorgTooDeep(Incomplete)` can escalate on a routine reorg across a tombstoned head (M15 keeps it rare) | (a) `StateEscalationRequested` from the FCU and `newPayload` refusal path to `SyncController`, sent after `escalation-refusals` (64, about 2 epochs) consecutive refusals; (b, c) one synced batch (`clearSnapSyncDone`, anchor delete, `state.escalation.last`, `state.reset-pending`), then `deleteRange` of CF `v`, `t`, `u`; (d) EG-14 asserts SYNCING and ACCEPTED, then VALID, one escalation. Forge: `escalation-cooldown` (6 h, persisted, counted) and the loop guard (a re-offered branch is dropped at ERROR, never a second escalation); the healing test is in C4d; the tombstone note is in 3.6 and risk 6 | data-model D, 5.1, 5.2, 10, 11, 14; plan C4d, EG-3, EG-14 | applied |
-
-**Adaptations and one reconciliation, stated so the reviewers can object.**
-- *Vault's addition, `state.reset-pending`.* Beacon's order (b then c) leaves a crash window between the synced batch and the
-  `deleteRange` calls in which a restart would resume SNAP over the old rows and owe the walk spec 022 removed. A start that finds
-  the key repeats the three idempotent `deleteRange` calls first; a plain mid-SNAP restart has no such key and keeps its rows.
-- *Reconciliation (forge item 3b against 6.4).* Forge wrote that above the pinned bytes "the recorded reverse-then-commit fallback is
-  taken". The design had `BranchTooLarge` (retryable, never invalid) as the default over the cap and reverse-then-commit as the
-  recorded alternative, switched on only if M13 shows real branches above it. It stays that way; forge confirms at C4e.
-  *(Superseded by the user's decision 1 of 2026-11-12, reverse-then-commit as the rule at the cap; forge confirmed it at C4e, 2026-11-15.)*
-- *Hysteresis.* "N consecutive FCUs, or about 2 epochs" is one key, `escalation-refusals = 64`, which is 2 epochs at one
-  `forkchoiceUpdated` per 12 s slot.
-- *EIP-8246 pass count.* Beacon asked for it on the ported harness; that harness is C3c, after C0, so C0 records the count on the pinned
-  jar's harness and C3c records it again on the ported one.
-- *Zero tombstones.* Asserted on ETH (EG-4, EG-15) as beacon asked; on ETC and Mordor the count is recorded and any non-zero value is
-  explained before `max-entries-per-owner-delete` is frozen, because forge asked for a measurement, not an assertion.
-
-**Text inconsistencies forge listed (R2.5), each fixed:** the stale "`basic` and `inmemory`" in checklist row 11; item 13 named in the
-forge routing line and in data-model C.1; open item 1 saying item 11 depended on the block source. **The unlisted risks of round 1**
-(forge's three: PoW branches over 32 blocks, recovery deeper than the reach, ommer and BLOCKHASH ancestors after hand-off; beacon's
-R1 to R3) are reported covered by both reviewers, with the changes above (3b, loop guard and cool-down, 8a) as the remaining edges.
-
-### C1 pre-code record (2026-11-11)
-
-`forge` and `beacon` read the implementation design of C1 before code (the Consensus-Critical Change Protocol's step 2), both
-read-only. Both returned the same counterexample, and both signed with the changes below; all are applied in the C1 PR.
-
-| Finding | By | Change |
-| --- | --- | --- |
-| **Critical.** Reporting the node `fix` absorbs in the same list as the replaced ones is not neutral on the hash store: the data-model 9 default passes that list to `updateNodesInStorage`, and `ReferenceCountNodeStorage` decrements every hash in it. Example: keys `[1,2]` and `[3,4]`, remove `[1,2]`: today the store is told of the branch and the leaf at `[1]`; it would also have been told of the leaf at `[3]`, which the trie only re-keys. beacon withdrew its S0 sign-off of that default as written | forge, beacon | `updateNodesAt(newRoot, replaced, absorbed)`: two lists; the default passes `replaced` alone, in today's order. `TwinTrie` in the C1 tests holds every update of a hash-keyed store to the nodes on the path of the change, root first, so the neutrality is tested and not argued (data-model 8 item 2, 9) |
-| A node is reported as absorbed when "the extension held its hash", not by a flag for "the remaining child is old": the flag also named an embedded sibling, which has no row | beacon | applied; an embedded sibling is a test case |
-| A put of the value a key already holds reports the nodes on its path, each replaced by an identical node: rule 2 must drop them | forge | a test: such a put leaves an empty change set |
-| `ConsensusAdapterSpec` drives a trie over `mock[MptStorage]` and expected `get` | forge | the expectation is `getAt` |
-| The decorator base must not let `getAt` bypass a wrapper's `get`, nor `updateNodesAt` bypass a wrapper that drops removals (`AppendOnlyMptStorage`, `ReplayMptStorage`, `RetainingMptStorage`: genesis load, `eth_call` replay and `eth_simulateV1` would start deleting nodes) | forge, beacon | `get`/`getAt` final over one `read` hook, the two update members final over one `update` hook; T041 carries the per-wrapper tests |
-| The collapse test compares ordered sequences, not multisets; child positions are computed only for a node that is walked | beacon | applied (`TriePosition`, built lazily) |
-| The path threaded as an array, not the cons list of data-model 8 item 1 | forge, beacon: SIGN | recorded in data-model 8 item 1, with figures in `baselines/m7-c1.md` |
-| `PositionKey` over an opaque array has identity equality (data-model 3) | forge, beacon: agreed | noted in data-model 3 for C3a |
-
-Two task-list defects found while building C1, recorded in tasks.md: **T026** (fixtures through a recording sink) cannot run
-before C2a's owner threading (T046), because until then every storage trie and the account trie reach one storage with no
-owner, and their positions collide; **T031** said the implementors derive from the decorator in C1, and T041 says they move
-in C2a: C1 ships the base, C2a moves them.
-
-**Open after round 2.** Nothing blocks code on C1 to C3a. Two C0 deliverables stay open and neither is a design change: the
-**EIP-8246 text** (read from an EIPs clone; the storage design does not depend on it) and the **source of the ETC 0 to 5.1M blocks**
-(open item 1; it gates C7).
-
-### C2a part 1 record (2026-11-11)
-
-C2a lands as two PRs (tasks.md, Phase 3). Part 1 moves the six wrapping `MptStorage` implementors onto
-`MptStorageDecorator` (T041) and threads the owner through execution, genesis and the BAL prefetch (T046). Both chains run
-that code today, so `forge` and `beacon` read the design before code and the diff after it, read-only.
-
-| Finding | By | When | Change |
-| --- | --- | --- | --- |
-| `PrefetchNodeReader.forOwner` must not give each trie its own budget: a block's prefetch is one budget and one count | beacon | before code | a private constructor passes the same two counters to every owner view; a test |
-| `PrefetchNodeReader.resetOwner` must throw like its other writes, not forward | beacon | before code | applied |
-| The mirror's read rule accepted "the current row hashes to it", which passes a read no staged layer would answer | beacon | before code | two rules only: a node this block wrote at that owner and position, or the row there when the block began |
-| A hash the block wrote at another position must not satisfy a read | forge | before code | rule 1 is keyed by owner, position and hash, which is stricter than data-model 6.2's by-hash layer |
-| **Blocker.** Four specs build a world over `mock[MptStorage]`, and a world now asks its storage for `forOwner(None)`: 12 tests fail | beacon | after code | confirmed by running them; the mocks stub `forOwner` |
-| The Amsterdam corpus barely exercises resets (EIP-6780, EIP-7610): run pre-Cancun suites | beacon | after code | confirmed by mutation: with the reset removed, 26,503 of 26,503 Amsterdam fixtures still pass and 22 of 8,835 Paris and Shanghai fixtures fail. Seven of the 22 are vendored |
-| A read of a storage trie after its reset is legitimate only for the access-list builder; before Amsterdam it is a bug the mirror passed | forge | after code | counted apart, and a finding on a fork that builds no access list |
-| Keep the unobserved replay as the consensus gate; the mirror is an addition | beacon | after code | `eest-amsterdam.yml` runs the corpus a second time with the mirror |
-| The mirror's `committed` is the last accepted block, not the block's real parent | beacon | after code | documented on `PositionMirror.ended`; a side branch would be reported, not passed |
-
-Verdicts after code: forge signs D1 to D3 and D4 with the reset-read change above; beacon finds the main diff neutral on the
-hash store for import, `newPayload`, payload building, `eth_call`, `eth_simulateV1`, genesis and the prefetch.
-
-**What later slices inherit** (each is written into the task it binds):
-
-- **C3b (T089).** `deleteAccount` resets at once and on the world's storage, so the reset belongs to the layer of the
-  execution that made it and dies with a rejected block. It never drops `byHash`. A reset of an owner with no rows is the
-  normal case and must be free.
-- **C3c (T111) before C3b's reset acts.** The PoW miner, `eth_simulateV1` and the lenient builder issue resets on a storage
-  nobody commits. Each attempt needs its own throwaway layer.
-- **C2b (T062).** The three batch reads go on the ratchet (data-model 9, "A batch read is not an execution read").
-- **The reset path is covered on real blocks only before Cancun.** `selfdestruct-stored-storage.json` is the oracle; the
-  Amsterdam corpus cannot see a missing reset.
-
-T026's figures and mutation runs: `baselines/t026-position-mirror.md`. Its ethereum/tests half is open (B-207).
-
-### C2a part 2 record (2026-11-11)
-
-Part 2 is the read side of the position store, in a new package `db/storage/pathstate`, behind `fukuii.state.path-live`
-(default false). `beacon` and `vault` read the design before code.
-
-| Finding | By | Change |
-| --- | --- | --- |
-| A storage whose writes throw cannot serve the readers C2b converts (`eth_call`, estimate, trace, simulate): each persists after every transaction and reads the new root back, and the access-list builder reads the older world. data-model 6.2 names them as throwaway layers, and the tasks put C2b before C3b | beacon | the by-hash layer lands here: `PathMptStorage.throwaway(view)`. C3b adds `changes` and `resets` to it |
-| Each move must be logged under the odd epoch it sets, or a reader that samples that epoch misses the move in flight | beacon | applied, and pinned by a test |
-| Add the interleaving of 6.3.3 now: the batch lands between the read of the row and the read of the epoch | beacon | `StateViewSpec`, three orders, driven by hand on one thread |
-| The stopped state of the prefetch reader must be shared by every trie's view, like its two counters: the prefetcher asks only the reader it holds | beacon | one flag, passed to each view |
-| `location` of a missing node stays the hex-prefix of the path alone, as today | beacon | applied |
-| `getOptimized` is the right read for execution (it fills the block cache; a closed database throws, and that must not be read as absent). The reader's key must be the bytes the SNAP writer wrote | vault | `PathNodeStorage.read(PositionKey)` uses the key as it is; a round-trip test; a closed-RocksDB test |
-| `EphemDataSource.get` is not synchronised with its `update`: a test that races a reader against a writer on it is unsound | vault | no such test: the clock is driven deterministically |
-| The conf include belongs in `conf/base/fukuii.conf`, and the accessor should not load the whole node configuration | vault | `state.conf`, `utils/StateLayoutConfig` |
-| `pathStateStorage` must be declared after `appStateStorage`; one `PathNodeStorage` per use is fine (it holds no state) | vault | applied |
-
-Two things in the code are not in the design note. `PathPrefetchReader` is not a second class: it is `PrefetchNodeReader`
-with a stop on the first fault, over a read-only view, so the hash store's reader and this one share one body. And
-`multiGetNodes` and `rawNodes` throw on a position store, where the trait's defaults would have answered "absent" for nearly
-every node (data-model 9).
-
-**The specs were shown to fail.** They passed on their first run but for one case, which was the test's own mistake (it
-took as "a wrong node" one the walk had read, rightly, at its own position). So nine rules were broken on purpose, one at a
-time, and the specs run again:
-
-| Rule broken | Tests that fail |
-| --- | --- |
-| a mismatching row is always called corrupt | stale once the disk has moved or is moving; decide after the read |
-| a view ignores the log of moves | 14, in `StateViewSpec`, `PathMptStorageSpec` and `PathPrefetchReaderSpec` |
-| a move is logged under the even epoch after it | 15, among them the one that pins the odd epoch |
-| the layer is not asked on a read | an execution that commits nothing persists its worlds and reads them back |
-| the prefetch reader does not stop on a fault | the three stop cases of `PathPrefetchReaderSpec` |
-| a row is not checked against the hash its parent holds | corrupt, stale, decide after the read, the throwaway execution, never cache a wrong row |
-| corrupt or stale is decided before the row is read | exactly the one test written for it |
-| the latest move answers, not the earliest | the earliest move wins; stale once the log no longer reaches back |
-| a throwaway update writes nothing | did not compile (the unused-binding ratchet); the fourth row covers the same layer |
-
-After code, `vault` found no blocker and asked for four things, all applied: a writer cannot forget to settle
-(`StateMoveLog.inFlight(move) { batch }` settles in a `finally`, as not committed when the batch throws); a test that a
-batch which failed still ends "the view of what is on disk" for earlier views, so that they report stale and never corrupt;
-the test kit's RocksDB directory is deleted whatever throws; and three rules for C3b's commit, written into T091.
-
-`beacon` signed after code with two changes, both applied. The first is the same pairing rule, taken one step further:
-`publish` and `settled` are private to the package, so a writer outside it has only `inFlight`. The second: an anchor written
-past the clock would leave views of a block the disk no longer holds looking current, and each row they met would be called
-corrupt, the one verdict that can end in a delete. So `AppStateStorage.putStateAnchor` is `private[storage]`, and a source
-ratchet (`AppStateAnchorRatchetSpec`) allows the path state storage as its only caller. beacon also named three cases with no
-test, now written: a view read through a batch that failed, `get(root)` on a view the disk has moved past, and a root under
-32 bytes found by hash in a throwaway layer. It confirmed the `PrefetchNodeReader` change neutral for today's hash-store
-prefetch (import and `newPayload`), and noted that a caller must ask `stateAvailable`, never `get(root)` (data-model 9, T056).
-
-**What later slices inherit.** T057 runs on `throwaway(block)`. T070 builds on the existing `PositionKey`. T091 writes
-its batch inside `inFlight`, under the state lock. T093 switches the prefetch's call site. T130 puts the forward chain and the
-reverse index behind the same `StateView.read`. T131's in-place commit evicts after it writes.
-
-### C3a record (2026-11-11)
-
-C3a is the changeset record (data-model 4), its storage in CF `v`, and the `fukuii.state` keys. Nothing reads or writes
-any of it until C3b. **The record's bytes are a one-way door**, so `forge` and `beacon` each re-derived the CRC32C of the three
-frozen vectors with an implementation of their own, and **both sign the vectors and the format**.
-
-What the frozen text left open, and how it was decided:
-
-| Decision | Signed by |
-| --- | --- |
-| The reader refuses four things more than data-model 4.2 lists (a length in more bytes than it needs, a presence byte other than 0 or 1, a tag other than 1 or 2, a key that is no row key), so that a record it accepts encodes back to its own bytes. No future writer needs any of them: new data is a new kind, and a new layout is a new version and a re-sync (4.4) | forge, beacon |
-| The version is checked first and alone, then the kind and flags, then the CRC, then the fields | forge, beacon |
-| `BlockDiff.byHash` is derived from the `next` nodes. The every-version map of an execution (`PathMptStorage.Layer`) is another structure and stays one | beacon |
-| The retention arithmetic: 64 with no finalized block, 106 at a 90-block finality lag, 512 when finality has stopped, 64 while the anchor is behind the finalized block | beacon |
-| No range scan in `ChangesetStorage`. An ETC mainnet block hash begins with about six zero bytes, so its record key sorts before every height key from 2^24 up; on Mordor, about four, they interleave. Pruning reads heights by their own keys | forge |
-| CF `v` joins `nsSeq`: a datadir this build has started cannot be opened by an older one | forge, with a release note |
-
-Changes asked for, and applied:
-
-| Finding | By | Change |
-| --- | --- | --- |
-| The index of a height is read, extended and written back. Outside the state lock two sibling commits lose one hash, and that record is never pruned | beacon | `recordUpdates` and `pruneUpdates` ask for a `StateLockHeld`, which only the lock of C3b can make; `put` and `prune` are private to the package |
-| `validate` can catch a diff built from the wrong world of a block (a persist inside a pre-Byzantium block, a world the miner threw away) | forge | the root rule: the account trie's root entry has a prior hashing to the pre-state root and a next hashing to the post-state root, and is there exactly when the two differ |
-| `retention.max-blocks` below `pruning.history` should not load | forge | refused when the configuration is read |
-| `recovery.escalation-refusals` is written in forkchoiceUpdated terms | forge | the conf says it does nothing on a proof-of-work node |
-
-Five rules were broken on purpose after the specs first passed (the writer sorts keys as signed bytes; no CRC check; a
-non-minimal length accepted; pruning takes the floor's height too; a second block at a height overwrites the index). Each
-was caught.
-
-**Carried to C3b, in its tasks:** a **persisted** prune cursor (T095: without one a restart or a switch from archive to
-basic would point-read every height from 0, about 22 million on ETC mainnet); a malformed height index fails the commit as
-storage corruption, never as a fault of the block (T091); `pruning.mode = "inmemory"` starts failing at start when C3b
-builds `StateConfig`, which the release notes must say (T093).
-
-**Decided by the user on 2026-11-11** (see "Decisions of 2026-11-11" below): 512 blocks where there is no finalized block,
-and one downgrade barrier. The two questions as they were put:
-
-1. **ETC keeps 64 blocks of changesets** by this design, because a proof-of-work chain has no finalized block and the floor
-   is then `pruning.history`. A reorganisation deeper than that is refused and the node re-syncs its state. ETC was
-   reorganised 3,000 to 7,000 blocks deep in 2020, and MESS returns only with Olympia; Besu keeps 512 trie logs by default.
-   forge asks for a proof-of-work default of at least 512 (`retention.max-blocks`). The cost is disk: one record per block
-   kept.
-2. **The downgrade barrier.** After this slice a build older than it cannot open a datadir (RocksDB must open every column
-   family a database has). forge asks that every column family C3b needs land in the same release, so operators meet one
-   barrier and not two, and that the release note say a rollback means a re-sync.
-
-### Decisions of 2026-11-11 (user)
-
-Four questions were put to the user after C3a was built, and answered in one message.
-
-| Question | Decision | Where it lands |
-| --- | --- | --- |
-| Merge C3a, which adds column family `v` to every datadir, after which an older build cannot open it? | **Merge.** | #1793 |
-| How many blocks of changesets where there is no finalized block (ETC, Mordor)? 64 by the design, at least 512 by forge | **512.** | `state.retention.without-finality = 512`; `StateConfig.retained`; data-model 4.5 and 10 |
-| One downgrade barrier or two? | **One: everything lands in the same release.** | below |
-| With the guard on a node can serve SNAP for the anchor's root only, until the overlay (C4a). Accept empty answers, or stop advertising? | **Stop advertising `snap1`, so that peers are not lost.** | T058 |
-
-**One downgrade barrier.** The release that first ships column family `v` also ships every other change of this track after
-which an older build cannot open a datadir. Today the track adds no column family but `v` (data-model 2: `t` and `u` exist,
-`n` stays as an empty family), so the rule binds two things: a later slice that finds it needs another family lands it before
-that release is cut; and the release note says, once, that a datadir started by this release cannot be opened by an older
-one. The `state.layout` marker (5.2) is a different barrier with its own message, and it stays behind the in-development
-guard until the track's last slice.
-
-**`snap1` under the guard.** With `fukuii.state.path-live` on and until the overlay can serve the window of recent roots,
-the node does not advertise `snap1`. A node in that state does not need SNAP as a client either: its hand-off (C5a) comes
-after the overlay (C4a) in merge order. With the guard off nothing changes. It is part of C2b's serving PR.
-
-### C2b pre-code record (2026-11-11)
-
-C2b (every reader can be handed the position store) touches 44 call sites of the four state accessors in 27 files. `conduit`
-(RPC), `herald` (SNAP serving) and `beacon` (the seam, the walkers) read the design before code. Each signs with changes; none
-blocks. **It lands as three PRs:** the ratchet; the RPC readers; serving and walking.
-
-| Finding | By | Change to the plan |
-| --- | --- | --- |
-| Only RPC readers move onto the seam in this slice. With the guard on there is no writer before C3b, so the anchor stands still while import moves the head: the proposer's nonce read (`EngineApiService:1191`), the importer's missing-node lookup (`BlockImporter:835-838`) and the chain importer's presence check (`ChainImporter:362`) would break | beacon | they stay on a root-keyed hash accessor, allow-listed, until C3b and C5b |
-| With the guard off the seam hands every reader `getReadOnlyStorage`: reads are the same as the backing storage in each pruning mode, and a reader that persists by accident then writes into a buffer | beacon | a differential test on basic and in-memory that a converted reader's answers are unchanged |
-| Account reads by block number resolve the number through the canonical index, so a request for a side block by hash reads the canonical block's state **today** (`BlockchainReader.scala:190-194,330-337`). Ten call sites hold the header and pass the number | conduit, beacon | the readers pass the header; an existing bug fixed on the way |
-| `StxLedger.advanceWorldToTx` needs the parent's state and the header in hand is the traced block's | conduit | it takes the parent header |
-| `eth_simulateV1` makes one storage and threads the world through every simulated block: block N+1 reads the root N persisted, which is no header's | conduit | one scratch state per request, shared |
-| Nothing in the RPC layer catches a `StateFault`: it would leave as `-32603`, or a 500 from GraphQL | conduit | a retry helper that re-runs the whole read up to 3 times, and a backstop that maps a `StateFault` to the existing `NodeNotFound` error |
-| Every caller of the root-only storage reads has the address | conduit | the root-only overloads are deleted |
-| Only `walkRangeVisit` carries a prefix in the SNAP server; `resolve`, `proofFor`, `collectNodeAtPath` and `resolveLeafAccount` do not, and two raw reads sit in `NetworkPeerManagerActor` (:1159, :1171) | herald | the prefix is threaded through all of them |
-| Only GetAccountRange checks the served-root window today; storage ranges and trie nodes serve any root the hash store holds | herald | with the guard on they are limited to the window too; with it off nothing changes |
-| `GetNodeData` is unreachable: every decoder from eth/68 to eth/72 rejects its codes. (The note said "eth/68 and eth/69 only"; eth/70 to 72 are opt-in per network) | herald | the handler is deleted or allow-listed, not converted |
-| Three walkers see only a hash (`LeafWalkVisitor`, `MptConstructionVisitor`, `ShardEnumerator`), and every read of a storage root by hash fails on a position store (`StorageRecoveryActor:452,497`, `StateValidator:79,287`) | beacon | positioned visitors for the three; the storage-root reads take the account hash they already hold |
-| The four accessors are not all the doors in | beacon | the ratchet also covers `getBulkLoadStorage`, `stageBlock`, `prefetchReader`, `getNode`/`getMptNodeByHash`, `storageMpt(`, trie constructions, `def visitHash`, and stores built outside `db/storage` |
-
-### C2b ratchet record (2026-11-11)
-
-C2b's first PR freezes who may still enter the state by a root or a hash (T054, T062). No code of the node changes.
-
-`scripts/check-state-accessors.sh` counts every use of eighteen entry points under `src/main/scala` and compares the counts
-with `scripts/state-accessor-allowlist.txt`, where each line has its reason. More uses than a line allows fail, and so do
-fewer: the list only shrinks. It runs in the Test and Build job before the compile, and again from
-`StateAccessorRatchetSpec`.
-
-**What the tree holds: 142 lines, 279 uses, 69 files.** By what happens to them:
-
-| Group | Lines | Leaves in |
-| --- | --- | --- |
-| The stores and the trie themselves (definitions) | 41 | C8b, with the Hash scheme; some are kept |
-| Tries and decorators that name their owner | 11 | kept (C2a did these) |
-| Not the state: list tries over an ephemeral source | 11 | kept |
-| Readers behind RPC, and the transaction pool | 12 | C2b, second PR |
-| SNAP serving, checkpoint export, recovery scans, walkers | 22 | C2b, third PR |
-| Execution, block production and the writers beside them | 10 | C3b, C3c |
-| SNAP hand-off, the audit, repair, checkpoint import | 11 | C5a, C5b, C5c |
-| The copy to the hash store, and SNAP's Hash arm | 24 | C8a |
-
-18 lines are marked `WRITER`.
-
-**What the list showed that the design had not:**
-
-- The four accessors named in T054 are 57 of the 279 uses, their definitions included. Most hash-only readers never touch
-  an accessor: they are handed a store and call `get(hash)` on it. SNAP serving, `StateValidator` (9 reads), the recovery
-  scans and `ShardEnumerator` appear only under `get-by-hash`, which is why it was added.
-- `PendingTransactionsManager` (`:498`) reads senders' accounts at the best block from a root alone. No task named it. It
-  is not on the consensus path and falls back to the senders it knows on any failure (`:530-533`), so it moves with the
-  RPC readers (beacon agrees).
-- Scala 3 builds a class without `new`: a pattern on `new SerializingMptStorage(` misses half of the constructions.
-- `MerklePatriciaTrie.getProof` has an arm that resolves a hash node with no position (`:196`). It is **unreachable**:
-  `pathTraverse` resolves every hash node before the arm sees one (beacon, who had said so in the C1 review; a first
-  reading here took it for a fault in `eth_getProof` on a position store, which it is not). T051 deletes the arm.
-
-**beacon's review of the list (SIGN WITH CHANGES; all taken):**
-
-| Finding | Change |
-| --- | --- |
-| No pattern covered the writes by hash: `storeRawNodes` (13 uses in 9 files), `repairNode`, `deleteBadNode`, `saveNode`. They are the riskiest doors | entry point `raw-store` |
-| An accessor reached under another name escaped: `StateIngest.trieStore` returns `getBackingStorage(pivot)`, and `SnapResumePlanner.getOrCreateMptStorage` hands that on to nine call sites | entry point `snap-store`; and `store-handed`, every method whose result is a store, so that the next such name has to be listed when it is written |
-| Three reasons were wrong about the code: the `getProof` arm; `NodeBuilder:496` serves SNAP only, not GetNodeData; the two raw reads of `NetworkPeerManagerActor` belong to the storage-range answer | corrected |
-| A `get` on a map called `storage` trips `get-by-hash`, and that kind of noise is what gets a check switched off | `get-by-hash` looks only in files that name a store or a trie (three rows left the list); a failure prints the exact line to add or edit |
-| Exact counts in both directions | kept: it is what makes the list only shrink, and moving lines inside a file is free |
-
-**Its limits.** It is text, not types. `get-by-hash` knows a store by its name (`mptStorage`, `storage`, `source`,
-`hashStore`, `mpt`), so a store under another name gets past it. The proof that nothing reads by hash alone is C8b, which
-deletes the read; until then this trips on the shapes the code uses today.
-
-**Evidence.** The spec passed when first run, apart from one wording mismatch, and four of its assertions were then
-found to pass on the script's closing paragraph and not on its verdict; they now name the verdict. The script was then
-broken one rule at a time, 27 ways, and every one fails at least one case (46 cases in all):
-
-| Broken | Cases that fail |
-| --- | --- |
-| more than listed passes; fewer passes; a line whose file is gone passes | 1 each |
-| comment lines are counted; lines are counted and not uses | 2 each |
-| a line with no reason, a line given twice, an unknown entry point, a count that is no number: each accepted | 1 each |
-| `src/test` is scanned too | 2 |
-| an empty list is read as the tree (the `FNR == NR` trap in awk, which the first run of the script hit) | 33 |
-| a tree with no sources passes; a missing allow-list passes | 1 each |
-| a difference exits 0 | 39 |
-| the uses of an unlisted file are not shown; the line to add is not printed | 34; 1 |
-| `get-by-hash` looks in every file | 2 |
-| a pattern loosened or narrowed, ten ways: no word boundary; `visitHash(` without `def`; any receiver for `get(`; a type argument counted as a trie; `new` required for a store; `raw-store` without the delete, or without the batch write; `snap-store` without its second name; `store-handed` taking a function type, or missing a declaration | 1 to 3 each |
-
-On the first set of mutations two of the loosened patterns failed only the run on the repository; each now has a made-up
-case of its own.
-
-### C2b RPC readers record (2026-11-11)
-
-C2b's second PR moves the readers behind RPC, and the transaction pool, onto a seam that hands out the state of a
-**block** (T051, T053, T056, T057). With the guard off they read what they read before, with one exception that is a fix.
-
-**The seam** is on `BlockchainReader`: `stateAt(header)` for a reader that writes nothing, `scratchStateAt(header)` for an
-execution that commits nothing. Guard off, both are the read-only store. Guard on, a view of the position store: the
-anchor's state, and `StateUnavailable` for any other block until the overlay (C4a).
-
-| What moved | To |
-| --- | --- |
-| Account reads by block number (`getAccount(branch, address, n)`): ten call sites | `accountAt(header, address)`; `accountIn` / `accountProofIn(state, header, address)`, which keep "a block above the best block has no account" |
-| `eth_getStorageAt`, `eth_getProof`, `eth_getStorageValues`, GraphQL `storage`, the test RPC: a storage trie from a root alone, over block 0's store | `(state, address, storageRoot, position)`, under the account, from the state the account was read from; the root-only forms are deleted |
-| `eth_call`, `eth_estimateGas`, `eth_createAccessList`, the trace and debug replays, `eth_simulateV1` | `scratchStateAt`; a replay takes the **parent's** header; a simulation takes one scratch state for the whole request |
-| The pool's read of senders at the best block | `stateAt(best header)` |
-
-**The one RPC-visible change.** A read by block number goes through the canonical index, so a request **by hash** for a
-side block was answered from the canonical block at that height. It is read by the header now (EIP-1898).
-`EthUserServiceSpec` has the case; it fails on the old read (123, the canonical balance) and passes on the new (456).
-
-**A stale view is retried, an unavailable state is the existing error.** `StateRead.at` / `scratchAt` run a read again,
-all of it, on a fresh state, three times at most. A request that holds a world across many reads (`eth_call`, a
-simulation, a trace) is run again as a whole: 18 routes go through `handleRead`. A state that is not held is
-`NodeNotFound` (code 3), the error a client already gets for a missing state node, and the controller answers a
-`StateFault` that escapes a method the same way. A `MissingNodeException` keeps each method's own answer.
-
-**What an end-to-end run found that the design had not.** `RpcReadersOnPositionsSpec` imports the execution-apis test
-chain (the chain hive's rpc-compat serves its vectors from), copies its head's state into the position store of the same
-datadir, and asks a node on each store the same questions through the JSON-RPC controller: balance, nonce, code, storage,
-proofs, `eth_call` and `eth_estimateGas`, for all 34 genesis accounts. **Every plain `eth_call` failed on the position
-store.** A message call does not run under its block's header: `CallTxBuilder` zeroes the base fee for a call that names
-no gas price (`runHeader`), and block overrides replace what they name. The ledger built the call's world from the header
-it was given. That was right while a state was found by its root; a view is asked for by a block's hash, and the header a
-call runs under has another, which names no block. Conduit's review had named this trap for traces (the parent's header);
-it was there for calls too, and no unit test of either store alone could have shown it. `StxLedger.callWorld(stateOf,
-executing)` separates the two, and `simulateCall` / `estimateCallGas` take the world instead of making one.
-
-**Reviews (both SIGN WITH CHANGES; all taken).**
-
-| Finding | By | Change |
-| --- | --- | --- |
-| GraphQL caught a `StateFault` with the missing-node case and answered no account or the start nonce: a state that is not held would read as a zero balance | conduit | not caught: it surfaces as an error of the field, as it does for `code` |
-| On the send paths a `StateFault` reached the backstop (code 3) where a missing node is `-32000` | conduit | admission answers both the same |
-| A read given up as unavailable left no trace: a view that stays stale looks like a node that is not there | conduit | a debug log with the attempts |
-| GraphQL's `call` and `estimateGas` reach the services without the controller, so without the retry | conduit, beacon | B-211; until then a stale view there is an error of the field |
-| With the arm gone, `case _ => acc` would drop a hash node that ever reached a proof, and serve the proof short | beacon | that case throws |
-| A retry is only worth something if each run takes its own state | beacon | `RpcRetryFreshStateSpec` counts the scratch states taken across retries of three real methods |
-| `PathMptStorage.decoded` has no check for a stored value shaped like a bare hash, which the hash store has | beacon | for C3b (B-209) |
-| A block imported by `newPayload` and not yet the head is above best, and answers "no account" though its state is held (old behaviour, kept) | beacon | B-210 |
-
-**Not covered here, and said so.** GraphQL has no test with the guard on. The two worlds `StxLedger` still makes from
-the header it is given (`runSimulated`, the estimate search) are reached only with a world handed in; a comment says why
-they must not be reached otherwise. hive's rpc-compat and graphql runs are with the guard off: a regression fence, not a
-test of the position store.
-
-**The ratchet** went from 142 lines and 279 uses to 136 and 268.
-
-**Evidence.** The new specs passed on their first or second run, so the production code was then broken one rule at a
-time, 18 ways. Fifteen of the first runs failed a case. **Three did not, and each was a gap in the tests, which now has a
-case:** the trace replay before Amsterdam asking for the traced block's state (only the Amsterdam arm had a block), the
-pool's account trie naming no owner (a transaction sent over RPC is judged by the transaction service; the pool's own
-read is for a peer's), and `eth_simulateV1` taking a reader's state. Three more did not compile as first written (the
-unused-symbol ratchet refuses a parameter or an import left unused) and were run again in a form that does.
-
-| Broken | Cases that fail |
-| --- | --- |
-| a reader's state takes writes; an execution's state refuses them (guard on) | 1; 2 |
-| `accountIn`, `accountProofIn` forget the block above the best block | 2 each |
-| the account trie names no owner | 5 |
-| a storage trie is read under the wrong owner | 4 |
-| a stale read is not run again; a stale request is not run again | 2; 9 |
-| a state that is not held is retried | 1 |
-| the controller's backstop answers an internal error | 1 |
-| `handleRead` does not run a request again | 7 |
-| a call's state is asked for by the header it runs under | 1 |
-| a replay asks for the traced block's state: before Amsterdam; from Amsterdam | 1; 1 |
-| admission lets a state fault escape | 1 |
-| the pool's account trie names no owner | 1 |
-| `eth_getStorageAt` reads the account by block number again | 1 |
-| `eth_simulateV1` takes a reader's state | 1 |
-
-### C2b SNAP serving record (2026-11-11)
-
-C2b's third PR is SNAP serving (T052, T058). The walkers (T055, T059 to T061) are a fourth PR: serving is wire
-behaviour and herald's review, walking is recovery and beacon's.
-
-**Every read says where it is.** A SNAP server reaches each node by a descent from a root, so it always knows the trie
-and the path: the account trie under no owner, a storage trie under its account's hash, the path counted through the
-range walk and the three descents (`proofFor`, `resolveLeafAccount`, `collectNodeAtPath`). A store keyed by hash ignores
-both. The handler of `GetStorageRanges` had its own copy of the account lookup, by hash; it is `SnapServer.storageRootOf`
-now, the server's own descent.
-
-**The state is asked for by the request's root, for each request**: `BlockchainReader.stateForRoot(root)`. Guard off it
-is the read-only store whatever the root, and the serve finds the root's node there or answers with nothing, as it
-always has. Guard on it is the anchor's view when the root is the anchor's and the anchor is within 128 blocks of the
-best block. No other state is held until the overlay, so no other root is served; C4a widens it to every block the
-overlay can give a view of, with the window `min(128, the retention floor)` (noted on T130).
-
-**A defect the conversion would have carried in.** The server took every read that failed as "no node here". For a node
-that is missing that is how it has always answered. A view of the position store can fail another way: the disk moves
-under it, and the read says the view is stale. Taken as an absent node that is a hole in the middle of a range (the
-accounts under that node left out) sent with proofs that cannot close over it, to a peer that finds the response invalid
-and drops this node. The handler's lookup did the same one level up: a stale read became "no such account", which is
-sent as an account with no storage. Each node that was read is still a node of the root asked about, since each is
-checked against the hash its parent holds, but a part of a range is not a range. **A serve that meets a `StateFault`
-answers with the empty response**, wherever in the serve the move falls. `SnapServePositionStoreSpec` moves the disk
-after every read count of a serve, from none to all of them, and holds the answer to the empty response each time.
-
-**`snap/1` under the guard** (user decision, this file, "Decisions of 2026-11-11"). `InstanceConfig` leaves `snap/1`
-and `snap/2` out of the capabilities while `state.path-live` is on, and says so at start. The capability is mutual: a
-node that does not offer it is not offered it, so such a node does not sync by SNAP either. Nothing can import a block
-with the guard on before C3b, so nothing is lost by it today; C4a advertises it again.
-
-**`GetNodeData`.** Every decoder this node has, eth/68 to eth/72, rejects codes `0x0d` and `0x0e` (EIP-4938). The
-handler in `BlockchainHostActor` could not be reached, and it read a node by hash alone, which this layout cannot do. It
-is deleted with its subscription and its two tests; one test pins that the host does not subscribe to the code.
-
-**The spec passed when first run, so the code was broken one rule at a time.** 38 mutations, all caught:
-
-| Rule broken | Mutations | Caught by |
-| --- | --- | --- |
-| a state fault is an absent node, or escapes one of the three serves | 4 | the stale-view cases |
-| a node, or a root, is looked for at the wrong position | 2 | both states |
-| the account trie under an owner; a storage trie under none, or under another account | 6 | both states (`alice` and `bob` hold the same trie) |
-| an extension counted as one nibble, in each of the three descents | 3 | **the chosen-key state alone** |
-| a descent, or the range walk, looks at the root, one nibble short or one long | 6 | both states |
-| a handler asks for another root's state, looks storage roots up in it, takes a fault in the lookup as no account, or finds its state outside its `try` | 6 | `SnapServingActorSpec` |
-| the window ignored or one block short; any root served; nothing served with the guard off | 4 | `BlockchainReaderSeamSpec` |
-| snap advertised when it is not served; the guard does not withdraw it | 3 | `NetworkProtocolConfigSpec` |
-| the host subscribes to `GetNodeData` again | 1 | `BlockchainHostActorSpec` |
-| SNAP sync may start under the guard, for the node or for an instance; the node's storages read the process-wide guard | 3 | `ConfigValidatorSpec`, `StorageBuilderStateGuardSpec` |
-
-The three extension mutations are why the second state exists. The state the production world builds has keys that are
-hashes, so its tries are bushy: counting an extension as one nibble passes every case on it, and every case of the two
-older specs of the server. The second state's keys are chosen: extensions of 4 and 62 nibbles in the account trie and in
-a storage trie held by two accounts, and requests from keys that part from the trie inside, before and after each.
-
-**Review (herald: SIGN WITH CHANGES, no blocker; all taken).** With the guard off it found no response that differs,
-and no path on which a state fault is still turned into a part of a response.
-
-| Finding | Change |
-| --- | --- |
-| The guard was read in two places: the storages from the process-wide configuration, the capabilities from the instance's. In a multi-instance run a node could hold the position store and offer SNAP, or the reverse | `StorageBuilder` takes the guard from its instance's configuration (`InstanceConfig.statePathLive`); `StorageBuilderStateGuardSpec` builds the production storages of an instance whose guard differs from the process's |
-| With the guard on and `do-snap-sync = true` the node waits for a snap-capable peer for ever: nobody offers SNAP to a node that does not offer it, and SNAP sync has no way back to importing blocks | refused at start, for the node and for an instance (`ConfigValidator.stateGuardErrors`): it names both keys and says to set `do-snap-sync = false`. It goes with the capability rule in C4a |
-| The handler's warning for a failed load of the root went with its copy of the lookup | `orAbsent` says at debug when a node is there and cannot be read; a missing node stays silent |
-| `GetStorageRanges` found its state outside its `try`, where the other two find it inside | the same shape for all three; a spec has the state fail to be handed out, and the actor answers and stays up |
-| The window compares block numbers, `isStateRootFresh` (`GetAccountRange` only) looks the root up among canonical headers: for a block that is not canonical the two would disagree | harmless while the one root served is the anchor's; for C4a, with the window (T130) |
-| `hive.conf` sets `snap2 = true`: with the guard on the hive devp2p snap tests see no snap | by design until C4a; the guard and those runs do not go together |
-| The requesting side of `GetNodeData` is dead too (`StateNodeFetcher`'s fallback, `PeersClient`'s node-data peers, the message classes) | B-214 |
-
-**Not covered here, and said so.** The half of T052 against the pinned jar waits for C0 (B-212): this compares two
-stores through one server, and would not show a change of the server itself that both stores share; `SnapServerSpec` and
-`SnapServerLimitsSpec`, unchanged, are what holds that. A node that cannot be read for any other reason (missing,
-corrupt) is still served as a hole where go-ethereum answers with nothing (B-213, old behaviour).
-
-**The ratchet** went from 136 lines and 268 uses to 133 and 263.
-
-### C2b walkers record (2026-11-11)
-
-C2b's fourth and last PR: every walk of the state reads each node at its position (T055, T059, T060, T061). The walks
-are the combined recovery scan and the two legacy scans, the state validator, the shard enumerator, the leaf walk they
-share, and the checkpoint export.
-
-**Frozen first.** The risk in this PR is the hash store: these walks decide what a node heals and when it stops
-looking, on ETC and ETH, today. So before a walker was touched, what ten walks answer on a hash store was written down:
-three states (hashed keys; chosen keys with extensions 4 and 62 nibbles long and nodes inside their parents; one
-account, the one shape in which the heal walk reaches a storage trie), seven sets of holes, two code stores. 420 answers,
-in order, in `src/test/resources/spec018/walker-verdicts-hash-store.txt`, and the checkpoint archive's bytes for the
-chosen-key state. Every conversion after that was run against them.
-
-**What a position store changes for a walk, beyond where a read is.** Two accounts with one storage root share one trie
-on a hash store. On a position store each has rows of its own, and the second's can be missing while the first's are
-whole (spec 022 V3). Three walks skipped a storage trie for having seen its root. On a position store that skip hides
-exactly that hole, and nothing else would find it until a block read it. `MptStorage.nodesSharedAcrossTries` is what a
-walk asks first: true of a hash store (by root, as before: the result and the number of storage tasks do not change),
-false of the position store (by account and root). The validator's skip of a node it has seen is by hash only where a
-node is its hash; a walk of a tree comes to each position once.
-
-**A state fault is not a hole.** The defect the SNAP server had, in its other places: the validator took any failed
-read as a missing node, or flagged the storage trie for healing. A view the disk has moved away from would have had a
-node that is there fetched again. It ends the walk: the validator answers `Left("State fault, not a hole")`, a scan
-ends, the export answers `StateNotHeld`.
-
-**A defect found on the way (beacon), fixed.** A legacy scan that could not run at all (the state root not in the
-store, the store failing) was mapped to a scan that found nothing missing, and the recovery flag was written for good on
-a state nobody had read. A test pinned it, as "graceful resilience". It now ends recovery for the run, so that regular
-sync starts, and writes nothing: what the combined scan, the default, already does (`recoveryCouldNotRun`).
-
-**Where a walk's store comes from did not change.** The scans and the validator are handed SNAP's own store, during or
-right after the sync, before there is an anchor to take a view of. Only the export has a block: it takes
-`BlockchainReader.stateAt(header)`. The rest is the hand-off's (C5a), and the allow-list rows say so.
-
-**Each spec passed when first run, so the code was broken one rule at a time.** 46 mutations, all caught:
-
-| Rule broken | Mutations | Caught by |
-| --- | --- | --- |
-| the leaf walk reads at the root, or one nibble short | 2 | `WalkersPositionSpec`, the scanners spec |
-| the shards read under an owner, at the root, or a shard under an extension or a branch is read above it | 4 | both |
-| a scan walks the account trie under an owner, or probes a storage root under none (combined, legacy storage, legacy bytecode) | 5 | the scanners spec, on the position store |
-| a scan tells storage tries by root on a position store (combined, legacy, the parallel merge), or by account on a hash store | 4 | the alias case, the merge case; the frozen answers |
-| a scan that could not run marks recovery done (storage, bytecode) | 2 | the two actor specs |
-| the validator: an owner, a path, an extension, a branch index or a leaf's key wrong in each of its walks | 10 | the scanners spec, on the position store |
-| the validator: a state fault is a missing node, flags a trie for healing, or is a failed load in other words | 3 | the moving-state case |
-| the validator skips a node it has seen on a position store | 1 | the case of one subtree at two positions |
-| the export: an owner, a path, an extension, a branch index, a pushed path or a leaf's key wrong | 6 | the frozen bytes, from the position store |
-| the export: a state fault is a missing node; a state not held is another error | 2 | `CheckpointExporterSpec` |
-| the position store says its nodes are shared; a wrapper answers for itself | 2 | the alias case; `MptStorageDecoratorSpec` |
-| after review: an account under a short key is a hole, or a leaf that does not decode, or is handed to the store by the export; a scan that could not run tells the controller it completed (storage, bytecode) | 5 | the short-key cases; the two actor specs |
-
-**Reviews (beacon and forge: SIGN WITH CHANGES, no blocker).** Both read the hash-store behaviour as unchanged: the
-same nodes, read in the same order.
-
-| Finding | By | Change |
-| --- | --- | --- |
-| On a position store an account under a key that is not 32 bytes names no storage trie; the store throws, and the validator's catch-all would have flagged the storage root for healing: a corrupt account trie read as a hole | beacon | the validator answers `Left("Corrupt trie node, not a hole")`, the export `CorruptAccountKey`; on a hash store, where the name is not used, both walk on as before |
-| The controller was told `RecoveryComplete` whether or not the scan ran, and logged "complete". It also counts failures of a bulk bytecode recovery towards a cap, which a scan that never ran must not count against | forge | `RecoveryNotRun` from both legacy actors; the controller says so at ERROR and sets `recoveryScanCouldNotRun`, as the combined scan's path does |
-| The closing check of storage recovery (a log) caught trie exceptions only: a state fault there would have crashed the actor | beacon | it is logged and the check skipped |
-| The path was copied twice for every node read, on a walk of 90 M accounts | beacon | once (`NibblePath.wrap`, in the two walkers inside `mpt`) |
-| A v1 archive holds a storage trie that two accounts share once. An importer that places nodes by owner and path, with no lookup by hash, cannot rebuild the second account's trie from it | beacon | written into T230: v2 emits each owner's trie, or importing v1 keeps a lookup by hash |
-| How many accounts share a storage root on ETC mainnet, that is how many more storage tasks a position-store scan starts, is not measured; nothing in the storage download assumes one task per root | forge | the legacy scan already logs both counts (contracts, distinct roots); to be read off a Mordor and a mainnet run before C5a |
-
-**Not taken, with the reason.** forge: a pivot root that has been pruned makes a failed scan repeat at every start,
-so settle the flag once the best block is past the pivot by the pruning history. The scan does not read the pivot's
-root when it can read the best block's (`SyncController.recoveryScanRoot`): the pivot's is the fallback for a datadir
-whose best block has no readable state, and there the combined scan, the default, already repeats at every start, at
-the cost of one failed read. Whether either path should give up is one question for both, with B-217.
-
-**Left as it is, and why.** A legacy scan that meets a hole stops there, returns what it had, and the flag is settled
-on it (beacon: a walk that stopped must be a failure; forge: count the hole and go on, as the combined scan does, then
-retire the legacy path). The user decided on 2026-10-31, for the combined scan, that a
-pass that ran settles the flags, holes or not, because a rescan at every start blocks regular sync for hours. With the
-fix above, "a stopped walk is a failure" would be that rescan on any datadir with one hole. The consistent change is the
-combined scan's hole counter for the legacy walks, which is the user's to decide (B-217). What the SNAP controller does
-when a validation ends in a state fault is unreachable until the validator is handed a view (B-216).
-
-**Not covered here, and said so.** The controller's two new arms for `RecoveryNotRun` have no test of their own: the
-legacy path is chosen by the process-wide configuration, which the controller's spec cannot set for one case. The
-actors' message is pinned; the arms mirror the ones beside them. And one case of `SyncControllerSpec` fails when that
-spec is run alone, at #1797's head as well as here, though it passes in the full run (B-218).
-
-**The ratchet** went from 133 lines and 263 uses to 121 and 240. Nothing in main resolves a node of the state by hash
-alone in a walk any more: what is left of the list's walking section is the store each walk is handed.
-
-### C3b storage record (2026-11-11)
-
-C3b is two PRs. **This is the first, the storage half**: what a block does to the state is recorded by position while
-it runs, and committed in one batch (T087 to T092, T095, T096, with their tests). Nothing in block execution calls it
-yet. The second PR is the wiring: `BlockExecution` and `Blockchain` (T093, T094, T084), what the guard may be used for
-before C4, and the differential over real blocks.
-
-**Three consults before code** (beacon, forge, vault), and what they changed.
-
-| Finding | By | Change |
-| --- | --- | --- |
-| A second place replaces a storage trie whole: `initialiseAccount` over an account that has storage (a create collision; reachable on ETC, where the collision check is nonce and code only). It runs inside a frame that can revert, so a reset applied at once to the block's shared layer cannot be undone | forge (BLOCK) | **the world carries the owners it has reset**, as a value that reverts with its frame, and tells its storage at `persistState`, before the contract storage is persisted. Neutral on a hash store. Its own commit, with `WorldStorageResetSpec` |
-| An in-place commit at `newPayload` moves the anchor to a payload the consensus client has not chosen, and a one-slot reorganisation cannot be executed before the overlay | beacon (BLOCK) | the scope decision below |
-| A view asked for between the move's announcement and its end waits for the writer, with no timeout: a commit that asked for one there would wait for itself | vault | everything is read and built before the announcement; inside it there is the one write. A test notes every call on the data source and holds the write to be the last |
-| The lock must be the innermost, and not reentrant | vault | `StateLock`: fair, refuses its own holder, nothing under it but the data source |
-| The scan of a replaced trie's rows, made outside the lock, can be stale by the time the batch is written | vault | it is made under the lock, after the anchor check (dm 7.0's last bullet has it outside, on a view: that returns with the overlay, when there are other views to scan) |
-| Records cannot be scanned for their lowest height, so a restart, or a switch from archive, would read every height from 0 | vault, forge | the height pruned up to is kept in AppState, started by the first commit at its own number, moved in the batch that deletes |
-
-**The decision taken, for the user to see: what the guard is for until C4.** dm 3.6 already says that on ETH every block
-is a forward layer first and is promoted at `forkchoiceUpdated`. That is the overlay's (C4a, C4d), and ETC's
-reorganisation is C4e's. So in C3b **the in-place commit serves linear import only**: a chain file, or an importer
-that extends the anchor block by block. A block that does not extend the anchor is refused with `StateUnavailable`
-and nothing written, where dm 7.1 has it degrade to an overlay commit. The second PR makes the rest of it true: with
-the guard on, `newPayload`, a `forkchoiceUpdated` to another block, a reorganisation and a side branch end in a local
-state fault (never INVALID, never a penalty for a peer), and the node does not start network sync, so that no ETC,
-Mordor or ETH node runs on the guard before C4. Not chosen: executing twice (at `newPayload` and again at
-`forkchoiceUpdated`), which is machinery C4a throws away.
-
-**What a block's changes are** (`StagedChanges`, dm 3). The trie tells its storage of each change as it makes it: the
-nodes on the path of the change, the nodes a removal merged into their parent, and the nodes it has there now. From
-those, one entry for each position: the prior is fixed by the first event there (an old node named first is the
-parent's; a node written where none was named has no prior, and every old node named there later is this block's
-own); the next is the last word. Only stored nodes count, and a root is stored at any size. A reset clears what the
-block had written under that owner, and at the commit every position of the owner takes the disk's row as its prior,
-whatever the first event said.
-
-**The commit** (`PathStateStorage.commitCanonical`, dm 7.0, 7.1), under the lock:
-
-1. the anchor is checked: none, refused; this block, only the caller's own updates are written; not the block the
-   layer was built on, refused;
-2. the rows of each replaced storage trie are scanned, a chunk at a time, until they are all read or are more than
-   may be listed;
-3. the diff is held to the header's two state roots (`BlockDiff.validate`): a layer that is not this block's final
-   world stops here;
-4. the record is the diff, or a tombstone;
-5. one batch: the caller's updates (the block, the best pointer), the rows, the deletes of retention, the record and
-   its height index, the prune count, the anchor last; written as a move of the clock, whose `pre` is the priors.
-
-**The bounds, and what each leaves.** A replaced trie with more rows than
-`max-entries-per-owner-delete`, or whose rows hold more than 64 MiB (a constant of the commit's settings, added on
-review: the rows are read into memory under the lock): its old rows stay, unreachable; the rows of whatever the block
-put in its place are written; nothing is recorded for the block. A record over `max-record-bytes`: every row is written and deleted as it
-should be, and only the record is a tombstone. The text of dm 3.6 reads as if the second skipped the deletion too; it
-has no reason to, since the rows are in hand. Neither fails a block. A later block that writes where a leftover row
-lies records no prior there, so a reverse across it would not put the leftover back: it is not state, and the
-tombstone below it stops any reverse first (forge's caveat for the audit, C6).
-
-**Reviews of the code (vault, forge, beacon: each SIGN WITH CHANGES, no consensus or correctness defect found).**
-
-| Finding | By | Change |
-| --- | --- | --- |
-| The scan of a replaced trie's rows was bounded by a count alone, a million rows by default: read in one pass under the data source's read lock, copied three or four times, with the state lock held. About a gigabyte for one owner, and every other reader of the data source held back behind a queued writer | vault | the scan is made **a chunk at a time** (8,192 rows, from the key after the last), and stops at the count or at **64 MiB of rows**, whichever comes first. A trie over either is not listed: its rows stay and the record is a tombstone, as before |
-| `finalized` was asked for under the state lock, and the observer told there too. Neither is this class's, and the first will one day be a consensus client's answer | vault | `finalized` is asked once, before the lock; the observer is told after the lock is free, and what it throws is logged and goes no further: a block that is committed stays committed |
-| Nothing held the layer to **one line of worlds**. Two worlds persisted from one start on one layer (a retry on a layer that was not dropped) would mix their rows under a root that still checks against the header; the batch would be written, and the next read would call the datadir corrupt | beacon, forge | a change to a trie must replace the root the block last left there, or it is refused where it is persisted (`StagedChanges.linear`), before anything is written |
-| A reset, and the commit, each looked through every change of the block for one owner's positions. A block can replace some 1,600 storage tries on ETC for the gas of their SELFDESTRUCTs: tens of millions of map operations, the second time under the lock | forge | the positions are kept by owner as they are recorded |
-| "Already applied" writes the caller's updates. The block, its receipts and its weight are on disk by then, so all those updates can add is a best-block pointer: on a chain whose head is the consensus client's to choose, a payload sent again must not move it | beacon | said in the commit's contract. The wiring must hand an `extra` with no pointer from `newPayload`, and never stage a block that is the anchor already |
-| The commit called any refusal from the record's writer "the index is corrupt" | vault, beacon | the index's own error (`ChangesetStorage.CorruptIndex`) is the one it reports so |
-| The race test let a reader that started late pass without having waited, and its spin had no deadline | vault | the reader is known to be parked on the clock, and the second writer in the lock's queue, before the first is let go; thirty seconds bound the wait |
-| A committed batch surviving a restart was not shown | vault | a RocksDB datadir is closed and opened again: anchor, rows, record and pointer are there, and the chain goes on |
-| Amsterdam clears the storage of an account it keeps; a storage root under 32 bytes has a row; a layer that is not the block's, handed with a block that is applied | beacon | each through a commit, and back |
-
-forge traced `MerklePatriciaTrie` for the question the whole record rests on: every node of the parent's state that a
-change replaces or absorbs is named, at its own position, and a first event that names a node names what the parent
-held there. forge re-signed the world's resets (F1).
-
-**Not taken.** vault's registry of path state storages by data source, to stop two of them over one data source
-having two clocks: vault accepted the reason on review. The node builds one, in `Storages`; a registry is
-process-wide mutable state, and a test that opens a datadir a second time wants exactly the second clock it would
-forbid. The class says one per data source. And forge's optional narrowing, a reset recorded only for an account
-whose storage root is not empty: with the positions kept by owner a reset of an account with no storage costs one
-seek at the commit, which forge found acceptable; it changes the world, which a hash store shares, and is better
-judged with M15's count of resets that find no row (T100).
-
-**For the wiring, from the reviews.** Only import may use `stage`: a builder and a retry use `throwaway` or a fresh
-layer. A decorator that drops the trie's removals (`StxLedger`, `EthSimulateService`, `GenesisDataLoader` each have
-one) must not wrap the staged storage: with no old node named, every prior comes out empty (forge). The block's
-`BlockRef` takes its state root from the header, not from the world, or the check of the roots checks the world
-against itself (beacon). A reader that lists one owner's rows by a scan must check each node against its hash:
-leftover rows are allowed there (forge). On ETH non-finality has lasted longer than 512 blocks, so a reorganisation
-past the floor must end in a state fault, never INVALID (beacon, C4d).
-
-**Tests.** A block is run twice from one parent state, on the staged storage and on a hash store, and the hash
-store's nodes, walked as raw RLP, say what the rows must be: forward (parent rows and every next are the new state's
-rows), reverse, each prior is the parent's row, and `validate`. At the commit the same, read off the disk: every row
-of `t` and `u`, on the in-memory data source and on RocksDB.
-
-| Spec | Cases | What |
-| --- | --- | --- |
-| `WorldStorageResetSpec` | 5 | the world's resets: removal, a create collision over storage, a frame that reverts, order at the persist |
-| `StateLockSpec` | 5 | one at a time, in order, free after a throw, its own holder refused |
-| `StagedChangesSpec` | 14 | hot rewrites, created then rewritten, vanished positions, a replaced trie, destroy and recreate, replaced twice, an older world's reads, an unlisted trie, a world that does not follow the last, nodes inside their parent, a root of any size, 40 seeded random blocks |
-| `CanonicalCommitSpec` | 46 | 15 on each data source: the rows, the anchor and the record after each block; forward and back from the records; replaced tries; a dead trie with a hole; an account cleared and kept; a storage root under 32 bytes; an empty block; the three bounds, at and over; retention, the switch from archive, the record of the block being committed. And 16 more: no anchor, the three refusals, a layer that is not the block's, another data source, one write under the lock as a move, a write that fails, a corrupt index, what is asked and told outside the lock, an observer that throws, a datadir closed and opened again, a view across a commit, a view across an unlisted trie, a view gone stale, two commits on one anchor in both orders, two commits of one block |
-| `OwnerRowsSpec`, `RetentionPolicySpec`, `StateMetricsSpec`, additions to `BlockDiffCodecSpec` | 18 | the scan's bounds (adjacent owners, the last owner, key order, chunks of every size, rows and bytes at and over, on both data sources), the floor's arithmetic, the metrics, the record's length without writing it |
-
-**Broken on purpose.** 8 rules of the world's resets, 2 of the lock, 13 of the staged layer and 34 of the commit, one
-at a time, and 13 more for what the reviews changed (the chunks and the two bounds of the scan, the line of worlds in
-the account trie and in a storage trie, the positions kept by owner, the observer, where `finalized` is asked): each
-is caught. One of those was missed at first: only the account trie's arm of the line of worlds had a test, since a
-world that branches in a storage trie branches in the account trie too; a storage trie written straight onto the
-layer pins the other arm. Two more are equivalent mutants and are said so in their drivers: a reset owner's position
-with no parent row keeping the first event's prior (a first event with a prior names a node read from the parent, so
-the row is there), and the record written before retention's deletes (the floor never reaches the block being
-committed, which its own mutant holds).
-
-**Not covered here, and said so.** No block has gone through the EVM onto this layer: that is the second PR's
-differential, with the Amsterdam access-list vectors and the SELFDESTRUCT fixtures. T075's recorded values and the
-measurements T098 to T100 need C0's pinned jar and ranges (B-203). A crash inside a RocksDB WriteBatch is RocksDB's
-contract and is not injected. `finalized` is wired as none: the floor is `without-finality` until a consensus client
-drives this layout (C4d).
-
-**The ratchet** went from 121 lines and 240 uses to 121 and 241: the staged factory of `PathMptStorage` hands out a
-store.
-
-
-### C3b wiring record (2026-11-11)
-
-C3b's second PR: block execution stages and commits a block on the unified layout (T093, T084, T094 in part), and the
-differential over real blocks that stands in for T075.
-
-**The adapter** (`PathStagedBlock`). Execution stages a block before it asks whether the block was executed already,
-and a layer can only be made over the state the disk holds. For a block that is applied that state is the block's
-own, so the layer is made when the execution first asks for the storage, and never for such a block: it reaches the
-commit with nothing staged, where its own records are written if it is still the anchor. A block is staged by its
-**header** (`stageBlockState(header)`): the parent is found by hash, and the staged changes are held to the state
-root the header carries, not to the world's (beacon).
-
-**In place or not at all, made true for the callers.** The commit of part 1 refuses a block that does not extend the
-anchor. This PR refuses the callers that could not commit in place **before the block runs**, each with
-`StateUnavailable`, a condition of this node's state and never a verdict on the block:
-
-| Caller | On the unified layout |
-| --- | --- |
-| `executeAndCommit` with the block adopted (the import of a block onto the head, a chain file) | the canonical commit, with the block and the best pointer in its batch |
-| `executeAndCommit` with the block not adopted (a side branch, the blocks of a reorganisation) | refused |
-| `executeAndValidateBlockFull` (`newPayload`: the state committed apart from the block) | refused; `newPayload`'s existing arm answers ACCEPTED, with no INVALID, no `markInvalidRecursive`, no deletion (beacon traced it) |
-| an execution with nothing staged (`getBackingMptStorage`) | `IllegalStateException` (dm 7.6): the chain file imported at start, test mode, a proposer's `executeBlock` |
-| `forkchoiceUpdated` to a head that is not the anchor, or asking for a payload | SYNCING, with no payload id; nothing moved, published or marked |
-
-And the node itself: it does not start network sync on the guard (ERROR at start), and the guard is refused at start
-with SNAP sync, with mining, with `import-chain-file` and with test mode, each of which would fail later or never
-finish. So no ETC, Mordor or ETH node follows a network on the guard before C4 (forge's condition). What it can do:
-take blocks from a chain file through the strict importer, and answer from the state it holds.
-
-**The differential (T075's substitute).** C0's pinned jar and ranges do not exist (B-203), so the same chains are
-imported in process on both layouts, through `BlockExecution.executeAndValidateBlocks`, the path a synced block and a
-chain file take. Every block validates against its header on each, so state root, receipts root, gas used, logs
-bloom, requests hash and access-list hash agree by construction. What is held beyond that is the disk.
-
-| Chain | Blocks | What is held |
-| --- | --- | --- |
-| the execution-apis chain (`ImportOnPositionsSpec`): proof of work, the merge, every fork to Amsterdam | 60 | after each block the rows of `t` and `u` are that block's state as a hash-store reference holds it, the anchor and best block are that block, receipts and access list are the reference's; the records take the disk back to genesis; a block with a wrong state root leaves everything; the hash store holds what the genesis load left and no node more; the same path with the guard off imports to the same head and writes nothing of the unified layout |
-| Mordor's first blocks (`MordorImportOnPositionsSpec`, forge): the shipped Mordor configuration, the proof-of-work validators, real Ethash seals | 256 | the same, against Mordor's own state roots: the ECIP-1017 reward of era 0; a forged seal refused with nothing touched |
-| execution-spec-tests, vendored (`EestImportOnPositionsSpec`): the regression vectors and `selfdestruct-stored-storage.json` | 47 kept, 5 rejected | after each block the disk is exactly the block's state, each node found among the rows by its hash; the record takes the rows back; a rejected block leaves rows, anchor and best block |
-| the Paris and Shanghai corpus (`EEST_IMPORT_POSITIONS`), frontier to shanghai | 11,262 kept, 596 rejected, in 8,835 fixtures | the same; 336 storage tries removed whole, 3,262 of their rows deleted and put back by the reverse; no tombstone |
-| the Amsterdam corpus (`tests@v21.0.0`), frontier to amsterdam | 27,352 kept, 5,715 rejected, in 26,503 fixtures | the same; 848 storage tries removed whole; no tombstone |
-
-The fixture oracle has no second store for a block's new state: it walks the state from the header's root, which
-validation has checked, finds each node among the disk's rows by its hash, and requires the disk to be those rows at
-those positions and no other. Both reviewers read it as sound for the rows, a replaced storage trie included. It
-does not look at contract code, which this track does not move.
-
-**The access-list prefetch** (from T045) reads the parent's rows through a view of its own. The chain's Amsterdam
-blocks are imported a second time with their lists supplied, as a peer serves them: each prefetch is handed a reader,
-and the disk ends the same.
-
-**Reviews of the code (beacon, forge: each SIGN WITH CHANGES, no critical finding; both confirmed nothing changes
-with the guard off).**
-
-| Finding | By | Change |
-| --- | --- | --- |
-| With the head at the anchor and a payload asked for, `forkchoiceUpdated` started a build over the hash store, which fails; the failure was swallowed, the answer was VALID with a payload id, and `getPayload` then had nothing | beacon | SYNCING with no payload id, said at ERROR |
-| The chain file imported at start executes with nothing staged: the node aborted while starting, after a notice that said it imports chain files | forge | refused at start with the guard, naming the `import` command and `admin_importChain`; the notice says the same. Test mode too |
-| The strict importer decides that a block is present by finding the head's state root in the hash store, which holds nothing on the unified layout: a file that overlapped the local chain was refused as a fork | forge | `BlockchainReader.holdsStateOf(header)`: the anchor on the unified layout, the root's node on the hash store |
-| The 35 proof-of-work blocks of the test chain run under an ETH configuration with their headers trusted: no ETC rule is tested | forge | `MordorImportOnPositionsSpec` |
-| Nothing showed that the hash store is left alone | beacon, forge | held in all three differentials |
-| Only Paris and Shanghai fixtures had run | beacon | the Amsterdam corpus, through the same case |
-| A state fault at `newPayload` was logged as an unnamed error | beacon | its own arm, at INFO |
-
-**Not taken, with the reason.** beacon: the gate of `forkchoiceUpdated` sits before the branch for a head that is a
-canonical ancestor, so such a head gets SYNCING where the specification expects VALID with nothing moved. Harmless
-while the guard is in development, and that branch reads the canonical index, which the head move of C4b replaces.
-beacon: check that the code of every account the walk meets is present; code is written by the world as it always
-was, to the same storage on both layouts. `saveLastBlock` still writes the best pointer after a batch (dm 7.1 has it
-write nothing): with no degraded commit the last imported block is the anchor, which both reviewers traced; the rule
-returns with the overlay commit.
-
-**Broken on purpose.** 16 rules of the wiring, one at a time: a commit without the block's records, a block
-committed as another, a discarded layer kept, an applied block not known to be, each of the refusals, the header's
-state root, the prefetch's reader, the gate of `forkchoiceUpdated` and its payload arm, the head's state looked for in
-the wrong store, each start-up refusal. Each is caught.
-
-**Not covered, and said so.** The node's own refusal to start sync on the guard is three lines of `StdNode.start`
-with no test. `eth_getWork` still builds over the hash store on the guard (forge; the proposer view, T111). A
-re-import of an older canonical block after a restart is refused as a state fault, with no message of its own for
-the operator (beacon). T075's recorded values, and T098 to T100, wait for C0.
-
-
-### C3c genesis record (2026-11-11)
-
-C3c is three PRs: the genesis commit (this one: T107, T115), the proposer view (T102 to T106, T111 to T114), and the
-lenient chain import, test mode and the ported harnesses (T108 to T110, T116, T117). Each of the last two lifts the
-start-up refusals C3b put in `ConfigValidator.stateGuardErrors`, with the code that makes them safe.
-
-**What it is.** On the unified layout the genesis loader builds the genesis tries on a layer of their own
-(`GenesisLayer`, a staged layer over a view of nothing) and `PathStateStorage.commitGenesis` writes what they end
-with: one batch, synced, under the state lock, as a move of the clock, with the genesis block, its weight and the
-best-block pointer, the rows, the marks of a datadir this build created, the layout stamp `state.layout =
-path-live-1`, and the anchor last. A genesis has no changeset record, and the count of pruned records is left for
-the first block to start. The loader still runs at every start, to say what the genesis header is; on a datadir that
-has its genesis the layer is dropped unused.
-
-**One consult before code (forge: AGREE WITH CHANGES), and what it changed.**
-
-| Finding | Change |
-| --- | --- |
-| The data model has the genesis built through the buffer that drops the tries' removals (dm 5.4, "insert-only"). On the unified layout that would make every second change to a trie look like a second world, which a layer refuses since C3b | **removals are honoured** on the genesis layer. The buffer exists because two storage tries can share a node by its hash on the hash store; here each account has rows of its own. The rows come out the same: every prior is none, a node made and then replaced ends on its last form, and nothing vanishes. forge checked the shapes that could differ (a slot of zero, a storage of zeros, `accountStartNonce`, two accounts with one storage) |
-| One address written two ways (`0xAB…` and `ab…`, `0x1` and `0x01`) is two entries of the allocation for one account. On the hash store the second overwrites the first. Here the first's storage would be rows under an owner whose account names none, or a second trie built over the first | refused on the unified layout, before anything is built. No shipped genesis has one |
-| This is the first thing that writes the layout stamp, and nothing reads it until the guard of C5a: a build with the in-development guard off would open a stamped datadir and run the hash store's code over a store that holds none of the state; and with the guard on, a datadir of the hash layout would have its genesis found, the commit skipped, and the node run with no anchor | **the rule of dm 5.3 is in the loader now**, both ways (`GenesisDataLoader.layoutRefusal`); C5a moves it to the node's own guard at start |
-| The marks of a created datadir were a second synced write after the genesis, with a crash window between | they are in the genesis batch. That reference counts are exact is never said here: nothing on this layout has them |
-| `commitGenesis` should also refuse a datadir with changeset records or a count of pruned ones, and a build that replaced a storage trie whole | taken |
-| Genesis storage on a chain whose storage is not Ethereum-compatible is at positions execution never looks at (dm 5.4) | refused on the unified layout, when some account has a slot that is not zero. Every shipped chain is compatible |
-
-**Not taken, with the reason.** forge: refuse a duplicated address on the hash store too. It would change what a
-private chain's genesis does with the guard off, and nothing here needs it: the refusal is where the harm is. forge
-(a suggestion): walk the layer from the genesis root at the commit and require the positions reached to be the change
-set. The tests hold that property against an independent walk for every shipped genesis; at run time the commit holds
-the account trie's root to the header's state root.
-
-**Tests.** Each genesis is loaded twice by the production loader, onto the hash store of one datadir and onto the
-unified layout of another. The first says what the genesis state is, by a walk of its raw nodes; the second must
-hold exactly those nodes as rows, with nothing in its hash store.
-
-| Case | What is held |
-| --- | --- |
-| Ethereum Classic (8,893 accounts), Mordor (no allocation: no row, the empty root), Platåberget and Sepolia (system contracts with code, storage and nonces) | the rows, the header's hash, the anchor in memory and on disk, a view of it at once, the block and its body, the head, the weight, the stamp, the marks; no changeset record |
-| two accounts with one storage; a storage of zeros | each account's own rows; none |
-| one batch | one synced write, made under the lock while the clock says a move is in flight, the stamp inside, the anchor last; a write that fails leaves no block, row, stamp or anchor, and the next start commits |
-| a datadir that has something | a restart writes nothing; another genesis is refused as before; a commit over an anchor, over rows with no anchor, or as a block that is not block 0, is refused; a build that is not the state its block names |
-| what a genesis may not have, and which layout opens a datadir | an account allocated twice, in capitals and unpadded; storage on a chain that would not find it; the rule of dm 5.3, case by case and through two real datadirs |
-| the guard off | the load writes no stamp, no anchor and no row of the unified layout |
-
-The import differentials of C3b (`ImportOnPositionsSpec`, `MordorImportOnPositionsSpec`) now start from a genesis
-commit where they seeded rows by hand, so block 1 is imported onto a committed genesis: an allocation with contracts
-on the first, none on the second. The fixture replay still seeds by hand: a fixture's genesis header carries fields
-the loader does not produce, so its hash is the fixture's and not the loader's (the harness port, T117).
-
-**Mutation run.** 25 mutants of the commit and of the loader's rules, each a rule dropped or weakened (a commit over
-an anchor, over rows with none, over changeset records, over a count of pruned ones, over a stamp; a block that is
-not block 0; a build that replaced a storage trie whole; a build not held to its root; the stamp or the marks left
-out; the anchor not last; the batch not synced or written before the move is announced; counts said to be exact;
-removals dropped; the genesis stored the hash store's way; no best block; the two refusals of the loader; the layout
-rule's three arms; the two halves of address normalisation; the withdrawals list of the body): 25 caught. Two were
-first written so that the unused-symbol ratchet refused them before any test ran, and were re-aimed. Four were added
-after forge's read found their rules had no test. One rule has no mutant: a change with a node before the genesis,
-which no build over a view of nothing can make; it is kept as a guard.
-
-**Two reads after code (forge: APPROVE WITH CHANGES; beacon: APPROVE), and what they changed.** Both traced the guard
-off to the code of `staging`: the same buffer, the same writes in the same order, one more read of AppState (the
-stamp, which no datadir of the hash layout has).
-
-| Finding | Change |
-| --- | --- |
-| forge: four refusals of the commit had no test and no mutant (changeset records, a count of pruned ones, a stamp with no anchor, a build that replaced a storage trie whole) | four cases, four mutants |
-| forge, beacon: the header's hash was held only to the hash layout's, so a state root wrong on both would pass | each shipped genesis is held to the hash every client of its network has: Ethereum Classic `d4e56740…`, Mordor `a68ebde7…`, Platåberget `ee33ef92…`, Sepolia `25a5cc10…` |
-| forge: the one-batch case had no code, so nothing showed where the code write falls | a case with code: one write that is not synced, then the batch, and the code is found by its hash |
-| beacon: the genesis block was built once in each arm | built once, before the arms |
-| beacon: the commit threw where the loader returns a `Try` | the commit's refusals and a failed write are the load's `Failure` |
-| forge: `ChangesetStorage.isEmpty` runs an effect to its end on the calling thread | said in its doc: for a caller at start-up |
-
-**Accepted, with the reason.** forge: on the hash layout the genesis nodes are written before the genesis block, so a
-crash between them leaves nodes and no block 0; such a datadir then opened with the guard on gets a genesis of the
-unified layout beside orphan nodes of the hash store. Nothing reads them, the window is one start wide and needs the
-guard to be turned on after it, and C5a's guard at start is where a datadir is judged whole. Left as it is.
-
-**For part 3, from beacon and forge (test mode).** `TestService.setChainParams` builds its loader by the constructor
-and not by `GenesisDataLoader.over`, so it has no position store and reads no stamp; it removes the genesis block and
-loads another, which on a datadir with an anchor the commit refuses (the anchor, the rows and the stamp are still
-there), so part 3 needs a reset of the state in one synced batch that also clears the clock's anchor; its
-`storeGenesisAccountCodes` and `storeGenesisAccountStorageData` write to the hash store; and it throws away the
-`Try` of the load. The start-up refusal of `testmode` with the guard on stands until then. An Amsterdam-at-genesis
-header on the unified layout (no shipped chain has one: Platåberget's genesis is before its Amsterdam) comes with the
-fixture replay of T117, whose Amsterdam fixtures start there.
-
-### C3c proposer view record (2026-11-12)
-
-The second of C3c's three PRs: T102 to T106 and T111 to T114.
-
-**What a node on the guard can and cannot do after it.** Every builder is right on the unified layout, and is held
-to import by differentials. **No running node proposes and follows yet**, and this PR does not change that:
-
-- a block that is mined reaches import through `SyncController` to `RegularSync` to `BlockImporter.MinedBlock`, and
-  a node on the guard does not start network sync (C3b): it could not follow the side branches and reorganisations
-  that come with it. A mined block would be dropped as a dead letter;
-- `engine_newPayload` executes a payload apart from adopting it, which the unified layout refuses before its overlay
-  (`refuseUnadopted`, C3b): the answer is ACCEPTED, and a `forkchoiceUpdated` to that block is SYNCING. A payload
-  this node built is a block like any other there.
-
-So the refusal of `mining.mining-enabled` at start **stays**, with its real reason in its message, until the head
-can move (C4b); and `eth_getWork` and `eth_submitWork`, which are served with the internal miner off, answer an
-error with the same reason, where a solution would have been answered `true` and its block dropped. The plan had
-this PR lift the mining refusal; forge traced the route and it does not exist. A solo miner that started regular
-sync for its own blocks alone would refuse every valid block beside its own and publish a minority chain: that is
-the door C3b closed.
-
-**What it is.**
-
-| | Guard on | Guard off |
-| --- | --- | --- |
-| The state a block is built on (`BlockchainReader.proposerStateOn`) | the parent's state under a layer of the build's own (`PathStateStorage.throwaway`): a fresh view and a fresh layer at every call. What the build persists is read back by it and dropped with it. No row, no record, no anchor move | `None`: `executeForProposer` takes `getBackingMptStorage(child number)`, `prepareBlock` takes `getReadOnlyMptStorage()`, each as it did |
-| The Engine API's build | `forkchoiceUpdated` with attributes builds on the block whose state is held (the SYNCING answer of C3b is gone). A view that goes stale under a lenient attempt is retried on a fresh one with the attempt's own list, three times; any other fault of the node's state is thrown past both fallbacks (the empty payload, and the block sealed over its parent's root), and the first build answers -38003 with no payload id, as go-ethereum answers a `BuildPayload` that fails. A rebuild that meets one serves the version it has | unchanged |
-| The pool's nonce filter (`executableAtParent`) | reads the parent's state through `accountAt(parent, …)`; a state that is not held is the build's to answer, where a missing node of the hash store leaves the pool unfiltered | the same read-only buffer at the same root |
-| `testing_commitBlockV1` | commits the block it built by importing it (`executeAndValidateBlocks(…, adoptEachBlock = true)`): the block, its receipts, its access list, the head and its state in one batch. An import that refuses is an error, and the head does not move | unchanged: the build's own writes are the state |
-| `BlockParam.Pending` (both copies: `ResolveBlock`, `EthProofService`) | the head: the pending block's state is held nowhere, and readers that take its header would be refused | the generator's last block and its world |
-| `MockedMiner` | builds the next block with no inherited world, once the block before is the block whose state is held; waits up to ten ticks for that import, stops at once when the state on disk is another block's at that height | chains the worlds of its builds |
-
-What a build does write on both layouts is contract code: `persistState` puts it in the code store, by its hash.
-It is the bytes import writes.
-
-**Two consults before code (forge and beacon: AGREE WITH CHANGES), and what they changed.**
-
-| Finding | Change |
-| --- | --- |
-| beacon: the design said `newPayload` commits a block that extends the anchor. It does not: it executes apart from adopting, which is refused. No node on the guard proposes and follows before the overlay | said above and in the PR; `testing_commitBlockV1` goes through the adopting import and not through `newPayload` |
-| forge: a mined block has no route to import on the guard | the mining refusal stays, reworded; `eth_getWork` and `eth_submitWork` refuse, which the design had not seen: with the builders fixed, work would have been given and a solution dropped |
-| forge: "pending while its parent is the anchor" is not enough. `eth_getBalance`, `eth_getCode`, `eth_getStorageAt`, `eth_getTransactionCount` and `eth_getProof` read state by the pending block's header, which is never the block whose state is held. On the hash store they work because the proposer's nodes leak into it | pending is the head on the unified layout |
-| beacon: the pool's nonce filter reads the hash store, which is empty there: the pool went unfiltered and stale transactions burned the lenient retries | it reads through the seam (T111) |
-| beacon: the first build's answer on a fault is neither SYNCING (the head was already set) nor VALID with no id | -38003, the head kept, nothing stored |
-| beacon: catch the stale view around the attempt alone, as a value; never turn a fault into a `Left`, which falls to the empty payload and then to a block sealed over its parent's root | so built; a state fault still cannot reach either fallback |
-| forge, beacon: the guard-off arms must be the calls they were, to the letter (mocks stub them, the ratchet counts them, `getBackingMptStorage` takes the child's number) | `proposerStateOn(...)` is tried first and the old call is its `getOrElse` |
-| forge: the mocked miner is gated on the guard and not on the kind of fault; it retries only while the state is behind the block it mined | so built |
-
-**Tests.**
-
-| Spec | What is held |
-| --- | --- |
-| `ProposerOnPositionsSpec` | every post-merge block of the execution-apis chain, to Amsterdam, is built again on the unified layout, strict and lenient (with a transaction an earlier block included, which the lenient build drops): the fixture's hash. Around each build every key of the datadir but contract code is compared; new code is keyed by its hash; the epoch and the anchor have not moved. The block is then imported. Also: a stale view retried once; a view that stays stale ends as that after four attempts and never as an empty payload; a parent that is not held; `forkchoiceUpdated` with attributes, whose payload import takes; its answer with no id on a fault; the pool filter; `testing_commitBlockV1`, and its import refusing |
-| `MinedBlockOnPositionsSpec` | proof-of-work blocks prepared on both layouts from the same parent, transactions, ommers and clock are the same block: a contract deployed with storage, a slot cleared, the contract destroyed and its address paid again in one block (no row of its storage is left), a transaction the generator leaves out, ommers, the first block of the next era. A block that is prepared writes nothing; import computes the root it carries. Pending is the head on the unified layout |
-| `MockedMinerOnPositionsSpec` | on the test's own clock: the next block is built on its parent with no inherited world, after the import; the bound; a block lost to a sibling; a state that moves between the look and the build; a fault that is not of the state |
-| `EthMiningServiceSpec`, `EthProofPositionStoreSpec` | no work given or taken on the unified layout, and nothing sent to sync; `eth_getProof` for pending answers for the head and does not ask the generator |
-
-**Mutation run.** 24 mutants over the accessor, the two builders, the Engine API's retry and its answer on a fault, the pool filter, `testing_commitBlockV1`, pending in both resolvers, the two work methods and the mocked miner's wait: 24 caught. One was first written so that it did not compile, and was re-aimed. One was missed at first: the mocked miner building on the world of its last build when the import had landed before its next look, which the tests reached only after a wait (where the world is dropped anyway); a case was added, and the mutant is caught. Not mutated: one layer shared between attempts, which gives the same roots.
-
-**Two reads after code (forge and beacon: APPROVE WITH CHANGES, no blocker).** Both traced the guard off, call by
-call, to what `staging` evaluates, and found no route by which a fault of the state reaches a fallback of the
-lenient build.
-
-| Finding | Change |
-| --- | --- |
-| forge: the mocked miner's spec raced its own clock: the miner tells sync of a block before it sets its timer, and a failed build comes back after the reply a tick waits for | the spec waits for the miner to have dealt with what it was sent before it moves the clock, and where a failure comes back on its own it ticks until the block is there |
-| beacon: the lenient builds of blocks with no transaction proved nothing, since dropping a transaction and falling to the empty payload give the same block there | drops are counted where the block has transactions, and each such build is two executions: the one that fails and the one that is the block |
-| beacon: no test on the unified layout reached the empty-payload arm | a case: a failure no transaction explains gives the empty payload, which import takes, and writes nothing |
-| forge: what ommers are paid was held only through the block's hash | the ommers' miners are read on both layouts |
-| both: comments that named a spec that does not exist, or the proposer's nonce read as a caller of the read by a root | corrected, with the allow-list's reason |
-
-**Not here, with the reason.**
-
-- An Olympia block prepared on the unified layout (forge). At Olympia the base fee is credited to the Treasury
-  account: one more account written through the same layer, by code import shares. The shipped test configuration
-  has no fork between Frontier and Olympia that a four-block chain can cross. With the lift of the mining refusal
-  (C4b), on Mordor's own configuration.
-- That each lenient attempt has a view of its own is not asserted by a count: one layer shared between attempts
-  gives the same roots, so no test could tell. The retry on a stale view is what needs it, and that is tested.
-- A fault of the state raised by a read in the middle of an execution: every injected fault is thrown before the
-  execution or as it opens its storage. Nothing between a trie read and the builder catches it (beacon read the
-  path), and import's own tests of a view lost in mid-execution are C3b's.
-- A view that goes stale in the pool's nonce filter is not retried, and neither is one in the strict build of the
-  testing namespace: before the overlay a stale view means the parent is no longer held, and a fresh one would be
-  refused. The first answers -38003, the second a JSON-RPC error; the head does not move.
-- `eth_submitHashrate` still marks the node as active on the guard. Left.
-- The fixture replay of the builder on positions (`EestBuilderReplay`): it starts from a fixture's genesis header,
-  which the loader does not produce. With the harness ports (T117).
-- A rebuild that meets a fault after the head moved (beacon): the path is the one that already serves the stored
-  version when a rebuild throws; a test needs a pool. Not added.
-- `test_mineBlocks`, `TestmodeMining` and `NoOmmersBlockGenerator`'s caller are test mode: part 3, with its refusal.
-- For C4b, when network sync returns: `BlockImporter` drops a `MinedBlock` that arrives while an import is running
-  (`case _: MinedBlock => Behaviors.same`), which a miner that waits for its last import will meet every time; and
-  the mining refusal and the two work methods are lifted there.
-- A node that is corrupt (`CorruptNodeException`, an `MPTException`) still reaches the lenient build's fallbacks,
-  as a missing node of the hash store does. Unchanged.
-
-
-### C3c part 3: the linear subset now (user, 2026-11-12), and the lenient import record
-
-The third part of C3c was written as the lenient chain import, test mode and the ported harnesses (T108 to T110,
-T116, T117). As written it takes side blocks, rewinds and reorganisations, which the unified layout cannot do before
-its overlay: a block is committed in place when it is built on the block whose state is held, or not at all (C3b).
-**Decision (user): the linear subset is done now**, and what needs a state beside the head's moves to C4a and C4b:
-post-merge side blocks in the lenient import (the rest of T109), `test_rewindToBlock`, and the fork-choice harness
-(`ForkChoiceBlockchainTestsSpec`, the rest of T117). It is three PRs: the lenient import (this record), the fixture
-replays on positions with the harness canary, and test mode.
-
-**The lenient import (`ChainImporter.importChainFile`, the `import-chain-file` key: hive and ethereum/tests).** On
-the unified layout a block that is built on the head goes through the node's own import of one block onto the head
-(`BlockExecution.executeAndAdoptBlockIf`, the one an operator's restore uses): one batch for the block, its
-receipts, its weight, the head and the state. A block that is not built on the head is refused, on either side of
-the merge, and nothing of it is kept; it is counted as failed, and the log says it is a limit of this node's layout
-and no verdict on the block (the first loudly, the rest at debug). A head whose state is not the one the disk holds
-is a fault of the datadir, and ends the import. The refusal of `import-chain-file` with the guard at start is
-lifted. With the guard off the three arms are as they were.
-
-**One consult before code (forge and beacon: AGREE WITH CHANGES).** Both read the two paths side by side: for a
-block built on the head the standard import makes the checks the lenient arm makes, in the same order, with the
-same validator (before execution, after it, the requests hash, the access-list hash), and writes what
-`saveImported` wrote, in one batch where that was two writes.
-
-| Finding | Change |
-| --- | --- |
-| beacon: a fault of the node's own state must not be counted as a failed block and passed over; every block after it meets it too | it is thrown, as anything thrown by the hash store's arm is, and ends the import |
-| beacon: "built on the head" must also mean "the head's state is the one held"; otherwise the log blames the block for a fault of the datadir | checked, and thrown as that fault |
-| forge: calling the fork choice for a side block would be worse than refusing it: a heavier branch reaches a reorganisation that the layout refuses on its first block, and the throw would end the node's start | refused before the fork choice |
-| both: failed and not skipped (skipped means present, or kept as a side block; nothing is kept); do not store the side block by its hash | so |
-| forge: the parent's weight as the strict path takes it | so; each block's weight is compared with the hash store's |
-| beacon: one error line per refused block is noise for a long tail | the first of each kind at error, the rest at debug, and both counts in the import's last line |
-| beacon: an Amsterdam block with a wrong access-list hash should be among the cases | it is, and its reason is held |
-
-**Two reads after code (forge: APPROVE WITH CHANGES; beacon: APPROVE).** Both traced the guard off to what it was:
-one more read, of a flag that is false there. Taken: the two checks and the commit are under one exclusive lock,
-with the head looked at again before the commit, as the strict path has it (the import runs at start, where
-nothing else writes the head, so this is parity and not a fix); a fork choice that fails the test when it is
-reached, and the refusal counted by its kind, so that a side block is seen to be refused for that and not for
-something an execution found; the counters are per import; the datadir compared around the fault of the held
-state. The exclusive lock taken around an import that takes the shared one is the nesting the strict path has had
-since C3b (a write lock's holder may take the read lock).
-
-**Tests** (`ChainExportImportSpec`, on the unified layout): the execution-apis chain file imported whole, to the
-head, rows, receipts and weights it has on the hash store, with nothing in the hash store; the file again, every
-block skipped and nothing written; an invalid block counted and the valid one at its height imported; an Amsterdam
-block whose header commits to another access list refused with nothing written; the blocks after a failed one
-refused; a side block before the merge and after it refused with the datadir as it was, and the chain going on;
-a head whose state is not held. A mutation run over the new arm (the arm not taken, a block that is not on the head not refused, or counted as kept, or counted under the other kind; the held-state check dropped; the weight taken wrong; a block that import refuses counted as imported): 7 mutants, 7 caught. The look at the head before the commit has no mutant: nothing moves the head while this import runs.
-
-**What a node on the guard gets from it, and what it does not.** It starts from a chain file and serves the head
-it imported. The ethereum/tests vectors that end on a side chain (`bcMultiChainTest`, the uncle races,
-`lotsOfLeafs`) end on another head with the guard on, until C4. No hive run sets the guard. And a payload sent by a
-consensus client after the import is still accepted and not adopted, before the overlay (C4a, C4d).
-
-
-### C3c part 3b: the fixture replays from a genesis commit, and the harness canary
-
-The two replays of the execution-spec-tests fixtures (`EestBlockchainReplay.replayOnPositions`, of import, and
-`EestBuilderReplay`, of the builder) started on the unified layout from rows a test kit copied out of a genesis
-loaded on the hash store: a fixture's genesis header carries fields the loader does not produce, so the loader's
-genesis was not the fixture's. They now start from **the node's own genesis commit, under the fixture's header**:
-the loader builds the state from the fixture's allocation and commits it, and the header it stores is the one the
-harness hands it. The seam is the loader's `prepareHeader`, protected where it was private; nothing in the node
-overrides it. So no node of a fixture's state is written to the hash store, at the genesis or after it, and the
-datadir a replay ends on is one the unified layout wrote alone.
-
-- **The import replay** (`EestImportOnPositionsSpec`) is otherwise as it was: after each block the rows are the
-  block's state, the anchor and the head are the block, and its record takes the rows back.
-- **The builder replay** has a run on the unified layout (`rebuild(t, onPositions = true)`,
-  `EngineApiAmsterdamBuilderEestSpec`): each block is built on a view of its parent's state to the fixture's hash,
-  and is then imported, where on the hash store it is saved as it was built. The eight vendored Amsterdam fixtures
-  (14 blocks, the EIP-8282 dequeues among them) pass, and an Amsterdam fixture's genesis is the first
-  Amsterdam-at-genesis header committed to this layout.
-- **The harness canary** (T110, `HarnessCanarySpec`): a replay on positions ends by asking its datadir what wrote it
-  (`EestBlockchainReplay.notOnPositions`: nodes in the hash store, no layout stamp, no anchor, an anchor that is
-  not the head). The spec holds the
-  question to both answers: a genesis the unified layout committed passes it, and the same fixture's genesis loaded
-  with the guard off is seen for what it is. A harness that was quietly on the hash store no longer passes.
-
-**The corpora, again, from genesis commits** (`EEST_IMPORT_POSITIONS`, the replay of import): the Paris and Shanghai sets, 8,835 fixtures, 11,262 blocks committed, 596 rejected, 336 storage tries emptied; the Amsterdam corpus, 26,503 fixtures, 27,352 blocks committed, 5,715 rejected, 848 storage tries emptied. No divergence and no tombstone in either, and the figures are those of C3b's runs from copied rows. The 35,338 genesis states the loader committed are the states the fixtures name: each one's rows were walked from its root and compared, as every block's are (run again after the read below asked for that).
-
-**One read after code (beacon: APPROVE WITH CHANGES).** The seam is the narrowest there is: no new public method,
-no constructor argument, no flag in the node; the override gives the fixture's header only when the state built is
-the one it names. Two changes, both in the harness: the rows a genesis commit leaves are held to the genesis state,
-each of its nodes and no other, where the copy that seeded them was exact by construction (a row missing at the
-genesis could have hidden behind a block the fixture expects to be rejected); and the question the canary asks also
-holds the anchor to the head, at the genesis and at the end, so that a run whose state stopped moving is seen.
-
-**Not here.** The three harnesses under `it/ethtest` (`EthereumTestHelper`, `EthereumTestExecutor`,
-`ForkChoiceBlockchainTestsSpec`): the first two import ethereum/tests chains with side blocks through the lenient
-importer, and the third goes through `reorganise`; they wait for the overlay and the head move with the rest of
-T109 and T117. `RpcCompatNode` needs no port: `ImportOnPositionsSpec`, `ProposerOnPositionsSpec` and
-`ChainExportImportSpec` run it on the unified layout by overriding its storages.
-
-
-### C3c part 3c: test mode on the unified layout (2026-11-12)
-
-Test mode (`fukuii.testmode`, retesteth's `test_*` methods, `TestService`) runs on the unified layout, in the linear
-subset. Its refusal at start is lifted. Tasks T108 and the rest of T116. With the guard off each method does what it
-did, but for two faults of test mode that the work found and that are fixed on both layouts (below).
-
-- **A chain is set on a datadir that holds the chain before** (`test_setChainParams` is the first call of every
-  test). On the hash store the new genesis is written over the old. Here a genesis is committed only to a datadir
-  that holds no state, so, in this order: a genesis the layout cannot commit is refused with the datadir as it is
-  (`GenesisDataLoader.unifiedLayoutRefusal`); the blocks of the chain before are removed, from the head down (the
-  hash store's arm removes block 0 alone and leaves the numbers above it naming old blocks); its state is destroyed;
-  the node's own loader commits the genesis, and its failure is answered as an error. Nothing of the genesis goes to
-  the hash store: the storage tries are rows of the commit.
-- **The destruction of a state** is new, and is the position store's (`PathStateStorage.destroyStateForNewGenesis`):
-  under the state lock, one synced batch of point deletes of every row and every changeset record, with the anchor,
-  the layout stamp and the pruned-to count. One batch, so there is no moment with the rows gone and the anchor
-  there, or the reverse; point deletes, since a range delete is no part of a batch; so it holds the keys in memory,
-  and refuses above a million. It is a move of the clock of its own kind (`StateMoveLog.inFlightToNoState`): the log
-  of moves is emptied before the epoch goes odd, so a view made before it is stale and never reads "no row" as its
-  state. **Only a store built for a node in test mode does it** (`CommitSettings.allowsStateDestruction`, set from
-  `instanceConfig.testmode` in `NodeBuilder`); any other throws.
-- **Blocks.** A block on the head is committed in place by the import test mode always used (`importToTop`, the
-  adopting execution). A block beside the head is queued, as on the hash store. The block that makes a branch the
-  heavier one reaches a reorganisation, which the layout refuses before anything is written; the answer says the
-  layout holds the state of its head alone until its overlay (`TestService.HeadStateOnly`), and is no verdict on
-  the block. A mined block that was not made the head is an error there, where the hash store answers that it was
-  mined.
-- **A rewind** (`test_rewindToBlock`): to the head or above it, no block goes; to the genesis, the chain that was set
-  is set again (the same block, the same state, on a datadir that holds nothing of the blocks above it); to a block
-  between them, refused before anything is removed. The state of such a block is held nowhere until the head can
-  move back (C4b).
-- **The world of test mode** (`TestModeWorldStateProxy`) carries the storage tries it replaces whole, as the base
-  world does since C3b, and builds its account trie over the account trie's own view of the storage: without the
-  second every import in test mode threw on the unified layout (forge).
-- **`TestModeNode`**: what the three classes of test mode take from their node (the chain configuration and seal
-  engine a test sets, the queue, the genesis loader, the position store). `TestNode` is it; a spec gives the
-  services one in memory.
-
-**Two faults of test mode, fixed on both layouts, each in a commit of its own.** Both are visible with the guard off,
-in test mode and nowhere else; neither touches a state root.
-
-1. *The world of test mode stopped being that world at the first persist.* The base world's `copyWith` built a plain
-   world, and a block's transactions are each persisted. So the hook that notes the storage keys a transaction
-   writes ran for the first transaction of a block alone, and `debug_storageRangeAt` left out every slot first
-   written by a later one. `copyWith` is protected and the test-mode world overrides it.
-2. *`test_mineBlocks(n)` mined one block and n - 1 siblings of it.* The head was read once, outside the effect that
-   is repeated; each later block was built on the same parent, queued as a side block, and reported as mined. The
-   head is read when each block's turn comes.
-
-**Not parity with the hash store, and said in `ConfigValidator.stateGuardErrors`:** a side branch is never
-reorganised to; a rewind goes to the head or the genesis; `debug_storageRangeAt` and `debug_accountRange` answer at
-the head alone. Each is in B-220, with the side blocks of the lenient import.
-
-**Tests.** `TestServiceOnPositionsSpec`: two test-mode nodes in memory, one on each layout, given the same calls.
-The same block at each height; rows that are exactly the head's state; nothing in the hash store; the same answers
-from the storage range and the account range. The blocks: a contract created with storage, a slot first written by
-the third transaction of a block, a storage trie that loses a leaf, a contract created onto an account with storage
-and no code, a contract destroyed and paid again in one block, two blocks in one request. A second chain, and the
-first again by a rewind, each leave the datadir a node that was only ever given that chain has. The refusals each
-leave the datadir as it was: a genesis written twice, a store that would not destroy its state, the heavier branch,
-the rewind between, a mined block that is already queued, a head whose state is not held, a range of the state of a
-block below the head. A write that fails (the destruction, the genesis commit) is an error of the method, and the
-chain is set by asking again. `TestModeWorldSpec` (the world), `StateDestructionSpec` (in memory and on RocksDB),
-`StorageBuilderStateGuardSpec` (only a node in test mode).
-
-**Three reads after code (forge, vault, conduit: each APPROVE WITH CHANGES, no blocker).** Guard off was traced
-method by method to what `staging` does but for the two faults above; the destruction's batch, key shapes, bound
-and clock were found right, and its fence closed (one override, `instanceConfig.testmode`). Taken:
-
-- *What is refused is refused before anything changes* (vault). The store's refusals (not built for test mode, more
-  keys than one batch deletes) were met after the blocks of the chain before were gone. The service now asks first
-  (`PathStateStorage.refusalToDestroyState`, a read under the lock), with the genesis refusal, and before it takes
-  the new chain's rules.
-- *A fault is an answer* (forge, conduit). A write that failed in `test_setChainParams`, and a range read of a block
-  below the head, were thrown before any effect existed, past the controller's mapping, to the transport (an HTTP
-  500). Both are now errors of the method. The codes stay -32000: -1 is "block validation failed", a verdict on a
-  block, and a limit of the layout answered as that could let a test that expects an invalid block pass.
-- *A view made after a move is stale across a destruction* (the mutation run): the case had an empty log, where a
-  log kept across the destruction changes nothing. It now has a move in it.
-
-**The mutation run**: 41 mutants over the service, the world, the destruction, its clock and its fence; every one
-is caught. Four were not at first, and each got a case: the log of moves kept across a destruction, a state above
-the bound deleted all the same, the changeset keys with no bound of their own, and a chain that was not set still
-taken for the one to rewind to.
-
-Left as they are, and said: an invalid branch that outweighs the head is answered with the layout's refusal and not
-with "block validation failed" (the refusal comes before validation); the service's fields are plain variables, as
-they were (retesteth calls in sequence); the queue is kept across a rewind to the genesis, as on the hash store.
-
-### C4a part 1: forward layers (2026-11-12)
-
-C4a is four PRs, in this order, each a precondition of the last: **forward layers** (this), **the reverse index**
-(views of blocks behind the anchor and of forks), **the bounds** (budgets, eviction, pinned branches), and **the node
-uses it** (an execution that is not adopted commits to the overlay). Until the fourth, nothing in the node makes a
-layer: part 1 is storage and its spec.
-
-- **A forward layer** (`ForwardLayer`) is what an executed block, whose state is on no row, **left** of its
-  parent's state: the node at each position its tries touched (or that it left none), the **hash** of the node its
-  first event there named as old, and the owners of the storage tries it replaced whole. A position of a replaced
-  trie that the block did not write again reads as no row. It is made from what the execution staged
-  (`StagedChanges.frozen`), and **nothing of the parent's state is read to make it**.
-- **A layer does not grow with a storage trie its block destroys** (forge, in the consult for part 3). ETC has no
-  EIP-6780: a SELFDESTRUCT removes a trie of any size. A layer that held a prior for each of its rows, which is
-  what this part first built, is as large as the trie; under the bounds of part 3 a heavier proof-of-work branch
-  with such a block in it could not be kept, so could not be adopted, and the node would stay on the lighter
-  branch. What a block did to the rows (the priors, the rows of a replaced trie, whether they are too many to
-  list) is therefore settled **when the layer is promoted**, below.
-- **A view** (`StateView`) of a block that is not the anchor reads through the layers between the disk and that block,
-  newest first, and then the row as its base held it: the existing read, corrected by the log of moves. It holds its
-  layers itself, so it reads the same after one of them is promoted or dropped, until the log no longer reaches back.
-  **The epoch, the anchor and the layers are one observation** (`PathStateStorage.viewAfter`): a layer goes only
-  after the batch that promoted it has settled, and a view whose epoch moved while its layers were looked up is made
-  again.
-- **The overlay commit** (`PathStateStorage.commitOverlay`, data-model 7.2) keeps a staged block as a layer and writes
-  nothing: no row, no record, no anchor, no move of the clock. The lock is held for the look at the anchor and the
-  registration alone, which are one step: the block that has become the anchor is not kept beside itself, and a
-  block whose parent's state is no longer held (neither the anchor nor a layer) is not kept.
-- **Promotion** (`PathStateStorage.promote`, data-model 7.1 case 2) commits a layer whose parent is the anchor
-  through the batch an in-place commit writes, and drops the layer when the batch has returned. **The block is
-  settled then, against the disk, under the lock, as a commit in place settles one**
-  (`StagedChanges.settle`, which `finalise` now is): the prior of each position is the row, read then and held to
-  the hash the layer names; the rows of a replaced trie are scanned then, and listed or left by the bound a commit
-  in place applies. The disk is the parent's state at that moment, so the record, the rows deleted and the priors
-  of the move are those of the same block committed in place. A layer that was not built on the rows the disk holds
-  is dropped, with what stands on it, and nothing is written.
-- **What is kept can be promoted, unless the disk is not the state it was built on.** A layer is held to the two
-  state roots when it is made, by the account trie's root (the hash of the node the block first found there is the
-  parent's state root, and the node it left hashes to the root in the block's header), and to every other check of
-  a diff that needs no row of the parent's state: a node under 32 bytes away from its trie's root, the shape of the
-  blocks' names. The whole diff is validated again at promotion; a layer that fails there, which only a defect can
-  bring about, goes with what stands on it. Kept, it would be the answer to every later execution of its block,
-  and a branch with that block in it could never be adopted (forge, beacon).
-- **A wrong node under a layered view** is `LayerInconsistent` when the layer gave it, or when the disk is at rest on
-  the view's base: a new `StateFault`, not retried as a stale read and **never a corrupt row**, since what a corrupt
-  row is answered with deletes it by hash. Stale otherwise.
-
-**Not as the data-model has it, and why.**
-
-- Promotion is its own method, and `commitCanonical` with nothing staged does what it did. Promotion moves the
-  anchor, so it is for a caller that adopts the block; once layers count as executed (part 4), a caller that only
-  has the block's own records to write reaches `commitCanonical` with nothing staged for a block that is a layer
-  (forge).
-- **The third case, a staged block whose parent is not the anchor degrading to an overlay commit, is not built
-  here.** `PathStagedBlock.commitWith` takes a return for "committed", and `saveLastBlock` would then write the head
-  past the anchor (beacon, forge). It lands with its callers in part 4: `buildExtra(adopted)`,
-  `NotExtendingAnchor`, `saveLastBlock` writing nothing. `isApplied` stays the anchor alone until then.
-- A prior of none is not held against the row at promotion. A storage trie replaced with too many rows to list
-  leaves them on disk, and a block that first writes where one lies names no prior there, committed in place or
-  kept as a layer.
-- **No view lists a storage trie's rows** (data-model 3.6, 6.2 and 7.0 have `StateView.ownerRows`, outside the
-  lock). Every commit, in place or a promotion, is made over the rows of the block's parent, so a replaced trie is
-  listed there, from the disk, under the lock (`PathNodeStorage.storageRows`, as C3b built it). The listing through
-  a view that this part first built, put right by the log of moves and laid over by the layers, had no other caller
-  and is removed.
-- The count of layers is capped at 32 as a stopgap (`CommitSettings.maxForwardLayers`); part 3 replaces it.
-- **No layer outlives the chain that leads to it** (the reads after code, all three). A layer is kept only on the
-  anchor or on layers that lead from it. When the anchor moves, by a commit in place or a promotion, and when a
-  layer is dropped, every layer no chain leads to goes: the siblings of the new anchor and what stands on them, and
-  what stood on the dropped layer. Left alone they would fill the cap for good, and side blocks are routine on a
-  proof-of-work chain. The reverse index changes what "leads to" means: a sibling of the anchor is then reached
-  through the block behind it.
-
-**Tests.** `ForwardLayerSpec`: two datadirs are given the same blocks, one committing each in place, the other
-keeping each as a layer on the layers before it. Every node of each block's state is read through the layers; then
-the layers are promoted, oldest first, and after each the datadir is the other's, key for key (rows, records, their
-index, the anchor, the head). The blocks replace a storage trie in one block, make it again in the next and replace
-it again in the third. Run again where the replaced trie has too many rows to list, and with the bound just above
-and just below the disk's rows while the layers add to them or take from them. A view read across the promotion of
-its own oldest layer, and stale when the log ends; a view made while a promotion lands between its two looks; the
-faults; the refusals of a layer and of a promotion; **a block that destroys a storage trie grown by 400 slots holds
-what the same block holds of the small one, to the byte, reads every row of it as gone, and deletes and records
-each when promoted**; the layers nothing leads to; a promotion whose write fails.
-
-**Three reads after code (beacon, forge, vault: each APPROVE WITH CHANGES, no blocker).** Found sound: the capture
-of a view (a layer is dropped after its batch settles, so a chain seen without it is seen with a moved epoch), the
-batch of a promotion being the staged commit's, the lock (no path asks for it while holding it), and every flow of
-a node that makes no layer being what it was. Taken: the layers nothing leads to, above; a block of a hash that is
-kept, on another parent or with another state root, is refused; `stateAvailable` is the anchor alone again; a view
-with no layers does not look through any.
-
-**Two reads of the layer as it now is (beacon, forge: each APPROVE WITH CHANGES, no blocker).** Found sound: a
-layer grows with what its block wrote, which gas bounds, and never with a trie it destroyed, also where the trie is
-made again in the same block or in the next layer; a promotion's record, rows, tombstone and move are those of the
-block committed in place (the settling overwrites the prior of every position of a replaced trie from the scan, so
-what the layer names there does not matter); a view reads as before, and more exactly at the positions a replaced
-trie left; under the lock a promotion does what a commit in place does, with the same bounds, and one hash for
-each named prior. Taken: the checks without the disk when a layer is kept, and a layer that cannot be promoted
-dropped, above; a commit in place settles the staged changes without copying them; the cases beacon named (the old
-anchor's view across the promotion of a layer that removed a trie, a promotion over a row that is not there, the
-root check's branches, the positions a block left as it found them).
-
-**The mutation run**: 51 mutants over the layer, the overlay, the view, the overlay commit, the promotion and the
-settling. 47 are caught. Fourteen were not at first, over the two forms of the layer, and each got a case (the
-anchor promoted again, the layers after the state is destroyed, a layer's removed row and its wrong node after a
-move, a block of a kept hash with another state root or on another parent, what stood on a layer that failed its
-promotion, the two branches of the root check that no staged block reaches, what a layer is taken to hold). Four
-change nothing that can be seen: two fast paths (a view with no layers, a block that is a layer already), the check
-of a layer's parent by its layer where every layer kept is reachable, and a chain ending on a block of the anchor's
-hash and another state root, which nothing can register.
-
-**For the later parts, from the reads.** (1) *A move's priors are not exact where a block first writes over a row
-an unlisted trie left behind*: the move says "no row", and a row was there. A read never comes to such a position,
-and nothing lists a trie's rows through a view any more, so nothing is misled by it. (2) A layered view at rest that
-meets an *absent* row answers with a missing node, which is fetched, and not with an inconsistency of its layers: to
-settle before part 4 routes it. (3) `commitOverlay` can answer with a layer that a promotion has just put on disk:
-part 4 does not read "layered" as "not on disk". (4) `promote` is for an adopted block, and only its documentation
-says so: part 4 guards its caller. (5) A promotion that answers "was not built on the state the disk holds" has
-dropped the layer: the caller of part 4 (`forkchoiceUpdated`, the head move of a proof-of-work branch) executes the
-block again from its stored body before it answers (beacon). (6) Part 3's bound on a layer's bytes is set above
-what the largest block can write at the highest gas limit a chain allows, Olympia's schedule included: a bound
-under that would bring back, for writes, what this part removed for destroyed tries (forge). And the time the lock
-is held by a promotion is measured there: the scan of each replaced trie is under it, as in a commit in place, and
-an 8M-gas ETC block can replace some 1,600 (forge). (7) The differential on RocksDB (the shape of scan keys, the
-resume key of a chunk), and `EphemDataSource.scanRangeLimit`, which copies the whole range for each chunk.
-
-### C4a part 2: the reverse index (2026-11-12)
-
-The state of a block **behind the anchor**, and of a block on **a fork**, is read through the changeset records with
-no row touched. Tasks T121 to T123, and the rest of T128 and T130. Still storage and its spec: the node's readers
-and its execution are given the anchor's state and no other (`PathStateStorage.view`); the new views come from
-`viewOf`, which only the overlay's own code can call until part 4 changes the callers with it (beacon: a reader
-handed a state behind the head today would answer where it refuses, `CheckpointExporter`'s walk would go stale, and
-test mode would lose its refusal).
-
-- **`ReverseIndex.between(anchor, fork)`** is what the state of `fork` held at every position the blocks after it
-  changed: the prior of the earliest such block. It is built by a walk of the anchor's own records, by the parent
-  each record names; the canonical index of blocks by number is never asked (data-model 7.0), and neither is the
-  index of records by height. Each record is held to its block (its number and the state root it leaves; its hash by
-  the record's key), and the walk ends on the record whose parent is exactly `fork`. A record that is pruned, is a
-  tombstone, cannot be read, is too far back or would make the index too large is a state that is not held: never
-  an index with a block missing from it. `fork`'s own record is not read. A record is not decoded to find that it is
-  by itself more than an index may hold.
-- **A view** reads its layers, then the index, then the row as its base held it. Its base is the anchor the index
-  was built from, so the log of moves keeps the rows under it that anchor's, and the index, a fact about two states,
-  needs no correction. **What the index gives is never taken for the disk's**: a wrong node there, or none where one
-  is named, is the records' inconsistency (`LayerInconsistent`), not a missing node, which is fetched and written to
-  a row that is the anchor's, and not a corrupt row. A row that is missing where neither layers nor records say
-  anything is a real hole in the anchor's disk, and is said as a missing node with no position.
-- **A block executed on such a view is kept as a layer like any other**: a layer holds what the block left and is
-  settled against the disk when it is promoted (part 1), so nothing lists a storage trie's rows through the index.
-- **`AncestorWindow`**: the blocks behind the anchor that the records lead back to, newest first. It is derived (a
-  walk of the records' headers at the first need, then one step with each commit) and never stored. It says which
-  forward layers stand on the anchor's chain and which are of a block that is now canonical, without a record being
-  read under the lock at every move (vault). An error in it costs a view that could have been made; the view itself
-  is made from the records.
-- **A fork's layers are kept while the block they left the chain at is led back to**: a sibling of the new anchor
-  stays readable, where part 1 dropped it. A layer of a block that is the anchor or behind it is dropped, and such a
-  block is not kept as a layer (`OverlayOutcome.BehindTheAnchor`).
-
-**The invariant part 4 and C4b build on** (beacon): *the index's view of a block equals the disk after the blocks
-above it are reversed by their records, at every position*, the rows a replaced storage trie left behind among
-them. Where a block first wrote over such a row its prior is "none"; a reverse deletes the row, and the index says
-it was not there. So a move's priors need not be made exact (part 1's open point): an inexact "none" lies only over
-a leftover row, which no state names, and a head move back must write a record's priors exactly, "none" as a
-delete. A layer promoted after such a move is settled against that disk, so it lists a replaced trie by the rows
-the move left: **C4b's spec promotes a fork's layer after the move back and holds its record to the block committed
-in place over that disk** (beacon; nothing here moves the disk back, so nothing here can show it). The spec holds
-what a view behind the anchor reads at every position of a trie, the leftover rows among them, to a second datadir
-whose last blocks were reversed by their records.
-
-**Not built, and where it goes.** No cache of decoded records and no index built from a nearer one: a handful of
-whole indexes are kept by (anchor, fork) and dropped when the anchor moves; part 3 owns the budgets. The first
-build of the window reads whole records under the state lock: before part 4 it is walked outside the lock and
-installed under it, or bounded in bytes (beacon, vault). The specs run in memory: the RocksDB cases (a reader beside
-pruning commits, a reopened datadir, a record of several MiB, hashes that begin 0x00) come before part 4.
-
-**Tests.** `ReverseIndexSpec` (6 cases): the view 1, 2, 8 and 9 blocks back reads that block's state, every node of
-it as the hash store holds it, on a chain that replaces a trie every third block and makes it again; the same after
-the anchor moves on, until the log of moves ends, and from records alone after a restart; a fork of three blocks
-from a block behind the head, executed on layers and read through index and layers, before and after the anchor
-moves, and a second fork that replaces a storage trie and makes it again, where neither the fork point's rows nor
-the disk's show through; the states that are not held; the faults; the positions of a trie behind a tombstone's successors, held to
-a datadir reversed by its records; the window. `ForwardLayerSpec`'s case of the layers nothing leads to is now a
-fork that outlives its fork point's records.
-
-**Two reads before code and two after (beacon, vault), and the mutation run.** Before: an answer of the index must
-never reach the disk's fault branches; the new anchor's own layer would have counted as reachable; no record is
-walked under the lock at each move. After (each APPROVE WITH CHANGES,
-no blocker), taken: the window is bounded by the depth a view is made across (on an archive node it grew with every
-block, and a layer was accepted on a parent no view could serve); a record's encoded size is held to the cap before
-it is decoded; the indexes of an anchor go when it moves; a block behind the anchor has an outcome of its own; a
-hole under a layered view names no row. A third read (beacon, APPROVE WITH CHANGES, no blocker) of this part on the
-layer as part 1 now has it: a fork block that replaces a trie reads right through layers, index and disk; a named
-prior of a fork's layer is the row after the move back, and a leftover row is never a named prior; taken: the fork
-that replaces and remakes a trie, and the promotion after a move back named as C4b's to test. 34 mutants, 32
-caught; nine were not at first and each got a case. Two change nothing that can be seen: a layer of a block behind
-the anchor (it is dropped when that block becomes the anchor), and a window of another anchor (there is never one).
-
-### C4a part 3: the bounds (2026-11-12)
-
-What the overlay keeps, and what goes when it is full (data-model 6.4). Tasks T124 and T132, and the rest of T129.
-Still storage and its spec: nothing in the node keeps a layer until part 4.
-
-- **The forward layers no branch pins are bounded** in number (`state.overlay.max-forward-layers`, 32), in bytes
-  together (half of `state.overlay.max-bytes`, 128 MiB) and in bytes each (`max-layer-bytes`, 64 MiB). A layer's
-  bytes are what `ForwardLayer.bytes` counts: its nodes, their keys, and an overhead for each entry.
-- **One more than fits evicts layers to make room.** Only a **tip** goes, a layer no kept layer stands on: an inner
-  layer would take every state above it with it. Never a pinned layer, and never one the new layer stands on. The
-  eviction is worked out first and done only if the layer then fits: nothing goes for a layer that is not kept in
-  the end.
-- **Which tip goes first**: a fork whose fork point is the oldest block the records still lead back to (the first
-  the anchor's moving on would take away in any case); then the layer least recently **used**; between layers used
-  alike a fork's before one on the anchor's chain, and then the lower block. A use is an execution staged through
-  the layer (`stage`, `stageOf`), a layer kept on it, and a delivery again. **A reader's view is no use**
-  (`readOnly`, `throwaway`): a caller of `eth_call` does not decide what a node keeps.
-- **A block that is not kept is answered with an outcome, and not a fault**: `OverlayOutcome.NotKept(TooLarge |
-  NoRoom)`, beside `Kept`, `AlreadyApplied` and `BehindTheAnchor`. Nothing is wrong with the block; its state is to
-  be had by executing it again. `Kept` is as of now: the next layer can evict it.
-- **A branch under execution is pinned** (`PathStateStorage.withPinnedBranch(name)(pin => ...)`, and
-  `commitOverlay(staged, block, Some(pin))`). Its layers are kept whatever the bounds of the others are, are never
-  evicted, and are bounded together in bytes across every pinned branch (`pinned-max-bytes`, 256 MiB), each layer
-  once whoever holds it. A pin takes hold of the kept layers its blocks stand on, and of a layer that is there
-  already. A branch that would not fit is refused with `BranchTooLarge`, a fault to try again after and never a
-  verdict on a block, and nothing of that block is kept or pinned.
-- **A pin is released however the execution ends**, under the lock. Nothing is evicted by a release: the bounds
-  apply to what the branch held from the next layer that is kept, pinned or not, and what it held counts as used at
-  the release. So a caller that adopts a branch promotes it first and releases after. Between a release and the
-  next layer that is kept, the layers no branch pins can be over their bounds by what the branch held. A branch is
-  not pinned by the holder of the state lock, which the release needs.
-- **The reverse indexes that are kept** are bounded together in bytes (the other half of `max-bytes`); one that is
-  by itself more than that is built for its view and not kept.
-- **Metrics** (data-model 11): `db.state.overlay.forward.layers` and `.bytes`, `.pinned.layers` and `.bytes`,
-  `.reverse.resident` and `.bytes`, `.evictions` (each eviction told once, from a count the overlay hands over),
-  and `db.state.view.retries` and `.stale` for the views that were made again or could not be made.
-- **A reverse index is kept with the epoch it was built at**, and given only to a view of that epoch: one built
-  across a move of the disk is never met again, also when a head move (C4b) brings the anchor back to a block it
-  has been at (beacon).
-
-**Not as the data-model has it, and why.**
-
-- *"One layer above `max-layer-bytes` is committed in place if it extends the anchor"* (6.4): a layer is kept or not
-  kept, and the store does not commit a block nobody adopted. A caller that adopts the block commits it in place
-  from what it staged, whatever its size; part 4 does that.
-- *`resident-reverse-blocks`* is not read: whole indexes are kept, by the anchor and the block they lead back to,
-  and not decoded records. The key stays in the configuration until the measurements say what the pool should be.
-- *Pinned layers are exempt from the bound of one layer too*: a branch is as large as its blocks are, and
-  `pinned-max-bytes` is its bound. (ETC: a block's layer does not grow with a storage trie it destroys, part 1.)
-- *An evicted layer that a view still holds is not counted.* A view holds its layers; it ends with its caller or
-  with `max-view-age-moves`.
-- *A pin does not keep a layer nothing leads to.* When the anchor moves and no chain leads to a pinned layer any
-  more, it goes like any other: a pin holds a branch against the bounds, not a state that cannot be reached.
-- `db.state.move.seconds` comes with the head move (C4b). A read that goes stale after its view was made is counted
-  by what catches it, which comes with the callers (part 4).
-- **T126 and T131 do not apply as the code stands**: the position store is given no decoded-node cache
-  (`PathStagedBlock.prefetchReader` passes none, and `PathMptStorage` has none). They stay open, with what they ask:
-  when a cache is put in front of the position store, the in-place commit evicts the hashes of the nodes it
-  replaces or removes, after its write.
-
-**For part 4** (from the consults before code, and the reads after): "kept" is a snapshot, so a caller asks for a
-view and executes again when there is none; the candidates for the head are the pinned chains and the last
-`forkchoiceUpdated` target; a branch is rebuilt from the stored side blocks and executed again when its layers
-went. What each answer of the store means to a caller (beacon, forge): `Kept`, `AlreadyApplied` and
-`BehindTheAnchor` are a block that was executed and is valid; **`NotKept` is that too**, with its state to be had
-again by execution, and its header, body and weight are stored all the same; a parent's state that is not held
-(`StateUnavailable` when an execution is staged or kept) is answered by executing the ancestors again from their
-stored bodies, or by SYNCING or ACCEPTED, and on a proof-of-work chain by leaving the block queued. **None of these
-is an invalid block, a penalty for a peer, or an entry in a cache of bad blocks.** Side blocks and payloads are
-handled one at a time with the execution of a branch, so that nothing evicts the layers a branch is about to take
-hold of. Blocks of the head's own chain are committed in place or pinned, and never left to the layers no branch
-pins. To count there: blocks not kept, by reason; branches refused; blocks executed again because their state had
-gone; the lag of the anchor behind the head.
-
-**Two decisions part 4 could not be designed without** (raised by forge and beacon; **decided by the user,
-2026-11-12**).
-
-1. *A branch that is heavier and holds more than `pinned-max-bytes`.* `BranchTooLarge` is the same answer however
-   often the branch is tried: left as the last word, such a branch is never adopted, and on a proof-of-work chain a
-   node that cannot adopt the heaviest chain has left it. Forge's estimate of what 256 MiB holds: some 85 full
-   blocks at today's 8M gas, some 20 at 60M, and the deep reorganisations ETC has seen were of thousands of blocks.
-   **Decided: reverse-then-commit, as the rule when the cap is hit** (the fallback data-model 6.4 records). The
-   branch is executed under a pin as far as the cap allows; when the cap is hit, the disk is moved to the fork
-   point by the records, the executed prefix is promoted block by block, and the rest of the branch is executed
-   and committed in place on it. If a later block is invalid, or the branch turns out not to outweigh the head it
-   left, the disk is moved back by the records of the blocks it committed and the old branch is committed again
-   from its stored blocks. Not chosen: pinned layers spilled to a scratch column family; the cap as the limit.
-   What this asks of the slices: the head move is C4b's, so the fallback lands with it, and until then a branch
-   above the cap is deferred and never judged; the move back after a failed adoption is in the crash matrix (a
-   crash between the move to the fork point and the last commit leaves a head the node must be able to explain
-   from its records and stored blocks); only a branch whose headers prove more weight than the head starts it,
-   so what it costs to make a node do this is the work of that branch.
-2. *More than 32 payloads in a row ahead of a `forkchoiceUpdated`.* A pin lasts for one call, so the payloads a
-   consensus client sends ahead of its choice are layers no branch pins: the 33rd on one chain finds no room (every
-   kept layer is under it), and the 34th finds its parent's state not held. **Decided: the bounds stay as they
-   are, and the cost is execution again**: at the `forkchoiceUpdated`, the blocks of the chosen chain whose state
-   is not held are executed again from their stored bodies, in order, and committed. Not chosen: a higher bound
-   for a chain that follows a consensus client; a pin that outlives a call. To look at again with M1's bytes per
-   block on Sepolia and Platåberget: the bound of 128 MiB on the layers' bytes would bind before a higher count of
-   layers did.
-
-**Two reads after code (beacon, forge: each APPROVE WITH CHANGES; nothing blocks this part).** Found sound: nothing
-that is not pinned can evict or block a pinned branch; a refusal with `BranchTooLarge` pins and keeps nothing; a
-view made while tips are evicted is refused or right, never wrong (only tips go, a layer's content never changes,
-and a child is registered under the lock that evicts); dropping a pinned layer nothing leads to. Taken: a branch is
-not pinned under the state lock, and a failed release does not hide the execution's failure; a pinned layer that is
-kept holds the others to their bounds; evictions told once each; an index kept with its epoch; a bound of one layer
-above the bound of all refused when the store is made; the comments of the overlay's keys. Left, and said: a use is
-marked with one write and no lock, so two at once can leave the older stamp (the order of eviction bends, nothing
-else); a branch whose execution failed counts as used when it is released like one that was not adopted (forge
-would not stamp it); a legitimate ETC block at a 60M gas target can be above 64 MiB and is then `NotKept` unless a
-branch pins it, which is why `NotKept` is never a verdict.
-
-**Tests.** `OverlayBudgetSpec` (16 cases; every block changes one account, so a bound in bytes is a count of
-layers): the count bound, with the one layer that could go being the one the new layer stands on; nothing going for
-a block that finds no room in the end, where some layers could have gone; a refused branch taking hold of nothing;
-a branch refused a pin under the state lock; what an earlier branch left held to the bounds by the next; a view of an
-evicted layer that goes on reading, and the block kept again when it is executed again; the order of use (a
-reader's view, an execution staged, a delivery again, a layer kept on one); the bytes together and each, to the
-byte; a pinned branch of six beside a bound of two, others coming and going beside it, and the bounds applied after
-the release; `BranchTooLarge` at one layer more than fits, with nothing kept of it; a pin taking hold of the layers
-under its block, two pins on one layer counted once; the release when the execution throws, and a branch promoted
-before it is released; a fork at the floor going first though it was last used; the order between layers used
-alike; what the observer is told, and the views made again and given up; the index pool. `StateMetricsSpec` and
-`StateConfigSpec` hold the metrics and the settings the configuration gives.
-
-**The mutation run**: 54 mutants over the bounds, the eviction and its order, the pins, the release, the pool of
-indexes, what the observer is told and the settings. 53 are caught. Two were not at first, and each got a case: a
-layer kept on a layer being a use of it (an execution is staged through the layer first, which is a use already, so
-the case stages on another layer in between), and a released branch counting as used (the same layers were left
-whichever went first, so the case evicts one layer and no more). One changes nothing a test of one thread can see:
-an index given to a view of a later epoch, which is there for a builder that crosses a move of the disk.
-
-### C4a part 3c: the ordering, the stress and M3 (2026-11-12)
-
-Tests and a measurement; no change to the store. Tasks T125, T127 and T134.
-
-- **`EpochOrderingSpec` (T125)**: the one ordering the isolation of a view rests on (data-model 6.3.3). A data source
-  that stops before and after its write makes the steps: one thread, the same interleaving every run. *The writer*:
-  when its batch is about to be written the epoch is odd, the move is in the log with the new anchor, and nothing
-  is written; when the batch has returned the move is in flight still, and says of every row the batch changed
-  what it held, and of no row a thing that was not so (the rows before and after, compared). For a commit in place
-  and for a promotion. *A reader*: the anchor's view, a view through a layer, a view behind the anchor and a view
-  of a fork, each made before the move, read every node of their states before the batch, after it while the clock
-  is not settled, and after. *The fallback* of 6.3.3 is another clock under the same view: a view asks its clock
-  three things, so a store whose writers exclude its readers by a reader-writer lock is a `StateClock` of a few
-  lines, shown reading. The memory model's own gap (no happens-before across the native write) is as the
-  data-model has it: documented, and not something a test of one thread can close.
-- **`OverlayStressSpec` (T127)**: ten thousand steps in an order a seed decides: blocks committed in place (with
-  readers reading before and after the batch, inside the write), blocks kept on the anchor, on layers, behind the
-  anchor and on forks, branches of two to four blocks under a pin while other blocks arrive, promotions, drops,
-  views opened and read. The overlay is small (six layers, 40 KB, 12 blocks of records), so its bounds are met all
-  the time. **Every read that succeeds is right, and every failure is `StaleStateViewException`,
-  `StateUnavailable` or `BranchTooLarge`**: never a wrong node, a missing one, or `LayerInconsistent`. A read is of
-  nodes by their hash, and of rows: at positions of the view's state and of another state, where a view must hold
-  nothing if its own state has no row there. Every block is executed on a hash store too and the two state roots
-  are held to each other, so an execution through layers and records is checked as it is made. Two invariants are
-  held as the run goes: every kept layer has a view while the disk is at rest, and what a branch holds stays while
-  it is under execution. At the end the disk is its anchor's state, row for row. About five seconds.
-- **The mutation run for the two**: 12 mutants of isolation (the batch written before the move is said, a move that
-  says nothing of its rows, a view that reads the rows as they are, the wrong move or the wrong layer answering, a
-  row of a replaced trie showing through, an inner or a pinned layer evicted, a promotion that scans nothing, the
-  layers nothing leads to left). Ten are caught. Six were not at first: the stress read only nodes that exist and
-  took every refusal for a right answer, so it was given the reads of rows and the two invariants. Two change
-  nothing one thread can see: a view that is not made again when the disk moves while it is made (`viewOf`; the
-  same rule in `view` has its case in `ForwardLayerSpec`), and an index kept across a move of the anchor (it is
-  kept with its epoch and never given again).
-- **M3** (`baselines/m3-layer-heap.md`, `LayerHeapBenchmark`): what a layer holds on the heap against what the
-  overlay counts. The count is no less than the heap in every shape measured, by 9 % to 2.2 times, so a bound on the
-  count is a bound on the heap and the defaults stay. Measured by a heap difference over hundreds of layers, not by
-  JOL, which is not a dependency of the build. Setting the defaults from real blocks waits for M1 and M2.
-
-### C4a part 4: the node reads behind its head, first for SNAP (2026-11-12)
-
-**What part 4 is.** The record of part 1 said the degrade of a staged commit to an overlay commit "lands with its
-callers in part 4". Its callers are not C4a's: a block that is executed and not adopted comes from a `newPayload`
-(C4d) or from the blocks of a reorganisation (C4e), and what moves the head to it is C4b. So the degrade lands with
-the first of those, and C4a ends where its checkpoint says: *non-head state is readable and bounded; nothing moves
-the head yet.* Part 4 is the readers: the state served to a peer by its root (this), and the readers of a block
-behind the head over JSON-RPC (next).
-
-- **`BlockchainReader.stateForRoot(root)` under the guard** looks the root up among the canonical blocks from the
-  block the disk holds back to 128 behind the best block, and hands out that block's state: the disk's own rows
-  for the block it holds, and for a block behind it a view through the changeset records
-  (`PathStateStorage.readOnlyBehind`). Where two blocks of the window have one state root (an empty block after
-  the merge) the newer is read: the same state through fewer records. The roots of a window are kept for the next
-  request, by the block the disk holds and the best block's number, and made again when either moves.
-- **Not served**: a root of no canonical block of the window; a root whose block the records no longer lead back
-  to (past the retention floor, or behind a record that lists nothing); and **an executed block kept beside the
-  chain, ever**, also where the index by number names it (a side branch's headers written under the chain):
-  `readOnlyBehind` gives the state of a block of the anchor's own chain and of no other.
-- **One rule for the three requests.** Under the guard the state that is handed out for a root is the rule, for
-  `GetAccountRange`, `GetStorageRanges` and `GetTrieNodes` alike. With the guard off nothing changes: the
-  read-only store whatever the root, and the 128-block check on `GetAccountRange` alone.
-- **A state that goes away while a request is served** (a view the disk moved past, a state no longer held) is
-  answered with nothing, as a root that is not served is, and logged at debug: nothing is wrong with the node.
-- **SNAP stays unadvertised under the guard, and T130's "advertise again" moves to the slice in which the node
-  follows the head (C4d, C4e)** (herald). A node on the guard does not sync from the network yet, so the roots a
-  syncing peer asks about, which are near the network's head, are none of its own: every answer would be empty,
-  which is what the user's decision of 2026-11-11 was made to avoid. The window is served to whoever asks (the
-  handlers do not wait for the capability). The refusal of `do-snap-sync` under the guard stays, and says why: the
-  hand-off of a SNAP sync onto the unified layout is C5a.
-
-**Tests.** `ServedRootWindowSpec` (5 cases, on `CanonicalChainOnPositions`: a chain as a node holds one, with its
-headers, their index, the records and the best block): every block of a chain served and read node for node
-against a hash store; the window's edge to the block, and its move with the best block; a root past the records
-not served, and a root two blocks share read at the newer when the older is one record too far; three executed
-blocks beside the chain not served, one of them named by the index; a state handed out earlier stale after as many
-moves as a view outlives and never wrong, and the new root served when the disk catches up with the best block.
-`SnapServingActorSpec`: each of the three requests for each root of a chain whose storage trie changes in every
-block, equal to the answer a hash store gives, proofs included; and nothing for a root of no canonical block.
-
-**The mutation run**: 9 mutants over the lookup, the window, the kept roots and the seam; all caught, one after a
-case was added (the roots kept when the disk moves to another block while the best block's number stands).
-
-**Two reads (herald).** Before code, AGREE WITH CHANGES: the same window for the three requests is what geth,
-Nethermind and Besu do (from memory, not from their code: to check before it is relied on elsewhere), and an empty
-answer with the request's id is the answer for a root that is not held, never a disconnect. After code, APPROVE
-WITH CHANGES, nothing blocking: with the guard off nothing differs (no `StateFault` can be thrown there); the
-window is the old rule's and the fresh-root cache's, to the block; the kept roots can miss a state and cannot hand
-out a wrong one, since the view is made of the exact block and only of a block the records lead back to. Taken:
-the case of a best block's number behind the disk. **Checked in code by herald**: contract code is not pruned with
-retention (nothing in the position store touches the code store), so a code hash of a window state is there for
-`GetByteCodes`; and fukuii's own SNAP client marks a peer that answers empty five times running as unusable for
-good (`AccountPeerDispatch`), which is the behaviour not advertising avoids. `ServedRootWindowSpec` runs in the
-essential tier (no actors); the actor spec's cases are `SyncTest`, as that spec's are.
-
-### C4a part 4b-1: what a reader behind the head may cost the node (2026-11-12)
-
-The readers that come next are anyone who can reach the node: a peer (part 4, above) and a caller of the JSON-RPC
-(part 4b-2). Two consults before code (conduit, beacon; both AGREE WITH CHANGES) named what the store had to be
-first, and this is that: no change to what any caller reads.
-
-- **The look at the blocks behind the anchor is made by a reader with no lock held.** It reads the header of a
-  record for each block behind the anchor (up to the reach), and under the state lock that was every commit held
-  up behind one read after a start. A reader builds it at the epoch its view observed and it is kept only if the
-  disk did not move meanwhile; otherwise the view is made again. A writer builds it under the lock it holds
-  anyway.
-- **An index is built once for those who ask for it together.** Who asks for an index that is being built waits
-  for it and is given it, kept or not, and is told what the builder was told when the records give none: no second
-  walk of the same records, no second copy of the same bytes.
-- **The readers of one kind build two at once**, a peer and a caller of the JSON-RPC each their own
-  (`PathStateStorage.Reader`): a third is told the state is not available right now and to ask again
-  (`StateUnavailable`), and counted. One that waits for a build in flight needs no such leave. **An execution is
-  held to no limit.** The number is a constant until it is measured (M5).
-- **The indexes that are kept are an execution's or a reader's** (`ReverseIndexCache`, in place of four that were
-  all dropped when a fifth came): four of each, the least recently used going first, within the pool's bytes. A
-  reader's makes room only among readers'; an execution's takes a reader's place when it must, and takes over a
-  reader's index it uses. An index of an epoch that is past goes when a later one is kept. So a sweep of reads
-  over old blocks costs the readers their own indexes and nothing else.
-- **A view is not made by the holder of the state lock** (`IllegalStateException`): it may wait for records to be
-  read.
-- **How far behind the anchor a view reaches is the configuration's**: `state.retention.max-blocks` in the basic
-  mode (as far as records are kept), `state.archive.view-reach` in the archive mode. It was 1024 whatever the
-  configuration said. **In the archive mode this bounds an execution on a fork point too**: a head move across
-  more than `view-reach` blocks must not go through a view (C4b: the move walks the records itself).
-- Metrics: `db.state.overlay.reverse.builds`, `.build.bytes`, `.refused`.
-
-**What this does not bound, and 4b-2 must (beacon W1).** The pool and the builds in flight are bounded. An index
-that is not kept, or no longer, lives as long as the views that read through it, up to 64 MiB each: how many reads
-behind the head run at once is for the layer that serves them to bound. SNAP serving answers one request at a
-time; the JSON-RPC does not, and 4b-2 bounds it at its seam. Also for 4b-2: a refusal may reach the caller as a
-stale view when the disk moved meanwhile, and both mean "ask again".
-
-**Tests.** `ReverseIndexCacheSpec` (6 cases): found by its two blocks and its epoch and nothing else; each kind's
-few and their order of going; a reader never at the cost of an execution, by count and by bytes; an execution's
-three ways of making room; the take-over; an index above the pool. `ReaderIndexBuildSpec` (11 cases, threads
-stopped inside the data source's read by latches, no sleep): the look made with the lock free (a writer takes it
-inside every record read); the view made again when the disk moves during the look, and during the index build;
-one build for a reader, a second reader and an execution that ask together, with room for the index and with
-none; the failure told to who waited without a second walk; two builds per kind, the third refused, the other
-kind and an execution not; a build that failed gives its leave back; a sweep of readers leaves the execution's
-index; the reach; no view under the lock. `StateConfigSpec`, `StateMetricsSpec`: the reach by mode, the counters.
-
-**The mutation run**, twice: 27 mutants before beacon's read (26 caught, one did not compile), and 32 over the
-code as it is after it: the lock around the look, a look kept across a move, each caller building, a waiter not
-given the index or the reason, the take-over by an execution that waited, the limit lifted, shared between the
-kinds, put on an execution, or one more or less, a leave not given back at all or only after a failure, a build
-left behind or never ended, the cache's seven rules of who goes and what is found, the past epoch's index kept or
-a late one taken, the reach by mode, the guard against the lock's holder, and a peer served as a caller. All
-caught: one after it was written again so that it compiled, and one after a case was added (a peer served from the
-peers' own builds, in `ServedRootWindowSpec`). The run also showed one of the new cases to depend on the order two
-threads came to wait in: it now starts the second after the first is counted.
-
-**Read after code (beacon): APPROVE WITH CHANGES, nothing that hands out a wrong state.** Verified by beacon in
-code: every change of the anchor moves the epoch, so a look or an index built across a move is never used; the
-window's and the walk's bounds agree with the retention floor to the block. Taken: waiters given the result
-directly (they were given it through the kept indexes only, so an index that was not kept was built again by each);
-a kind of reader each with its own builds; the guard against the lock's holder; the take-over made one at a time
-with the keeps; indexes of a past epoch dropped; the tests told apart from an accident of interleaving (a count of
-who waits, in place of a thread's state). Recorded for 4b-2: the bound on reads in flight. Not tested, because
-nothing stops a thread there: a caller that waited on a reader that was refused asks again.
-
-### C4a part 4b-2: the JSON-RPC reads a block behind the head (2026-11-12)
-
-The readers behind the JSON-RPC and GraphQL now read the state of a canonical block behind the head, within the
-reach of the changeset records, and the reads behind the head that are in flight are counted and bounded. With the
-guard off nothing changes.
-
-- **A read behind the head is made in a scope** (`ReadScope`, the calling thread's). What is made of the records
-  for such a state lives as long as anything reads through it, and nothing in a storage says when its reader is
-  done; so the reader says it. `BlockchainReader.stateAt` and `scratchStateAt` hand out the state of the block the
-  disk holds to any caller, as ever, and the state of a block behind it only to a caller inside a scope
-  (`PathStateStorage.readOnlyInScope`, `throwawayInScope`). **A caller in no scope reads the head and no other
-  block**: that is every caller that was not looked at for this slice, and the node's own (the transaction pool,
-  the Engine API's `executableAtParent`, the exporter, test mode, the MCP tools, `personal_`).
-- **Four reads behind the head in flight, and a fifth is refused** (`maxReadsBehindHead`, a constant until M5): a
-  scope is counted once for each block it reads behind the head, at the view's own look at the block the disk
-  holds and before a record is read for it, and counted no more when it ends. A refusal and not a queue, as for
-  the builds: the caller is told at once and bears the retry, and nothing a caller asks for is waited for by
-  anyone else. With part 4b-1 this bounds what readers hold: the kept indexes within their pool, two builds per
-  kind of reader, and four reads in flight of at most `maxReverseIndexBytes` each. (This closes what part 4b-1
-  left open.)
-- **Anchor chain only.** A scoped read is of the block the disk holds or of a block behind it on its own chain,
-  never of an executed block kept beside it, whether it is named by number or by hash. Reads of such a block by
-  its hash, with EIP-1898's `requireCanonical` and `BLOCKHASH` by the block's own ancestry, are C4d's.
-- **Where the scope is.** `StateRead.at`, `scratchAt`, `retrying` and `attempting` run each attempt in one
-  (`eth_getBalance`, `getTransactionCount`, `getCode`, `getStorageAt`, `getProof`). A method that executes on a
-  state wraps the synchronous body in which it takes the state and reads through it (`StateRead.reading`):
-  `eth_call`, `estimateGas`, `createAccessList`, `simulateV1`, the `debug_trace*` and `trace_*` methods. **A range
-  takes one scope for each block** (`debug_traceChain`, `trace_filter`): a block's state is held for that block
-  alone, so a range of any length holds one read at a time. GraphQL's `code`, `storage`, `balance` and nonce
-  fields read through `StateRead.attempting`, which also gives them the retry on a state that moved.
-- **Three errors, none of them an execution error** (code 3 is what a client takes for a revert): a state that is
-  not held is `-32000 missing trie node: the state of that block is not held` (go-ethereum's words for a pruned
-  state); one that is not handed out right now is `-32005 ... ask again`; one that moved under every view of it is
-  `-32005 ... ask again`. They were all the error for a missing state node. Only under the guard: no `StateFault`
-  is thrown with it off.
-
-**Tests.** `ReadScopeSpec` (13): the head with no scope and no count; behind with no scope refused at no cost;
-counted once a block while the scope lasts; given back on an exception and with the outer scope; a third reader
-of two refused before a record is walked, a peer and an execution not; counted when the disk moves on under a
-scope; a scratch execution behind the head writes nothing; a scope is its thread's. `RpcReadersBehindHeadSpec`
-(12): **the rpc-compat chain imported on the unified layout from its genesis**, and every reader asked about the
-blocks 1, 2, 8, 20 and 40 behind its head and compared, as JSON, with a node that imported the same chain on the
-hash store: balance, nonce, code and storage of every genesis account; `eth_getProof` by number and by hash;
-`eth_call`, `estimateGas` and `createAccessList`; the replay of a block's transactions on its parent's state, the
-head's too; a range of twelve blocks one scope a block; `debug_traceBlockByNumber`, `debug_traceTransaction`, `trace_block`,
-`debug_traceChain` and `trace_filter` through the services, with transactions; GraphQL's account fields, `call`
-and `estimateGas`; a fifth request told to ask again over JSON-RPC and over GraphQL while four are in flight; the
-fifth block of one scope refused for good; `eth_simulateV1` on a block behind. `StateReadRetrySpec`: the three errors, the scope of a read and of a method's body, and that no
-later stage of the `IO` is in it.
-
-**The mutation run**: 37 mutants, 19 before the reads after code and 18 over what they changed. A scope that
-gives nothing back, that ends inside another, that is counted for every state it takes, or that stays on its
-thread; a caller in no scope let through; the count not taken, or not at the view's look at the disk; no bound, a
-leave not given back, the bound one more; a refusal that does not say to ask again, and one that says so to a
-scope that holds every leave itself; the seam handing out the old doors, or a state that takes no writes to an
-execution; a read through `StateRead` in no scope, and a method's body; each of the three errors said as another;
-each wrapped method in no scope (`eth_call`, `estimateGas`, `createAccessList`, `simulateV1`, four of the tracing
-methods), a range read in no scope and a range read in one; a GraphQL field in no scope, one that gives a call's
-default for a state that was not read, one that does not run again; the tracing services under the node's rules
-whatever chain they serve; a failure to give back hiding the read's own; a peer counted as a caller. All caught.
-The two range mutants and the tracing ones were missed until the tracing services took the chain's rules as a
-parameter: on the test chain they had traced no transaction.
-
-**Reads after code: conduit and beacon, both APPROVE WITH CHANGES, nothing blocking.** Verified by them in code:
-nothing that reads through a state leaves a wrapped body (no lazy collection, no later stage of an `IO`); no
-nesting that piles up counts; a `StateFault` reaches the controllers' backstop from every wrapped method; SNAP
-serving holds a state for one request (a typed actor, synchronous handlers); the refusal cannot be swallowed by
-the view's own retry; a scratch execution behind the head writes no row, keeps no layer and repairs nothing.
-Taken: GraphQL's `call` and `estimateGas` answer a state that cannot be read with an error of the field and run
-again when it moved (an estimate of 0 was the default they would have given); the tracing services take the
-chain's rules, which made the conformance spec trace real transactions through them; a scope that holds every
-leave itself is refused for good; the doors behind the anchor that count nothing are the package's, with one for
-a peer, so that no later caller goes round the count; a failure to give back goes with the read's own failure;
-the invariant a count rests on is written where the scope is (**a scope keeps no more than one world of a block
-within reach**: it is counted once for a block however often it takes it, and after a move of the disk each
-taking is an index made anew). **The bound as built** (beacon): the kept pool, plus one index for each read in
-flight and one for a peer, each at most `maxReverseIndexBytes`; twice that for the moment a replay holds the
-last world and the next. Follow-ups in the backlog: the head-only callers read in a scope, for the one block the
-disk may move between their lookup and their read (B-238); `executableAtParent` through the proposer's door when
-layers return (B-239, C4d); `IO.blocking` for the bodies that run for seconds (B-240).
-
-### C4b: the move core, as it is to be built (2026-11-13)
+### Build records (moved to implementation-log.md)
+
+The S0 review records and every per-slice and per-part build record (C1 to C5a, about 4,000 lines) are in
+[implementation-log.md](./implementation-log.md), verbatim. They are the history of how the design in this plan was reached; where a record and
+this plan differ, this plan and data-model.md are the current word. A citation of the form `plan.md "<name>"` in code
+or in tasks.md names one of these sections:
+
+- **S0 (C0)**: [S0 record (round 1, 2026-11-06)](./implementation-log.md#s0-record-round-1-2026-11-06); [S0 record (round 2, 2026-11-07)](./implementation-log.md#s0-record-round-2-2026-11-07).
+- **C1**: [C1 pre-code record (2026-11-11)](./implementation-log.md#c1-pre-code-record-2026-11-11).
+- **C2a**: [C2a part 1 record (2026-11-11)](./implementation-log.md#c2a-part-1-record-2026-11-11); [C2a part 2 record (2026-11-11)](./implementation-log.md#c2a-part-2-record-2026-11-11).
+- **C2b**: [C2b pre-code record (2026-11-11)](./implementation-log.md#c2b-pre-code-record-2026-11-11); [C2b ratchet record (2026-11-11)](./implementation-log.md#c2b-ratchet-record-2026-11-11); [C2b RPC readers record (2026-11-11)](./implementation-log.md#c2b-rpc-readers-record-2026-11-11); [C2b SNAP serving record (2026-11-11)](./implementation-log.md#c2b-snap-serving-record-2026-11-11); [C2b walkers record (2026-11-11)](./implementation-log.md#c2b-walkers-record-2026-11-11).
+- **C3a**: [C3a record (2026-11-11)](./implementation-log.md#c3a-record-2026-11-11); [Decisions of 2026-11-11 (user)](./implementation-log.md#decisions-of-2026-11-11-user).
+- **C3b**: [C3b storage record (2026-11-11)](./implementation-log.md#c3b-storage-record-2026-11-11); [C3b wiring record (2026-11-11)](./implementation-log.md#c3b-wiring-record-2026-11-11).
+- **C3c**: [C3c genesis record (2026-11-11)](./implementation-log.md#c3c-genesis-record-2026-11-11); [C3c proposer view record (2026-11-12)](./implementation-log.md#c3c-proposer-view-record-2026-11-12); [C3c part 3: the linear subset now (user, 2026-11-12), and the lenient import record](./implementation-log.md#c3c-part-3-the-linear-subset-now-user-2026-11-12-and-the-lenient-import-record); [C3c part 3b: the fixture replays from a genesis commit, and the harness canary](./implementation-log.md#c3c-part-3b-the-fixture-replays-from-a-genesis-commit-and-the-harness-canary); [C3c part 3c: test mode on the unified layout (2026-11-12)](./implementation-log.md#c3c-part-3c-test-mode-on-the-unified-layout-2026-11-12); [C3c's leftovers after C4 (B-220, 2026-11-24)](./implementation-log.md#c3cs-leftovers-after-c4-side-blocks-in-the-lenient-import-test-modes-ranges-the-ethtest-runner-b-220-2026-11-24).
+- **C4a**: [C4a part 1: forward layers (2026-11-12)](./implementation-log.md#c4a-part-1-forward-layers-2026-11-12); [C4a part 2: the reverse index (2026-11-12)](./implementation-log.md#c4a-part-2-the-reverse-index-2026-11-12); [C4a part 3: the bounds (2026-11-12)](./implementation-log.md#c4a-part-3-the-bounds-2026-11-12); [C4a part 3c: the ordering, the stress and M3 (2026-11-12)](./implementation-log.md#c4a-part-3c-the-ordering-the-stress-and-m3-2026-11-12); [C4a part 4: the node reads behind its head, first for SNAP (2026-11-12)](./implementation-log.md#c4a-part-4-the-node-reads-behind-its-head-first-for-snap-2026-11-12); [C4a part 4b-1: what a reader behind the head may cost the node (2026-11-12)](./implementation-log.md#c4a-part-4b-1-what-a-reader-behind-the-head-may-cost-the-node-2026-11-12); [C4a part 4b-2: the JSON-RPC reads a block behind the head (2026-11-12)](./implementation-log.md#c4a-part-4b-2-the-json-rpc-reads-a-block-behind-the-head-2026-11-12).
+- **C4b**: [C4b part 0: a fault of this node's state ends a batch as a result of its own (2026-11-13)](./implementation-log.md#c4b-part-0-a-fault-of-this-nodes-state-ends-a-batch-as-a-result-of-its-own-2026-11-13); [C4b part 1: the plan of a move, and why one is refused (2026-11-13)](./implementation-log.md#c4b-part-1-the-plan-of-a-move-and-why-one-is-refused-2026-11-13); [C4b part 2a: the move of the head in the store (2026-11-13)](./implementation-log.md#c4b-part-2a-the-move-of-the-head-in-the-store-2026-11-13); [C4b part 2b: the writer's rows in the move's batch (2026-11-13)](./implementation-log.md#c4b-part-2b-the-writers-rows-in-the-moves-batch-2026-11-13); [C4b part 2c: a move's batches bounded, the barrier, the hold for an attempt (2026-11-13)](./implementation-log.md#c4b-part-2c-a-moves-batches-bounded-the-barrier-the-hold-for-an-attempt-2026-11-13); [C4b part 3a: the head's writers on the unified layout (2026-11-13)](./implementation-log.md#c4b-part-3a-the-heads-writers-on-the-unified-layout-2026-11-13); [C4b part 3b: the fork choice and test mode's rewind move the head through a move (2026-11-13)](./implementation-log.md#c4b-part-3b-the-fork-choice-and-test-modes-rewind-move-the-head-through-a-move-2026-11-13); [C4b part 4: the reconciliation at start (2026-11-13)](./implementation-log.md#c4b-part-4-the-reconciliation-at-start-2026-11-13).
+- **C4d**: [C4d part 0: a confirmation is no move, and `Corrupt` fails closed (2026-11-14)](./implementation-log.md#c4d-part-0-a-confirmation-is-no-move-and-corrupt-fails-closed-2026-11-14); [C4d part 1: the finalized block (2026-11-14)](./implementation-log.md#c4d-part-1-the-finalized-block-2026-11-14); [C4d part 2a: a payload is executed as a forward layer (2026-11-14)](./implementation-log.md#c4d-part-2a-a-payload-is-executed-as-a-forward-layer-2026-11-14); [C4d part 2b: the fork choice moves the head (2026-11-14)](./implementation-log.md#c4d-part-2b-the-fork-choice-moves-the-head-2026-11-14); [C4d part 3: a state that is no longer held is had again (2026-11-14)](./implementation-log.md#c4d-part-3-a-state-that-is-no-longer-held-is-had-again-2026-11-14); [C4d part 4a: a branch longer than the forward layers is committed in place (2026-11-14)](./implementation-log.md#c4d-part-4a-a-branch-longer-than-the-forward-layers-is-committed-in-place-2026-11-14); [C4d part 4b: what readers and the consensus client see of an adoption (2026-11-14)](./implementation-log.md#c4d-part-4b-what-readers-and-the-consensus-client-see-of-an-adoption-2026-11-14).
+- **C4e**: [C4e part 1: a heavier branch is executed on pinned layers and adopted by one move (2026-11-15)](./implementation-log.md#c4e-part-1-a-heavier-branch-is-executed-on-pinned-layers-and-adopted-by-one-move-2026-11-15); [C4e part 2: the side blocks a branch stands on are executed again when their state is gone (2026-11-15)](./implementation-log.md#c4e-part-2-the-side-blocks-a-branch-stands-on-are-executed-again-when-their-state-is-gone-2026-11-15); [C4e part 3: at the pinned cap, the head is moved first and the branch committed in place (2026-11-15)](./implementation-log.md#c4e-part-3-at-the-pinned-cap-the-head-is-moved-first-and-the-branch-committed-in-place-2026-11-15); [C4e part 4: the head's generation, who builds on the head, and a fork below the views (2026-11-15)](./implementation-log.md#c4e-part-4-the-heads-generation-who-builds-on-the-head-and-a-fork-below-the-views-2026-11-15); [C4e part 5: the consensus layer's branch is executed on layers and adopted by one move (2026-11-15)](./implementation-log.md#c4e-part-5-the-consensus-layers-branch-is-executed-on-layers-and-adopted-by-one-move-2026-11-15); [C4e part 6: fork recovery moves no state (2026-11-15)](./implementation-log.md#c4e-part-6-fork-recovery-moves-no-state-2026-11-15); [Mining on the unified layout: the miners read the head under its generation (B-293) (2026-11-17)](./implementation-log.md#mining-on-the-unified-layout-the-miners-read-the-head-under-its-generation-b-293-2026-11-17).
+- **C5a**: [C5a part 1: the layout guard, where the storages are built (2026-11-15)](./implementation-log.md#c5a-part-1-the-layout-guard-where-the-storages-are-built-2026-11-15); [C5a part 2: the window below a block, and ommers a node cannot check (2026-11-15)](./implementation-log.md#c5a-part-2-the-window-below-a-block-and-ommers-a-node-cannot-check-2026-11-15); [C5a part 3: the state is cleared for a sync from scratch (2026-11-15)](./implementation-log.md#c5a-part-3-the-state-is-cleared-for-a-sync-from-scratch-2026-11-15); [C5a part 4: the hand-off's sample, on the rows where they lie (2026-11-15)](./implementation-log.md#c5a-part-4-the-hand-offs-sample-on-the-rows-where-they-lie-2026-11-15); [C5a part 5a: a sync hands off in one synced write, with nothing copied (2026-11-15)](./implementation-log.md#c5a-part-5a-a-sync-hands-off-in-one-synced-write-with-nothing-copied-2026-11-15); [C5a part 5c: the bodies below a pivot are fetched (2026-11-15)](./implementation-log.md#c5a-part-5c-the-bodies-below-a-pivot-are-fetched-2026-11-15); [C5a part 5b: a sync ends by a sample of its rows and one write (2026-11-15)](./implementation-log.md#c5a-part-5b-a-sync-ends-by-a-sample-of-its-rows-and-one-write-2026-11-15); [C5a part 6a: a node says when it cannot follow the chain, on proof of stake (2026-11-16)](./implementation-log.md#c5a-part-6a-a-node-says-when-it-cannot-follow-the-chain-on-proof-of-stake-2026-11-16); [C5a part 6b: a node says when it cannot follow the chain, on proof of work (2026-11-16)](./implementation-log.md#c5a-part-6b-a-node-says-when-it-cannot-follow-the-chain-on-proof-of-work-2026-11-16); [C5a part 7a: whether an escalation is acted on (2026-11-16)](./implementation-log.md#c5a-part-7a-whether-an-escalation-is-acted-on-2026-11-16); [C5a part 7b: the state given up (2026-11-16)](./implementation-log.md#c5a-part-7b-the-state-given-up-2026-11-16); [C5a, a gate on part 10: what the clear of an escalation also does (B-307, in part) (2026-11-16)](./implementation-log.md#c5a-a-gate-on-part-10-what-the-clear-of-an-escalation-also-does-b-307-in-part-2026-11-16); [C5a, a gate on part 10: the index by number after a clear for an escalation (B-303) (2026-11-16)](./implementation-log.md#c5a-a-gate-on-part-10-the-index-by-number-after-a-clear-for-an-escalation-b-303-2026-11-16); [C5a, a gate on part 10: what the proof-of-work feed does not count (B-306) (2026-11-16)](./implementation-log.md#c5a-a-gate-on-part-10-what-the-proof-of-work-feed-does-not-count-b-306-2026-11-16); [C5a part 8: the catch-up after a hand-off, on proof of stake (2026-11-16)](./implementation-log.md#c5a-part-8-the-catch-up-after-a-hand-off-on-proof-of-stake-2026-11-16); [C5a, a gate on part 10: the pivot of the sync after an escalation is on the refused branch (B-307 c1) (2026-11-16)](./implementation-log.md#c5a-a-gate-on-part-10-the-pivot-of-the-sync-after-an-escalation-is-on-the-refused-branch-b-307-c1-2026-11-16); [C5a, a gate on part 10: the sync is steered onto the refused branch (B-307 c2) (2026-11-16)](./implementation-log.md#c5a-a-gate-on-part-10-the-sync-is-steered-onto-the-refused-branch-b-307-c2-2026-11-16); [C5a part 9a: the ethereum/tests fork vectors on the unified layout (B-289) (2026-11-16)](./implementation-log.md#c5a-part-9a-the-ethereumtests-fork-vectors-on-the-unified-layout-b-289-2026-11-16); [C5a part 9b: an announced block does not end the fetching of a branch (B-300, in part) (2026-11-16)](./implementation-log.md#c5a-part-9b-an-announced-block-does-not-end-the-fetching-of-a-branch-b-300-in-part-2026-11-16); [C5a, a gate on part 10: the consensus layer's branch beyond the forward layers, and a refused one (B-297) (2026-11-16)](./implementation-log.md#c5a-a-gate-on-part-10-the-consensus-layers-branch-beyond-the-forward-layers-and-a-refused-one-b-297-2026-11-16); [C5a part 9c: a heavier branch that is the shorter, and a lighter one fetched again and again (B-300, in part) (2026-11-16)](./implementation-log.md#c5a-part-9c-a-heavier-branch-that-is-the-shorter-and-a-lighter-one-fetched-again-and-again-b-300-in-part-2026-11-16); [C5a part 9d: the bodies below a block with ommers are fetched when they are not stored (B-301) (2026-11-16)](./implementation-log.md#c5a-part-9d-the-bodies-below-a-block-with-ommers-are-fetched-when-they-are-not-stored-b-301-2026-11-16); [C5a, a gate on part 10: a hand-off's sample that keeps failing does not restart the sync for ever (B-304) (2026-11-16)](./implementation-log.md#c5a-a-gate-on-part-10-a-hand-offs-sample-that-keeps-failing-does-not-restart-the-sync-for-ever-b-304-2026-11-16); [C5a, a gate on part 10: the escalation's tests left from B-307 (B-311), and task #68 (B-309) (2026-11-16)](./implementation-log.md#c5a-a-gate-on-part-10-the-escalations-tests-left-from-b-307-b-311-and-task-68-b-309-2026-11-16); [C5a, a gate on part 10: a refresh after an escalation stays on the branch (B-310) (2026-11-16)](./implementation-log.md#c5a-a-gate-on-part-10-a-refresh-after-an-escalation-stays-on-the-branch-b-310-2026-11-16); [C5a part 10: the refusals lifted, and a hand-off run live (B-325, B-308) (built, #1880, 2026-11-17)](./implementation-log.md#c5a-part-10-the-refusals-lifted-and-a-hand-off-run-live-b-325-b-308-built-1880-2026-11-17).
+
+### C4b: the move core, as built (2026-11-13)
 
 Two consults before code (forge for ETC, beacon for ETH; both AGREE WITH CHANGES) changed the shape of the slice.
-What follows is the plan C4b is built to; where it differs from data-model 7.0 and 7.3 and from tasks.md, this
-is the later word, and the tasks are annotated.
+What follows is the design C4b was built to (B-061; #1816 to #1829); where it differs from data-model 7.0 and 7.3
+and from tasks.md, this is the later word.
 
 - **The move takes the caller's rows; it hands out nothing** (beacon). `moveHead(target, extraFor)` asks the
   caller for its index and best-pointer rows outside the state lock, once for each chunk and again after every
@@ -2200,8 +521,8 @@ is the later word, and the tasks are annotated.
 - **A move of several blocks is settled and verified against a virtual disk**: the disk and the batch so far
   (beacon, forge). A block that is forwarded from a layer has its priors, and the rows of the storage tries it
   replaces, read from its parent's state, which inside one batch is not on disk. Settled against the disk its
-  record lists the wrong rows, and a later move back by that record writes a wrong state; ETC has no EIP-6780, so
-  a replaced storage trie is routine there. Every reversed entry's `next` and every forwarded record's `prior`
+  record lists the wrong rows, and a later move back by that record writes a wrong state; ETC has no EIP-6780 before Olympia
+  (ECIP-1112), so a replaced storage trie is routine there. Every reversed entry's `next` and every forwarded record's `prior`
   is compared with the virtual value before anything is written, and what a reader's view needs of the old state
   is the disk's row, read under the lock. That is also the interior check, made before the write and not after.
 - **Refusals.** `Deep` is decided by the records that are there (the walk meets one that is gone below the
@@ -2235,532 +556,36 @@ is the later word, and the tasks are annotated.
   in-place writer goes on, the Engine API answers SYNCING) and takes the escalation route. It never rolls back
   onto such a store.
 
-**The parts.** Part 0: a fault of the state as a way for a batch to end (below). Part 1: the plan, pure, with the
+**The parts.** Part 0: a fault of the state as a way for a batch to end. Part 1: the plan, pure, with the
 refusals. Part 2: the move, with the split of `BlockchainWriter` and the one-batch test (T137 and T147 move here
 from the callers). Part 3: the callers that exist on the guard (`test_rewindToBlock`, the index writers), and the
 table of pointer writers as a test, with the rows the audit missed (forge: the SYNC-FORK resolver's
 `discardBlocksAfter`, which steps the best block down one batch at a time under no lock;
 `PivotAnchor.reanchor`; `repairBestBlockNumberMapping`). Part 4: the reconciliation at start, in place of
-`fixDatabase` and `repairBestBlockMapping` on the unified layout (as built, below: they trust the best block or the
-index, and would undo it).
+`fixDatabase` and `repairBestBlockMapping` on the unified layout (they trust the best block or the index, and would
+undo it); as built it applies rule 4 only (the user, 2026-11-14: "go with what is on disk"; rules 2 and 3 are not
+built), in `domain/StateReconciliation.scala`.
 
 **Recorded and not decided here.** A legal reorganisation deeper than 512 blocks during a time without finality
 is refused and escalated (retention's bound; an accepted risk, to be stated in the operator's notes).
 `recovery.max-blocks` is the history, 64, against 512 retained on ETC: a lost side chain longer than that is not
 executed again but escalated (C4e).
 
-#### C4b part 0: a fault of this node's state ends a batch as a result of its own (2026-11-13)
+*The records of C4b parts 0 to 4 are in [implementation-log.md](./implementation-log.md#c4b-part-records), verbatim (moved 2026-11-21).*
 
-Forge found this live on the guard as it stands: a `StateFault` met while a batch is imported (the state a block
-is to be executed on is not the one the disk holds, or is no longer; a view went stale) was thrown out of
-`BlockExecution`, past the blocks of the batch that were already adopted, and failed the import as an exception.
-With the head able to move under a batch it is an ordinary event, so it comes first.
+### C4d: the PoS arms, as built (2026-11-14)
 
-- **`BlockExecutionError.StateFaulted(fault)`** ends a batch as an error does and is no error of the block: the
-  blocks before it are adopted, the block it was met at wrote nothing, and neither it nor the blocks after it
-  were judged. It travels in the result the batch executor's callers already take; `ConsensusImpl` takes it out
-  once (`BlockExecution.BatchOutcome.of`), before any arm that judges a block by its error.
-- **`ConsensusStateFault(fault, imported, blocksToEnqueue)`**, and from the adapter
-  **`BlockImportStateFault(fault, imported)`**: a result of its own and no failed import, so that every place
-  that tells the results apart has to say what it does with it. The blocks that were not executed are queued
-  again and none is dropped from the queue; no block is reported invalid; the importer counts the adopted prefix,
-  fetches the rest again from the first that was not executed, and blames no peer.
-- **`saveLastBlock` writes nothing on the unified layout** (T149): there the pointer moves with the state, in
-  the batch that commits each block. Written again after a batch, under no lock, it would put the pointer back
-  on a block whose state the disk no longer holds.
-- **Not here**: the block-by-hash-only records of a block that is executed and not adopted (they come with the
-  overlay commit's first caller, C4d or C4e); what the node does when the fault keeps coming (the escalation of
-  Part 2, D).
-
-**Tests.** `StateFaultInABatchSpec`: the rpc-compat chain on the unified layout through the node's own
-consensus; a batch of five whose third block is executed, and before it is committed another writer makes a
-sibling of it the head. The first two are adopted with their records; the third is answered as a state fault
-with the last three handed back; nothing is reported invalid; the best block is the block the disk holds, which
-is the other writer's; the last two were never stored. The same through the adapter, with the blocks still
-queued; the same with the head moved before the third block is executed; and a view gone stale under a block,
-which ends the batch with that very fault and the blocks before it adopted. `ConsensusImplSpec`: the fault
-mid-batch, at the first block, and in a reorganisation, each with a reporter that stays silent.
-`RegularSyncSpec`: the block is tried three times at the importer's usual pace, then spaced out; no peer is
-blacklisted.
-
-**The mutation run**: 18 mutants; 15 caught. The fault thrown out of a batch; judged as an error of the block;
-the pointer written after a batch on the unified layout; the blocks not handed back, the adopted ones not told,
-the handing back starting one block late; a reorganisation answered as done; the adapter answering a failed
-import, or not queueing the blocks again; the importer blaming the peer, or counting a strike; test mode
-answering an invalid block; the tries never spaced out, spaced out at the usual pace, or from the second. **Three
-missed, and why**: the `testing_` namespace's rethrow and test mode's answer for a mined block have no spec that
-meets a state fault there; and a pick of blocks sent at once after the third fault is no change of behaviour (the
-fetcher was emptied from that block on before the pick reaches it, and answers a pick it cannot serve with
-nothing: the mutant is equivalent). The first case of the spaced-out tries could not tell them from ordinary ones (its
-window was shorter than the importer's usual pace) and was made to.
-
-**Read after code (forge): APPROVE WITH CHANGES, nothing critical.** Verified in code: every way a `StateFault`
-can leave a batch is inside the catch (staging, the refusal of a block that is not adopted, a stale view, the
-commit); no arm of `ConsensusImpl` that judges a block can be handed one; `saveLastBlock` writes the same row
-the block's own batch wrote, so writing nothing is right at each of its calls; the fetcher's rewind without a
-blacklist blames nobody; the queue cannot grow without bound; with the guard off nothing changes, the old matches
-being moved and not altered. Taken: **the tries are spaced out** (a fault that stays, such as a branch this
-layout cannot execute yet, was met again at every round trip of the fetcher for good: from the third in a row on
-one block the next pick waits out the importer's backoff, said once at ERROR, and nothing is escalated); the
-fault met where a block's state is taken as well as where it is committed, and another kind of fault through
-the real catch, as cases; test mode's parity; the reorganisation's answer after an executed prefix, which is
-not met as the code stands and is said so in the code and in B-242 (it must tell the settled prefix and the old
-branch's blocks when a branch is executed on layers, C4e).
-
-#### C4b part 1: the plan of a move, and why one is refused (2026-11-13)
-
-**What it is.** `HeadMovePlan.of(anchor, epoch, target, sources, limits)` says how the disk's state gets from the
-block it holds to another, and changes nothing: the blocks to reverse, newest first, by the headers of the
-anchor's own changeset records; the blocks to apply, oldest first, by the target's headers; the fork, which is the
-highest block the two chains name by one hash. It is given no index of blocks by number and no chain weight, so it
-can ask neither (T136's two cases of an index ahead of the anchor and behind it are met by what the plan is made
-from; the caller's `link`, built from headers by hash, is part 3's to test with a reader whose index throws). A
-block to apply is taken from its record where it has a complete one that leads from its parent, since a record is
-exact and needs no settling, and from its layer otherwise. `PathStateStorage.planMove(target, link)` makes it from
-what the store keeps, off the lock. Nothing calls it yet: the move is part 2.
-
-**Three answers.** `Planned`; `Refused(reason)`, which executing blocks again does not change; `NotHeld(heldTo)`,
-where a block on the way up has neither a record nor a layer and `heldTo` is the highest block a move could be made
-to as things are (the caller executes from there), or `None` where no fork was found at all (the target's headers
-do not lead here, or it lies further above the head than a move reaches: a sync's matter, not re-execution's).
-
-**The refusals, asked for each block to reverse in this order**, so that the answer does not depend on what happens
-to have been pruned:
-
-1. `Finalized`: the block is the finalized one, by number **and hash**. A block of another hash at that height is
-   not it: the head is then on a branch the consensus client left, and the way back is open (beacon: a number alone
-   would refuse that move, and `Finalized` is the one refusal that does not escalate, so the node would be stuck).
-2. `Pivot`: block 0, or a block at or below `state.origin`, the block this datadir's state began at (a new
-   AppState key, written by the genesis commit; SNAP finalization and checkpoint import write it with their anchor,
-   C5a and E.1, B-243). A datadir that does not say where its state began answers `Deep` there.
-3. `Deep` by policy: more blocks than `state.reorg.max-depth` allows. In the archive mode with `floor`, which keeps
-   every record, that is what one plan holds (65,536 blocks), unless a depth is configured.
-4. By the record: gone below `state.changeset.pruned-to` is `Deep` (the physical bound: what retention left, which
-   is not always what its formula says); gone at or above that mark, unreadable, or not its block's, is `Corrupt`,
-   a refusal of its own that is never said as `Deep`; a tombstone is `Incomplete`.
-
-A fork exactly at the finalized block, at the origin, or at the block below the lowest record is planned: that
-block is not reversed and its record is never read.
-
-**Recorded, with the slice that owns it.**
-- **A depth met above the finalized block is said as `Deep`** even when the fork would have lain below it: the walk
-  never came to it. With retention capped at 512 and more than that without finality, a head that breaks finality
-  would be escalated and followed. That a head descends from the finalized block is asked of its headers **before
-  a move is planned** (C4d, at the `forkchoiceUpdated`: `-38002`), and not inside a plan of the state (beacon).
-- **`Corrupt` fails closed** at the Engine API (C4d): SYNCING, no in-place writer goes on, ERROR, then the
-  escalation route; never INVALID, never as `Deep`.
-- **`NotHeld(None)` is SYNCING and a sync**, not re-execution (C4d, C4e).
-- `ReorgTooDeep` and `StateUnavailable` are thrown from these answers by the move (part 2), which also carries
-  `heldTo`.
-
-**The mutation run**: 44 mutants, all caught. One was missed at first (a genesis committed to a datadir that
-says where a state began) and got a case. The walk (a move to the anchor walked; a target's header of another
-block; a meeting block its header does not describe; the anchor's chain reversed whatever the target's height;
-the reverse set out of order; a parent given its child's state root); the bound above the head, on both sides of
-it; each refusal, its boundary and its place in the order (the finalized block reversed, taken by its number
-alone, not looked at, or asked after the depth; the origin and block 0; one block more than the policy; a record
-gone at the mark itself, where nothing was pruned, above the mark; a record of another number or state root; a
-tombstone taken for a record); the target's headers (under another hash, of another height); the sources (a
-layer preferred to a record; a record on another parent or another state; a layer on another parent; what is held
-said to end at the fork; a record written for a block that has one); the chunks; and the store (no origin written
-at genesis, or left behind when the state is destroyed; a plan without the finalized block, the policy, the mark
-or the origin; the depth taken without the finalized block; the bounds wrapping round; a plan given out though
-the state moved under it, or made again one time fewer; the archive's cap). Twenty-one of them were run before
-the reads' changes and not again, the code they break being unchanged.
-
-**Reads after code (forge, beacon): both APPROVE WITH CHANGES, nothing critical.** Verified by them in code: the
-fork and every parent named are right (each parent comes from a record and is held to its header at the next step
-or at the meeting point; a forward parent is held by hash and height); both walks end on hostile headers; with the
-guard off nothing changes (`commitGenesis` and the new key are reached only on the unified layout). Taken:
-- **The bound on the target's chain no longer overrides the refusals** (forge): it counted every header walked, so
-  a deep move answered "not held", which sends the caller to execute blocks again for nothing, and in the archive
-  mode capped a re-adoption at about a thousand blocks. It now bounds how far **above** the head a target lies;
-  below that each header walked is a block reversed.
-- **The finalized block by hash** (beacon), as above.
-- **A plan is made again if the state moved while it was made** (beacon): a commit prunes records and moves the
-  mark in one batch, and a walk that began before it would call the records corrupt. No answer is given out that
-  the epoch moved under; after a few tries, `NotHeld(None)`.
-- **A hard cap where nothing else bounds a reverse** (both), as above; a deep move in the archive mode that streams
-  its records is part 2's.
-- **Corruption on the forward side is said at ERROR** (forge): the block can still be applied from its layer or
-  executed again, and a record is then written over the bad one, so it is said where it is last seen.
-- The bounds are added without wrapping round; the detail of a chain that shares no block with this node's.
-
-#### C4b part 2a: the move of the head in the store (2026-11-13)
-
-**What it is.** `PathStateStorage.moveHead(target, link, extraFor)` plans the move (part 1) and writes it: as one
-batch, or as a chain of batches of at most `state.move.max-blocks-per-batch` blocks. Each batch holds the rows, the
-records of the blocks that had none, the anchor, and **what the caller gives for it** (`extraFor`, asked for
-outside the state lock, once for each batch and again after a re-plan): its index of blocks by number and its
-best-block pointer. So after any batch, and after a crash between two, the anchor and the best block are one
-block, on the way from the old head down to the fork and up to the target. Nothing in the node calls it yet; the
-callers that exist on the guard are part 3, and `BlockchainWriter`'s rows part 2b.
-
-**A batch is built against a virtual disk** (`MoveBatch`): the disk's rows under what the batch has done so far.
-A block reversed must find at every position what its record says it left; a record applied again must find what
-it was applied over (not where it names no prior, as a layer's is not: the rows a trie left behind when it had
-too many to list). A block applied from its layer is settled against the virtual rows of the tries it replaces,
-with the bounds of an in-place commit held on **those** rows and not on the disk's: an owner the batch has shrunk
-is listed as a commit on its parent's state would list it, and one it has grown is not (forge, beacon: else the
-record of a block, and whether its old rows stay, would depend on how a move was cut into batches). The account
-trie's root on the virtual disk must be the state root of the block the batch ends on. All of that is before
-anything is written; a batch that fails it writes nothing, and the batches before it stand. What is written is
-each position whose final value differs from the disk's, and a reader of the old state is given back the disk's
-row for exactly those.
-
-**A promotion is that batch for one block.** `promote` goes through the same builder; the 411 specs of the store
-that existed before passed unchanged.
-
-**One move at a time, and no commit between two batches.** A move holds a lock of its own from its plan to its
-last batch and says it is under way (`moveInProgress`, with `movesStarted` for who builds on the head and must
-know a move began meanwhile). A writer that adopts a block looks at that under the state lock; if a move is under
-way it lets the state lock go, waits for the move's end and asks again. It does not take the move's lock
-otherwise: writers queue where they always did, in the fair state lock. A commit that got in just before a move
-began makes the move's first batch find another head, and the move is planned again (three times at most); a
-head moved under a later batch stops the move where it is.
-
-**Retention.** A batch that only applies blocks prunes as the commit of a block does, and never a height it
-records itself (the index of a height is read from the disk, which does not hold what the batch writes there). A
-batch that reverses a block prunes nothing: the records above the fork are the way back.
-
-**A store that wrote other bytes than it was given fails closed.** Up to 64 of the rows a batch wrote are read
-back. A mismatch cannot come from anything but the store: what is kept in memory follows the disk first, and then
-nothing is written in place and **no state is given out**, by a view or an overlay commit, until the node is
-started again (beacon: a block executed on such a store could be answered INVALID, and a consensus client keeps
-that verdict).
-
-**Left for part 2b** (recorded by the reads): a bound on a batch by bytes and a barrier move above it; the layers
-of a plan pinned for the whole move (an eviction between two batches stops the move, which fails closed);
-`max-view-age-moves` against batches of one block; the hold that keeps retention off the records while a
-reverse-then-commit attempt is unsettled; `BlockchainWriter` split into a builder of its rows and a commit, with
-the one-batch test (T137, T147); the metrics. For C4e: the miner reads `movesStarted` before and after it
-builds, with the flag (forge). `moveHead` waits and may be long: its callers run it where a thread may block
-(beacon).
-
-**The mutation run**: 50 mutants; 48 caught, 2 equivalent. The batch builder (a reversed or re-applied block not
-held to the disk; a reverse that writes what the block left; a re-applied record that writes its priors; a layer
-read over the disk and not over the batch so far; a replaced trie settled against the disk's rows alone, or with
-the batch's deletes shown, or bounded on the disk's rows and not the virtual ones, in rows or in bytes; rows of an
-unlisted trie not written; the root not held to the target's; every touched row written, changed or not; a reader
-of the old state given the new rows; a tombstone or a record over its bound or an unlisted trie's block treated as
-an ordinary record); the move (a commit between two batches; a move not said to be under way, or said to be after
-its end; a dropped layer applied; a batch written though the epoch moved; the caller's rows of a move to the head
-not written; no re-plan, or a re-plan after a later batch; a layer that does not stand kept; pruning in a reversing
-batch, of heights the batch records, or counted from its last block; no record for a layer's block; the caller's
-rows or the anchor left out of the batch; one batch whatever the size; no `heldTo`; the layers applied kept, or
-dropped between batches, or kept after a move that failed; a move inside a move; a move not counted); and the
-store that failed its read-back (written to again, moved, read, given an executed block, or its promotion or batch
-saying nothing). **Equivalent**: the check that the anchor is where a batch starts, with the epoch checked too (the
-anchor never moves without the epoch); and the drop of layers after a one-layer batch that is not the last (records
-lie on a prefix of the blocks applied, so every later block is a layer on it). Three cases were added for mutants
-the first run missed: a branch that leaves a trie as the old one left it writes none of its rows; a record that
-became a tombstone under the plan is named; a layer dropped between two batches stops the move where it is.
-
-**Reads after code (forge, beacon, vault): all APPROVE WITH CHANGES, nothing critical.** Verified by them in
-code: the coalescing is exact for a trie reset earlier in the batch, a reset that is reversed, and a contract
-destroyed and made again in one block; the reverse check is sound above an older tombstone, and the reverse of a
-prior of none over a row left behind deletes that row, rightly; the views of the old head, behind it, through
-fork layers and through layers being promoted stay right across one batch and across several; no key is written
-twice or deleted after it is written in a batch; rows, records and anchor recover together (one write-ahead log,
-never disabled); no commit can land between two batches; with the guard off nothing changes. Taken: the bounds
-on the virtual rows (above); the layers a later batch needs are not dropped between batches; the fail-closed
-store gives out no state, and its memory follows the disk before it says so; records are read past the block
-cache; the move's lock is fair, and a move asked for from inside a move is refused.
-
-#### C4b part 2b: the writer's rows in the move's batch (2026-11-13)
-
-**The head's index rows are built apart from their commit.** `BlockchainWriter.canonicalHeadUpdate(head, reader)`
-builds the batch that makes a block the canonical head (its ancestry in the index of blocks by number, nothing
-above it, the best-block pointer, the transaction lookups of the blocks it drops) and writes nothing;
-`promoteToCanonicalHead` is that batch committed, with its log line. With the guard off nothing changes, and a
-spec holds it to that byte for byte: two stores of the same chains, one promoted and one given the builder's batch,
-are equal after a move up, across, down and to the head itself.
-
-**The move writes them in its batch** (T137). On the execution-apis chain imported on the unified layout, a move
-whose `extraFor` is the builder for the block each batch ends on leaves the index the ancestry of the state's
-block, the best block that block, the transaction lookups in the canonical one of two blocks that share them, and
-the anchor, in one batch: down by three records, a competing block imported in place, and across by records. A
-batch that fails writes none of them; after each batch of a move of one block a batch, the index is the ancestry
-of the block the state is at.
-
-**The layers a plan applies are pinned for the whole move**, and the pin released at its end, whatever came of it
-(beacon: an eviction between two batches would stop the move). They are in memory already, so the bound on pinned
-bytes is not asked.
-
-**The move's metrics** (T151): `db.state.move.seconds`, `db.state.move.blocks` by side, `db.state.move.batches`,
-`db.state.reorg.refused` by reason.
-
-**Read after code (beacon): APPROVE WITH CHANGES, nothing critical.** Verified in code: guard off, promotion
-reads, builds, logs and writes what it did; the builder is right for a head on the way down and on the way up, and
-a lookup deleted in one batch and written again in a later one ends as one promotion would leave it. Taken: the
-byte comparison now covers a move up and the sweep of entries left above the head; an across move one block a
-batch checks the index, the pointer and every lookup after each batch; the way down checks the lookups it drops;
-a failure to release the pin does not hide the move's own; every refusal reason has its counter. **Owed by part 3**
-(recorded at T140): the index rows a caller gives a move are built outside the state lock and written blind, so
-any other writer of the index or the best block in between makes them stale (`newPayload`'s `storeBlock` indexes a
-payload whose parent is canonical). On the guard the move must be the only such writer, or the batch checked under
-the lock.
-
-**Left, and where.** Nothing in the node calls `moveHead` yet: the callers that exist on the guard
-(`test_rewindToBlock`, the index writers, the SYNC-FORK rewind) are part 3, with the table of pointer writers as a
-test; the Engine API's `forkchoiceUpdated` is C4d. A bound on a batch by bytes with a barrier move, and the hold
-that keeps retention off the records while a reverse-then-commit attempt is unsettled, are part 2c.
-
-**The mutation run**: 13 mutants; 12 caught, 1 equivalent. Promotion that writes nothing; the lookups of dropped transactions
-kept, or those of re-included ones dropped; what was dropped or cleared not said right; an extension taken for a
-reorganisation and the other way round (missed at first: no case moved to a branch that ends above the old head;
-it has one now); a move's layers not pinned, or the pin of a move that failed never released; a move, or a refused
-one, not told; a refusal reason without its counter. After the read four were run again on the new cases (the
-lookups both ways, and the pin). **Equivalent**: the release of the pin after a move that succeeded, whose every
-pinned layer has been applied and dropped by then.
-
-#### C4b part 2c: a move's batches bounded, the barrier, the hold for an attempt (2026-11-13)
-
-**Batches cut by what they read.** A plan reads every record's header already; the store keeps each record's
-length from that one read, and a move's batches are cut by count and by bytes (a record's length, a layer's
-bytes; `CommitSettings.maxMoveBatchBytes`, 128 MiB). A block worth more than a batch goes alone. What ends up on
-disk does not depend on the cut: a move cut into a batch per block leaves the data source one batch leaves.
-
-**The barrier.** The prior values a batch must give back to older views are kept in memory for as long as the log
-keeps its move. A batch whose prior values are more than `CommitSettings.maxMovePreBytes` (64 MiB) is written as a
-barrier (`StateMoveLog.inFlightBarrier`): the log is emptied before the epoch is made odd, and every view made
-before it is stale, never wrong. An in-place commit takes the same rule. And the log as a whole holds no more than
-`CommitSettings.maxMoveLogBytes` (128 MiB) of prior values: the oldest moves go first, the newest stays whatever it
-holds (forge: eight moves of 64 MiB each would otherwise be held outside every bound).
-
-**The hold for an attempt** (reverse-then-commit, the user's decision of 2026-11-12; C4e is its caller).
-`PathStateStorage.withRecordsHeld(above)(body)`: while it runs, no commit and no move prunes a record above
-`above`, and a move may go back to `above` however deep that has become (forge: the depth policy bounds what a
-move may undo, and not the way back from an attempt the node made itself; on ETC with 512 retained, an attempt
-longer than that would otherwise have no way back though every record is on disk). It is taken under the state
-lock and refused at once (`Deep`) when the records above `above` are pruned already. It lives in memory: after a
-crash mid-attempt the next commit prunes as usual, and what a restart means for an attempt is C4e's to say.
-
-**The mutation run**: 17 mutants, all caught. A batch not cut by bytes, cut at the bound itself, or started at
-nothing; the records' sizes not kept; a layer worth nothing; no barrier, a barrier that keeps the log or leaves the
-anchor; an in-place commit never a barrier; a log that keeps its bytes whatever they are, or lets the newest move
-go; a hold that holds nothing, holds too little, outlives its attempt, or is ignored by retention; the way back
-bounded by the policy; a hold taken above records that are gone. Two of them did not compile as first written and
-were written again.
-
-**Read after code (forge, with vault's questions): APPROVE WITH CHANGES, nothing critical.** Verified in code: the
-barrier leaves every view made before it stale, never wrong (the anchor's, one through a reverse index, one through
-layers, one made while the log was already empty); nothing else reads the log in a way it breaks; a hold taken with
-no lock could not corrupt a state (a prune before it is caught by the epoch and the re-plan), and capping the floor
-at the block above the fork is exact. Taken: the way back's depth while a hold is open; the log's byte budget, and
-the barrier for in-place commits; the hold under the lock and refused at once; barrier cases for a view through
-layers and a barrier whose write fails. **Noted for M6**: a batch's memory at its peak is some three to five times
-its records' bytes (decoded record, the virtual disk, the maps it writes from, the write batch), and the scans of
-replaced tries are not counted in the cut.
-
-#### C4b part 3a: the head's writers on the unified layout (2026-11-13)
-
-Beacon and forge, consulted before code (both read the tree), agree: **on the unified layout the move of the head,
-and a block's own commit, which is the move of one block, are the only writers of the best block and the index of
-blocks by number.** A check under the lock alone does not close the window beacon found in part 2b (a writer that
-takes no lock writes between the check and the batch), so every other writer is routed through a move, refuses on
-that layout, or runs only where the layout is not yet in force (before an anchor, at start). Part 3a is the
-structure; part 3b routes the two callers that reach the head on the guard today (the fork choice, which promotes
-the head after `newPayload`, and test mode's rewind).
-
-- **The writers refuse** on the unified layout with an `IllegalStateException`: `BlockchainWriter.saveBestKnownBlocks`,
-  `setCanonicalChainHead` (the SYNC-FORK rewind), `rewriteCanonicalIndex` (the reorganisation's index), and
-  `Blockchain.removeBlock` (and with it `discardBlocksAfter`). Test mode's reset of the chain for a new genesis is
-  `Blockchain.removeChainForNewGenesis`, allowed only where the state may be destroyed, which it is next.
-  `PivotAnchor.reanchor` refuses once there is a state anchor. None of these is reached on the guard today (sync is
-  not started there, SNAP and mining are refused); a path that reaches one later fails loudly at its first test.
-  `promoteToCanonicalHead` refuses with part 3b, which routes the fork choice through a move.
-- **The best block is held to the anchor under the state lock** before a block's commit and before every batch of a
-  move (`CommitSettings.checksBestBlock`, on in the node): a writer that moved the best block alone is a defect, and
-  nothing is written over it.
-- **A move's link is the header stored under a hash**: `BlockchainReader.headerLink` and `ancestorAt`, which never read
-  the index of blocks by number (a spec plans and makes a move with a reader whose index throws at every read).
-- **The table of the head's writers is a ratchet** (T140): `scripts/check-head-writers.sh` and
-  `scripts/head-writer-allowlist.txt`, the state accessors' engine with its own entry points (the best block's rows,
-  the index's, the head's writers by name, the block stores that index). Every line says which of MOVE, REFUSED, DEF,
-  HASH, PRE, START or C4D/C4E holds for that writer. It runs in CI beside the state accessors' check.
-
-**Recorded, with the slice that owns it.**
-- **SYNC-FORK on the unified layout makes no head move at all** (forge): today it rewinds to the common ancestor and
-  imports the peer's branch with no comparison of weight, and the old branch is deleted, so there is no way back. On
-  that layout the fetcher is invalidated from above the ancestor, the blocks arrive as a side branch, and the
-  reorganisation decides by weight under `withRecordsHeld` (C4E); `Deep`, `Pivot` or `Corrupt` there escalate (D).
-- **`newPayload` stores by hash only on the unified layout** (beacon, C4D), as go-ethereum's
-  `InsertBlockWithoutSetHead` writes no canonical hash.
-- A pre-existing defect of the hash layout that forge found reading the resolver: `discardBlocksAfter` deletes the
-  index entries before `rewindCanonicalChain` reads them, so the reference counts' undo never runs on that path
-  (B-248, its own change).
-
-**Read after code (beacon): APPROVE WITH CHANGES.** Verified in code: nothing on the hash layout changes; on the
-unified layout no path reachable today throws in its normal order (test mode's commit is followed by the fork
-choice's promotion of the same block; the Engine API promotes only the head the state is at); throwing, not failing
-the store closed, is right for a best block moved alone, since nothing was written and the disk keeps the refusal
-across a restart. Taken: two guard specs that staged "the head moved alone" with a writer that now refuses write the
-row themselves; the caller's rows for the head as it is are held to the anchor as any batch is; in the node a batch
-that moves the state must bring the rows that move the best block; the ratchet holds each line to its verdict word;
-two `testing_commitBlockV1` in a row on the unified layout. **Owed by part 3b** (recorded in the allow-list): the
-fork choice still promotes outside the state lock; a commit that moves the anchor in between leaves the best block
-behind, which the check then refuses to write over, and nothing but test mode's reset mends that before part 4.
-
-**The mutation run**: 18 mutants, all caught. The writer not told the layout; each refusal undone
-(`saveBestKnownBlocks`, `setCanonicalChainHead`, `rewriteCanonicalIndex`, `removeBlock`, the reset outside test
-mode, the pivot's re-anchor); the best block not held to the anchor, held by its hash alone, not for a move, not for
-a commit, not in the node; a header under another hash taken for a link, or followed to an ancestor (a walk that
-then never ends); an ancestor above the block found; the head's own rows written over a best block moved alone; a
-move without the rows that move the best block; a reason without its verdict. Five were missed at first and got
-their cases.
-
-#### C4b part 3b: the fork choice and test mode's rewind move the head through a move (2026-11-13)
-
-Part 3a left two callers that reach the head on the guard today: the fork choice, which promoted the head outside the
-state lock, and test mode's rewind, which refused any block between the genesis and the head. Part 3b routes both
-through a move of the head, the design beacon gave before code (part 3a's consult, §3 and §4).
-
-- **One way to move the head with the state**: `BlockchainWriter.moveHeadInPlace(target, reader, refuse)`, which is
-  `PathStateStorage.moveHead` planned by `BlockchainReader.headerLink`, with `canonicalHeadUpdate` for the block each
-  batch ends on as that batch's rows. The writer now takes the path store (`pathState`, from `BlockchainWriter(storages)`),
-  so every writer the node and the specs build from their storages has it, and no caller is wired by hand. `refuse` is
-  asked for each batch before its rows are built; a refusal ends the move with a `StateUnavailable`.
-  **`promoteToCanonicalHead` refuses on the unified layout.**
-- **The fork choice confirms the head by a move of nothing** (`ForkChoiceManager.applyForkChoiceState` on the guard).
-  `EngineApiService.forkchoiceUpdated` lets through only the head the state is at; a commit in place of the next block
-  may land between that look and the write. The move of nothing is written under the state lock against the anchor it
-  was planned from, so that commit makes it a move back, which is refused: nothing is written and `currentState` is
-  not set. `forkchoiceUpdated` then finds the head it was given a VALID ancestor of the canonical head and answers it
-  as its own branch for one does, VALID with no payload (execution-apis paris.md point 2; go-ethereum "Ignoring beacon
-  update to old head"); T145's interleaving, driven through the Engine API with the commit landed after every look
-  it takes at the head and before the fork choice's write. Before 3b the promotion moved the best block back and deleted the new head's index entry under a state that
-  stayed the new head's. Any other move off the held block is refused until C4d (`SYNCING`); a `Corrupt` plan is
-  thrown on. On that layout the call runs under `IO.blocking`, since it may wait behind a move; the hash store's runs
-  as it did. The reference counts are not touched on that layout.
-- **`test_rewindToBlock` below the head moves the head back** to the block of its own chain at that height, found by
-  parent hashes from the held block (`ancestorAt`), never by the index the move rewrites. The blocks above it are not
-  removed: they stay known by their hash, with their records, the way back up; imported again, a block is executed
-  again, to the block it was. A refused move (`Deep`, `Corrupt`, `Incomplete`, `Pivot`, `Finalized`) is the request's
-  error, `TestService.RewindRefused`, with nothing changed and the pending transactions kept. A rewind to the genesis
-  still sets the chain's genesis again.
-- **The writes themselves are watched** (beacon 5b): the guard chain spec's data source records every write of the best
-  block's rows or of the index of blocks by number made while the state has an anchor by a thread that does not hold
-  the state lock. The commits, the moves, the fork choice (confirmed and refused) write none; a write of the best
-  block's rows alone is seen.
-- **The ratchet** counts `moveHeadInPlace` as a writer of the head (MOVE): the fork choice's line becomes HASH for the
-  hash layout's promotion and MOVE for the confirmation; test mode's gains the rewind.
-
-**Read after code (beacon): APPROVE WITH CHANGES**, all taken but where said. The hash layout is unchanged (the
-refusal is inert without a path store; the hash arms of the fork choice and the rewind are untouched); the guard's
-branch is reached for a head other than the anchor only by the race. Taken: the race answers VALID, not `SYNCING`
-(above), with an end-to-end case through `forkchoiceUpdated`, with and without payload attributes; the guard's call
-under `IO.blocking`; a `Corrupt` refusal logged at ERROR with `[STATE-MOVE]` in test mode, as the fork choice throws
-it; a `StateUnavailable` in a rewind answered as `RewindRefused`. Not taken, with the reason: a rewind of several
-batches is the writer's one-block-a-batch case in `HeadMoveOnTheChainSpec`; `importRawBlock` of the very block kept
-above the new head cannot be made in this rig (a block mined in test mode carries no seal, and a sealed copy is
-another block), so the same block mined again stands for it (known by its hash, with a record, committed in place
-again); a commit that waits for a confirmation under way is `adopting`'s, covered by `HeadMoveSpec`.
-
-**Recorded.**
-- **A kept block still answers by its hash** after a rewind on the unified layout (`eth_getBlockByHash`, its receipts
-  are kept), where the hash layout and go-ethereum's `SetHead` answer null. The headers are what a move back up is
-  planned from (`headerLink`), so they stay; `eth_getBlockByNumber` above the head answers null on both.
-- **A confirmation counts as a move** (`movesStarted`, `moving`): no code in main reads them yet. A builder that does
-  (the miner, C4e; the payload builder, C4d) must not take a confirmation for a move, or the store gets a path for a
-  move of nothing that does not count.
-
-**The mutation run**: 17 mutants, all caught. The fork choice promoting on the unified layout, moving the head off the
-held block in any direction or only up, taking a head it did not confirm as applied, answering a corrupt record
-`SYNCING`, throwing a refused move; the Engine API answering a head the race made an ancestor `SYNCING`; the writer's
-promotion not refused, a refused batch written, every batch given the target's rows, a move's batches given none, the
-writer not given the store; the rewind keeping the pending transactions, taking them for a refused move, throwing a
-refusal past the request, refusing as before, or going to the block above. Two did not compile at first (an unused
-symbol is an error here) and were rewritten so that they do. The Engine API's mutant survived the first form of the
-end-to-end case, which committed inside the gate's look: there the Engine API's own branch for an ancestor answers
-first. The case now commits inside the fork choice, where the window is.
-
-#### C4b part 4: the reconciliation at start (2026-11-13)
-
-Vault and forge, consulted before code, agree: **the block whose state the disk holds wins, always.** Since part 2 a
-block's commit and every batch of a move write the state's rows, the anchor, the best block and the index in one
-RocksDB write batch (one `dataSource.update`, the write-ahead log on), under the state lock, after part 3a's check that
-the best block is the anchor. So no crash leaves "the pointer half committed first", the case data-model 5.1's rules 2
-and 3 were written for. A best block that is not the anchor at start comes from a writer's defect, a datadir written
-before 3a, or test mode's reset of the chain, which is two writes (vault). Moving the state to that best block would
-throw away a state that execution proved (rule 2) or undo a fork choice that a move made deliberately (rule 3), and
-trusting the best block while the state stays put leaves every import refused, since a block is committed in place only
-on the anchor (forge). Rule 4 needs only the anchor's header, never writes the state, and loses nothing: the blocks
-above the anchor stay stored by hash and are executed again when they are imported again (on the unified layout today a
-chain import or test mode; the Engine API and sync follow with C4d and C5). go-ethereum's start does the same, down to
-the highest block whose state it has (beacon). **So rule 4 is the rule, and rules 2
-and 3 are not built** (data-model 5.1 amended; the user agreed on 2026-11-14: "go with what is on disk").
-
-- **`StateReconciliation.run`** (`domain/`), called from `StdNode.start` before the genesis loader and before any
-  actor, server or sync, in place of the hash layout's `fixDatabase` and `repairBestBlockMapping`, which trust the best
-  block or the index and would undo it (forge: also before the storage check, the sync controller's starting block and
-  the fork ID, all of which read the best block).
-  - Not stamped `path-live-1`: nothing; the genesis loader judges the datadir.
-  - No anchor: nothing, unless the datadir says SNAP sync is done, which is refused.
-  - The anchor's header not stored: refused, but in test mode, where it is a reset that stopped between its two writes,
-    left for the next `test_setChainParams` (which destroys the state) with nothing written.
-  - The anchor's header naming another number or state root than its row, or its chain weight not stored: refused.
-  - Otherwise the best block and the index are made the anchor's (`[STATE-ANCHOR] best pointer rewound` at WARN), or,
-    with the best block in place, the index alone (I6). A datadir found consistent takes no write.
-- **`BlockchainWriter.heldBlockIndex`**, a START builder: the anchor's ancestry by parent hashes for 1,024 blocks, with
-  every height whose entry is not the ancestor rewritten at whatever depth (not `canonicalHeadUpdate`'s walk, which
-  stops at the first entry that matches); every entry above the anchor deleted, up to the old best block and 1,024
-  heights past the highest found, capped at a million above the anchor; the lookups of the transactions of dropped
-  blocks; the best block. One synced batch, under the state lock. Nothing else: no state row, anchor, record, header,
-  body, receipt or weight.
-- **The ratchet** counts `heldBlockIndex` as a START writer; `StdNode`'s two START lines are the hash layout's only.
-
-**Tests** (`HeadMoveOnTheChainSpec`, the execution-apis chain on the unified layout): a best block above the state with
-its index and lookups (rewound; the rest of the datadir byte for byte as it was; the writes under the lock; a second
-start writes nothing; the blocks above imported again as blocks to execute, and a fork choice on the new head); a best
-block below, on another branch, with no hash, unknown; the index with the best block in place (a side entry under
-entries that match, a hole, an entry above a gap); the refusals, each writing nothing, and test mode's residue left; a
-batch that fails, then the next start.
-
-**Recorded.** I6 is not reachable on the guard today: side-branch execution is refused before its `saveBatch`. C4e
-should store a block it does not adopt by hash only, as C4d does for `newPayload`, so that I6 stays a defence (forge).
-`StdNode.start`'s call is not covered by a spec (the node is not started in unit tests).
-
-**Read after code (beacon): APPROVE WITH CHANGES**, all taken but where said. Rule 4 is right after the merge too,
-and dropping rules 2 and 3 is right on ETH as on ETC. `newPayload`'s answer of VALID for a kept block above the anchor
-(its receipts are kept) is no consensus fault: the block was executed and validated when it was committed in place,
-validity is the block's and not the state's, and nothing moves on it (go-ethereum answers a known payload the same
-way). The caches start empty and the finalized supplier is none on this layout. Taken:
-- the Engine API's gate for a head that is not the held block now records it as the head asked for and publishes it
-  (notify-only, as its other `SYNCING` branches): without it, after a reconciliation that lowered the head, nothing
-  would know where the blocks above lead;
-- the claim that the blocks above "are executed again when they come back" says what imports them today;
-- a transaction of a dropped block that the ancestry includes higher up keeps its lookup, pointed at that block (the
-  re-included set is the ancestry from the lowest rewritten height up, and its locations are written again);
-- the hash layout's two repairs do not run on a datadir stamped for the unified layout and opened with the guard off,
-  which the genesis loader then refuses: nothing is repaired in it first;
-- cases: the Engine API after a reconciliation (the consensus layer's head above answered `SYNCING`, nothing written,
-  that head recorded); the window and the cap; the shared transaction.
-Not taken, with the reason: `newPayload` for a kept block and for its child is not driven here (a payload from a block
-of this chain is not built by any helper of this spec); the duplicate rule (`number <= best`) is read, not driven
-through `ConsensusAdapter`, whose node this fixture does not build; `StdNode.start`'s call has no spec.
-
-**The mutation run**: 16 mutants, all caught. The reconciliation starting a synced datadir with no anchor, refusing
-test mode's residue, taking an anchor row whose state root contradicts its header, taking an anchor with no weight,
-writing a consistent datadir, writing off the state lock, reconciling a datadir with no stamp; the index walk stopping
-at the first entry that matches, looking for no entry above a gap, keeping a window of one block, removing nothing
-above the held block; the best block not moved; the lookups of dropped blocks kept; the old lookups rule (a shared
-transaction dropped and not put back); the Engine API's gate recording no head. Five did not compile at first (an
-unused symbol is an error here) and were rewritten so that they do. One more, the new lookups rule's first half
-alone, is equivalent: the locations written again in the same batch put the lookup back.
-
-### C4d: the PoS arms, as it is to be built (2026-11-14)
-
-Beacon's decomposition, before code (C4d is beacon-first). What the guard does today, read in the code:
+Beacon's decomposition, before code (C4d is beacon-first; built as B-062, #1830 to #1843). What the guard did before
+C4d, read in the code:
 `newPayload` never executes (a block not on the anchor is refused before execution, `refuseUnadopted`), and is stored
-by hash only and answered ACCEPTED; `forkchoiceUpdated` follows only the held head. **A latent defect part 2a must
-close first:** once a payload executes, its store indexes it by number (`storeBlock` -> `storeBlockHeader`), which is
+by hash only and answered ACCEPTED; `forkchoiceUpdated` follows only the held head. **A latent defect part 2a closed
+first:** once a payload executes, its store indexes it by number (`storeBlock` -> `storeBlockHeader`), which is
 not refused on the guard and would put an index entry above the anchor: on the guard every executed payload is stored by
 hash only, and a spec pins it.
 
 The parts, in order, each mergeable alone:
 - **Part 0, plumbing, no change to the answer table**: a confirmation of the head is no move (B-249); `Corrupt` fails
-  the state closed at the fork choice, answered `SYNCING` (below).
+  the state closed at the fork choice, answered `SYNCING`.
 - **Part 1, finality** (T160, T171): the finalized block from the fork choice, set only after a move that succeeded
   (the zero hash is none), persisted in AppState in the move's own batch; the retention floor follows it.
 - **Part 2a, `newPayload` executes as a forward layer** (never in place: only a fork choice moves the head): a parent
@@ -2782,327 +607,31 @@ The parts, in order, each mergeable alone:
 - **Part 6, the ordered clear** (T165, T166, T172, T173): with or after C5a, never before: with SNAP refused on the
   guard, a clear would leave a datadir that can never hold a state again.
 
+Parts 5 and 6 were built in C5a, not here (the user's decision of 2026-11-14, below; #1843 moved T163 to T165 and
+T174).
+
 **Decided by the user on 2026-11-14**, on beacon's proposal: `Finalized` is answered `-38002` (go-ethereum: the
 finalized block is not in the canonical chain); on PoS a block of a long branch found invalid moves the head back to
 the fork choice's last head (the consensus layer's head stays the validated one), where W4 (PoW, C4e) keeps the
 executed prefix; the designated-head arm (T170) moves to C4e, which edits the same `reorganise`; the armed ordered
 clear lands with C5a, not before.
 
-#### C4d part 0: a confirmation is no move, and `Corrupt` fails closed (2026-11-14)
+*The records of C4d parts 0 to 4b are in [implementation-log.md](./implementation-log.md#c4d-part-records), verbatim (moved 2026-11-21).*
 
-- **B-249**: `movesStarted` counts a move of the head under the state lock before its first batch is written. A
-  confirmation of the head as it is moves nothing and is not counted, and neither is a move refused before any write
-  (by its plan, or by its caller's rows). A build that overlaps any write of a move still sees the count change.
-- **`Corrupt` fails closed at the fork choice** (plan.md "C4b part 1"): `PathStateStorage.failClosed(why)` (through
-  `BlockchainWriter.failStateClosed`) marks the store as one that takes no further in-place write and gives out no
-  state until the node is started again, logged at ERROR; the fork choice answers `SYNCING` and does not set
-  `currentState`. Before, part 3b threw the refusal past the Engine API. Test mode's rewind still answers it as a
-  refused rewind with nothing changed (C4b part 4), since a test datadir is mended by the test.
+### C4e: the PoW arms, as built (2026-11-15)
 
-**The mutation run**: 6 mutants, all caught: a move not counted, counted at every batch, a confirmation counted; a
-corrupt record leaving the state open, thrown past the fork choice, a closed store taking writes. The count at every
-batch survived the first run; the one-block-a-batch case now counts its moves.
-
-**Read after code (beacon): APPROVE WITH CHANGES**, all taken. The count is under the moves lock at every access and
-counted once per move; `Corrupt` reaches the fork choice only from a real bad record or a codec fault (a prune, a
-commit in between or a test-mode wipe moves the epoch and is refused otherwise); the reconciliation at start reads no
-view; nothing changes on the hash layout. Taken: the count's wording (counted before its first batch is built, so a
-first batch refused while it is built is counted with nothing written, the safe side; one per move, so a reader pairs
-it with `moveInProgress`); `failClosed` takes no lock, so a write already past its check completes and none that
-starts after does; a genesis commit refuses a store that failed closed, and test mode's destruction of the state
-clears the fault with the state it was found in (a case); test mode's comment on `Corrupt` (it logs, and does not fail
-closed: a test datadir is the test's to mend). Recorded: the fault is kept in memory only, and nothing looks at the
-records again at the next start (B-252).
-
-#### C4d part 1: the finalized block (2026-11-14)
-
-The node's finalized block on the unified layout, which a move of the head must not reverse (C4b part 1's `Finalized`
-refusal) and above which retention keeps the records (`StateConfig.retained`: the anchor less the finalized block,
-plus the margin), was none: no consensus client drove the layout. Now:
-- **The fork choice names it** (T160, T171): the finalized block hash of a fork choice that was followed, by its
-  header, is written in the batch of the move, or the confirmation, of the head that followed it, as the AppState row
-  `state.finalized` (`v1:<hash>:<number>`), and is the store's (`PathStateStorage.finalizedBlock`) under the state
-  lock right after that batch (`moveHead(..., finalized)`, through `BlockchainWriter.moveHeadInPlace`), so the move or
-  commit that follows sees it. A fork choice that was refused names nothing; the row is not written again when it is
-  the block already named. The zero hash names none and leaves the block named before; a hash with no stored header
-  does too, logged; a block below the one named is taken, logged (go-ethereum's `SetFinalized` takes it, and on the
-  held state's chain it only loosens what is kept). `testing_commitBlockV1` names none: test mode has no beacon chain
-  behind it, and naming each committed head would refuse every later rewind.
-- **It survives a restart**: the store reads the row when it is opened. Before this a restart lost the `Finalized`
-  refusal, and the retention floor jumped from the finality lag to `state.retention.without-finality` and back.
-- **Test mode's destruction of the state takes it away** with the state's other marks.
-
-**The mutation run**: 9 mutants, all caught: a refused fork choice naming the block, the row not written, the row not
-read at start, the store ignoring the block it was given, test mode's reset keeping the block or its row, the block
-not taken by the store after a confirmation's batch, the writer not passing it on, a test-mode commit finalizing its
-head.
-
-**Read after code (beacon): APPROVE WITH CHANGES**, all taken. The named block is always on the held state's chain:
-the Engine API refuses a finalized block it does not know or that is not an ancestor of the head before the fork
-choice, and the confirmation passes only for the anchor. Taken: the block is the store's under the state lock right
-after the batch that ends on the target (it was set after the move returned, a window a fork choice that reverses
-blocks, from part 2b, could have used, and a gap where a throw after the write left the row on disk and the store
-without it); `testing_commitBlockV1` names none; the two WARN lines; the row not rewritten each slot; one zero hash.
-Cases: the Engine API's fork choice names it; a lower one is taken; a store is not opened over a row it cannot read; a
-test-mode commit names none. Not driven here: retention narrowing to the finality lag once a block is named (the
-arithmetic is `StateConfig.retained`'s, and its spec; a chain longer than `pruning.history` is not built here).
-Recorded: a path that gives a datadir its anchor again (the hand-off of C5a, a checkpoint import of C5c) must take the
-row away with the old state, as test mode's destruction does.
-
-#### C4d part 2a: a payload is executed as a forward layer (2026-11-14)
-
-`newPayload` on the unified layout executed nothing: a block not on the anchor was refused before it ran, and every
-payload was answered ACCEPTED. Now a payload is executed and its state kept beside the state the disk holds, as a
-forward layer (C4a), and the head does not move: only a fork choice moves it (part 2b; the execution-apis Paris
-specification).
-- **A block is committed apart from the block** (`StagedBlockState.commitApart`): on the hash layout the commit of its
-  state alone, as before; on the unified layout `PathStateStorage.commitOverlay`. A payload is staged apart
-  (`Blockchain.stageBlockStateApart`): its parent may be the anchor, a layer, a block behind the anchor that the
-  records lead to, or a block on a fork from those (`stageOf`, which C4a kept private until an execution could commit
-  such a block). The importer's in-place staging, and its refusal of a block it does not adopt (C4e), are unchanged.
-- **An executed payload is stored by its hash only** on the unified layout, whatever its parent (beacon: the store
-  that indexes it by number was not refused there, and would have put an entry above the anchor, I6). Its state is a
-  layer, not a reference count, so nothing is taken back out of the hash store's counts.
-- **A payload whose requests are not those its execution derived** is marked invalid first, so a fork choice in
-  between finds it so, and then its layer, with what stands on it, and the import gate's record of it are dropped
-  (`BlockchainWriter.dropForwardLayer`, `BlockImportGate.forget`).
-
-Answers on the unified layout: a parent whose state is held (the anchor, a layer, behind the anchor through the
-records, a fork from those) executes, VALID or INVALID; a parent stored and executed whose state is not held any more
-(its layer evicted), or a parent not known, ACCEPTED, stored by its hash; a layer not kept (too large, no room) is still
-VALID, since the block was validated and its state can be executed again (part 3). The fork choice still follows the
-held block only until part 2b.
-
-**The mutation run**: 5 mutants, all caught: a payload's layer not kept, a payload staged in place, a block staged
-apart staged on the anchor only, an executed payload indexed, a payload committed in place.
-
-**Read after code (beacon): APPROVE WITH CHANGES**, all taken but where said. The answers are right (a layer's
-receipts admit its child; a parent whose layer is gone is a state fault, ACCEPTED, as go-ethereum's
-`delayPayloadImport`), no state fault reaches INVALID, and nothing changes on the hash layout. Taken: a payload staged
-apart is "applied" for the import gate while its layer is kept, so one delivered again while its first execution runs
-takes that execution instead of a second (the consensus client resends a slow block); the `INVALID_REQUESTS` cleanup
-runs under the block's gate; a layer not kept is logged with its reason; `newPayload`'s log line says "layer" on the
-unified layout; the Engine API requires that it is told the held block exactly when the state is held in place (a
-builder replay on positions that was not told it is fixed); cases: an unknown parent answered exactly ACCEPTED, a
-parent whose layer was dropped answered ACCEPTED with nothing executed. Not taken: `INVALID_REQUESTS` is not driven (it
-is unreachable over RPC: the controller refuses malformed requests, and the requests hash binds the block hash), and a
-layer not kept, which needs a store with a small layer bound. **Owed by part 2b**: a fork choice to a head whose
-layers were not kept, or were evicted, re-executes them (go-ethereum's `recoverAncestors`; part 3's re-execution), and
-the descendants of such a block stay ACCEPTED until then.
-
-#### C4d part 2b: the fork choice moves the head (2026-11-14)
-
-The fork choice on the unified layout followed the held block only. Now it moves the head, with the state, to the head
-the consensus client names: **up** a chain of executed blocks (forward layers) or along changeset records, and
-**across** a fork, back along the records to the fork and up the other branch's layers and records, each as one move of
-the head (C4b's `moveHead`, through `BlockchainWriter.moveHeadInPlace`).
-- **Never down to an ancestor of the head**: go-ethereum skips such a fork choice ("Ignoring beacon update to old
-  head"), and the Engine API's branch for an ancestor answers it VALID with no payload before the fork choice is asked.
-  Behind that branch, a move whose plan only reverses blocks is refused before anything of it is written or counted
-  (`PathStateStorage.moveHead`'s new `admit`, asked of each plan): the race of part 3b is answered VALID as before.
-- **The gate for a head other than the held block is gone.** The checks that move nothing run first, as on the hash
-  layout: an invalid head, an unknown head, a head stored by its hash with no receipts (SYNCING), an ancestor (VALID),
-  the safe and finalized blocks' ancestry (-38002). Then the move, under `IO.blocking`, and on its success alone
-  `currentState`, the finalized block (part 1), the gossip gate and the pool. Then the attributes and the build, on the
-  head the move made.
-- **Refusals**: a head whose state is not held (a layer that was not kept, or evicted; a fork beyond the records:
-  `NotHeld`) SYNCING, until part 3 re-executes it; `Deep`, `Incomplete`, `Pivot` SYNCING (a strike in part 5);
-  `Corrupt` fails the state closed, SYNCING; **`Finalized`, a move that would reverse the finalized block, -38002** (the
-  user's decision of 2026-11-14; go-ethereum: "final block not in canonical chain"), with nothing moved.
-
-**The mutation run**: 6 mutants, all caught: a plan not asked whether it may be made, the fork choice moving the head
-in no direction or down, a move that would reverse the finalized block answered SYNCING (by the fork choice, or by the
-Engine API), the writer not passing the plan's check on.
-
-**Read after code (beacon): APPROVE WITH CHANGES.** The order is right (execution-apis: the fork choice is applied,
-then the attributes; a -38003 leaves the move standing, as go-ethereum's SetCanonical then BuildPayload); the ancestor
-rule is go-ethereum's (a block canonical by the index and below the best block), and a reverse-only plan names only such
-a block while the index is the anchor's ancestry; the build after a move reads the new anchor, with the stale-view
-retries; nothing changes on the hash layout. Taken: an ancestor of the head is answered VALID before a `Finalized`
-refusal is (a raced walk back that meets the finalized block); cases: a cross-fork move whose attributes are refused
-(-38003) stands, and the block built on the new head is VALID when it comes back as a payload. Recorded: the pool
-drops only the head block's transactions and puts back none of a reversed block's, on both layouts (B-253). **Put to
-the user**: the `Finalized` refusal is held against the finalized block named before; a fork choice that names a new
-finalized block on its own head's chain, while its move reverses the old one (a consensus client resyncing from a
-corrected checkpoint), is consistent and go-ethereum follows it, where this answers -38002 on every retry. Beacon
-proposes planning against the fork choice's own finalized block when it names one on the head's chain, so the refusal
-fires only for a fork choice that names none, or a stale one. **The user's decision of 2026-11-14: no.** The refusal
-stays held against the finalized block named before; a datadir whose finalized block a consensus client later reverses
-is mended by hand.
-
-#### C4d part 3: a state that is no longer held is had again (2026-11-14)
-
-A forward layer lives in memory: a restart loses every one, and a layer that does not fit is not kept. The guard starts
-no sync (C5 brings one), so a consensus client that names a head above such a block got SYNCING for good. Now the node
-executes the stored blocks again on its own, as go-ethereum does when it has the blocks and not their state, and the
-consensus client is answered ACCEPTED or SYNCING meanwhile (`ledger/StateRecovery.scala`, T169; it is in `ledger`, not
-`pathstate` as T169 says, since it executes blocks).
-- **The walk** goes down the head's chain by parent hash to the highest block whose state is held
-  (`PathStateStorage.stateAvailable`, T094: the anchor, a block behind it that its changeset records lead back to, or a
-  block that forward layers lead to from one of those; it reads the window of the anchor's ancestors, builds no index,
-  and is false once the state has failed closed). It covers `state.recovery.max-blocks` blocks, and no more than half of
-  `state.overlay.max-forward-layers` (16 by default): a layer executed must not push out the one below it before that is
-  used, nor every other layer the node keeps (beacon), and the pins of a longer branch are part 4's. Beyond that,
-  `TooLong`; a header or a body that is not stored, nothing executed at all.
-- **The execution**, oldest first, each block through `executeAndValidateBlockFull`, as `newPayload` executes a payload,
-  apart (a forward layer), and **never the head moved**: the next fork choice moves it. Every block is validated in
-  full, before and after its execution (its requests and its access list too), as go-ethereum validates the blocks it
-  recovers; the versioned hashes a consensus client sends are checked by `newPayload` before it looks for the parent,
-  ACCEPTED or not. A block that has receipts and fails now is the node's fault, never the block's (`LocalFault`, ERROR),
-  as is a parent header not found. One never executed that fails a rule of consensus is marked invalid by the Engine
-  API, with every block of the head's chain above it (a node started again remembers no payload of theirs) and what
-  stands on it, its parent the latest valid block; nothing above it is executed. After each block, its state must be
-  held (a layer, or behind the anchor once a fork choice moved the head past it), or the recovery stops (`NotKept`); the
-  state moving under it is walked down to again, once. Once the node is stopping, nothing more is written.
-- **Bounded, never inline**: one daemon thread, `state-recovery`, behind a queue of four heads (`Busy` beyond them); one
-  recovery per head (a head asked for again gets the one under way); a head whose recovery failed is not tried again for
-  12 s. The node closes it on the way down, after the Engine API's server and before the data source: one under way ends
-  after its block, and those waiting are answered `Closed`.
-- **What asks for one** (only on the guard; on the hash layout nothing builds it): a payload ACCEPTED whose parent is
-  stored (its own hash, so the payload is executed too); a fork choice whose head's chain is held up to a block below it
-  (`NotHeld` with `heldTo`: the fork choice answers `NotHeldHead`, the Engine API SYNCING); a fork choice to a head that
-  was stored and never executed, on a parent that is stored. What a recovery executes is kept as `newPayload` keeps an
-  executed payload (receipts, access list, chain weight: `keepExecuted`, one helper for both).
-- **T156** is pinned in process: a node started again on the datadir between `newPayload(B)` and the fork choice to B
-  (the layer gone, no peers) answers the fork choice SYNCING, executes B again, and the next is VALID; in the variant,
-  `newPayload(B+1)` is ACCEPTED (neither VALID nor INVALID) and its fork choice VALID. The child-JVM `kill -9` test on
-  RocksDB with a real consensus client stays T156's (B-255).
-
-**The mutation run**: 23 mutants, all caught. The walk not stopping at a held state, newest first, no bound, a block executed
-before not validated again, one executed before marked invalid, a rejected block not handed over, a block behind the
-anchor taken for one not kept, no dedup, no cool-down, `close` not ending those waiting or not stopping between blocks or
-writing a block finished after it, the fork choice not saying the head is held below, the Engine API not recovering a
-fork choice's head, an ACCEPTED payload or an optimistic head, what a recovery executes not kept, the latest valid
-block not the parent, the chain above a rejected block not marked, a block not kept not noticed, and `stateAvailable`
-not counting a block behind the anchor, a layer, or a state failed closed. One survived the first run (`close` not
-stopping between blocks, once the check after each block landed) and has its case.
-
-**Read after code (beacon)**: **APPROVE WITH CHANGES**, all taken. Nothing can keep a wrong state: every kept layer is held to the header's
-roots, and a recorded execution is reused only while its layer is. Full validation of an ACCEPTED block is sound, and
-the versioned hashes are checked before the parent is looked for (go-ethereum's `ExecutableDataToBlock` does the same).
-Taken:
-- a rejected block takes every block of the head's chain above it with it, its parent the latest valid block, as
-  go-ethereum's `recoverAncestors` answers (a node started again remembers no payload, and its head was SYNCING for good);
-- after each block its state is asked for with `stateAvailable`, so a fork choice that moved the head past it is no "not
-  kept";
-- a recovery covers at most half of the forward-layer budget, so it cannot push out every other layer kept;
-- nothing is written once the node is stopping, and `close` waits two minutes, longer than the slowest block seen;
-- every block is validated in full;
-- a parent header not found is the node's fault, never INVALID.
-Cases added: a restart then a rejection (INVALID with the bad block's parent), a fork choice moving the head past a
-block mid-recovery, a Prague block whose requests are not those its header commits to (`INVALID_REQUESTS`), a fork
-behind the anchor recovered and moved across to, and `close` during an execution. The child-JVM crash test stays
-B-255.
-
-#### C4d part 4a: a branch longer than the forward layers is committed in place (2026-11-14)
-
-What part 3 left (beacon, read in the code): a branch of payloads longer than the forward layers may hold could not be
-followed. Only a layer at the tip of a chain is evicted, never one another stands on, so the layer past the budget is
-not kept (`NoRoom`). The payloads after it are ACCEPTED on a state that is not held, and the recovery as layers
-(at most half the budget) ends `TooLong` or `NotKept`. A fork choice to the tip then answered SYNCING for good: the
-guard has no sync to fall back on. The same held for a straight run of payloads on the head.
-
-**The user's decision of 2026-11-14: in place**, beacon's design (data-model 6.4: reverse-then-commit, no stack of
-layers). Pinned layers up to `pinned-max-bytes` were the alternative, and were not taken: in place is needed beyond
-that anyway, and pins are released before the next fork choice. Three side fixes go with it, in part 4b: `eth_syncing`
-says syncing while an adoption runs; a fork choice that reaches the adoption through the arm for a head never executed
-answers -38002 where it would reverse the finalized block; the `safe` tag never names a block an adoption reversed.
-
-As built:
-- **Who asks.** A recovery says what asked for it (`StateRecovery.Authority`). A payload keeps its blocks as layers and
-  never moves the head, as in part 3. A fork choice that names the head (the arm for a head never executed, and
-  `NotHeldHead`) walks as far as `state.recovery.max-blocks`, and has a branch committed in place when its blocks and
-  the layers it stands on (`PathStateStorage.heldDepth`) are more than a recovery as layers covers, or when a layer of
-  it did not fit. In-flight recoveries are one per head and per authority, so a fork choice that arrives during a
-  payload's recovery of the same head runs its own after it; a payload's failure does not hold a fork choice back.
-- **The adoption**, on the recovery's thread. With the changeset records above the fork held from retention
-  (`withRecordsHeld`; the fork is where the branch meets the index of blocks by number, I6), the head is moved with the
-  state to the highest block of the branch whose state is held (down and across, or up its layers), then each block
-  above it is executed, validated in full and committed in place as the head (`executeAndAdoptBlockIf`, as an import
-  commits a block). Before each commit the consensus client must still name the tip, and the node must not be
-  stopping; otherwise the adoption stops, uncommitted, and the head stays where it got to. It never sets the fork
-  choice's head: the consensus client's next fork choice to the tip confirms it, VALID. Meanwhile it answers SYNCING.
-- **A block that fails**: one never executed is INVALID, with what stands on it, its parent the latest valid block (as
-  in part 3); one executed before is the node's fault. Either way the head is moved back, along the records held, to
-  the head of the last fork choice followed, or to where the adoption found it (on proof of stake the consensus
-  client's head stays the one it validated, the user's decision). A way back that cannot be taken leaves the head on
-  the last block committed, all valid, at ERROR.
-- **Refused before anything moves**: records already pruned above the fork (`Deep`), a move that would reverse the
-  finalized block, a branch that does not lead back to the held chain (`NotAdopted`).
-
-**The mutation run**: 18 mutants, 17 caught. Caught: a fork choice never adopting, a payload adopting (with
-the consensus client naming its head), the records not held (retention of two blocks: the way back across the fork is
-pruned by the branch's commits but for the hold), no move to the held block, the first move ignoring another head, no
-move back, the move back aiming at where the adoption began, the check before each commit ignored, a head that extends
-the branch stopping it, a local fault not taken back, a payload's failure holding a fork choice back, one ticket per
-head whatever asked, a payload taking the last place in the queue, a fork choice whose layer did not fit not adopted,
-a stopped adoption cooled, the Engine API's fork choice asking as a payload, and the sink naming no followed head. The
-one left is equivalent: without the look before the adoption runs, the first move's own refusal stops it, and nothing
-is written either way. Six survived the first run, and have their cases.
-
-**Read after code (beacon)**: **APPROVE WITH CHANGES**, all but three notes taken. Nothing can commit a wrong state: an
-in-place commit checks under the state lock that the staged parent is still the anchor, so a fork choice that moves
-the head between the check before the commit and the commit makes it refused; and no lock cycle (the recovery holds the
-chain insert lock, shared, and the block's gate only inside one block's commit). Taken:
-- **(critical) the head is not taken off a head the consensus client has gone on to**: the first move is refused,
-  before any of it is written, once another head is named (its check runs per batch under the moves' lock, and the fork
-  choice sets the named head before it takes that lock); and an adoption whose head is no longer named does not begin;
-- a first move of more than one batch that is refused part way takes the head back;
-- a head that extends the branch does not stop it, as go-ethereum goes on inserting what its new head extends (a block
-  slower than a slot made no progress otherwise);
-- the records are held from the fork, or from where the last followed head leaves the index if that is lower;
-- a superseded or stopped recovery is not cooled down; the last place in the queue is a fork choice's;
-- the docs of the class and of `executeAndAdoptBlockIf`, and what a sink that names no head means.
-Not taken: bounding the search for the fork by the window (65,536 header reads only on a broken index), the relaxation
-of a move's reach while records are held (it predates this part; the finalized block bounds it), and a one-layer move
-in place of executing a block whose layer stands on the anchor (a saving). Cases added: an adoption across a fork with
-its way back on held records; another head named before it runs, and between its look and its move; a local fault
-taken back with nothing marked invalid; a head that extends the branch; the node stopping mid-adoption; a branch long
-only by the layers it stands on; a fork choice whose single block's layer does not fit; a payload never adopted.
-
-#### C4d part 4b: what readers and the consensus client see of an adoption (2026-11-14)
-
-The three side fixes the user took with part 4a's design (beacon flagged them; the user's decision of 2026-11-14):
-- **`eth_syncing` says syncing while an adoption runs.** The recovery keeps how far the adoption has got (from the
-  fork to the branch's tip, and the block the head is at); `EthInfoService` answers it before it asks the sync
-  controller (`startingBlock`, `currentBlock`, `highestBlock`, as go-ethereum answers during beacon sync). Meanwhile
-  the Engine API answers SYNCING, which agrees.
-- **The `safe` tag never names a block the head has left.** On the unified layout a safe block the index does not name
-  is answered by its highest ancestor the index names, where the two chains meet; it walks headers, at most 1,024, and
-  reads the one block at the end. Off the guard nothing changes. The fork is at or above the finalized block, since an
-  adoption that would reverse it is refused, so `safe` stays at or above `finalized`.
-- **A fork choice to a head never executed is answered -38002 when its chain does not hold the finalized block** the
-  node was told of (the one named before, as the user decided for the `Finalized` refusal), with no notice to the sync
-  layer and no recovery asked: an adoption to it would be refused, and it answered SYNCING for good. Its stored headers
-  are followed down: a different block at the finalized height, or below it a block other than the one the index names
-  there, is a reversal; a block of the index at or above that height, an empty place in the index (a consensus client
-  resyncing from an older checkpoint), headers that run out or 1,024 of them read say nothing, and it is answered as
-  before. go-ethereum answers SYNCING for a head it has not executed; this follows what the fork choice answers for one
-  it plans (beacon).
-
-**The mutation run**: 9 mutants, all caught: `eth_syncing` ignoring the adoption, no adoption told, the adoption not
-cleared or its progress not told, the safe tag naming a reversed block, no -38002 for a head never executed, the
-finalized block's hash not compared, and below it another block named there taken for none or an empty place taken for
-a reversal.
-
-**Read after code (beacon): APPROVE WITH CHANGES**, all taken: an empty place in the index below the finalized height
-is no reversal (it was, for a head below that height); the walk stops at the first block of the index; the adoption's
-`startingBlock` is the fork (the old head could be above the tip); the safe tag's walk reads headers. Cases: a head
-beside the index below the finalized block (-38002), with the index's place emptied (SYNCING), a head whose parent is
-not known (SYNCING), and a finalized block the branch holds (the adoption goes on).
-
-### C4e: the PoW arms, as it is to be built (2026-11-15)
-
-Forge's decomposition, before code (C4e is forge-first). What the guard did, read in the code: the only way to a
+Forge's decomposition, before code (C4e is forge-first; built as B-063, #1846 to #1853). What the guard did before
+C4e, read in the code: the only way to a
 reorganisation in a running node is test mode (`test_importRawBlock`, `test_mineBlocks`); the first block of a heavier
 branch was refused before it ran (a block not adopted as it is executed), so the ethereum/tests fork vectors failed
 there. A chain import refuses side blocks without asking the fork choice, mining is refused at start, and regular
 sync's importer is not started on the guard (C5, C6).
 
-**The design is the user's decision 1 of 2026-11-12** (above, "Two decisions part 4 could not be designed without"):
-**execute first, on pinned layers; reverse-then-commit as the rule when the cap is hit.** It supersedes the
-reconciliation note under the S0 records ("`BranchTooLarge` is the default over the cap ... forge confirms at C4e") and
-the wording of T177 and T189: forge confirms that `BranchTooLarge` is never the last word for a heavier branch. Not
+**The design is the user's decision 1 of 2026-11-12** (implementation-log.md, "C4a part 3: the bounds", under "Two
+decisions part 4 could not be designed without"): **execute first, on pinned layers; reverse-then-commit as the rule
+when the cap is hit.** `BranchTooLarge` is never the last word for a heavier branch (forge); the S0 reconciliation note
+("`BranchTooLarge` is the default over the cap ... forge confirms at C4e") and the original wording of T177 and T189 no
+longer apply. Not
 reverse-then-commit always: a fork of one or two blocks is routine on ETC, and committing it in place would write the
 disk down and up, show readers a lighter head and open a generation pause each time; execute-first leaves the old head
 untouched when a branch turns out lighter or invalid, as core-geth keeps its head until a side chain's total difficulty
@@ -3131,292 +660,22 @@ The parts, in order, each mergeable alone:
 - **The PoW escalation** (T182's second half) **is folded into C5a with the PoS trigger** (the user's decision of
   2026-11-15): there is nothing to escalate to before it. C4e says `[STATE-REORG-TOO-DEEP]` at ERROR.
 
-Recorded, not changed: on equal total difficulty core-geth prefers the lower block number, then chooses at random;
-fukuii keeps its head, on both layouts (B-284). ECIP-1017 rewards do not depend on the layout.
+Recorded here, then changed (B-284, the user's decision of 2026-11-24): on equal total difficulty core-geth prefers the
+lower block number, then chooses at random; fukuii kept its head, on both layouts, and now follows core-geth's rule
+(`PowForkChoice`). ECIP-1017 rewards do not depend on the layout.
 
-#### C4e part 1: a heavier branch is executed on pinned layers and adopted by one move (2026-11-15)
+*The records of C4e parts 1 to 6, and of the mining gate (B-293) are in [implementation-log.md](./implementation-log.md#c4e-part-records-and-the-mining-gate-b-293), verbatim (moved 2026-11-21).*
 
-- **A block that is not adopted as it is executed** (`BlockExecution.executeAndCommit` with `adoptEachBlock = false`)
-  is, on the unified layout, staged apart, on the state of its parent wherever that is held, validated in full, then
-  **stored by its hash only** with its receipts, chain weight and access list, and its state kept as a forward layer
-  held by its branch's pin. Nothing writes the index of blocks by number but a move of the head (I6; B-250), and an
-  unadopted block has no transaction lookups. The refusal of such a block (`refuseUnadopted`) is gone.
-- **The reorganisation** (`ConsensusImpl.reorganiseOnLayers`; the hash layout's is the code it was, moved under its
-  own name). **Refused before a block runs** when the head cannot be moved back to the block the branch leaves the
-  chain at (deeper than the records reach, past the finalized block or the state's origin, records lost): this node's
-  own condition, the branch not judged, `[STATE-REORG-TOO-DEEP]` (`[STATE-RECORDS-CORRUPT]` for its own records).
-  Otherwise the branch is executed under one pin, and when what executed outweighs the old head (strictly, as before),
-  **one move of the head** takes the state, the best block and the index across, before the pin is released. A prefix
-  that does not outweigh it leaves the old head exactly as it was, its layers kept for the next attempt (W4 on layers:
-  nothing was committed, so there is nothing to take back). **On a fault of the state nothing moves**, whatever was
-  executed before it, a trie error included, and the whole branch waits to be tried again; so the importer is never
-  told of a fault with the head moved (B-242 cannot arise here).
-- It runs on a thread that may block: the move waits for the state lock and for a move under way.
-- The designated-head arm is refused as before, as this node's condition, until part 5.
+### C5a: the hand-off, the layout guard and the escalation, as built (2026-11-15)
 
-**The mutation run**: 10 mutants, all caught: a side block indexed by number, its receipts or its weight not stored,
-its layer not kept, the block staged in place, no refusal up front, the head not moved to a heavier branch or moved to
-a prefix that is not heavier, the hash layout taking the layers' arm, and the layer not its pin's (it survived the
-first run: a branch of five on a budget of two unpinned layers is its case).
+Read before code by forge (ETC and the shared structure), beacon (proof of stake) and vault (the write order). Built as
+B-064, parts 1 to 10 (#1855 to #1880, 2026-11-15 and 11-16); the live gates (T209, EG-4) are open.
 
-**Read before code and after (forge): APPROVE WITH CHANGES**, all taken. No lighter or invalid chain can become the
-head: the weight test is the hash layout's, an invalid block is never committed, and a recorded execution is reused
-only for a block that passed. A side block's header, ommers and `BLOCKHASH` resolve by parent hash, never by the index,
-and every block of the branch is stored by hash before the next runs, so the fallback to the index in
-`AncestorBlockHashes` is not reached. No lock cycle. Taken: a trie error is looked for before the weight test (it
-moved the head and then answered a fault); a refusal for corrupt records has its own tag; a move that stops part of the
-way says where the head is. Recorded: `OmmersValidator.getNBlocksBack` does not end when an ancestor's body is missing
-(B-283, on both layouts); holding the chain insert lock across the move before the Engine API shares this path.
-**Not covered**: a heavier prefix followed by an invalid block in one branch (test mode hands blocks over one at a
-time, so its branches settle as soon as they are heavier), and a `BLOCKHASH` or ommer vector across a fork: the
-ethereum/tests fork vectors are part 2's gate.
-
-#### C4e part 2: the side blocks a branch stands on are executed again when their state is gone (2026-11-15)
-
-A forward layer lives in memory: a restart loses every one, and after it a side block is stored with no state. A
-branch that stands on such blocks (`fork.parentSideChain`: its parent's ancestors that are not of the head's chain)
-was not judged, and never would be: on a proof-of-work chain a heavier valid chain refused for good (forge: not to be
-left out before the guard is on for any Mordor node).
-- **They are executed again**, in `reorganiseOnLayers`, ahead of the branch and **under the branch's pin**, from the
-  lowest one whose state is not held up (what stands on it is not held either; looked for under the pin, so nothing
-  found held is evicted before it is used), each validated in full and on its own parent's stored chain weight, as
-  core-geth executes a side chain's ancestors again when their state is gone (it skips the seal; this does not). Inline
-  and not through `StateRecovery`, which is the Engine API's, on its own thread: here the layers must be the pin's.
-- **A side block that is not stored whole**, or with no chain weight under it, is a fault of this node's state: the
-  branch is not judged, and waits.
-- **A side block that was accepted before and fails now** says nothing of the branch: this node's state or its
-  configuration is not what it was. `[STATE-REEXEC-DIVERGED]` at ERROR; nothing is reported invalid and no peer is
-  blamed; the block is remembered (in memory, until the node is started again), and a branch that stands on it is
-  refused at once and **not queued again**, so it is not executed again and again to the same end. What it should
-  become is the escalation's, C5a.
-- The settle and what the importer is told count the branch's blocks only.
-
-**The mutation run**: 6 mutants, 4 caught (the lost blocks not executed again, executed on the wrong weight, a diverged
-block not remembered, and the answer of whether a state is held), 2 the same in what they come to (a missing body left
-to the execution to find; a branch on a diverged block executed once more to the same refusal). The first test of this
-part passed without the change: after a reorganisation the queue hands the old branch's blocks back, so the branch
-arrived whole; the case now empties the queue, as a restart does.
-
-**Read after code (forge): APPROVE WITH CHANGES**, taken: the look under the pin; a missing body said as that; the
-divergence with its tag, remembered, the branch dropped. Full validation of a block accepted before is sound: every
-lookup it makes is by hash, and no rule compares a timestamp with the clock. Recorded: a branch whose side parents
-with it are more than the pinned bytes loops on `BranchTooLarge` until part 3; the transactions of the side blocks
-executed again are not told to the pool as mined (as on the hash layout; with B-253).
-
-**The core-geth parity scenarios of `ReorgBlockhashParitySpec` now run on both layouts**, on one genesis loaded as
-the node loads one: a heavier branch that fails mid-way with a lighter prefix (the head and the index stay, and the
-next block's `BLOCKHASH` is the old chain's); **a heavier prefix before an invalid block becomes the head** (W4 on
-layers, the case part 1 could not make in test mode); and a reorganisation back onto an orphaned block across a
-restart, with `BLOCKHASH` read by the block that is executed before the index is settled. **Not run**: the
-ethereum/tests fork vectors (bcMultiChain, bcTotalDifficulty, bcForkStress), whose fixtures are not in this checkout:
-they are the gate before the guard is on for a node (B-289). **Run since, on both layouts: C5a part 9a.**
-
-#### C4e part 3: at the pinned cap, the head is moved first and the branch committed in place (2026-11-15)
-
-A branch whose executed blocks would hold more than `pinned-max-bytes` ended in `BranchTooLarge`, the same answer
-however often it was tried: a node that cannot adopt the heaviest chain has left it. The user's decision 1 of
-2026-11-12 is built: **reverse-then-commit is the rule at the cap** (`ConsensusImpl.commitInPlaceAtTheCap`).
-- **Where it is taken**: when the execution under the pin ends in `BranchTooLarge`, in the lost side parents (part 2)
-  or in the branch, for a branch selected by weight. What was kept under the pin stays; the rest is what is still to
-  run.
-- **What it does**: with the changeset records above the fork held from retention
-  (`BlockchainWriter.withRecordsHeldAbove`), and still under the pin, the head is moved with the state to the block the
-  first remaining block stands on (the last block kept, whose layers the move applies; the fork, or a held side parent,
-  when none was), and each remaining block is executed, validated and committed in place as the head, by the commit an
-  import uses (`executeBranch(adoptEachBlock = true)`; it is `StateRecovery.commitEach`'s commit too, so no core had to
-  be extracted). The head leaves the old chain before the whole branch is known valid, and is on a chain of valid
-  blocks at every step.
-- **What is left as the head** (W4, the user's decision of 2026-11-14): what was committed stays when it outweighs the
-  old head strictly, as `settleOnLayers` keeps an executed prefix and core-geth moves its head as soon as a side block
-  outweighs it; otherwise the head is moved back to the old head along the records held, and the importer is told what
-  part 1 tells it for a lighter prefix. On a fault of this node's state it is moved back whatever was committed.
-- **A lost side parent that fails in place** is part 2's divergence: moved back, remembered, nothing told invalid.
-
-**Read after code (forge): no blocker; five warnings, taken.** Anything thrown after the first move takes the head back
-while the records are still held (a first move that stopped part of the way among it). A move back that fails is
-**said**: the answer is a fault that names where the head is, with the committed blocks of the branch as imported and
-the chain it left queued again. A whole branch that ran and does not outweigh the head it was selected over is a
-disagreement of the stored weights, no verdict. The head is checked at entry against the one the branch was weighed
-against. A fork that left retention between the refusal up front and the hold says `[STATE-REORG-TOO-DEEP]`. Forge
-confirms: the old head read by number is sound (nothing under the pin writes the index); the strict `>` is core-geth's
-and part 1's; a move back leaves no index row, best block or transaction lookup of the branch
-(`canonicalHeadUpdate`); the hash layout cannot reach this code.
-
-**Recorded, not changed here**:
-- between the in-place commits a miner or a reader can see a head that is later moved back: wasted work and a head that
-  goes backwards, no split. **Part 4's attempt-wide latch lands before the guard is on for a node that mines.**
-- on every layout and arm, a reorganisation that kept a heavier prefix and met an invalid block answers
-  `BranchExecutionFailure`: the chain it left is not queued again and the pool is not told of it (B-291).
-
-**The mutation run**: 11 mutants, 10 caught (the cap not taken in either phase, a lighter prefix left as the head, a
-heavier one moved back from, the commit without the move, the old blocks not reported, side parents counted as the
-branch's, the weight of the pinned part only, a side parent's failure told as the branch's, the head left moved by it),
-1 not reachable in a test of a few blocks (the records not held: retention deletes nothing that young).
-`ReorgBlockhashParitySpec` runs its three core-geth scenarios on two more variants: nothing kept under the pin (a cap
-of one byte; a lost side parent goes through it), and the cap met within the branch. **Not covered**: a fault after
-in-place commits, a move back that fails, a first move that stops part of the way (each needs a store that fails on
-demand; before the guard is on by default, B-292).
-
-#### C4e part 4: the head's generation, who builds on the head, and a fork below the views (2026-11-15)
-
-Forge's cut, before code: the latch, the one proof-of-work builder that can be reached on the guard, the deep-fork
-fix, and the text. Mining is refused at start on the guard and `eth_getWork` with it, so the readers of the miner, the
-Ethash coordinator and `eth_getWork` would be code nothing reaches: they go with the slice that lifts that refusal
-(**B-293, a gate on it**).
-
-- **The head's generation** (`PathStateStorage.headGeneration`, `awaitHeadSettled`; T190, which named `StateLock`):
-  even while the head is settled, odd from the first batch of a move of the head to its end and for the whole of an
-  attempt that holds the records (`withRecordsHeld`: `commitInPlaceAtTheCap` and `StateRecovery.adopt`'s in-place
-  arm, with every move and commit they make). One count of what is open, whatever thread opened it, so a fork
-  choice's move inside an adoption only nests. A block committed on the head as it is, a confirmation, and a move
-  refused before its first batch do not change it. `moveInProgress` and `movesStarted` stay a move's own (B-249; no
-  main code reads them).
-- **The rule for a builder** (a sequence lock): the generation is read settled **before** the head is read, the block
-  is built, and the build is kept only if the generation is the same. Built into `test_mineBlocks`
-  (`TestService.builtOnTheSettledHead`): it waits up to 30 s for the head to settle, builds again a block the head
-  overtook, three times at most, and refuses the request otherwise. A sealed block whose parent the head left is
-  never dropped: it is a side block, judged by weight. The Engine API's builder builds on a parent the consensus
-  client names, on a view that is that parent's or stale: no rule, as `BlockGeneratorSkeleton` has none (it builds on
-  the parent it is given). **For a miner the policy is to wait or arm again, not to refuse after 30 s** (forge): an
-  adoption in place of thousands of blocks is odd for as long as it runs.
-- **A fork below what a view reaches** (T183; the gap forge read and the first test confirmed). In the archive mode the
-  records lead further back than views do (`archive.view-reach`), and in the basic mode they can when the floor lags:
-  the refusal up front passed, the first block of the branch was to be executed on a view of the fork, and the answer
-  was `StateUnavailable` on every attempt. **The heaviest chain was never adopted.** Now, when the block the first
-  block to run stands on is the fork and its state is not held, part 3's reverse-then-commit is taken at once with
-  nothing pinned: the move goes to the fork by the records, in batches, with no view. Only for the fork: a side block
-  whose state was held a moment ago and is not now is no reason to move the head; the branch waits and the side block
-  is executed again.
-
-**Read after code (forge): no blocker; three warnings.** Taken: the route fires for the fork only; the generation is
-opened before the move says it is; no move back is tried when the first move wrote nothing. Confirmed by forge: the
-open and the close are balanced on every path and the monitor is a leaf; the close comes after the overlay is released
-and the observers are told, and the best block and the index are of the move's own batch, so who is woken reads the
-final head; the generation only grows and is bumped before the first write, so a build is never kept across an attempt.
-**Recorded**: an import onto an intermediate head during an attempt is not excluded (test mode only today; B-294,
-with beacon); a deep reorganisation loads the whole old chain with its receipts before it runs (**B-296, a gate before
-the guard is on for an archive node**).
-
-**T183 as it stands**: a reorganisation of **4,000 blocks** in the archive mode, with views that reach 2 blocks and
-moves of 3 blocks to a batch, is adopted through `ConsensusImpl` with the index and the state the branch's
-(`ReorgBlockhashParitySpec`, 4 s), and the three core-geth scenarios run on that configuration too. A move killed
-after a batch is pinned at the store (C4b part 2c). **Not built: a node killed during reverse-then-commit and started
-again** (B-295, a gate before the guard is on for a Mordor archive node). The task's "recovers by I1 rules 2 and 3" is
-out of date: every batch writes the anchor, the best block and the index together, so what a kill leaves is a
-consistent head on a block of the way, which is rule 4; the heavier chain is judged again when its blocks arrive.
-
-**The mutation run**: 12 mutants, 11 caught; the twelfth (who waits is not woken) is caught by a case added after it.
-
-#### C4e part 5: the consensus layer's branch is executed on layers and adopted by one move (2026-11-15)
-
-Beacon's cut, before code. **T170 as written is superseded**: "reverse to the fork, then a commit per block, no
-N-layer stack" was written before C4d part 4a, which made the proof-of-stake shape what it is now: payloads are
-executed as forward layers, the fork choice moves the head across them in one move, and an adoption in place beyond
-them is `StateRecovery`'s alone. A second in-place adopter in `ConsensusImpl` would write the same head beside it,
-block by block, while the consensus client sends a fork choice every slot.
-
-What the arm is: `ConsensusImpl` follows a branch that is not heavier when it leads to the head the consensus layer
-named (`leadsToDesignatedHead`). After the merge every block weighs the same, so it is the only way a proof-of-stake
-branch is reorganised here; never on ETC, where nothing is bound to the holder. **It cannot be reached on the guard
-before regular sync's importer runs there (C5)**: the Engine API never goes through `ConsensusImpl`, a chain import
-refuses side blocks, test mode has no consensus layer. It is built now as a branch of the code the weight arm runs,
-not a body of its own, and pinned through a `ConsensusImpl` with a head bound.
-
-- **The refusal up front holds both arms**: the consensus layer's branch that would move the head back below the
-  finalized block, or below what the records reach, is refused before a block of it is executed.
-- **The settle**: the head goes to the branch by one move only when **the whole of it is valid** and it **still
-  leads to the head the consensus layer names**, looked at again as the move is admitted, before anything is written
-  (the named hash is compared first; the walk of headers is made only when it changed). **An invalid block leaves the
-  head where the consensus layer last had it** (the user's decision of 2026-11-14), which costs nothing here, since
-  nothing has moved; the hash layout makes the valid prefix the head, and stays as it is. The invalid block is
-  reported, with its parent as the last valid block, whatever head is named by then.
-- **Another head named meanwhile** is no fault of this node and no verdict on the branch: `REORG-SUPERSEDED` at INFO,
-  the branch's blocks stay beside the head, and the importer is told the head was kept.
-- **At the cap, or with a fork below the views, it is not judged**: that adoption is the fork choice's recovery's.
-
-**Read after code (beacon): no blocker; four warnings.** Taken: an invalid block is told even when another head is
-named by then; "another head" is not a state fault; the walk is not repeated while the move's lock is held. Confirmed
-by beacon: the hash layout's arm and `settleHead` are untouched; the weight arm is as it was; a branch executes whole
-or ends in an error or a fault; a branch that ends on an ancestor of the named head moves the head there, as the hash
-layout and go-ethereum's chain insert do; the fork choice manager has no lock, so there is no order to invert.
-**go-ethereum's behaviour here was said from memory** (no clone in this checkout): to be checked against one before
-the rule is called its parity.
-
-**For C5 (B-297, a gate on starting regular sync on the guard)**: the hand-off at the cap to `StateRecovery`; a
-refusal for the finalized block or the depth is queued again without end while the consensus client keeps naming that
-head; a race test of the importer's move against the fork choice's; the lost side parents are not in what is told as
-the new branch (both arms); the hive engine reorganisation suites with the guard on.
-
-**The mutation run**: 9 mutants, 8 caught; the ninth (the named head not looked at again before the move) comes to
-the same answer, by the look as the move is admitted. `ReorgBlockhashParitySpec` holds the cases: adopted by one move
-with the old blocks told; an invalid block (head kept, reported, the prefix's layers kept), also when another head is
-named by then; at the cap; another head named at each read; below the finalized block; and ETC's own (nothing bound,
-equal weight, kept).
-
-#### C4e part 6: fork recovery moves no state (2026-11-15)
-
-The user's decision of 2026-11-15, built: **on the unified layout the importer's fork recovery (`SYNC-FORK`) moves
-nothing.** T181 and T188 as written (clamp the blind rewind to the reach) are superseded: there is no rewind to clamp.
-
-**What the rewind was for, traced first** (forge; from the history on origin, the checkout being shallow, and with the
-pull request that brought it in not readable, so its motive is read from its diff):
-- 0.7.0 added the strikes and a blind `setCanonicalChainHead(max(best - 128, pivot))`: a node whose SNAP-synced head
-  was on a losing tip had a fetcher stuck on one block, and lowering the best block put the next fetch below the
-  fork. **The same change** moved the floor of an unknown branch from the best block to the SNAP pivot, which lets
-  the walk back go below the head by itself; and since #1683 a gap at that floor never reaches consensus.
-- 0.8.0 put a resolver in front of it, which finds the common block, with the blind rewind as the fallback. #1474
-  added the undo of the reference counts, #1705 the end of the import that started it.
-- **So the rewind's first purpose is gone.** The strikes fire today only for a batch whose parent is in the chain and
-  that fails in consensus: a chain weight that is missing, or an invalid block. Neither is a fork, and a rewind mends
-  neither. What is kept is its other half: the fetcher is sent back to a block that is known, and no peer is blamed.
-
-**What the path did on the guard**: the resolver's own removal of blocks threw, it stopped without an answer, the
-blind rewind threw in the importer, the importer stopped, and a new pipeline began again. I1 held; it was a loop of
-crashes, not a refusal.
-
-**As built** (`BlockImporter`, on the guard only; the hash layout is as it was):
-- **The resolver only finds the common block** (`discardDiverged`, now required of every caller): no block is taken
-  off this node's chain.
-- **With the common block**: the head stays; the fetcher is sent back to it; and the next pick spans the fork, from the
-  common block up to the head, so the whole of the peer's branch is weighed against the whole of this node's
-  (`BranchResolution`, then `reorganiseOnLayers`): adopted if it is the heavier, left if not. With the rewind the head
-  had become the common block and that comparison was never made; core-geth never sets its head back on a fork.
-- **A common block the head could not be moved back to** (the records' reach, the finalized block):
-  `[STATE-REORG-TOO-DEEP]` once, and the fetcher is not sent there. **That is a stall until C5a escalates**: the
-  fetcher goes on serving the branch that cannot be followed.
-- **No common block found**: the fetcher goes back as far as the rewind would have; nothing is written, and nothing is
-  escalated (a sync from scratch is refused on this layout until C5a).
-- **One recovery for a block**: nothing having been rewound, a block that fails for another reason fails again. It is
-  recovered for once; after that it is said, and its strikes start again, so that the peer serving it is dropped at
-  the third as on the hash layout.
-- **The resolver's answer is held until the import that started the recovery has ended**: that import sends the
-  fetcher back to the block that failed as it ends, and its end clears the branch being resolved; acted on before it,
-  the answer would be undone by both (forge; harmless on the hash layout, which has rewound by then).
-
-**Read after code (forge): no blocker; four warnings**, two taken (the held answer, the strikes), two for C5
-(**B-300, a gate on starting the importer on the guard**): announced and mined blocks clear the branch being resolved
-and move the fetcher on, which can keep a fork longer than a block time from ever being fetched whole; and the pick's
-upper bound is this node's head, which a heavier but shorter branch never reaches. With them: a lighter branch
-fetched again and again, and the pick against the fetcher's bound of 512 ready blocks in the archive mode.
-
-**Found on the way, on the hash layout, and not this slice's** (B-298, B-248): the resolver removes this node's blocks
-above the common block before the importer has read them and before any weight is compared; the common block it
-accepts has no bound, and the peer it asks is the one with the highest block, not the heaviest chain.
-
-**The mutation run**: 10 mutants, 9 caught. **Not pinned**: the one recovery for a block, and the held answer; each
-needs an import that really fails, several times (B-300). Pinned: the three ends of a recovery on the guard
-(`RegularSyncSpec`: nothing written, nothing abandoned, the fetcher sent where it should be or left, the pick that
-spans the fork, nothing escalated), the hash layout's rewind as it was, and a resolver that leaves this node's blocks
-and its head (`FastSyncBranchResolverActorSpec`).
-
-### C5a: the hand-off, the layout guard and the escalation, as it is to be built (2026-11-15)
-
-Read before code by forge (ETC and the shared structure), beacon (proof of stake) and vault (the write order).
-
-**What the guard refuses today, which decides what C5a can run**: with `fukuii.state.path-live` on, the sync
+**What the guard refused before C5a, which decided what C5a could run** (part 10 lifted the SNAP and sync refusals, and
+B-293 lifted the mining refusal): with `fukuii.state.path-live` on, the sync
 controller is never started, `do-snap-sync` and mining are refused at the configuration, SNAP is not advertised (and
 the capability is mutual), and ETC's SNAP is held to the hash scheme. The escalation trigger that C4d part 5 was to
-log was never built; the keys `state.recovery.escalation-refusals` and `escalation-cooldown` have no reader.
+log had not been built; the keys `state.recovery.escalation-refusals` and `escalation-cooldown` had no reader until C5a.
 
 **The user's decisions of 2026-11-15**:
 1. **C5a lifts the refusals of SNAP and of sync on the guard**, so that a hand-off runs live in this slice (forge and
@@ -3447,8 +706,8 @@ log was never built; the keys `state.recovery.escalation-refusals` and `escalati
   block is validated, so a forged branch that forks below the records would otherwise cost every such node a sync
   from scratch every cool-down, for no work;
 - a body of an ancestor that is missing when ommers are validated is a fault of this node, not an invalid block; the
-  window below a pivot on ETC is the bodies of the pivot and the five below it (the tasks say six below), and the 256
-  hashes are checked by hash, not by the index (forge);
+  window below a pivot on ETC is, since B-302, the bodies of the pivot and the four below it whose headers name ommers
+  (`AncestorWindow.check`; data-model E.1 and G), and the 256 hashes are checked by hash, not by the index (forge);
 - the floor of the pivot of an escalated sync on proof of work is the common block, never the old head, since a
   heavier chain may be shorter (forge);
 - SNAP never starts over an anchor above the genesis, and `clearDoneOnStart` is refused on the guard (beacon).
@@ -3464,1177 +723,311 @@ log was never built; the keys `state.recovery.escalation-refusals` and `escalati
 8. the catch-up after a hand-off on proof of stake;
 9. the gates of the importer on the guard (B-297, B-300), and the fork vectors (B-289);
 10. the refusals lifted, and a hand-off run live;
-11. the measurements (T207 to T209).
-
-#### C5a part 1: the layout guard, where the storages are built (2026-11-15)
-
-`StateLayoutGuard` (T203), one rule for both chains and both directions of the guard:
-
-| the guard | the marker | the directory | |
-|---|---|---|---|
-| any | a value this build does not know | any | refused |
-| on | `path-live-1` | any | opened |
-| on | none | holds something | refused: written by an earlier layout |
-| on | none | empty | opened; the genesis commit that follows stamps it |
-| off | `path-live-1` | any | refused, and the flag is named |
-| off | none | any | opened: the hash layout's |
-
-- **It only reads.** T194 and data-model 5.3 say an empty directory is stamped by the guard. The stamp is written in
-  the genesis commit's batch, and that commit refuses a directory that has one: a guard that stamped first would
-  leave a node killed between the two unable to start (vault). "Empty" is no best block and no block at height 0.
-- **It is asked where the storages are built** (`StorageBuilder.storagesInstance`), with the instance's own value of
-  the guard, so whoever takes the storages has passed it: before the state is reconciled, before a repair of the best
-  block or the index, before the genesis is loaded, and in test mode. A directory it refuses is closed, not held.
-- The genesis loader's own refusal asks the same rule; the start no longer needs to look at the marker before its
-  repairs.
-
-**Read after code (vault): no blocker; one warning, taken.** The checkpoint export tool opens the data directory
-with a builder of its own and passed no guard: with the guard off over a directory of the unified layout it would
-have exported from a state store that holds nothing. It asks the same rule now (`StateLayoutGuard.checkOrClose`,
-which both openers use). Confirmed by vault: nothing writes a row between the open and the check (the storages and
-the path state storage are built by constructors that only read the anchor); the read of height 0 is the writer's
-key; every other consumer is handed its storages and opens nothing. Also taken: the refusal is what is thrown
-whatever the close of the directory does; a new directory opened twice with the guard on is pinned.
-**Recorded**: opening a directory creates the column families it lacks, a record in RocksDB's manifest and no row;
-the hash layout's genesis is not one batch, so a node killed between its state rows and its block leaves a directory
-that reads as empty with rows of the hash store in it, which the unified layout never reads.
-
-**The mutation run**: 7 mutants, 7 caught (before the review's changes, which a case each pins). Pinned on real
-RocksDB: a directory written with the guard off is refused as the storages are built with it on, can be opened again
-at once, and holds no row the refusal wrote.
-
-#### C5a part 2: the window below a block, and ommers a node cannot check (2026-11-15)
-
-**B-283, a change of verdict on both layouts.** The ommers of a block are checked against its six ancestors whole: an
-ommer's parent must be one of them, and an ommer must not be one any of them used. After a sync that began from a
-pivot the bodies below the pivot are not stored, and the validator's walk back either never ended (a body missing in
-the middle) or handed the rules a short list. On a short list a valid ommer reads as one whose parent is no ancestor,
-and an ommer used before reads as new: **a valid block refused, or an invalid one accepted.**
-- **Fewer ancestors than the rule reads is no verdict**: `AncestorNotStored`, a fault of this node's state, thrown by
-  `StdOmmersValidator`. A block with no ommers reads no ancestor and is judged as it was. A block near the genesis is
-  checked against the ancestors there are.
-- **It is taken for a fault on every path**: a batch (it was caught there already), a single block
-  (`ConsensusAdapter.evaluateBranchBlock`, where it was a failed IO and the block was dropped), and **a block this
-  node builds takes no ommers** (the two block generators), as it does for ommers that are invalid: it threw there,
-  and a miner on a node that had synced from a pivot would have had no work until the bodies came (forge's blocker).
-- The walk back ends at the first block that is not stored.
-- A test pinned the old verdict with no ancestor at all; it pins the fault now.
-
-**Read by forge against core-geth**: on a node that holds its whole chain nothing differs. core-geth reads seven
-ancestors and this reads six blocks, which is the same rule: the parents of P to P-5 are P-1 to P-6, and an ommer in
-the body of P-6 is too old to be offered. core-geth breaks off its walk at a missing ancestor and judges on what it
-has; a core-geth node always has them.
-
-**The window** (`AncestorWindow.check`, T204's check): the 256 headers below a block, each found **by the hash its
-child names** (a header of another height at that hash is no ancestor; the index is not asked, since `BLOCKHASH`
-falls back to it only where the walk breaks, and answers zero where that is empty); and on a proof-of-work chain the
-bodies of the block and the five below it, **the block's own among them** (the tasks said six below). It reads only,
-and says what is missing: the highest header, and each body.
-
-**Not in this part**: fetching what is missing and holding a hand-off for it (`ensure`). It goes with the hand-off
-commit. **Until it does, nothing fetches those bodies** (the backfill runs up from the genesis, and by default only
-after the state is complete), so a block with ommers right above a pivot waits for the backfill. Forge reads that as
-no worse than before in all but one case (an empty pivot body and an ommer one level down, which "worked" by a check
-that could not see a reused ommer). **B-301: the fetch on both layouts, at the hand-off and on the fault; no release
-between this part and that.** B-302: read a body only where the ancestor's ommers hash says it has ommers, as
-core-geth does, which leaves few bodies to wait for.
-
-**The mutation run**: 9 mutants, 8 caught; the ninth is the same in what it comes to (the walk ends without the
-guard added to it). The block builders and the single block each have a case, added with forge's review.
-
-#### C5a part 3: the state is cleared for a sync from scratch (2026-11-15)
-
-The ordered clear (T165, T172), which the user decided lands with C5a, and the genesis state cleared as a sync starts
-(T197, T205). **Nothing calls it yet**: the escalation that does is part 7, and a sync starts on the guard in part 10.
-
-`PathStateStorage.clearForResync`, under the lock of the moves and the state lock:
-1. **One synced batch**, written as a move of the clock to no state (`AppStateStorage.stateClearBatch`):
-   - the sync is no longer done, and the state's anchor, the block it began at, the finalized block and the height
-     its records were pruned to are removed. **`state.layout` stays**: the directory is the unified layout's still;
-   - **what SNAP keeps of its run is removed** (the user's decision): its pivot and roots, its progress and resume
-     point, its flags of a phase done, the paths of its files, and with them a checkpoint import half made, the
-     recoveries and the code scan that were owed or done, and the count of the times regular sync was stuck. Left, a
-     flag that says the accounts are complete over rows that are gone lets the next run skip them;
-   - the best block is the genesis again; the headers, bodies and index of the chain stay, they are of blocks;
-   - `state.escalation.last` records why (`v1:<millis>:<unreachable|local>:<head hash>:<head number>`), and
-     `state.reset-pending` marks that the rows are still to go.
-2. What is kept in memory of the state is dropped: after the batch, so that a batch that fails leaves memory and
-   disk the same.
-3. **A range delete of each column family**: the changeset records, the account trie and the storage tries; and what
-   a sync kept that is of those rows: the ranges it had downloaded (kept by state root: a sync that pivots to a root
-   it had been at would skip them), the queue of its healing walk, the flat copies of accounts and slots, the
-   accounts it left out and the storage tries it marked done.
-4. **`state.reset-pending` is removed, synced**: that write makes the deletes before it durable with it.
-
-**A start finishes a clear that was interrupted** (`finishPendingClear`, before the state is reconciled): it writes
-the batch's removals again, since a sync that ran with the mark still set has written its own record over rows about
-to be deleted; then the ranges; then the mark. **It refuses a datadir that has the mark and a state** (an anchor, or
-a sync that says it is done): the batch removes both with the mark's own write, so that is no interrupted clear, and
-deleting the rows of a state in use would destroy it for nothing.
-
-**The genesis state as a sync starts** (`clearGenesisStateForSync`) is the same clear with no escalation, when the
-state held is the genesis's. The data model's two steps (the rows, then the anchor) leave a genesis anchor over rows
-that are gone if killed between them, and the other order leaves rows no start would clear (vault).
-
-**Read after code (vault): three blockers, taken.** The ranges a sync had downloaded were not deleted; the accounts
-it left out were not; and an interrupted clear did not take a later sync's record away. Each is a way a sync would
-skip work over rows that are gone. Confirmed by vault: the best block as the genesis is right (every reader of the
-head during a sync assumes it); the order of the locks; the in-memory clears after the batch; a view made before the
-clear goes stale and never reads a wrong row; a synced write syncs every log not yet synced, so a delete cannot be
-lost while the mark's removal survives. **The caller's, and not checked here**: the audit and any walker with an
-iterator of its own are stopped first, and no import or fork choice is committing.
-
-**For the parts that follow**: the hand-off's batch removes `state.reset-pending` with the anchor's write (part 5); a
-sync does not start while the mark is set (part 10); after a clear the index of blocks by number still names the old
-chain's blocks above the genesis, with no state under them, until a hand-off rewrites it (part 5, and the head an
-RPC reports).
-
-**Tests**: `StateClearBatchSpec`, `ClearForResyncSpec` on a store that records its writes (what is left, the order,
-nothing changed when the first batch fails, a start after an interrupted clear, the two refusals each alone, a later
-sync's record, the genesis clear), and **`StateClearCrashItSpec`: a real RocksDB in a child JVM, killed at five
-points** (before the batch, after it, among the range deletes, before the mark's removal, after it), opened again and
-finished. A kill is not a loss of power: it pins the order of the writes and what each leaves, not that a synced
-write is on the disk. **The mutation run**: 14 mutants, 14 caught (one after a case was made to stand alone: a mark
-with an anchor and no sync said to be done).
-
-#### C5a part 4: the hand-off's sample, on the rows where they lie (2026-11-15)
-
-`PathHandoffSample` (T202, T196): the sample of spec 022 decision 11, which the copy made as it scanned every node
-and checked through the hash store. With no copy there is no scan and no second store. **Nothing calls it yet**: the
-hand-off of part 5 does, on a blocking thread, with the sync finished and nothing writing the rows.
-
-**How it samples**: by seeks at random keys (`PathNodeStorage.accountRowsBetween`, `storageRowsBetween`: one seek and
-a scan of at most 64 rows, with no fill of the block cache), 16 leaves a seek, so that a stratum is many short runs
-and not one subtree.
-- **Account leaves by the first nibble of their path**, 256 a nibble. A key is the hex-prefix form of a path, which
-  is not in the order of the paths: for each nibble the paths of an even length (`00 Nx ..`) and of an odd one
-  (`1N ..`) are two ranges, and both are sampled. The root (`00`) is read with nibble 0.
-- **Storage tries by the first nibble of their owner**, 16 a nibble: a seek lands on a row, and the row names its
-  owner.
-- **The largest of those tries**, 16 of them, 64 leaves each. Each trie sampled is sized by reading up to 1,024 of
-  its rows; one with fewer is known whole and its leaves are taken from what was read, one with more is sampled by
-  seeks inside it. **These are the largest of the tries the seeks landed on, never the largest of the chain**: a
-  seek finds an owner by the gap before it, not by its size, and the store has no count of an owner's rows. What is
-  kept of a sized trie is its size and the leaves to look up, never its rows (vault: 256 tries of 1,024 rows were
-  some 150 MB held to the end). Tries that reach the bound are of one size and are chosen among by lot.
-- **Leaves held in their parent**, met among the rows read to size a trie. A sync writes no such row (a node under 32
-  bytes is not asked for by hash, and a leaf that short lies deeper than a trie of hashed keys goes), so **on a
-  chain this stratum is empty and is no coverage**; it is kept for a store that has them.
-
-**How it checks**: each leaf is looked up from the state root through the rows, by position, each node checked
-against the hash its parent holds. That is what `PathMptStorage` does at the anchor, without an anchor: there is none
-before the hand-off's commit.
-
-**What stops a hand-off** (changed from the copy's sample, on vault's read after code):
-- a state root that is not in the rows;
-- **any hole**: a lookup that meets a row that is absent, or is another node than its parent names. The copy's
-  sample could not tell a hole from a leaf another pivot left, and let both by under 1%. A walk that comes down from
-  this root and does not find the row it wants is what the execution of a block meets, and at 4,096 samples a subtree
-  of 0.4% of the trie would have passed. **In a storage trie a hole is let by, and counted, only when the sync says
-  it left accounts out** (spec 022 D5: their storage is fetched when a block asks for it); a hole in the account
-  trie stops it always, and missing storage roots past the rate stop it then too;
-- leaves the root has no place for, past the rate (16 and more than 1%): each is harmless, a read never reaches it,
-  but that many say the rows are not this root's.
-A hand-off that is stopped goes back to healing, which finds the hole from the root. One that is let by with a hole
-stops the import of the first block that reads it, until the fetch by position of C5b.
-
-**Confirmed by vault**: the 32 ranges of the account family are a partition of it, and the bounds of the last nibble
-are right (`01` for the even paths, `20` for the odd); the byte after an owner is `00` or `1N`, never `ff`, so
-`owner ++ ff` ends an owner's rows; the scan closes its iterator, does not fill the cache, holds the read lock for
-one call and reads no more than its limit when it goes round to the start of a range. A seek into a region of point
-deletes passes over them one by one: once, at the hand-off.
-
-**Found by a test**: the end of the range of the odd paths of nibble 15 was `0x10 | 16`, an empty range (`+` binds
-before `|`).
-
-**Tests**: `PathHandoffSampleSpec` (31, on an in-memory store): the cases of `PathToHashExportCheckSpec`, and the
-strata at both lengths of path, a range read whole, the last key of the family, a trie past the bound, the lot among
-tries of one size, each rule that stops a hand-off alone and what `accountsLeftOut` lets by, and that nothing is
-written. `PathHandoffSampleItSpec`: the ranges on a real RocksDB, where a byte of `0xf0` sorts last. **The mutation
-run**: 26 mutants, 26 caught (three after a test was added: the even paths of the last nibble, an
-account hole met only on the way to a storage root, and rows left under an account with no storage).
-
-#### C5a part 5a: a sync hands off in one synced write, with nothing copied (2026-11-15)
-
-Part 5 is in two: the store's half here, and the sync's finalization that calls it (5b). **Nothing calls it yet.**
-
-`PathStateStorage.commitHandoff(pivot, extra)` (T201's store half, T195, B-243's first half): the rows a sync wrote
-are the state of the pivot from here on. Under the lock of the moves and the state lock, as a barrier of the clock:
-- **one synced batch**: the caller's own updates (the pivot's header and weight, the best block, what the sync says
-  of its recoveries: 5b passes them), **the anchor**, **the block the state began at** (`state.origin`: no move of
-  the head goes below it, and a move below it is answered as below the pivot and not as too deep), and **that the
-  sync is done**. No row is written and no changeset record is made: nothing this node holds came before the pivot;
-- **it refuses a datadir that holds anything of a state**: an anchor (in memory or on disk), a changeset record, a
-  count of pruned records, the block a state began at, a finalized block, a sync that says it is done; **a datadir
-  with the mark of a clear** (below); one not stamped as this layout's; and a pivot whose state root is not the node
-  at the root of the account trie (for the root of the empty trie: when there are rows);
-- what memory holds of a state is dropped after the write, as a clear does.
-
-**What it does not vouch for**: that the rows are the whole of the pivot's state. It reads the one node a position
-store finds by its hash, under the lock; the rest is the sync's and the sample's (part 4), which 5b runs first.
-
-**Durability** (data-model 7.4, the barrier of DC-1 and 016 FR-044): the rows were written with no sync, into the one
-write-ahead log; the batch's synced write syncs the log up to itself, so the rows are on the disk before a recovered
-`SnapSyncDone` or anchor. That rests on two things, and neither is tested by a kill: that RocksDB recovers the log to
-a point in time (its default, which nothing here changes), and **that no write goes round the log**. There is none
-today (the only write options set are `setSync`), and **`scripts/check-wal-writes.sh` is a ratchet on it**: it fails
-on a write with the log turned off or a file of rows ingested, under any module's main sources
-(`WalWriteRatchetSpec` runs it in the test step).
-
-**Read after code (vault): no blocker, four warnings.**
-- **The mark of a clear is refused, not removed** (vault's own advice before code was to remove it in this batch). A
-  sync that ran over a clear that was not finished has written beside rows still due to be deleted, and with them the
-  flat copies of accounts and slots of the state that was cleared, **which no read checks by hash**; removing the
-  mark would erase the only record of it. A sync does not start while the mark is set (part 10), so a mark at a
-  hand-off is a fault before it. Taken.
-- **A pivot with the empty trie's root is handed off only over no rows**: rows there are another state's. Taken.
-- **A finalized block left on disk, and a sync that already says it is done, are refused**: the clear removes both,
-  so either says the clear did not run. Taken.
-- **After a clear for an escalation the index of blocks by number, and the header cursor, still name the old chain
-  above the fork** (the clear keeps the blocks and sets only the best block back). Not this part's: the store does
-  not know the fork, the escalation's handler does. **B-303, a gate on arming the escalation (part 7)**: the index
-  above the common block is deleted and the cursor set back to it before a sync starts; 5b writes the pivot's own
-  place in the index.
-Confirmed by vault: the order of the locks is the clear's and the move's; a barrier is the right move of the clock
-with no anchor before it (no view can have been made); the stamp is on every datadir that reaches a hand-off (the
-genesis commit stamps it, and a clear keeps it), and one with no stamp fails loudly.
-
-**Tests**: `HandoffCommitSpec` (17, on a store that records its writes): the one batch and what is in it, the state
-read where it lies and the next block committed on it in place, nothing changed when the batch fails, and each
-refusal alone. **`HandoffCrashItSpec`: a real RocksDB in a child JVM, killed on either side of the synced write**
-(T195): before it, no anchor, no origin, no sync done and no best block, and the hand-off is then made again; after
-it, all of them, the sample of part 4 finds every leaf from the root, and a view of the state reads. A kill is not a
-loss of power. `WalWriteRatchetSpec` (8). **The mutation run**: 18 mutants, 18 caught.
-
-#### C5a part 5c: the bodies below a pivot are fetched (2026-11-15)
-
-The first half of B-301. Nothing fetched the bodies of a pivot and the five below it after a sync: bodies are held
-back until the state is complete, and the backfill then runs up from the genesis, so the blocks whose bodies the
-ommers of the first blocks above the pivot are checked against came last. On the unified layout the hand-off holds
-for them (part 5b), and would hold for ever.
-
-In the chain download (`ChainDownloader`, which is not one of the split's modules):
-- **`FetchBodies(hashes)`**: these bodies now, at the front of the queue, while bodies are held back too. A hash is
-  passed over when its header is not stored (a body is checked against its header before it is kept), when its body
-  is stored and fits its header, or when it is on its way: so the tick of a hold sends the same hashes again and
-  again. One that is queued further back is moved to the front (found by the mutation run: it was passed over). The
-  hand-off's hold of part 5b sends it.
-- **At `ReleaseBodiesAndReceipts`, on either layout, the target and the five below it go first**, by a walk of parent
-  hashes from the target, where blocks above it may have ommers (the target's difficulty is not zero). The scan that
-  follows passes over them, so none is queued twice. This is what the hash layout's hand-off gets: it releases at
-  once and does not hold.
-
-**Left of B-301**: the importer's arm for `AncestorNotStored` asks for the bodies the window names (a node started
-again into regular sync has no hand-off to fetch them); with part 9's work on the importer.
-
-**Tests**: `ChainDownloaderSpec` (+5): a body asked for while bodies are held back and no other; nothing asked twice
-(on its way, stored, no header); the window first at a release, six blocks of it, and none where the target has no
-difficulty. **The mutation run**: 8 mutants, 7 caught. **Not pinned**: that a body asked for goes ahead of bodies
-already queued. The spec's rig has one peer, which is busy with the first request by the time a queue exists, so the
-order of what is left cannot be seen; it matters for the importer's route (part 9), which asks while a backfill
-runs, and is to be pinned there.
-
-#### C5a part 5b: a sync ends by a sample of its rows and one write (2026-11-15)
-
-The sync's half of the hand-off (T201, T199, the rest of B-243). **It does not run yet**: the controller's
-`handoff` is `None` until a sync starts on the unified layout (part 10), which is also where the recovery scans and
-the audit of the hash store are held off.
-
-**Where the code is, and why.** The split of spec 016 keeps its modules off the stores: no batch is built in
-`snap/controller`, a capability holds abstract members only and does not grow without a justification, and the
-count of storage references there is a ratchet (`scripts/snap-split/verify.sh`). So what is written is the storage
-layer's, **`db/storage/pathstate/SyncHandoff`**: `sample` (part 4), `windowMissing` (part 2's check over the header
-and body stores, by hash) and `commit` (the pivot's header and its place in the index, its weight, the best block,
-the recoveries' flags, the owed scan taken off the books, the heal's marker removed when no clean decision stands,
-handed to `commitHandoff` of part 5a). The finalization module passes it the pivot, a weight and three booleans. The
-seam is a member of the finalization's own state (`SnapFinalizationState.handoff`), not of `StateIngest`.
-
-**The order on the unified layout** (`SnapFinalization`):
-1. **The sample**, off the actor's thread; the controller answers status and progress meanwhile, as during a
-   publish. It is remembered **for the pivot and its state root**: the write that hands off names a root, and it is
-   the one that was looked at, or the sample is made again (beacon). When it stops the hand-off
-   (`PathHandoffSample.Stopped`) the parent restarts the sync, which heals from the root; **anything else it fails
-   with is a store that failed, and is thrown**: healing again does not mend it (beacon).
-2. The header hold, as today.
-3. **The window below the pivot** (part 2): the hand-off holds while a header of the 256 below it, or on a chain
-   where blocks above it may have ommers a body of the pivot and the five below it, is not stored. The bodies are
-   asked of the chain download on every tick (part 5c). **"May have ommers" is the chain having no terminal total
-   difficulty, or the pivot having a difficulty** (forge, beacon: a pivot before the merge on a chain that has one).
-   **The hold is its own** (forge, beacon): once the headers are at the pivot every tick leaves the header hold, and
-   a hold that leaned on it began again each time. **It does not hold for ever**: unchanged for the header hold's
-   stall time, the download is started again, and the third time the sync is given up to the parent.
-4. **The weight**: where fork choice is by weight, only an exact one (the stored weight, or the parent's and the
-   pivot's difficulty). **An estimate is never written beside the anchor** (forge, T243 brought forward): the sync
-   is given up instead. After the merge an estimate is taken, as today.
-5. **One synced write** (`SyncHandoff.commit`). Nothing before it but the pivot's own body, kept, derived or left as
-   `applyPivotBodyCheck` always did.
-A pivot whose header is not stored is refused on this layout: the old route there set the best block by its number
-alone, which here would be a node with no state that says it is synced.
-
-**The hash layout's path is the same code, moved**: the tail of `finalizeSnapSync` into `finishOnTheHashLayout`, and
-what both layouts need into `pivotWeight`, `excludedAtHandOff`, `recoveryFlags`, `finishedHandOff`. Forge read it
-line by line: the same writes in the same order, each value read when it was, the same early exits.
-
-**Read after code: forge and beacon, no blocker.** Taken: the hold of its own and its bound; the exact weight; the
-test for ommers; the sample kept by root; a store's failure thrown. **B-304** (P1, a gate on part 10): a sample that
-keeps failing restarts the sync with no bound, since only the same pivot is refused a second time; the parent counts
-them, and stops after three. For later parts: the header download must overwrite what the pivot's bootstrap left in
-the index below the pivot (part 10, forge); the catch-up after a hand-off needs the headers above the pivot and the
-consensus client's last head, which is kept only in memory today (part 8, beacon).
-
-**A rule of the repository this part cannot meet from this session's branch**: `verify.sh` lets files under
-`snap/controller` change only on a branch named `refactor/snap-016-*`, `test/snap-016-*`, `fix/*` or `hotfix/*`.
-Under such a name it passes; the user decides how this part is pushed.
-
-**Tests**: `StateIngestDurabilitySpec` (T199; 16 on this layout): one synced write after the rows under `archive`
-and `basic`, and every prefix of the writes that has the sync done has the anchor and the root's row; the hold for a
-body and for a header, and the hand-off when they come; no body asked for after the merge, and bodies asked for
-below a pivot that has a difficulty; the bodies asked of the download on every tick and the hold begun once; the
-restarts and the giving up; an estimated weight refused, and taken after the merge; a sample of another root; a
-store's failure thrown; the marker removed in the same write; no header, no hand-off. `SyncHandoffSpec` (8): what
-the one write holds. The tables of the controller's messages have the two new ones. **The mutation run**: 23
-mutants, 23 caught (one after a test was added: the code of the sampled accounts is looked for in the node's own
-store).
-
-#### C5a part 6a: a node says when it cannot follow the chain, on proof of stake (2026-11-16)
-
-Part 6 is in two: proof of stake here, proof of work in 6b. **It says only**: an ERROR line
-(`[STATE-ESCALATION]`) and a count (`db.state.recovery.escalation.triggers`, by kind). Nothing is cleared and no
-sync begins; the handler is part 7. On the unified layout only.
-
-- **`EscalationTrigger`** (T163), the user's decision of 2026-11-15: a head that cannot be reached is an escalation
-  at once; a fault of this node waits for 64 refused fork choices in a row **and** 64 slots from the first; on proof
-  of work (6b) for 64 blocks of growth of the branch that is refused. One count, begun again by any move of the head.
-- **`EscalationWatch`** feeds it and says when the verdict is to give the state up: counted each time, said once for
-  a run. A run is numbered: a recovery asked for before the head moved and ended after it is dropped (beacon).
-- **What the Engine API tells it**:
-  - how each recovery that a fork choice asked for ended. A recovery that is cooling down ends at once as it ended
-    last, so each fork choice that names the head again counts once; fork choices that find one under way share its
-    ticket and count once for all of them (beacon: while it runs the node is at work on the head, not refusing it);
-  - a fork choice refused where no recovery is asked for, which the fork choice manager now says for what it is:
-    `UNREACHABLE:` for a move deeper than the records reach, past a record that is not whole, or below the block the
-    state began at; `LOCAL FAULT:` for records that are corrupt and for every fork choice refused while the state is
-    failed closed. The consensus client is answered SYNCING as before;
-  - **a head that is followed**: the fork choice that sets the head, and the two that name an ancestor of it and
-    are answered VALID. Not a payload, which never moves the head.
-- **`StateMetrics`** (T174): `recovery.escalation.triggers` (now), `recovery.escalations` and
-  `recovery.escalations.suppressed` (for part 7), `recovery.reexecuted.blocks` (not yet counted: 6b).
-
-**What is "cannot be reached", as built** (beacon's read after code, three blockers, taken). Only what is known:
-more blocks than a recovery covers have no state held (`TooLong`), and the manager's three refusals above.
-**A branch that was not committed in place, and a header or a body of the head's chain that is not stored, wait**
-with the faults: a branch is not adopted for many reasons, a fault of the state among them, and the outcome does not
-say which; a block that is missing may be on its way. Counted as what may mend, they cost a node that cannot follow
-the chain some thirteen minutes; counted as what cannot, they would cost a node that can its state.
-
-**Found by the tests**: a plain "state not held" from the move of the head is also what a fork choice that names an
-ancestor of the head gets, so it is not read as a chain that cannot be reached; it says nothing unless the state has
-failed closed.
-
-**Not counted yet**: a layer that is inconsistent again and again ends a recovery as superseded, which says nothing
-(beacon). **Not tested at the Engine API**: the two prefixed refusals reaching the watch; the manager's answers and
-the watch's handling are each tested, the line between them is not (it needs a move across a missing record made
-through the Engine API). **For part 7** (beacon): the watch tells its verdict on the recovery's thread, inside its
-own monitor, so the handler takes the work to an actor and does not clear or close anything inline. The slot is
-taken as 12 s: no chain here says otherwise, and a shorter slot only lengthens the wait.
-
-**Tests**: `EscalationTriggerSpec` (9), `EscalationWatchSpec` (8), `StateMetricsSpec` (+1), and in
-`HeadMoveOnTheChainSpec`: each fork choice refused for a fault counts once, a head that is followed and an ancestor
-that is named begin the run again, corrupt records are answered as a fault. **The mutation run**: 13 mutants,
-13 caught.
-
-#### C5a part 6b: a node says when it cannot follow the chain, on proof of work (2026-11-16)
-
-The same verdict as 6a, fed from the import of proof-of-work blocks. **It says only.** On the unified layout only.
-
-- **Where it is fed**: `ConsensusAdapter`, where every result of an import passes, typed, with the branch it is of.
-  The importer is not touched. `PowEscalationFeed` is told of a branch that was not judged (`ConsensusStateFault`) and
-  of a head that moved (an extension, a reorganisation, the blocks of a batch adopted before a fault). Blocks with no
-  difficulty (a chain after its merge) are the Engine API's (6a).
-- **Only a branch that outweighs the head, with headers that are valid, is counted** (forge). A refusal is met before
-  a block of the branch is validated, on what its headers claim. `BlockValidation.firstInvalidHeader` validates each
-  header as an import does, the seal with it, against a parent in the branch or in what is stored; it is asked only
-  for a branch that outweighs the head. What stands under the branch was executed before its weight was stored, so a
-  branch that is counted is work that was spent.
-- **The weights are to be exact** (forge, a blocker for part 7 as first built): a head weighed from an estimate at a
-  pivot is outweighed by any block below it. A hand-off on a chain that chooses by weight refuses an estimate (5b),
-  and the feed is given no weight for a head whose stored weight is not its parent's plus its own difficulty.
-- **The table**: at once for a move back that is refused for its depth (`ReorgTooDeep` Deep, Incomplete, Pivot);
-  every other fault of the node waits for 64 blocks of growth of the branch. A block that fails when it is executed
-  again is now its own fault, `ReexecutionDiverged` (it was a plain `StateUnavailable`).
-- **The growth of a branch** is of the highest tip seen, for the branch named by the block its first refused block
-  stands on (forge): a refused branch is fetched again a batch at a time, with the tip of the batch, and told again
-  with the tip a peer announced. By the tip alone a long branch never grew, and a lower cut began the run again.
-- **A move of the head ends the run only when the head is no lighter than the branch refused.** This narrows the
-  user's "any move of the head that succeeds" for proof of work: on a chain that is split the lighter side grows too,
-  and a node kept on it by its own fault would never say so. Open to the user to overrule.
-- **It never fails an import** (forge): the feed is told inside the result of an import, after the head has moved;
-  whatever goes wrong in it is logged and the result stands.
-- `recovery.reexecuted.blocks` (T174) is counted: each block a recovery executes again or commits in place.
-
-**Before part 7 arms it** (forge, B-306): a branch that MESS (ECBP-1100) would refuse is not to be counted. Batches
-go through `BranchResolution`, which does not hand such a branch to consensus; a single announced block does not.
-MESS is off on ETC today and returns with Olympia. And the seal of the first header is checked on what the last
-header claims: the cheap rules of every header are to be checked, and the weight weighed again, before a seal is; a
-header of an old epoch builds an Ethash cache that pushes the current one out.
-
-**Tests**: `PowEscalationFeedSpec` (8), `ConsensusAdapterEscalationSpec` (3), `BlockValidationHeadersSpec` (3),
-`EscalationTriggerSpec` (+1).
-
-#### C5a part 7a: whether an escalation is acted on (2026-11-16)
-
-Part 7 is in two: the decision and what it keeps here, the handler that clears and syncs again in 7b. **Nothing
-here fires**: no one asks the guard yet.
-
-- **`EscalationGuard`** (T164) decides, for a verdict, one of: act; not now (inside `escalation-cooldown` of
-  `state.escalation.last`, which the clear writes and a restart keeps); never, for this branch; not while a record
-  cannot be read. A branch given up is refused before the cool-down is looked at, so that what is permanent is not
-  said as six hours. A record dated after now holds until the clock reaches its end; no cool-down acts at once.
-- **The loop guard of proof of work** (the user's decision 3): `state.escalation.given-up`, a list of branches, each
-  its first block above the fork with its height. **Written in the batch of the clear** (`clearForResync(...,
-  givenUpFor)`): a branch recorded with no clear would never be escalated for, a clear with no branch recorded could
-  be repeated. It is not among what a clear removes. It applies to both kinds of verdict on proof of work: a fault
-  that has since been mended also waits for an operator.
-- **A branch is known again by any block of it** (forge, after code): the name of a branch is worked out from the
-  number index, which the sync after an escalation rewrites, so the same branch can be named by another block. The
-  guard walks the refused blocks from their tip down, then the stored blocks under them, as far as the lowest height
-  on the list, and asks whether any is on it.
-- **What a verdict is for goes with it**: the watch tells a `Request` (the kind, the head on proof of stake, the
-  branch on proof of work, why) each time the verdict is to escalate. The growth of a refused branch (6b) is counted
-  under the branch's name, the same for every cut of it.
-
-**For 7b** (forge, vault): the watch tells a request each time, so the handler drops repeats; the ERROR for a branch
-given up is not to be rate-limited away, and says an operator ends it; `forgetGivenUpBranches` is for a start only,
-before anything syncs, written synced, and either once or said each time; a clear with a list that cannot be read
-throws before it writes, which the guard keeps a caller from.
-
-**Tests**: `EscalationGuardSpec` (8), `StateClearBatchSpec` (+4), `EscalationWatchSpec` (+1),
-`PowEscalationFeedSpec` (+3).
-
-#### C5a part 7b: the state given up (2026-11-16)
-
-The handler of an escalation and the controller's part in it. **It cannot fire yet**: a verdict is acted on by the
-sync controller while it runs regular sync, and on the guard the controller is not started before part 10.
-
-- **`EscalationHandler`** asks the guard (7a) for each verdict the watch tells, says what was decided and counts it,
-  and answers its owner: give the state up (with the record of the clear and, on proof of work, the branch), not now,
-  never for this branch, or not while a record cannot be read. **A verdict told again is answered once**: for a
-  branch on proof of work; on proof of stake for its kind, since the head named changes with every slot (beacon).
-  "Cannot be read" is looked at again after ten minutes. What it answered is forgotten when regular sync begins.
-- **A branch that was given up** is said at ERROR (`[STATE-ESCALATION-GIVEN-UP]`), with how an operator ends it, and
-  counted (`recovery.escalations.suppressed`).
-- **The sync controller** (T173, in part): `StateEscalationRequested` is asked about in the regular-sync states and
-  dropped in every other (a sync is already under way, or the controller was not started). An escalation is sent on
-  to itself as a restart, so that a backfill that still runs is stopped first; then the import is stopped, the audit
-  with it, **the state is cleared in its one synced batch with the record and the branch** (part 3), it is counted
-  (`recovery.escalations`), and SNAP starts, on proof of work with a pivot no lower than the first block of the
-  refused branch.
-- **A late import of the sync that was stopped cannot write over the cleared state** (forge, read after code): the
-  clear waits for a move of the head under way, and with no anchor a commit, a promotion and a kept layer are all
-  refused as a fault of the node; the best block and the index move only with the state.
-- **The operator's switch** `state.recovery.forget-given-up-branches`: at a start, before anything syncs, the list
-  of branches is removed, synced, and what was on it is said; so is a list, or a record of the last escalation, that
-  cannot be read. It is done at every start the switch is set for, and says to unset it each time (vault).
-- **The wiring**: the watch's verdicts reach the controller through a channel bound once the controller exists.
-
-**Gates on part 10, not in this part** (the plan had them on the arming, which is now part 10's lifting of the
-refusal to sync): B-303 (after a clear the index by number and the header cursor still name the chain that was
-left), B-306 (a branch MESS would refuse; the cheap rules of a header before its seal), T166, and **B-307**, what
-forge and beacon found the clear must also do before a sync runs on the guard: the recoveries that are queued or
-running are drained first, and what a recovery remembers of a failure with them (a `failClosed` after the clear
-would keep SNAP from ever handing off); the fork choice's memory of the old head is dropped (it gives refusals that
-count towards the next escalation); the pivot is on the refused branch, not only at its height (on ETC the heavier
-chain can be the shorter, and a pivot on the chain that was left drops the branch for good); the clear is taken off
-the controller's thread.
-
-**Tests**: `EscalationHandlerSpec` (10), `SyncControllerSpec` (+4), `StateConfigSpec` (the key).
-
-#### C5a, a gate on part 10: what the clear of an escalation also does (B-307, in part) (2026-11-16)
-
-What forge and beacon found, reading part 7b, that the clear must do before a sync runs on the guard. Nothing here
-fires before part 10 either.
-
-- **No recovery runs, and none is taken, while the state is cleared** (`StateRecovery.reset`). Those that wait are
-  ended, the one under way ends after the block it is executing, what was remembered of the heads whose recovery
-  failed is forgotten, and the clear runs inside. Left to run, a recovery between two blocks it commits in place
-  would move the head back over a state that is gone, and one that then fails the state closed would keep the sync
-  that follows from ever handing off. A request is taken or refused as one step against a reset (beacon, after
-  code): without that, one that saw no reset could be queued after the drain and run over the cleared state.
-- **A recovery that does not end in two minutes is stuck**: the clear is not begun, nothing is recorded, regular
-  sync goes on, and **no verdict is asked about for ten minutes** (or the cool-down, if shorter). Asked again with
-  every slot, each try would hold a thread for the whole wait and refuse recoveries meanwhile (beacon).
-- **The head the fork choice followed is forgotten, after the clear** (beacon): before it, a fork choice landing in
-  between would name again, for the hours of the sync, a head whose state is then deleted. Nothing reads its absence
-  as a chain before its merge.
-- **The watch's count begins again** with the clear: the refusals counted are of the state that is gone.
-- **The clear runs off the controller's thread** (forge), in a state of its own: the status is answered, a head the
-  consensus client names is kept for the pivot, a second verdict is dropped (one state is given up at a time), and
-  everything else waits, to be handed on if the clear could not begin and dropped with the sync if it could. The
-  import is stopped once the clear has ended, not before. A clear that fails stops the controller: the node finishes
-  it at its next start.
-
-**Left of B-307**: the pivot of the sync that follows is to be on the refused branch, not only at its height
-(forge: on ETC the heavier chain can be the shorter, and a pivot on the chain that was left has the branch dropped
-for good). Its first slice is the section "the pivot of the sync after an escalation is on the refused branch"
-below.
-
-**Tests**: `HeadMoveOnTheChainSpec` (+2), `SyncControllerSpec` (+4), `EscalationHandlerSpec` (+1),
-`EscalationWatchSpec` (+1).
-
-#### C5a, a gate on part 10: the index by number after a clear for an escalation (B-303) (2026-11-16)
-
-The clear keeps the blocks and takes the state. It also kept the index of blocks by number and the header
-download's cursors as they were, and above the block the node's chain shares with the chain it is to follow those
-name the chain that was left. What that breaks (vault's map, before code): the header download trusts its cursor,
-resumes above the old tip, and refuses every header of the other chain, since none stands on the tip it remembers;
-the pivot's selection takes "the header this node has at the pivot's height", which on ETC can be a block of the
-chain that was left, state root and all.
-
-- **The block the two chains share**: on proof of work, the block under the first block of the refused branch; on
-  proof of stake, the block that was finalized on the state that is given up; with neither, the genesis. Lowered to
-  a block whose weight is stored (the download works out each weight from the parent's), as far as 4096 blocks and
-  then to the genesis, said at WARN.
-- **In the clear's first synced batch**: what is to be deleted of the index is written down
-  (`state.reset-trim-above`: the shared block and the highest height that may have an entry), and the header
-  download's cursors are set back to the shared block, with the hash of the block there, and its target removed. A
-  cursor that was lower stays; one at a height the index has nothing at goes to zero.
-- **The entries are deleted one by one**, in chunks of 10,000, after the state's rows: the keys of the index are
-  not in the order of the heights, so no range says "above a height" (vault). Then the record and the mark of the
-  clear are removed in one synced write.
-- **A start after a kill finishes it**: the cursors are set back again and the entries deleted again, up to what a
-  sync that ran meanwhile has reached (vault, after code). A record that cannot be read stops the start.
-- The headers, bodies and weights of the chain that was left stay, by their hashes. A clear that is no escalation
-  (the genesis state, as SNAP starts) trims nothing.
-
-**Tests**: `ClearForResyncSpec` (+12).
-
-#### C5a, a gate on part 10: what the proof-of-work feed does not count (B-306) (2026-11-16)
-
-Two notes forge left on part 6b, to close before a verdict can cost a node its state.
-
-- **A branch MESS would refuse is not counted** (ECBP-1100). The fetcher's branch resolution never hands such a
-  branch to consensus; a block a peer announces goes round it, and a deep branch spread that way would have been
-  counted as the chain to follow. The feed weighs the reorganisation as the rule does: the seconds from the block
-  the chains share to the head, and each chain's weight above that block. Where the rule is in force and what it
-  weighs is not stored, or the shared block cannot be named on the chain, the branch is not counted: a branch left
-  out only delays a verdict. MESS is off on ETC today and returns with Olympia.
-- **The rules of a header that cost nothing are checked on every header before the seal of any.** What a branch
-  weighs is in its headers' difficulties, and a header is cheap to write with any difficulty and a seal no one
-  mined. With every difficulty checked against its parent first, a seal is verified only on a branch whose weight is
-  what it says. Forge's bound, after code: on ETC a difficulty rises by about a 2048th a block, so a batch of 50 can
-  outweigh the head only from some 51 blocks below it, and no header of an old epoch gets as far as its seal.
-
-**Tests**: `PowEscalationFeedSpec` (+3), `BlockValidationHeadersSpec` (+1).
-
-#### C5a part 8: the catch-up after a hand-off, on proof of stake (2026-11-16)
-
-A sync hands off at a pivot, and the consensus client's head is above it by 64 blocks at least. A fork choice's
-recovery walked 64 blocks down and no further, so every hand-off ended in a head that could not be reached, which is
-an escalation at once: a loop. The user's decision of 2026-11-15: the gap is closed by an adoption in place of a
-straight extension of the head, in chunks, under `recovery.max-catch-up` (8192); the 64 stays the bound of a branch.
-
-- **What is a straight extension**: the block the walk finds a state at is the block the disk holds the state of, or
-  stands on it by executed blocks kept beside the disk. Nothing of the node's chain is left.
-- **The walk of a fork choice's recovery goes as far as the catch-up covers.** A chain of no more than 64 blocks
-  takes the paths it took. A longer one is caught up over when it is an extension, and is a head that cannot be
-  reached when it is not, or when it is longer than the catch-up covers.
-- **`catchUp`** commits the blocks in place one by one, reading 256 bodies at a time (thousands at once do not fit
-  a heap). It holds no records and moves nothing back. It stops when the consensus client names a head its chain does
-  not lead to, or the node stops; what was committed stays. A body that is not stored ends it there, and the next
-  fork choice goes on from the head. A head the consensus client names before it has sent its block does not stop it
-  (beacon, after code).
-- **A block found invalid on the way leaves the head at the last valid block.** This departs from the user's rule of
-  2026-11-14 (the head goes back to the one the consensus client validated): after a hand-off there is none above the
-  pivot, and the blocks under the head cannot be undone below the block the state began at. **Decided by the user,
-  2026-11-16: the head stays at the last valid block.**
-  The invalid block and every block of the chain above it, the head with them, are marked, so that the next fork
-  choice is answered INVALID with the last valid block (beacon, after code: the blocks of the chunks not read were
-  left unmarked, and the head would have been answered as a fault of this node for ever).
-- A restart goes on from where it was: each block is committed in the batch that makes it the head.
-
-**Where the blocks come from** (beacon's map): a sync stores nothing above its pivot; `engine_newPayload` stores by
-hash each payload whose parent it does not know, so a node that ran with its consensus client through the sync has
-them. A gap is a header or a body that is not stored: it waits, and is filled by the importer on the guard (part 9).
-
-**Not done**: a catch-up that commits thousands of blocks and then meets a body that is not stored is counted by the
-watch as one refusal (beacon's note: count the progress of the head as a move).
-
-**Tests**: `HeadMoveOnTheChainSpec` (+9), `StateConfigSpec` (the key).
-
-#### C5a, a gate on part 10: the pivot of the sync after an escalation is on the refused branch (B-307 c1) (2026-11-16)
-
-On proof of work a node gives its state up for a branch it could not judge. The sync that follows had its pivot no
-lower than the branch's first block, and nothing said the pivot was on the branch: peers that serve the chain the
-node left give a pivot of that chain, and the branch is given up for nothing.
-
-**Decided by the user, 2026-11-16**: the pivot is held to the branch; where the peers serve another chain the sync
-is begun again, and after a bounded number of attempts the requirement is dropped with an ERROR.
-
-- **The requirement is written down with the clear** (`state.escalation.pivot-on`: the branch's first block, its
-  number and hash, and the attempts counted), in the clear's first synced batch. A clear for no branch ends one an
-  earlier clear left. The hand-off of a sync removes it in its own write. Until then it is also the floor of every
-  sync's pivot, across restarts.
-- **Asked when SNAP's header download has reached the pivot, before the pivot is anchored**
-  (`PivotAnchor.branchCheck`): the header the validated download holds at the branch's height is the branch's
-  first block, or is not. Only the validated download is asked (forge): the index by number is also written by the
-  pivot bootstrap, with headers nothing validated.
-- **Another block there: the sync is begun again.** SNAP writes nothing; it tells the sync controller, which waits
-  until SNAP and its header download have stopped (vault, forge: a cursor written after the clear would put the next
-  sync back on the chain that was left), then clears what that sync wrote
-  (`PathStateStorage.clearForBranchRetry`): the rows, the pivot, the entries of the index by number above the block
-  the branch stands on, with the header download set back to that block, and the attempt counted, in the same synced
-  batch that begins the clear. It is the clear of an escalation without a new escalation: no record, no cool-down, and
-  a kill in the middle is finished at the next start. Where the chain the peers served left the branch lower than the
-  branch's first block, the branch's stored headers are walked down to the block the two share (forge).
-- **The third sync that finds another chain drops the requirement** (`PivotOnBranch.MaxAttempts = 3`), with an
-  ERROR (`[STATE-ESCALATION-PIVOT]`) and a counter, and goes on with the chain it has. The branch stays given up: the
-  node does not clear its state for it a second time, unless an operator starts it once with
-  `forget-given-up-branches`.
-- **What the download cannot say yet holds the hand-off** when the pivot is at or above the branch; a pivot under
-  the branch is of the blocks both chains have, and passes with a WARN. A branch further below the download's tip
-  than is walked back (65,536 headers), a record that cannot be read, and a chain whose header download validates no
-  chain below the pivot each drop the requirement with the same ERROR: never silently.
-- A pivot the consensus layer chose is not asked: on proof of stake the consensus client names the chain.
-
-**The check at the end of a sync is the backstop, not the way**: a miss there costs a whole SNAP. The second slice,
-below, keeps a sync from getting there on another chain.
-
-**Not changed, and why** (vault's question): the rows a sync wrote on another chain are deleted by the clear, so
-nothing rests on healing over them.
-
-**Tests**: `PivotAnchorSpec` (+10), `ClearForResyncSpec` (+4), `StateClearBatchSpec` (+2), `SyncHandoffSpec` (+1),
-`SyncControllerSpec` (+1). Mutation run: 16 rules broken one at a time, 16 caught (one gap, the floor of the sync
-begun again, closed by a test).
-
-#### C5a, a gate on part 10: the sync is steered onto the refused branch (B-307 c2) (2026-11-16)
-
-Forge's finding before code: **nothing in a sync follows the weight of a chain.** The header download asks its first
-peer by number, and the first answer at a height decides the chain every later header stands on. The pivot's height
-is the best height the peers claim, and its header is asked of peers at that height: where the chain that was left is
-the longer, the branch's peers are below the pivot and are never asked. So without steering, the miss that c1 counts
-is the usual outcome after an escalation, not the rare one.
-
-- **The header download stores no other chain's block at the branch's height** (`PivotAnchor.branchGate`, asked in
-  `ChainDownloader.storeHeaderRun` of the headers that passed validation). A response that holds another block there
-  is not stored, and its peer is not asked for headers for 10 minutes. It is not blacklisted: it follows another
-  chain, honestly. A header that fails validation is its peer's fault as ever, and begins no wait.
-- **The pivot's header is taken from a peer on the branch** (`PivotHeaderBootstrap`, `branch`): one request by number
-  for the peer's header at the branch's height and its header at the target (`GetBlockHeaders(first, 2, skip =
-  target - first - 1)`), and the target's is taken only where the first is the branch's block. By number, since a
-  peer answers by hash for any block it has stored, whichever chain it follows. A peer on another chain is passed
-  over without blame; when no eligible peer is left the bootstrap gives up and names them (`NoPeerOnTheBranch`),
-  instead of waiting for a fresh peer for ever. The healing and recovery bootstraps, which store a header with its
-  entry in the index by number, ask the same way.
-- **The next target is chosen without the peers on another chain** (`PivotAnchor.OffBranchPeers`, 10 minutes each;
-  one call in `PivotSelector`), which lowers it to a height the branch's peers have. The saved target is forgotten
-  after `NoPeerOnTheBranch`: resumed, it would ask the same peers again (forge, after code).
-- **The wait for a peer on the branch is bounded: 30 minutes** (`PivotAnchor.BranchWaitMillis`), counted from the
-  first response or bootstrap that found only another chain, written down in the requirement so that a restart does
-  not begin it again, and ended as soon as a peer serves the branch: by the download when it stores the branch's
-  block, by the pivot's bootstrap when it takes its header from a peer on the branch, and by the clear that begins
-  a sync again (forge, after code: a wait the bootstrap began would otherwise end the requirement at the download's
-  first answer of another chain). At its end the requirement is dropped with the same ERROR as c1's. Whichever
-  bound is met first, the three syncs or the 30 minutes, ends it.
-
-**Left, as follow-ups (forge)**: a pivot refresh that fails with peers on another chain backtracks as ever and does
-not feed the list of those peers, and `currentNetworkBestFromSnapPeers` is not filtered; a peer left out of header
-requests is also left out of body and receipt requests for the same 10 minutes.
-
-**Tests**: `PivotAnchorSpec` (+6), `ChainDownloaderHeaderCheckSpec` (+4), `PivotHeaderBootstrapSpec` (+6),
-`PivotSelectorSpec` (+2), `SyncControllerSpec` (+2), `ClearForResyncSpec` (one case extended). Mutation run: 24 rules
-broken one at a time, 24 caught (three gaps closed by tests: the selector's filter, and the controller's two lines of
-wiring).
-
-#### C5a part 9a: the ethereum/tests fork vectors on the unified layout (B-289) (2026-11-16)
-
-The gate forge set before the guard is on for a proof-of-work node: the fixtures whose blocks form more than one
-chain. `ForkChoiceBlockchainTestsSpec` (the integration suite) delivers each block, in file order, through the
-production import path (`ConsensusAdapter.evaluateBranchBlock`: the block queue, the branch's weight, the import to the
-top or the reorganisation, the real EVM and the real state-root check), and judges the fixture's `lastblockhash` and
-`postState`. It ran on the hash layout only.
-
-- **Each category now runs on both layouts.** On the unified layout the pre-state is loaded as a node loads a
-  genesis, as rows (`GenesisDataLoader`), and the block the loader builds must be the fixture's genesis block, hash for
-  hash; a branch is executed on pinned layers and the head is moved to it in place. The post-state is read from the
-  head's state through `BlockchainReader.stateAt`, whichever layout holds it. A case fails loudly if its node is not on
-  the layout it is named for.
-- **Result, on both layouts alike** (Istanbul and Berlin, the forks whose rules Phoenix and Magneto adopt):
-  bcMultiChainTest 14 of 14 (16 reorganisations in 10 cases), bcTotalDifficultyTest 22 of 22 (20 in 18),
-  bcForkStressTest 4 of 4 (6 in 2), bcRandomBlockhashTest 192 of 192; and the uncle categories, added with this part,
-  bcUncleTest 16 of 16 and bcUncleSpecialTests 16 of 16.
-- **Where it runs**: the nightly (`ethereum-tests-nightly.yml`, `ethtest.*`); the pull-request gate names its
-  integration specs one by one and does not name this one. The fixtures are the `ets/tests` submodule.
-
-#### C5a part 9b: an announced block does not end the fetching of a branch (B-300, in part) (2026-11-16)
-
-A gate on starting the importer on the guard, from forge's read of C4e part 6. On the unified layout a fork recovery
-moves nothing: the fetcher goes back to the common block, the branch is fetched whole and weighed against this node's
-own blocks. Two things were said then and never pinned, and one defect was left.
-
-- **Pinned, with no change of behaviour**: one fork recovery for a block that keeps failing (`RegularSyncSpec`: fifteen
-  failed imports of one block make one recovery, at the fifth; the peer that serves it is dropped at the third, the
-  eighth and the thirteenth, since the strikes start again at the recovery and at each fifth failure after it); and
-  the resolver's answer held until the import under way has ended (the import sends the fetcher back to the block
-  that failed as it ends, and only then is the fetcher sent to the common block and the pick made to span the fork).
-- **W3, fixed, on the unified layout only**: an announced block imported while a branch was being fetched ended the
-  resolution as its import ended, so the next pick was a plain one and the branch was never weighed whole; and an
-  announced tip whose parent this node lacks sent the fetcher off to it. Now no announced block is imported while a
-  branch is fetched (it is of that branch, or of this node's chain, and is served again), and only a batch's import
-  ends the resolution: a block mined here does not. The hash layout is as it was (its own path is B-298), which a
-  test pins.
-
-**Left of B-300**: W4 with (f), together (the pick's upper bound for a heavier branch that is the shorter; a lighter
-branch fetched again and again), which are fork choice and are reviewed by forge; and (g), the pick against the 512
-blocks the fetcher holds ready on an archive node, **which waits for the user**: bound the pick at what the fetcher
-holds, so that a fork deeper than that is refused and ends in the escalation, or raise what it holds while a branch
-is resolved.
-
-**Tests**: `RegularSyncSpec` (+4). **The mutation run**: 8 rules broken one at a time, 8 caught (two gaps closed by
-tests: a batch's import ends the resolution, and the hash layout is unchanged).
-
-#### C5a, a gate on part 10: the consensus layer's branch beyond the forward layers, and a refused one (B-297) (2026-11-16)
-
-Beacon's five items from C4e part 5, read before code and after. On the unified layout, on proof of stake; ETC's arm
-is as it was but for what a reorganisation tells (below), which forge read. **Nothing here fires before part 10**: the
-importer does not run on the guard yet.
-
-**What was wrong.** The consensus layer's branch that met the cap was answered "adopted by the fork choice's recovery",
-and nothing handed it to the recovery: its blocks were never stored, so the recovery could not have read them, and it
-was queued again whole. A branch refused for the finalized block or for a depth the records do not reach was queued
-again whole as well, and the importer fetched it again at every round trip, for good while the consensus client named
-its head; the batch that hung from it read as an unknown branch and sent the fetcher back further. The importer's move
-of the head could take the head back down below a head a fork choice had confirmed meanwhile (beacon's B1), and an
-adoption's move could do the same to a head the importer had moved. And the side blocks a branch stood on, canonical
-again with it, were not told as of the new branch.
-
-- **The hand-off at the cap** (`BranchHandOff`, late-bound as `DesignatedHead` is; bound by
-  `NodeBuilder.bindBranchHandOff` on a post-merge chain with the Engine API on and a recovery built). The blocks of the
-  branch not stored yet are stored by hash, with no weight (only an executed block has one), and its tip is asked for
-  through `EngineApiService.handOffBranch`: `requestFor(tip, recoverySink, ForkChoice)`, as a fork choice asks, after
-  the pin is released, so that the recovery does not count the pinned layers as held and lose them as the pin goes.
-  **The tip, never the head named** (beacon): a failure of a recovery is remembered by its head, and one asked for the
-  named head with its bodies not stored would answer the consensus client's own fork choice with it. Not counted by the
-  escalation's watch, which counts what fork choices come to; the next fork choice shares the ticket. Answered
-  `HandedToRecovery`, with nothing to queue again. Unbound (every ETC network, the hash layout), it is answered as
-  before. **A fork below what a view reaches is not handed off** (beacon, after code): the recovery's walk stops only at
-  a state a view reaches, would end it as too long, and would leave that answer for the next fork choice.
-- **A refusal that holds while the head stays** (`RefusedForThisHead`): on the consensus layer's arm, a move back
-  refused for the finalized block, the depth, a record that is not whole or the block the state began at, and a side
-  block that fails when it is executed again. `Corrupt` is this datadir's fault and waits, as on proof of work. The
-  branch is stored by hash (so the next fork choice walks down to its fork, and is answered -38002 or counted as a
-  head that cannot be reached), remembered against the head (`ConsensusImpl`, 8,192 blocks at most), and not queued
-  again. **The importer does not fetch it again** (its own arm, no `InvalidateBlocksFrom`, no strike, `Running`), and a
-  batch that hangs from it is set aside with it (`Consensus.refusedWithTheirParent`, asked in `BlockImporter
-  .resolveBranch` before the unknown-branch arm, and in `importToNewBranch`): `BranchResolution` answers an unknown
-  branch for such a batch before consensus is asked, which beacon's memo had put in consensus. **Any move of the head
-  ends it**, the clear of an escalation and the recovery's adoption among them. A handed-off branch is set aside the
-  same way until the recovery has moved the head (beacon, after code: executed again meanwhile, it pins the layers the
-  recovery needs).
-- **The head a refused fork choice named is not the head the import path follows**
-  (`ForkChoiceManager.forgetRefused`): on every -38002, the requested head goes back to the head of the last fork
-  choice followed, only while it is still the refused one (by value: two refusals of one head are two `Option`s). With
-  none followed since a start, it is none, and the import path follows no consensus layer until the next fork choice.
-- **The race** (B1, beacon). The importer's move of the consensus layer's branch is admitted only from the head it was
-  weighed against: a head moved meanwhile past the tip is told as the head's own (`SelectedNewBestBranch` with nothing
-  left), any other move as superseded. An adoption's and a catch-up's move to the block their walk found held is
-  refused when the head is on the chain above it, or on a chain that stands on its tip (`AheadOfHeld`), answered
-  superseded with nothing moved back. The weight arm keeps its admit as it was (forge: on ETC the importer's lock
-  serialises every move; a follow-up, B-315, weighs it again there).
-- **The side blocks told** (both arms on the unified layout): every block of `fork.parentSideChain`, oldest first,
-  ahead of the branch, each with its own stored weight, in a reorganisation that ran with no error; on layers and at
-  the cap. The hash layout tells the branch alone, as ever. Forge, for ETC: right, as core-geth's new chain runs from
-  the fork up (a10's transactions leave the pool again). **Found with it, and fixed**: the importer broadcast every
-  pairing of the blocks told and their weights (`mapN` on two lists), so a NewBlock carried another block's total
-  difficulty whenever more than one block was told.
-
-**Item 5, the hive engine re-org suites with the guard on: not run.** The hive client has no switch for the guard, and
-on the guard the sync controller is not started before part 10, so the suites' p2p re-org cases cannot reach this code
-yet; and no network host was reachable from this session. Gated on part 10 (B-314).
-
-**Read after code**: beacon, no blocker, four warnings, all taken (the hand-off set aside; no hand-off below the
-views; a head above the tip; -38002 for a safe or finalized block that is not an ancestor); forge, no blocker for ETC,
-the broadcast pairing taken, the weight arm's admit left as a follow-up.
-
-**Left**: the consensus layer's branch that forks below what a view reaches is adopted by no one (B-316); a head refused
--38002 is still published to SNAP as a pivot hint (B-317). **Not pinned** (B-318): a fault of the pin's release after a
-hand-off is decided (the hand-off is then not asked for); the `Deep`, `Incomplete` and `Pivot` refusals one by one (the
-finalized one is); a catch-up's move refused for a head ahead of it (an adoption's is).
-
-**Tests**: `ReorgBlockhashParitySpec` (+7: a hand-off adopted by a real recovery; a refusal not queued, what hangs
-from it refused, a move of the head ending it; set aside after a hand-off, and no hand-off below the views; the head
-moved to the tip, and to its own next block, meanwhile; the side blocks told on both arms, on layers and at the cap;
-one pin changed: the orphaned a10 is told with a11 on the unified layout), `HeadMoveOnTheChainSpec` (+1, two shapes;
-two cases extended), `RegularSyncSpec` (+2), `ForkChoiceManagerSpec` (+2), `EngineApiForkchoiceErrorCodeSpec` (+2).
-**The mutation run**: 24 rules broken one at a time, 22 caught. The two that survive are the not-pinned ones above: a
-catch-up's check of a head ahead of the block it moves to (its race needs a head that is not the block the catch-up
-stands on, which a hand-off's catch-up never has), and `Deep` taken out of the refusals that hold while the head stays
-(B-318).
-
-#### C5a part 9c: a heavier branch that is the shorter, and a lighter one fetched again and again (B-300, in part) (2026-11-16)
-
-The rest of forge's read of C4e part 6 that is not (g). On the unified layout a fork recovery sends the fetcher to the
-common block and picks the branch whole before it is weighed (part 9b); nothing of a branch that is not taken is
-stored.
-
-- **W4, a heavier branch that is the shorter**: the pick's upper bound was this node's head, which such a branch never
-  reaches, so the pick was never answered. It is now the block whose import started the recovery, or the head where
-  that is lower (`ImporterState.resolvingBranchTo`, set where the recovery begins). The path that goes back for an
-  unknown branch keeps the head as its bound, and the hash layout is unchanged.
-- **(f), a lighter branch fetched again and again**: weighed and not taken, nothing of it was stored, so the next batch
-  hung from a block this node did not know, the fetcher went 64 blocks back, and the same answer came again, for ever.
-  Now the branch is remembered (`BranchResolution.notTaken`: its tip, the block it leaves this chain at with that
-  block's hash, its weight, and the difficulty of its blocks above the common block; the last 16, in memory). A batch
-  that stands on a remembered tip is weighed with it (`BranchResolution.extended`), by the rules `compareBranch`
-  applies: strictly heavier than this chain, and not refused by MESS, whose check is the one function both ask
-  (`messRejects`, which the old check now calls with the same inputs). Still not taken: the batch is dropped, the
-  record grows, and the fetcher goes on above it. Taken: the fetcher goes back once to the common block and the branch
-  is picked up to its tip, above the head where it is, and judged again as any branch is.
-- **After code (forge)**: a remembered branch says nothing once the block it leaves this chain at is no longer on it,
-  since MESS would then be asked of another pair of branches; MESS is asked once for a batch, so that its verdicts are
-  counted once in the metrics; and a branch that is the heavier only with its tip is fetched up to that tip, or it
-  read as the lighter without it and was sent for again.
-- The escalation's feed hears what it heard: neither a remembered branch nor a dropped batch reaches consensus, and a
-  branch that is taken reaches it as any branch does. A branch forgotten (evicted, or after a restart) is fetched again
-  from 64 blocks back, as before.
-
-- **(g), a fork deeper than the fetcher holds** (decided by the user, 2026-11-16: refuse it and let the escalation clear
-  and re-sync the node). The fetcher pauses at `max-ready-blocks-queue-size` (512) blocks ready, so on an archive node a
-  fork whose common block lies further below the head was never picked whole, and regular sync stalled. Now
-  `fetchFromTheCommonBlock` refuses it (`ReorgRefusal.BeyondTheFetch`), after the refusal for a move back below what
-  the records reach, and the fetcher is not sent back. The same holds for a remembered branch that has become the
-  heavier and reaches further than that from its common block: it starts a fork recovery, which finds a peer for it.
-- **Both refusals now reach the escalation** (forge, before code: neither did; announced blocks of the branch resolve
-  as an unknown parent, not as a fault of this node, and the walk back reached the feed only for forks the fetcher could
-  hold). The branch's headers are asked of the peer the common block was resolved against
-  (`BranchHeadersFetch`, one request at a time), and given to the feed under the import lock
-  (`ConsensusAdapter.branchOutOfReach` → `PowEscalationFeed.notJudgedHeaders`), whose guards are the ones a branch
-  handed to consensus meets, since `notJudged` now calls it: heavier than the head, every header valid, the seal with
-  it (`BlockValidation.firstInvalidHeaderOf`), not refused by MESS, and the given-up branch named by its first block
-  above the fork. An answer that is not the branch's next headers, a timeout, or no header at the common block
-  escalates nothing; a shorter answer than asked is weighed as it is, so that a heavier branch that is the shorter is
-  escalated too.
-
-**Tests**: `BranchResolutionSpec` (+4: the record and its growth, MESS on it, a record off this chain, the memo of
-the last 16), `RegularSyncSpec` (+5: the bound above the head, a branch not taken and then taken, one taken only with
-its tip above the head, none remembered on a chain that follows a consensus layer, the hash layout as it was; the
-expected bound of the existing fork-recovery tests changed from the head to the block that failed). The fork-choice
-fixtures (part 9a) pass on both layouts. **The mutation run**: 29 rules broken one at a time; 25 caught by tests, 2 by
-the compiler, 2 equivalent (the bound's field cleared at the end of a resolution, which is always set again before it
-is read; a record left under its old tip once it has grown, which is harmless and ages out). The first run found six
-gaps, closed by tests and by moving the memo into `BranchesNotTaken`, with the guards of the memo reduced to one. For (g):
-`RegularSyncSpec` (+11), `BranchHeadersFetchSpec` (new, 7), `PowEscalationFeedSpec` (+5), `ConsensusAdapterEscalationSpec`
-(+1); 13 rules broken, 11 caught by tests and 2 by the compiler, after five gaps (the reach of a remembered branch, both
-ways; the cap on the headers asked for; the two links an answer must keep) were closed by tests.
-
-#### C5a part 9d: the bodies below a block with ommers are fetched when they are not stored (B-301) (2026-11-16)
-
-The rest of B-301 (forge's W2). A block with ommers is checked against the six blocks below it, headers and bodies
-(`StdOmmersValidator.ancestorsOf`). After a SNAP sync those bodies are fetched by the hand-off (part 5c); a node started
-again straight into regular sync has no hand-off, the backfill runs up from the genesis, and the check met a body that
-was not stored: `AncestorNotStored`, a fault of this node's own, on both layouts. The importer fetched the block again
-and, from the third time, waited five minutes between tries, for ever: nothing fetched the bodies.
-
-- **On `AncestorNotStored`** (the batch and the single-block path) the importer asks what is missing of the window
-  under the failed block's parent (`AncestorWindow.check`, proof of work): a header missing inside the six blocks the
-  check reads fetches nothing and is said at ERROR; one missing below them only at WARN, once, since `BLOCKHASH` cannot
-  reach past it. The missing bodies are asked for once (`BlockFetcher.FetchAncestorBodies`), one fetch at a time for the
-  importer, by a child of the fetcher (`AncestorBodiesFetcher`: `GetBlockBodies`, at most three requests, each to a
-  peer not yet asked). The answer goes to the importer alone, never through the fetcher's own bodies.
-- **A body is stored only if it is its header's**: `StoredBodyCheck.mismatch` (the shape, the transactions root, the
-  ommers hash, the withdrawals root, the size, the blob gas), in the child as it matches bodies to the requested headers
-  in order, and again where it is written. A peer whose body matches none of the headers asked for is blacklisted; a
-  peer that leaves one out is not.
-- **The write is under the import lock** (forge, after code): the header stored under each hash is read again there,
-  so a reorganisation in an import under way cannot leave a body without its header, nor point a transaction's
-  location at a block that is not on the chain. Then the block's run of faults is cleared and it is tried again at
-  once.
-- **No answer stays lost** (forge, after code): an answer that arrives while a fork is resolved is taken there; one that
-  never arrives frees the fetch after ten minutes. The escalation is told of the fault as before: what peers never serve
-  still ends there.
-
-**Not done**: the backfill that resumes after a restart does not ask for the window first; the window that matters is
-below the best block, which can lie far above the backfill's target, and the importer now covers the case.
-
-**Tests**: `RegularSyncSpec` (+4: one fetch for exactly the missing bodies and none twice; the matching bodies stored,
-the block tried again at once, no peer blamed, nothing fetched when a header in the window is missing; an answer during
-a fork recovery; a lost answer), `BlockFetcherSpec` (+2: a round trip with a body that is not its header's, and the
-matching in order).
-
-#### C5a, a gate on part 10: a hand-off's sample that keeps failing does not restart the sync for ever (B-304) (2026-11-16)
-
-Beacon's note on part 5b. A sample that stops the hand-off restarts SNAP at a newer pivot, which heals and samples
-again. Only the same pivot is refused a second time, so a failure that is systematic (a fault in how the sync writes
-its rows, not in one pivot's) would repeat on every pivot, each a whole heal, with nothing said but a WARN each time.
-
-- **What stopped it goes with it**: `PathHandoffSample.Stopped` carries the rule (`StopReason`: the root absent, a
-  hole in the account trie, too many account leaves of another root, a hole in a storage trie on a sync that left no
-  account out, too many storage tries with no root) and the counts made up to there (the `Result` a sample that
-  passes returns).
-- **Its own message**: the finalization sends `HandoffSampleStopped(reason, counts, pivot)` to the sync controller in
-  place of `HealingImpossible`. Restarted as before for the first two; a stale one during a pivot bootstrap is dropped
-  as `HealingImpossible` is.
-- **Counted since the last hand-off** (`HandoffSampleFailures`, outside the split's modules): the third stops the
-  restarts. The sync controller logs an ERROR with the reason, the pivot and the sample's counts and stops, as for a
-  SNAP controller that crashed: an operator restarts the node, which begins the count again (it is kept in memory).
-  Samples of any reason count together: a systematic fault need not stop each sample by the same rule.
-- **A hand-off that was made begins it again** (`SnapSyncFinalized`); another reason a sync is restarted between two
-  samples does not, since it is no evidence that the rows are now whole. A sample that passes is not told to the
-  controller, so this is a count since the last hand-off, not of samples in a row (beacon, after code).
-- **A root absent again at the pivot of the last stop is not counted** (beacon, after code): it is a consensus client
-  frozen on a root no peer serves (#1555), a fault of the head and not of the rows, and three would stop a node for it.
-  On the hash layout #1555's check of the root runs before the publish; on this one the sample is the first to meet
-  it.
-- **Metrics**: `db.state.handoff.sample.stopped` by `reason`, and `db.state.handoff.sample.stopped.consecutive`.
-
-It cannot fire before part 10: `handoff` is `None` until a sync starts on the unified layout.
-
-**Read after code (beacon): no blocker.** Taken: the count's wording and the root absent at the same pivot (above); a
-debug line that named only `HealingImpossible`; an ERROR for an absent root that printed zero counts. **For part 10**:
-on proof of stake, until spec 022's V1 and V2 land, every re-peg leaves holes by construction, so this bound stops a
-fresh Sepolia sync on the unified layout where today it loops: part 10 on ETH comes after 022's slices 1 and 2. The
-message carries the pivot and not the child that sent it, so a late one from a child being stopped would count against
-the next; the window is one sample's `pipeToSelf`. Left as follow-ups: a stopped controller does not answer
-`eth_syncing` (a final state that answers with the reason would serve operators better than a time-out).
-
-**Tests**: `HandoffSampleFailuresSpec` (5), `PathHandoffSampleSpec` (each rule that stops a hand-off pins its reason,
-and three their counts), `StateIngestDurabilitySpec` (the message, in place of `HealingImpossible`),
-`SyncControllerSpec` (+2: two restarts, then the controller stops with the ERROR; the count from one again after a
-hand-off).
-
-#### C5a, a gate on part 10: the escalation's tests left from B-307 (B-311), and task #68 (B-309) (2026-11-16)
-
-Tests only; no behaviour changes. **The escalation in the sync controller** (`SyncControllerSpec`, +3):
-- the import and the audit are stopped once the clear has ended, not before (a clear that could not begin leaves them
-  as they were), and the SNAP of the first escalation is told its pivot is no lower than the branch's first block (the
-  retry's was pinned by c1, the first escalation's was not);
-- a verdict that arrives while SNAP's backfill still runs stops the backfill first and is handed on to regular sync,
-  which gives the state up;
-- the clear that begins a sync again for the branch (c1) fails: the controller stops and begins no sync over rows half
-  cleared, as it does when the escalation's own clear fails (that case was pinned by 7b).
-The backfill that resumes on its own at a start (`runningRegularSyncWithStandaloneBackfill`) takes the same arm and
-is not pinned separately.
-
-**Task #68** (B-309), `SyncControllerSpec` "leave SNAP's resume alone once SNAP has taken over the best block of an
-upgraded node", which failed on staging and was on the SNAP SyncTest job's allow-list (spec 016 FR-033): **the test's,
-not the code's**. It seeded the accounts done with no storage or code-hash task file, and SNAP's resume rightly
-restarts the accounts phase over a task file that is lost (a lost file must not complete its phase), clearing the flag
-the test then read. The seed now carries both files, empty with a count of zero (a chain with no contracts). Not
-CI-invisible: the test is `SyncTest`, outside `testEssential`, and the SyncTest job tolerated it by name. It passes, so
-the entry is removed as spec 016 T007 says (a passing entry is a stale list); the allow-list is empty, and its pin
-(`test_synctest_report.py`) says so.
-
-#### C5a, a gate on part 10: a refresh after an escalation stays on the branch (B-310) (2026-11-16)
-
-Forge's follow-ups to c2 (review of #1870), designed with forge before code. Its read found a worse case than the
-three it had left: **a refresh that backtracked under the branch's first block took a pivot with no check of the
-branch** (the bootstrap asks for the branch only at or above its height), ended the wait for a peer on it as if one
-had served it, and the check at the end of the sync then passed it with a WARN: the requirement ended without the
-ERROR the user decided on.
-
-- **A failed refresh feeds the peers on another chain** to the actor's one `OffBranchPeers` (shared now by the
-  selection and the refresh, through `OffBranchPeersApi`), and begins or goes on with the 30-minute wait: its end drops
-  the requirement with the ERROR, as at the start.
-- **It does not backtrack** when the bootstrap found no peer on the branch, nor to a block under the branch's first
-  one: the pivot is chosen again in 5 s, without those peers. A backtrack by number asked the same peers again.
-- **A refresh's target is never under the branch's first block** (`PivotAnchor.refreshFloor`) on a chain that picks
-  it from the peers. A pivot that is at the branch's first block is checked on it. **Where every peer left is under
-  that block, there is no target** (forge, after code: the bootstrap would wait for a peer at that height for ever, with
-  no clock running), and the wait for a peer on the branch is begun.
-- **A refresh that finds no target** ends the wait when it has run out (`PivotAnchor.waitExpired`): nothing else would,
-  since no bootstrap is asked. **Only then** (forge, after code): a refresh with a target leaves the wait to its
-  bootstrap, which ends it on a peer on the branch or counts the peers it missed; asked first, a wait the header download
-  began would have been ended by a refresh that asked no one.
-- **A bootstrap under the branch does not end the wait** (`branchServed` with the height it served).
-- **A peer is held only while a sync is bound to a branch** (forge): a requirement that ended at the download's gate,
-  at the end of a sync or at a hand-off left peers held for up to ten minutes.
-- **Both measures of the network's best leave held peers out**: a peer on another chain says nothing of the branch's
-  head, for a refresh's target, a resume's drift or a roll's window. With none left the best is none, and the wait
-  above bounds it.
-- **A peer at rest for headers is still left out of body and receipt requests: the third follow-up is declined**
-  (forge, after code). An empty reply to either blacklists its peer (`EmptyBlockBodies`), which would blame a peer that
-  follows another chain honestly, and a peer that has not the headers above the fork has not their bodies or receipts
-  either. A rest is ten minutes, and the bodies the hand-off waits for are of the branch, which such a peer cannot serve.
-  The comment that said bodies and receipts were unaffected now says what the code does.
-
-**Left (forge), B-320**: the healing serve-root and recent-root bootstraps drop the peers they found on another chain,
-and the healing one takes its target from every peer's height; `currentNetworkBestFromSnapPeers` does not filter
-`forkAccepted`, unlike its siblings.
-
-**Not in the split's count**: the peers are built from the `StateIngest` (`OffBranchPeers.of`), and the floor, the
-wait and the hold are asked of them, so the controller's modules name no store (`verify.sh`: 535, unchanged).
-
-**Read after code (forge): no blocker.** Taken: no target under the branch, and the wait asked only of a refresh with
-no target (above); the bodies (above). Noted: a refresh whose bootstrap fails for another reason with its backtrack
-under the floor is retried every 5 s with no clock of its own (each try is a whole bootstrap with its back-off); the
-held peers are read from the store once a peer.
-
-**Tests**: `PivotAnchorSpec` (+4, one case changed: with no sync bound, no peer is held), `PivotRefresherSpec` (+7),
-`PivotSelectorSpec` (+2, one case binds a requirement), `SyncControllerSpec` (+1). **The mutation run**: 13 rules
-broken one at a time, 13 caught; two only after tests were added (the bootstrap's freshness, the controller's height
-for `branchServed`). (The downloader's three were run on the split that was then withdrawn.)
-
-#### C5a part 10: the refusals lifted, and a hand-off run live (B-325, B-308) (built, #1880, 2026-11-17)
-
-**A design, not yet built.** Read before code by beacon (proof of stake), forge (ETC) and vault (the write order),
-each on staging at `47890a1`. Nothing below is code yet. It is for the main session, which owns the PR, and for the
-user's four decisions at the end.
-
-**What the guard refuses today**: `ConfigValidator.stateGuardErrors` refuses `sync.do-snap-sync` and mining;
-`StdNode.startSyncController` never starts the controller (`[STATE-PATH-LIVE]`); `InstanceConfig.supportedCapabilities`
-does not advertise SNAP; `SNAPSyncController.handoff` is `None`; ETC's SNAP is held to the hash scheme
-(`SyncController.loadSnapSyncConfig`, the `require` on `expectedScheme`).
-
-**What the three found that lifting those alone would break.** These are the substance of part 10; the lifting is
-a few lines.
-
-- **No genesis clear before SNAP** (all three, a blocker). `PathStateStorage.clearGenesisStateForSync` has no
-  caller. A fresh guard datadir holds the genesis anchor and its rows; SNAP writes beside them and
-  `SyncHandoff.commit` refuses a datadir with a state, so every sync fails at its end, hours later.
-- **SNAP can start over a live anchor** (all three, a blocker). Every route into SNAP clears `SnapSyncDone` first or
-  does not look: `resnapNow` (from `RegularSyncStuck`), the `clearDoneOnStart` arm, the dangling-best clear, the
-  `(false, Snap)` start arm, `HealingImpossible`, the branch retry. Only `PivotAnchor.reanchor` (mid-sync) and
-  `commitHandoff` (at the end) refuse.
-- **The hash store is still repaired and audited** (all three, a blocker). After a hand-off `isSnapAuditOwed` is set
-  and `BackgroundAudit.gate` answers `Run`: the audit would fetch the whole trie into CF `n`, which this layout never
-  reads and the clear never deletes. The `(true, Snap)` start arm runs `startRecovery` when a flag is down;
-  `MissingCodeNeedsBulkRecovery` runs the bulk code recovery; the importer's missing-node path
-  (`BlockImporter` `FetchStateNode`, then `stateStorage.repairNode`) writes the hash store, so the same block fails
-  again, `RegularSyncStuck` is raised and `resnapNow` runs over the anchor (forge).
-- **ETC's SNAP writes the hash store** (vault, forge, a blocker). With the Hash scheme there is no `PathNodeStorage`:
-  the sample reads position families only and stops every hand-off, which heals and stops again. **B-308 (lane 3)
-  is a hard prerequisite on ETC**, not hygiene. On ETH the Path scheme already writes positions only; one call,
-  `FrontierPersistence` (`storeRawNodes`), is unverified on Path (vault).
-- **A hand-off that left accounts out cannot fetch their storage on this layout** (beacon C4, forge): the sample
-  tolerates the holes, and the only fetch writes the hash store. The first block that reads one is a fault, then 64
-  of them, then an escalation and a whole SNAP again. See decision 1.
-- **The escalation's watch counts during SNAP and carries the count over the hand-off** (beacon C5). With no anchor,
-  a fork choice to a head stored by hash reaches `recoverStateOf`, whose walk ends `MissingHeader` (a fault) or
-  `TooLong` (unreachable, at once). The verdicts are dropped while SNAP runs, but the count grows, and the first
-  refusal after the hand-off gives a freshly synced state up.
-- **A catch-up that moved the head is counted as a refusal** (beacon C6, part 8's note): `catchUp` ends `MissingBody`
-  after committing thousands of blocks.
-- **Checkpoint import gives a node that says it is synced with no state** (forge): `CheckpointImporter` writes the
-  hash store and sets `snapSyncDone` and the best block with no anchor.
-- **The index above the pivot** (forge, a warning): entries an earlier, higher pivot bootstrap left above the final
-  pivot stay (B-307 c2 lowers the target; the healing bootstrap). Below the pivot the header download overwrites them
-  by construction (forge's note of 5b is met there, not pinned). Consensus is untouched (BLOCKHASH walks by hash); the
-  PoW feed's canonical test and RPC by number read the index.
-
-**The changes, in the order they land.** Before B-308 merges, everything but step 6 can be built and tested on
-staging; the PR opens after B-308 (the main session's call).
-
-1. **The lift.** `ConfigValidator.stateGuardErrors`: `do-snap-sync` is allowed; mining stays refused (B-293), its
-   message reworded (it says this node does not sync); new refusals on the guard: `checkpoint-sync-file`/`-url`
-   (until C5c) and an explicit `snap-sync.storage-scheme = hash`. `StdNode.startSyncController` loses its guard arm.
-   `-Dfukuii.snap.clearDoneOnStart` throws at start on the guard (`StdNode.start`, beside `reconcileState`: a system
-   property the validator does not see). `miner_start`, which answers `true` and does nothing, is refused as
-   `eth_getWork` is (forge).
-2. **The hand-off built.** `NodeBuilder.syncHandoff: Option[SyncHandoff]` from `pathStateStorage`, its
-   `PathNodeStorage` on the one `dataSource` SNAP writes to; passed through `SyncController.apply` to
-   `SNAPSyncController`, whose `val handoff = None` becomes the parameter (not under `snap/controller`, so
-   `verify.sh`'s branch rule does not apply).
-3. **A sync's start on the guard** (`SyncController.startSnapSync`, through a port beside `StateEscalationPort`, off
-   the controller's thread): a genesis anchor is cleared (`clearGenesisStateForSync`, inside
-   `stateRecoveryForSync.reset`, then the fork choice manager's memory and `watch.stateCleared()`, as the
-   escalation's clear does); no anchor resumes; **an anchor above the genesis, or the clear's mark set, is refused**
-   at ERROR, and the controller goes to regular sync. One check behind every route into SNAP; only the escalation's
-   clear, which removes the anchor first, reaches SNAP over a state.
-4. **Nothing of the hash store on the guard.** `RegularSyncStuck` is logged and does not re-SNAP (the escalation is
-   the way); the `(true, Snap)` start arm goes to regular sync; `auditGate` answers disabled;
-   `bulkCodeRecoveryAllowed` is false (code is fetched per hash, `evmCodeStorage` is shared);
-   `logSnapStateRootDiagnostic` and `forceAuditPassOnce` are skipped; the importer's missing-node path is a state
-   fault with no fetch and no `repairNode` (it reaches the feed as a fault of this node).
-5. **The watch quiet until the hand-off.** No `recoverStateOf` without an anchor; `watch.stateCleared()` in the
-   `SnapSyncFinalized` arm (which also drops recoveries asked for before it); a catch-up that committed blocks before
-   it stopped is told as a move of the head, not a refusal.
-6. **ETC's scheme** (after B-308): on the guard the scheme is Path on every network, by override
-   (`config.copy(storageScheme = Path)`: Mordor's and ETC's configs set none, and the fallback is Hash); off the
-   guard it is as it is.
-7. **The index above the pivot**: the hand-off's batch deletes the entries in (pivot, highest indexed], with B-303's
-   trim.
-8. **SNAP advertised on the guard**, if the user decides so (decision 2): `snapServed = true`, the warning removed.
-   Serving already reads the overlay, and answers empty for a root it does not hold (vault asks it be confirmed on
-   the guard before the switch).
-
-**Gates still open on staging**: B-304 (#1873), B-310 (#1875), B-311 (#1873) in review; B-308 open (lane 3).
-B-297, B-300, B-301, B-303, B-306 and B-307 are merged.
-
-**Tests** (each with the step it pins): `ConfigValidatorSpec` (SNAP allowed, mining, checkpoint sync and
-`storage-scheme = hash` refused; 1); `StdNode`/start (`clearDoneOnStart` throws; 1); `SyncControllerSpec` on the guard
-(the SNAP child gets the hand-off, 2; the genesis cleared, an anchor above it and the mark refused, 3; a stuck sync
-does not re-SNAP, no recovery, no audit, no bulk code, 4; ETC gets Path, 6); `RegularSyncSpec` (a missing node on the
-guard: no `FetchStateNode`, nothing written to the hash store; 4); `HeadMoveOnTheChainSpec` (no recovery and no count
-without an anchor, the count begun again at the hand-off, a partial catch-up a move; 5); `StateIngestDurabilitySpec`
-(the hand-off held while accounts are left out, if decision 1 is taken); `SyncHandoffSpec` (no index entry above the
-pivot after the commit; 7); `ChainDownloaderSpec` (a validated header replaces the bootstrap's entry; pins forge's
-5b note); `InstanceConfigSpec` (8). **Kill tests to add** (vault): a kill between the genesis clear and SNAP's first
-progress write, then a start with `do-snap-sync` off (it must fail loudly, not run regular sync on no state); a kill
-after the hand-off and before `SnapSyncFinalized` (regular sync, no audit, no scan). CF `n` empty after a whole SNAP
-and after a clear. A kill is not a loss of power: the live runs, each with a `kill -9`, are the proof of that.
-
-**The live runs, after the PR merges** (planned with the main session first; the dev-node host's rules):
-- **Mordor, fresh, on the guard**: no `[STATE-PATH-LIVE]`; snap/1 advertised; one genesis `[STATE-CLEAR]`; the Path
-  scheme logged, no `[PATH-PUBLISH]`, CF `n` stays empty; the hand-off with a sample of no holes and the window's
-  bodies fetched; `db.state.anchor.number` at the pivot. Then 24 h following the head (6 h at the least): the head's
-  hash matches a core-geth node every 1,000 blocks; a reorganisation followed (`db.state.move.blocks{side=reversed}`
-  above 0); `db.state.reorg.refused`, `recovery.escalation.triggers` and tombstones at 0; no `[LOCAL-STATE-FAULT]`,
-  `[STATE-CORRUPT]` or `RegularSyncStuck`; EG-12's window (an ommer block in pivot+1..+6, BLOCKHASH in the first 256).
-- **Sepolia, fresh, on the guard, with a consensus client**: as above for the start and the hand-off; then `Catching
-  up N block(s)` ending `Adopted`; "Node considered synced (forkchoiceUpdated set the head)"; 24 h of VALID each slot
-  with no `LOCAL FAULT`/`UNREACHABLE` and no escalation, and none counted while no anchor existed; `eth_getProof` at
-  the head and 64 below it equal to geth's.
-- **On each**: `kill -9` mid-SNAP, during the catch-up (Sepolia), and while following; each start resumes with no
-  audit and no recovery scan.
-- **hive** (B-314): `hive/fukuii/fukuii.sh` needs a switch for the guard first; then the re-org families of
-  `ethereum/engine`, `ethereum/sync` and devp2p's snap become reachable. hive's imported chain is an anchor above the
-  genesis, which exercises step 3's refusal.
-
-**The user's decisions (2026-11-17)**: 1, 2 and 3 as recommended below. The 2026-11-11 decision not to advertise SNAP
-on the guard is ended by decision 2, as it said it would be. Built in this session (the main session took the work over
-from lane 2 on the user's word), on `fix/018-c5a-part10`; how each decision is built:
-- 1: `SnapFinalization.startHandoffSample` does not sample when the excluded set has accounts: it sends
-  `HealingImpossible`, and the sync restarts heal-only from the durable set. The sample on the guard is run with no
-  holes tolerated.
-- 2: `InstanceConfig.supportedCapabilities` advertises SNAP whatever the guard says; the start's warning is gone.
-- 3: `StdNode.refuseRegularSyncFromGenesisOnTheGuard`, after the genesis and a chain file are loaded: no anchor above
-  the genesis, no sync done or in progress, and `do-snap-sync` off is refused, naming the flag. Test mode is left alone.
-
-**Decisions for the user, as they were put** (each the readers' recommendation first):
-1. **A hand-off that left accounts out, on the guard**: refuse it and keep healing until nothing is left out
-   (spec 022's "complete means nothing excluded"), until C5b gives this layout a fetch of its own (beacon, forge).
-   The alternative lets it through and leans on the escalation, at the cost of a whole SNAP each time.
-2. **SNAP advertised on the guard**: yes (beacon, forge, vault). It reverses the decision of 2026-11-11 ("advertised
-   again in the slice in which the node follows the head"), which is this slice: the capability is mutual, so a node
-   that does not advertise it cannot sync by SNAP at all.
-3. **A fresh node on the guard with `do-snap-sync = false`** (Sepolia's and Platåberget's shipped configs): refuse at
-   start, naming the flag (beacon). Otherwise it runs regular sync from the genesis, the first fork choice is
-   unreachable, and the escalation clears the genesis and starts SNAP anyway, a start that begins with an escalation.
-   The alternative is that no anchor above the genesis and no sync done means SNAP on the guard, whatever the flag.
-4. **The weight arm's re-check when the head moved** (B-315) is not needed for part 10 (forge: the importer's lock
-   serialises every move on ETC); no decision, recorded.
-
-#### Mining on the unified layout: the miners read the head under its generation (B-293) (2026-11-17)
-
-The last refusal on the guard after part 10. Forge read the design before code (no blockers; four changes taken):
-
-- `consensus/pow/miners/SettledHeadBuild`: the sequence lock of C4e part 4 as one helper. The generation is read settled
-  (waited for on a blocking thread), the head is read, the block built, and kept only if the generation is unchanged; a
-  build whose view went stale (`StateFault`) because the head was moved on is built again, any other fault is raised; at
-  most `Builds` (3) builds. With the guard off: one build, as before. `TestService.builtOnTheSettledHead` uses it.
-- `EthashMiner` builds through it (the coordinator passes it; the head is read by the helper on both layouts), and gives
-  a turn up before the nonce search when the head kept moving: `MiningUnsuccessful`, and the coordinator mines next.
-- `eth_getWork` builds through it, its ommers and transactions those of the parent built on, and answers geth's "no
-  mining work available yet" while the head moves (1 s wait); the work is notified only when kept. `eth_submitWork` is
-  as it was: the import judges a solution whose parent is no longer the head.
-- `MockedMiner` reads the generation on the guard (not waited on: the actor's thread), waits as for an import while it
-  is odd, and builds again rather than sends a block whose build a move overtook.
-- Forge's warnings: pending logs on the guard are the head's (`FilterManager`, as `ResolveBlock`); a mined block the
-  importer drops while an import runs is logged and counted (`regularsync.mined.dropped.total`).
-- The refusals are lifted: `ConfigValidator` (mining), `EthMiningService` (getWork, submitWork, miner_start).
-
-Not built: a `MockedMiner` run on real positions whose build overlaps an adoption (its spec mocks the reader with the
-guard off); logged as a follow-up. T184's Ethash and test-mode legs are pinned by `SettledHeadBuildSpec` and
-`TestServiceOnPositionsSpec`.
+11. the measurements (T207 to T209; T207, M12, and T209 are open).
+
+*The records of C5a parts 1 to 10 and of the gates on part 10 are in [implementation-log.md](./implementation-log.md#c5a-part-records-and-the-gates-on-part-10), verbatim (moved 2026-11-21).*
+
+### C9: history expiry (B-552, #1483; designed 2026-11-27)
+
+**Why, and why now.** The user placed B-552 in spec 018 as P1 on 2026-11-27: history expiry is key to running nodes on
+smaller devices. On staging nothing expires, prunes or freezes bodies, receipts or the transaction index
+(`EthBlocksService.scala:516-524` says so in `eth_capabilities`). Evidence from EG-4's GCP VM (0.12.184): the
+full-history backfill grew by about 17 to 20 GB/h; at about 21 h only 3M of 12.2M bodies and no receipts were stored;
+the datadir filled a 460 GB disk, and the 24 h follow needed 1,400 GB. #1483's sample (2026-11-01, head 12.04M)
+estimates Sepolia history at about 1,079 GiB of bodies and about 1,483 GiB of receipts raw (receipts weakly sampled),
+about 500 to 900 GB on disk, and **nearly all of it after the merge**. Track H's cold tier waits for GT-3, so C9 is
+in Track C as its own slice. It reads and writes history only (namespaces `b`, `r`, `l`, and AppState keys), never
+`t`, `u`, `v` or `n`, so it is independent of the layout, of the guard, of C7 and of C8a and C8b.
+
+**The reference.** go-ethereum `master` at `6fe8b63d41` (2026-11-27, 1.17.11-unstable), and the release tag `v1.17.10`
+for the default. core-geth `master` at `4720ac3305` (2026-11-08, 1.12.24-unstable) for ETC. Paths are relative to each
+repository.
+
+| Question | go-ethereum | Citation |
+| --- | --- | --- |
+| Option and values | `--history.chain`: `all`, `postmerge`, `postprague`, `postosaka`, or `<block number>:<block hash>` (the hash is required: a number alone is not trusted, since a reorged block has one too) | `cmd/utils/flags.go:322-327`; `core/history/historymode.go:32-47`, `:119-146` |
+| Default | **`all`** (keep everything) for every node, new or old: `HistoryMode: history.HistoryPolicy{Mode: history.KeepAll}` on `master` and on `v1.17.10` | `eth/ethconfig/config.go:53` (`v1.17.10`: `:54`); `historymode.go:33` "KeepAll (default)" |
+| Named points | first block kept (pruning is up to and excluding it): mainnet postmerge 15,537,393 `0x55b11b91…bb286`, postprague 22,431,084, postosaka 23,935,694; Sepolia postmerge **1,450,409** `0x229f6b18…d02db`, postprague 7,836,331, postosaka 9,408,577; Hoodi postprague 60,412, postosaka 1,507,304, and **no postmerge point** (merged at genesis). A named mode with no point for the genesis is an error | `historymode.go:159-202`, `:257-279` |
+| Start-up with a configured cutoff | fresh database: the target is recorded and sync starts there. Unpruned database: **refuses to start** ("history pruning required") and tells the operator to run `geth prune-history`. Pruned beyond the target: refuses ("database pruned beyond requested history"). The tail's canonical hash must equal the target's | `core/blockchain.go:742-823`, `:826-831` |
+| `all` on a pruned database | runs, records the real tail as the cutoff, and logs a WARN | `core/blockchain.go:747-757` |
+| Pruning | offline `geth prune-history --history.chain <mode>`: refuses `all`, refuses when the database is pruned beyond the target ("Cannot unprune"), needs the head at least 90,000 blocks (`FullImmutabilityThreshold`) past the target, checks the target's canonical hash, deletes the transaction-index entries, then truncates the freezer's body and receipt tail. Headers are kept. It notes an unhandled crash window between the two deletes | `cmd/geth/chaincmd.go:193-215`, `:709-783` (`TODO` at `:782`); `params/network_params.go:27`; `core/rawdb/chain_iterator.go:381` |
+| What is kept | headers and hashes (no tail truncation); block-access lists are a separate tail group, pruned independently | `core/rawdb/ancient_scheme.go:44-66` |
+| Sync | the downloader takes the cutoff, verifies the header at the cutoff against the configured hash, and fetches no bodies or receipts below it | `eth/downloader/downloader.go:243-257`, `:593-595`; `eth/downloader/beaconsync.go:277-295` |
+| RPC error | `PrunedHistoryError`: code **4444**, message **"pruned history unavailable"** | `core/history/historymode.go:297-301` |
+| Blocks below the cutoff | `eth_getBlockByNumber` / `ByHash`, and everything built on `BlockByNumberOrHash` (`eth_getBlockReceipts`, transaction counts, uncles, `debug_traceBlock*`): error 4444 when the block is below the cutoff and absent. Headers are answered (`eth_getHeaderByNumber`). `earliest` resolves to the cutoff block, not 0 | `eth/api_backend.go:90-123`, `:147-238` |
+| Transactions and receipts by hash | the index entries below the cutoff are deleted, so `eth_getTransactionByHash` and `eth_getTransactionReceipt` return **null** (no error) | `internal/ethapi/api.go:1548-1605`; `core/rawdb/chain_iterator.go:381` |
+| `eth_getLogs` | a range whose resolved `fromBlock` is below the cutoff is refused whole with 4444 (not clipped); `earliest` resolves to the cutoff; a `blockHash` filter below the cutoff is 4444; the log index starts at the cutoff | `eth/filters/api.go:484-486`, `:539-541`; `eth/filters/filter.go:92-94`, `:124-129`; `eth/filters/filter_system.go:329-341`; `eth/backend.go:307-313` |
+| `eth_capabilities` | `oldestBlock` of blocks, receipts, logs and transactions is the cutoff | `internal/ethapi/capabilities.go:122` |
+| eth/69 and eth/70 | `Status.EarliestBlock` and `BlockRangeUpdate.EarliestBlock` are `min(latest, cutoff)`; a peer with `earliest > latest` is refused | `eth/handler.go:720-727`; `eth/protocols/eth/handshake.go:53`, `:156-157` |
+| `GetBlockBodies`, `GetReceipts` | stop at the first block not held and return the prefix (no error, no gap) | `eth/protocols/eth/handlers.go:231-250`, `:274-302`, `:308-338` |
+| Freezer | `--datadir.ancient` (and `--datadir.era`); a background freezer moves blocks below `max(finalized, head - 90,000)` into append-only tables, syncs them, then deletes the key-value copies in a batch | `cmd/utils/flags.go:109-117`; `core/rawdb/chain_freezer.go:134-150`, `:157-300` |
+| `debug_getRaw*`, `eth_feeHistory`, transaction by block and index | through the block lookup, so 4444 below the cutoff; `debug_getRawHeader` **by number** also goes through the block lookup (4444), by hash it answers the header; `eth_feeHistory` reads blocks and receipts only when reward percentiles are asked, otherwise headers | `internal/ethapi/api.go:1493-1499`, `:2050-2095`; `eth/gasprice/feehistory.go:306-312` |
+| `debug_traceTransaction` | the transaction's index row is gone, so "transaction not found" | `eth/tracers/api.go:835-848` |
+| `engine_getPayloadBodiesBy*` | a `null` entry for every block whose body is not held | `eth/catalyst/api.go:1356-1364`, `:1387-1390` |
+| `BlockRangeUpdate` received | checked only for `earliest <= latest` and a non-zero hash, then stored; **a decreasing earliest is accepted**. EIP-7642 (Final) sets no monotonicity rule: the message "should be sent whenever the block range available from this client is updated", at most once per epoch (32 blocks) | `eth/protocols/eth/handshake.go:155-163`, `handlers.go:718-729`; EIP-7642 "BlockRangeUpdate message" |
+| **core-geth (ETC)** | **no history expiry at all**: no `--history.chain`, no `prune-history`, no pruned-history error, no eth/69; it keeps every body and receipt. It has the freezer (`--datadir.ancient`) and a transaction-index window (`TransactionHistory = 2,350,000`). A fact, not a parity target: under a cutoff, ETC's answer tables are fukuii's extension, the same as ETH's, and core-geth parity holds only with `none` | `cmd/utils/flags.go:118-122`, `:326`; `eth/ethconfig/config.go:70-71`; `eth/protocols/eth/protocol.go:34` |
+
+**One design for every chain** (the user, 2026-11-27: "etc should follow the same pattern as eth"). ETC and Mordor get the
+same cutoff kinds, the same default, the same RPC and devp2p answers and the same optional freezer as ETH. Nothing below
+is ETC-only; where a chain differs it is only in which named points exist.
+
+**C9a decisions** (each one for the reviewers named; none is a consensus rule: no state root, hash, RLP or gas changes):
+
+1. **Config.** `fukuii.history.chain` in a new `conf/base/history.conf`, one of:
+   - `none` (geth's `all`): keep everything;
+   - a **named fork point**, from the chain file's `history-cutoffs` block: on ETH, `merge`, `prague` and `osaka`
+     (copied from geth's table, mainnet, Sepolia, Hoodi; Hoodi has no `merge`); on ETC and Mordor, **activated ETC
+     forks only**, at least `spiral` (ETC mainnet 19,250,000, `etc-chain.conf:129`; Mordor 9,957,000,
+     `mordor-chain.conf:135`) and possibly `mystique` (14,525,000, `etc-chain.conf:120`; 5,520,000,
+     `mordor-chain.conf:126`) and others: **forge picks the set** at T293. No unscheduled fork is named (no `olympia`):
+     every named mode is a permanent promise. **No hash is written into these documents:** each ETC point's hash comes
+     from a verified archive checked against two clients, forge signs it, and a test pins it (T329);
+   - `"<number>:<hash>"`: a custom point on any chain (the hash is required, block 0 and the zero hash are refused);
+   - **`pivot`**: a fukuii extension geth lacks (the user, 2026-11-27): history from the sync's starting block on, and
+     nothing below it is backfilled or kept. Defined in decision 1a.
+
+   A named mode with no point on the chain (`merge` on Hoodi, `spiral` on Sepolia, any named mode on Gorgoroth or a
+   private chain) and a malformed custom point are **refused at start**. That is one rule for every chain.
+   *(beacon: the ETH points; forge: the ETC point set and its hashes.)*
+1a. **`pivot`, precisely.**
+   - **Which block.** The SNAP pivot P recorded at the hand-off (C5a's synced finalization commit), or, for a checkpoint
+     v2 import, the checkpoint block C. The cutoff is **P + 1** (C + 1): the first block the node holds with both its
+     body and its receipts. It is recorded (`history.cutoff`, number and hash) in the hand-off's or the import's own
+     final synced batch.
+   - **A full sync has no pivot.** `pivot` is **refused at start** when the configuration makes a sync from genesis
+     certain on a datadir with no recorded pivot (`do-snap-sync = false` and no checkpoint import). A SNAP-configured
+     node that falls back to a sync from genesis (PoW with no snap peer within `pow-snap-peer-wait`, open item 3)
+     records a pivot of 0 and runs as `none`, with one WARN naming the fallback.
+   - **An already synced datadir** switched to `pivot` takes its recorded hand-off pivot; with none recorded (a datadir
+     older than C9a, or one synced from genesis) it is refused at start with a message to use a named or custom point.
+   - **The ommer window (PoW).** The ancestor window that C5a's hand-off and C5c's import store for ommer validation
+     (`AncestorWindow`: the pivot's header window and, on PoW, the bodies of C..C-4 whose headers name ommers, B-302;
+     the S0 text said 6 bodies) is kept: it is exempt from the floor, and the prune's 90,000-block guard (decision 5)
+     keeps it until no import can read it. It is a consensus input, not served history: it does not lower the
+     advertised earliest block, since the window carries no receipts.
+   - **A re-peg or a re-SNAP.** Before the hand-off the pivot is not final and nothing is recorded; a re-peg only moves
+     it. After a hand-off, an escalation's re-SNAP (C5a) to a new pivot P2: if every block from P + 1 to P2 is held,
+     the cutoff stays at P + 1; otherwise it rises to P2 + 1 (with decision 5's intent write) and the range left
+     between is pruned. **The cutoff never decreases**: a later pivot below it fetches no history below it, and blocks a
+     sync imports below it are pruned by the normal rule.
+   - **What peers see.** `max(cutoff, L)` (decision 6), which is the cutoff from the hand-off on: with no backfill there
+     is no gap.
+2. **Defaults: `none` on every chain**, ETC and Mordor included: geth's default is `all` on `master` and on `v1.17.10`,
+   for new and existing datadirs alike. No existing datadir changes. The user added `pivot` as a mode, not as a default
+   (2026-11-27); the default can be revisited after T313 has measured `pivot`.
+3. **Start-up checks, before anything with side effects starts.** The policy is resolved and checked against the
+   datadir in `NodeBuilder` before the P2P server, the JSON-RPC listeners, the sync controller, the backfill and the
+   pruner start, and before any store writer runs; only the RocksDB open and the AppState read have happened when
+   it refuses. Refusals: the named-mode, malformed and `pivot` cases of 1 and 1a; a datadir **pruned beyond** the
+   configured cutoff (geth's "Cannot unprune"); a canonical header at the cutoff whose hash differs from the
+   configured one. Not a refusal (a divergence from geth, decision 5): a datadir that holds history below the cutoff.
+4. **Backfill and its floor (B1).** **Headers stay, all of them**, as in geth: the header download from genesis, the
+   exact total difficulty at the pivot and `HeaderChainCheck` are unchanged, and the header at the cutoff is checked
+   against the configured hash when it arrives (geth `beaconsync.go:277-295`). Block-access lists are kept.
+   - **One floor accessor.** `HistoryRange.floor` is `history.cutoff` (0 with `none`). Every write of the body and
+     receipt cursors goes through `AppStateStorage.putBackfillBestBody` and `putBackfillBestReceipt`, which store
+     `max(floor - 1, n)`. That covers every writer that resets or lowers them: the reset to 0
+     (`ChainDownloader.scala:972-976`), the lowering on a fork (`:1023-1024`), `StoredBodyRepair.armBackfill`
+     (`StoredBodyRepair.scala:82-87`), `headerCursorsBackTo` and `backfillCursorsAtMost`
+     (`AppStateStorage.scala:166-167`, `:199-200`). A reset to 0 therefore becomes a reset to the floor and refetches
+     nothing below it.
+   - **What cursor N means now.** It was "every block from 1 to N is held" (`AppStateStorage.scala:1157`, `:1171`); it
+     becomes "every block from the floor to N is held". `needsBackfillResume` (`:1220`) and the resume in
+     `SyncController.scala:3232-3236` read it with that meaning; with `none` the floor is 0 and nothing changes.
+   - **Writes below the floor are refused at the store.** The backfill's body and receipt stores
+     (`ChainDownloader.scala:1154`, `:1213`, `:1237`) drop any block below the floor they read in the same actor
+     message; `StoredBodyRepair` treats an absent body below the floor as expected (no remove, no re-arm).
+   - **The intent write is serialized with the backfill.** While the `ChainDownloader` actor runs, the pruner's intent
+     write (decision 5 (a)) is a message to it, committed between two of its stores and in the same batch that raises
+     the cursors to the new floor, so no response in flight can land below the new cutoff after it. When the actor is
+     not running, the pruner writes directly.
+   - **Exempt from the floor:** the ancestor window and the pivot body (decision 1a), which are consensus inputs.
+5. **Prune of stored history: online, bounded and kill-safe (a divergence from geth).** geth refuses to start and
+   prunes offline; fukuii prunes in the background, because the read side is told first. Order (vault owns it):
+   - (a) **Intent.** One `commitSync` (`DataSourceBatchUpdate.scala:20`) of `history.cutoff` (the new target, number and
+     hash), `history.prune.cursor` (the old earliest block), the cursor floor of decision 4, and
+     `history.compaction.pending`. From this write on, every RPC and devp2p answer treats the target as the cutoff and
+     a `BlockRangeUpdate` is due (decision 8), so a half-pruned range is never served as held.
+   - (b) **Batches**, in ascending block order, each one atomic RocksDB batch, bounded in blocks and bytes, that per
+     block deletes the receipts (`r`), the body (`b`) and the transaction-index rows of that block (`l`, read from the
+     body first), and advances the cursor in the same batch. **An `l` row is deleted only if its stored block hash is
+     the block being pruned (B2)**: `storeBlockBody` writes `l` rows for side blocks too
+     (`BlockchainWriter.scala:193` via `saveTxsLocations`, `:696-699`), and a later canonical block takes the row over,
+     so a transaction in a pruned uncle and in a kept canonical block keeps its row. Each batch reads the canonical
+     hash by number and compares under the **import lock** (`ImportLock`, `SyncController.scala:576`), which every
+     import and head move holds (`promoteToCanonicalHead` and `rewriteCanonicalIndex` rewrite `l` at
+     `BlockchainWriter.scala:342`, `:355`, `:623`); a bounded batch keeps the hold short. The lock is the guarantee;
+     the guard below is why it is never contended in practice.
+   - (c) **End.** When the cursor reaches the target, a `commitSync` records `history.earliest` (number and hash) and
+     removes `history.prune.cursor`.
+   - (d) **Compaction (W1).** The keys are hashes, so `deleteRange` cannot be used and the space comes back only at
+     compaction, which rewrites what remains (about 1 TB on Sepolia). It runs **in slices of the key space** with
+     `compactRange(namespace, from, to)` (`RocksDbDataSource.scala:353`): 256 slices per namespace (by the first key
+     byte) over `b`, `r` and `l`, one slice at a time, with a configured pause between slices
+     (`history.prune.compaction-pause`) as its I/O budget, and the slice reached recorded in
+     `history.compaction.pending`. The marker is cleared after the last slice; a start that finds it resumes from the
+     recorded slice.
+   - A kill at any point resumes from the cursor or the slice; no row at or above the cutoff is deleted.
+   - **The 90,000-block guard (W8).** The prune deletes only below `min(cutoff, head - 90,000)` (geth's
+     `FullImmutabilityThreshold`). A cutoff nearer the head than that (a custom point, or `pivot` just after a hand-off)
+     is accepted: RPC answers 4444 below it at once (a block reported absent while its rows still exist is benign), and
+     the rows are deleted as the head moves on. Blocks between a pivot and a cutoff above it are imported with their
+     bodies and pruned by this rule. It also keeps the 7 ancestors that ommer validation reads
+     (`OmmersValidator.scala:36-52`) out of reach.
+   - It runs only after the SNAP hand-off (like the deferred backfill; the hand-off is persisted, so a restart need not
+     re-derive it) and never during SNAP. Headers, the number index, chain weights and block-access lists are never
+     deleted. Side-chain bodies and receipts below the cutoff are not visited (the prune walks canonical numbers); they
+     stay until a sweep (a follow-up).
+6. **The earliest available block (B3).** Two numbers:
+   - the **cutoff**, `history.cutoff` (0 with `none`), below which RPC answers 4444;
+   - **L**, the lowest block from which every block to the head is held, body and receipts:
+     - L = the cutoff, **unless a backfill target T is recorded and unfinished** (`BackfillTarget` set and
+       `min(BackfillBestBody, BackfillBestReceipt) < T`), in which case L = T + 1. Receipts lag bodies, hence the
+       minimum. A node that never ran a backfill (a full sync from genesis on ETC or Mordor, an old datadir with unset
+       cursors) has L = the cutoff, which is 0 with `none`: today's answer, not a regression.
+     - After a checkpoint v2 import, T is the checkpoint block C, so L = C + 1 until the backfill reaches C. The PoS
+       archive carries 256 headers and no bodies; the PoW archive also carries the window bodies of C..C-4 (B-302),
+       but no receipts, so they do not lower L.
+     - When a backfill finishes, the batch that writes its last cursor also writes `history.earliest` = the cutoff
+       (number and hash), with or without a prune.
+
+   Peers are told `min(latest, max(cutoff, L))`. geth has no backfill gap, so it advertises the cutoff; fukuii must not
+   advertise the gap (herald).
+7. **JSON-RPC (conduit), one predicate for every block read (W3).** For a block n: if its body (and, where the method
+   needs them, its receipts) is held, answer; if not and n < cutoff, **4444, "pruned history unavailable"** (a new
+   `JsonRpcError.PrunedHistory`); if not and n >= cutoff (above the cutoff but not yet backfilled), geth's own
+   missing-body error, **-32000 "block body not found"** (geth `eth/api_backend.go:199-210`), distinct from 4444. The
+   predicate reads `history.cutoff` before the store, so a row deleted by a running prune is never answered as held.
+   `earliest` resolves to the cutoff everywhere `ResolveBlock` is used (`ResolveBlock.scala:60`, `:140` resolve it to 0
+   today).
+
+   | Method (file) | Below the cutoff | Above it, not yet backfilled |
+   | --- | --- | --- |
+   | `eth_getBlockByNumber`, `eth_getBlockByHash`, `eth_getBlockReceipts`, `eth_getBlockTransactionCountBy*`, `eth_getUncleByBlock*AndIndex`, `eth_getUncleCountBy*` (`EthBlocksService.scala`) | 4444 | -32000 |
+   | `eth_getHeaderByNumber`, `eth_getHeaderByHash` | the header | the header |
+   | `eth_getTransactionByBlockHashAndIndex`, `eth_getTransactionByBlockNumberAndIndex` and the raw variants (`EthTxService.scala:115`, `:203`, `:393`, `:409`) | 4444 (geth `api.go:1493-1499`) | -32000 |
+   | `eth_getTransactionByHash`, `eth_getTransactionReceipt`, `eth_getRawTransactionByHash` (`EthTxService.scala:106`) | null (the index row is gone) | null, as for any transaction not indexed |
+   | `debug_getRawBlock`, `debug_getRawReceipts` (`EthBlocksService.scala:565`, `:579`) | 4444 | -32000 |
+   | `debug_getRawHeader` (`:572`) | by hash: the header; by number: 4444, as geth (`api.go:2050-2066`; conduit decides whether to copy that quirk) | the header |
+   | `debug_traceBlockByNumber`, `debug_traceBlockByHash` (`DebugTracingService.scala:227`, `:247`) | 4444 | -32000 |
+   | `debug_traceTransaction` (`DebugTracingService.scala:148`) | "transaction not found" (geth `tracers/api.go:835-848`) | the same |
+   | `trace_block`, `trace_transaction`, `trace_filter` (`TraceService.scala:127`, `:166`, `:430`; no geth counterpart) | `trace_block` 4444; `trace_transaction` not found; `trace_filter` with `fromBlock` below the cutoff refused whole with 4444, like `eth_getLogs` | -32000; `trace_filter` checks its range up front |
+   | `eth_feeHistory` (`EthBlocksService.scala:385`) | with reward percentiles 4444 (it needs bodies and receipts); without them, answered from headers, as geth (`feehistory.go:306-312`) | -32000 with percentiles |
+   | `eth_getLogs`, `eth_newFilter`, `eth_getFilterLogs` (`FilterManager.scala:188-218`, `EthFilterService.scala`) | **the range is checked up front**: `fromBlock` (or a `blockHash`) below the cutoff, 4444 for the whole range, not clipped (geth `filters/api.go:484-486`) | any block of the range in the gap: -32000 for the whole range, up front, whatever the filter. Today the scan stops at the first matching bloom with missing receipts and returns what it has (`FilterManager.scala:208`, `case None => logsSoFar`), so the same range succeeds or fails by filter |
+   | `eth_capabilities` (`EthBlocksService.scala:516-563`) | reports the cutoff as `oldestBlock` of blocks, receipts, logs and transactions (geth `capabilities.go:122`) | |
+   | `engine_getPayloadBodiesByHash*`, `engine_getPayloadBodiesByRange*` (`EngineApiController.scala:69-75`, `:566`) | a `null` entry per block (the Engine API rule; geth `catalyst/api.go:1387-1390`) | `null` |
+   | `eth_call`, `eth_simulateV1`, `eth_estimateGas`, `eth_getBalance`, `eth_getProof` and the other state methods | unchanged: they need the header (kept) and the state; where the state is not held, its own error comes first (`JsonRpcError.NodeNotFound`, -32000 "missing trie node"), as today | unchanged |
+   | GraphQL block and transaction queries (`jsonrpc/graphql/GraphQLSchema.scala`) | the same predicate, as a GraphQL error carrying 4444 | the -32000 message |
+   | `McpService.scala`, `TestService.scala`, `TestingService.scala` | every block read goes through the same `BlockchainReader` members and the same predicate; test mode starts with `none` | the same |
+
+8. **devp2p (herald).**
+   - `Status` (eth/69 and eth/70) and every `BlockRangeUpdate` carry decision 6's number. Today all four places send 0
+     (`EthNodeStatus69ExchangeState.scala:187`, `EthNodeStatus70ExchangeState.scala:188`, `BlockBroadcast.scala:55`,
+     `:137`), which already claims history a node in backfill does not hold; C9a fixes that for every node, cutoff or
+     not.
+   - **When.** A new handshake's `Status` uses the current number at once. A `BlockRangeUpdate` is sent **at the
+     prune's intent write (W2)**, when a backfill finishes, and when a re-SNAP moves the cutoff, within EIP-7642's
+     at-most-once-per-32-blocks rule (a change inside that window rides on the next update). The number may decrease (a
+     backfill reaching below the pivot lowers L): EIP-7642 and geth accept a decrease, and so does fukuii
+     (`PeerActor.scala:656-672`).
+   - `GetBlockBodies` and `GetReceipts` already stop at the first block not held (`BlockchainHostActor.scala:115-160`,
+     geth's rule), so an ascending request that starts below the cutoff gets an **empty** reply although later blocks
+     are held (geth's behaviour too), and a descending one gets a prefix. `GetBlockHeaders` is unchanged.
+   - **The backfill's peer choice (W5).** The backfill blacklists a peer that answers bodies or receipts with nothing
+     (`ChainDownloader.scala:148-152`, `:537-552`), so asking a pruned peer for history it does not hold would cost us
+     the peer. fukuii does not store a peer's advertised range today (`NetworkPeerManagerActor.scala:656-664` only logs
+     it): T310 stores it per peer, asks eth/69+ peers only within it, and treats an empty reply from a peer whose
+     advertised range was stale (it moved since we asked) or from an eth/68 peer (which cannot advertise a range) as a
+     skip of that peer for that range, not a blacklist.
+9. **SNAP serving is unaffected**: it serves state and reads no history. A test pins it.
+10. **The transaction index `l` (W6).** One row per transaction, hash-keyed, never windowed today: about 1.16 billion
+    rows on Sepolia (#1483), on the order of 100 GB, so it cannot stay whole on a small disk. C9a adds
+    `fukuii.history.transactions` with geth's meaning (`--history.transactions`: the number of recent blocks whose
+    transactions are indexed; 0 = every held block), **default 0** (today's behaviour; geth's default is 2,350,000, and
+    the choice of default is the user's, after T313). A background un-indexer keeps a tail cursor
+    (`history.txindex.tail`) and deletes the rows of blocks below `head - window` with B2's compare-hash rule; a lookup
+    by hash below the window answers null, as geth's. `l` stays in the hot store (it is read by hash, and the freezer is
+    read by number). Budget at 2,350,000 blocks: about 226 million rows on Sepolia (about 96 transactions per block on
+    average), about 20 GB; that is the `l` share of SC-018 and SC-020.
+11. **`none` is inert on every chain.** With `none`, no freezer and `history.transactions = 0`, `b`, `r` and `l` are
+    byte-identical to staging's and every RPC answer is unchanged (rpc-compat 40, graphql 2) on Sepolia, ETC and Mordor
+    alike; the only change is decision 8's advertised number on a node mid-backfill, which today is wrong.
+
+**The writers of `b`, `r` and `l` (rule 8), and why the prune is disjoint from them.**
+
+| Writer | File:line | Disjoint from the prune because |
+| --- | --- | --- |
+| backfill bodies and receipts | `ChainDownloader.scala:1154`, `:1213`, `:1237` | the floor (decision 4) and the intent write serialized with the actor |
+| ancestor bodies on import | `BlockImporter.scala:1198` | heights near the head, within 90,000 |
+| pivot body at the hand-off | `SnapFinalization.scala:1054` (and its remove, `:1066`) | the pivot, above the cutoff or within 90,000 of the head |
+| checkpoint window bodies | `CheckpointImporter.scala:403` | C..C-4, at the head of a fresh datadir |
+| stored-body repair | `StoredBodyRepair.scala:63`, `:67` | below the floor it does nothing (decision 4) |
+| receipts of an executed block | `BlockExecution.scala:642`; `EngineApiService.scala:384` | executed blocks are near the head |
+| whole blocks | `EngineApiService.scala:911`; `TestingService.scala:179`; `BlockchainWriter.scala:81-82`, `:110-111`, `:119`, `:127` | near the head; test mode runs with `none` |
+| bodies with their `l` rows | `BlockchainWriter.scala:193`, `:200-207`, `:213`, `saveTxsLocations` `:696-699` | the floor for history; near the head otherwise |
+| canonical-index rewrites of `l` | `BlockchainWriter.scala:342`, `:355`, `:623` | under the import lock, which each prune batch also takes (decision 5 (b)) |
+| block removal | `Blockchain.scala:199-265` (`b` `:249`, `r` `:251`, `l` `:265`) | side and abandoned blocks near the head |
+
+**Interactions recorded.**
+- **EG-4 (decided 2026-11-27, open item 7 option (b)).** EG-4 runs without C9 and is accepted on its current run, with
+  its disk figure marked **without expiry**. The ~150 GB expectation moves to T313, where it is SC-020's target for
+  Sepolia `pivot`.
+- **Checkpoint v2 (C5c).** Decision 6 gives L after an import; the format is unchanged. With `pivot`, the cutoff is
+  C + 1 (decision 1a).
+- **SNAP's chain backfill** (`sync.snap-sync.defer-chain-backfill-until-state-complete`, on). The deferral is
+  unchanged; after it the backfill starts at the floor instead of genesis, or, with `pivot`, does not run.
+- **The audit (C5b)** reads state rows only; the prune deletes history rows only. Both are background disk work and
+  are measured together in T313.
+- **Receipts, `eth_getLogs` and the log index.** fukuii has no separate log index: `getLogs` scans header blooms and
+  reads receipts (`FilterManager.scala:188-218`). Blooms are in the headers, which stay; ranges below the cutoff are
+  refused (decision 7). geth's `--history.logs` window has no fukuii counterpart because there is no log index to
+  window.
+- **Spec 013 §5.6.** A snapshot-imported node's earliest block is N-255 and must be advertised; decision 6 is that
+  rule.
+- **Executed-block checks (N2).** `EngineApiService.scala:649`, `:824` and `:1128` treat "receipts present" as "the
+  block was executed". Those blocks are near the head and never below a cutoff; with C9b, `hasReceipts` falls through to
+  the freezer, so the answer stays right.
+- **Known-block check (N3).** `ConsensusAdapter.scala:724` treats `getBlockByHash.isDefined` as "known". A block gossiped
+  from below the cutoff would look unknown; it is far below the head and refused by the import's depth checks. T338
+  pins that.
+- **ETC: expiry is one-way.** There is no era1 archive for ETC history. Once pruned, ETC history comes back only from a
+  peer that holds it (a resync, or a backfill after switching back to `none` on a fresh datadir) or from a file
+  someone exports. A pruned node is also a poor server for the many ETC nodes that full-sync from genesis; the operator
+  doc says so, and T339 records what core-geth does when such a node is in its peer set.
+- **ETC consensus under a cutoff (forge).** ECIP-1017 rewards read the block number and the block's own ommer
+  headers; MESS (ECBP-1100) and total difficulty read headers and chain weights, which are never deleted; ommer
+  validation reads at most 7 ancestor headers and the bodies of those that name ommers, which decisions 1a and 5 keep.
+
+**C9b: the tiered freezer** (operator opt-in, after C9a; vault confirmed the shape with four changes, open item 9).
+- **Shape: a simple append-only freezer, not the `ColdStore` seam.** FR-024's `ColdStore` is asynchronous, bounded
+  and drops with a metric when full (spec Edge Cases): right for derived, query-oriented data, wrong for the only copy
+  of a block's body. The freezer is the source of truth for the frozen range, so its writes are synchronous and never
+  dropped. It is written in the format FR-022's segment store will use (per table a data file and an offset index by
+  block number; **each record carries its block hash and a CRC32C**, which geth's freezer lacks), so Track E's E1b
+  extends it rather than replacing it, and Track H's H2 (era and era1 export, for ETH) reads it.
+- **Path.** `db.history.freezer.path` (geth's `--datadir.ancient`), empty by default (no freezer). An unwritable path,
+  or a path that differs from the one recorded in AppState while frozen data exists, refuses the start before any
+  side effect (decision 3's rule).
+- **Migration.** A background mover freezes canonical blocks at or below `max(finalized, head - 90,000)` (geth's
+  `freezeThreshold`): on PoS that is the finalized block, on PoW (no finality) `head - 90,000`, deeper than any reorg
+  C4e or ECBP-1100 accepts. Order: append to the freezer, fsync the files **and their directory** (after a file is
+  created or renamed), write the high-water mark with `commitSync`, then delete the hot rows in one batch. A kill
+  between leaves both copies, and the next run deletes the hot duplicate. On open, the freezer truncates every table
+  to the shortest consistent length (geth's repair), and **refuses to start if that falls below the recorded
+  high-water mark** (frozen data lost: the hot copies are gone), never re-freezing silently.
+- **Canonical only; orphans.** The freezer holds canonical blocks. Side-chain bodies and receipts at frozen heights are
+  not moved; they stay in the hot store until a sweep (a follow-up; on PoW they are mostly ommer blocks, a small
+  share).
+- **Reads fall through in `BlockchainReader`, with a hash check (W7, iron rule 7).** Every read of `b` and `r` goes
+  through three members: `getBlockBodyByHash` (`BlockchainReader.scala:241`), `getReceiptsByHash` (`:284`) and
+  `hasReceipts` (`:292`); nothing else reads those stores. Each tries the hot store, then: hash, hot header, number;
+  below the high-water mark, the freezer record at that number; **the record's stored hash must equal the requested
+  hash**, so a side-chain hash at a frozen height reads nothing rather than the canonical body. `StoredBodyRepair`,
+  `advanceBodyCursor` and the backfill's `hasReceipts` check (`ChainDownloader.scala:295`) therefore see frozen blocks
+  as held and refetch nothing, and the reorg readers (`ConsensusImpl`, `StateRecovery`) reach frozen bodies.
+- **`l` stays hot**, windowed by decision 10.
+- **Expiry with a freezer** truncates the freezer's tail instead of deleting rows (geth's `TruncateTail`), after the
+  same intent write of decision 5; it frees the space at once, with no compaction.
 
 ### Destructive change (C8a and C8b): the vault protocol blocks
 
@@ -4670,23 +1063,35 @@ Recommend: DELETE in C8b, the last slice, after the C7 gate; KEEP-AND-GUARD (the
 All runs use the unified layout with the in-development guard on, and compare with the pinned pre-track jar. **EG-2 and every
 roots-equal item run on the ported harnesses of C3c**; a run on the Hash-scheme harnesses would measure the wrong store.
 
+**Platåberget (the user, 2026-11-25).** The chain was retired on 2026-10-28, so every Platåberget run in the gate is dropped:
+EG-15 and the Platåberget halves of EG-1 and EG-10. EG-1's ETH half is Sepolia only. Platåberget elsewhere in this
+spec (Tracks E and R, the C0 measurements M1, M6 and M8, FR-009 and SC-001) names a chain that no longer runs: where such
+an item is taken up, Sepolia stands in.
+
+**C9 (history expiry, B-552; 2026-11-27).** C9a and C9b are not part of this gate and wait for none of it; their own
+checks are T293 to T342 and SC-017 to SC-021. EG-4's disk figure was the one link: EG-4 expects about 150 GB, a node with
+no history below its hand-off, and without C9 the backfill fetches the whole history (the 0.12.184 run needed 1,400 GB
+to finish its 24 h follow). **Decided 2026-11-27 (the user, open item 7 option (b)):** EG-4 keeps running and is
+accepted on its current run, with its disk figure marked **without expiry**; the ~150 GB expectation moves to T313, as
+SC-020's target for Sepolia with `pivot`.
+
 | # | Check | Pass condition |
 | --- | --- | --- |
-| EG-1 | **Roots-equal import differential.** ETH: fixed ranges of Platåberget and Sepolia, **including Prague and Amsterdam ranges with request and block-access-list activity**, and an ETH mainnet range if a mainnet state exists. **ETC: an offline import from genesis** of ETC blocks 0 to 5,100,000 (`ChainImporter.importChainFileStrict` over a `chain.rlp` export; **the source is open item 1: a core-geth export (forge's recommended primary) or a fukuii full sync with SNAP off (acceptable), decided later; it gates C7 and this half of EG-1, not code**), and a Mordor import from genesis to 2,600,000 (era 0 to 1, Agharta 301,243, Phoenix 999,983, ECIP-1099 2,520,000) | ETH: every state root, receipt root and gas-used equal, and `requestsHash` and `blockAccessListHash` equal explicitly. ETC: **every block validates against its canonical header** (state root, receipts root including the pre-Atlantis intermediate roots, gas used), node-set equality with the pinned jar **every 100,000 blocks**, and every miner and ommer balance equal across the 5,000,000 era boundary and Mordor's two. At Platåberget and Mordor scale the position store walked from the anchor equals a `StackTrie` rebuild. `app.db.state.record.tombstones` is recorded over the ETC import and the Mordor runs (a non-zero count is explained before the bound is frozen, M15). Mordor also under `archive` (EG-10) |
+| EG-1 | **Roots-equal import differential.** ETH: a fixed Sepolia range (the Platåberget range is dropped: the user, 2026-11-25: Platåberget was retired on 2026-10-28, so its gate is dropped (B-068)), **including Prague and Amsterdam ranges with request and block-access-list activity**, and an ETH mainnet range if a mainnet state exists. **ETC: an offline import from genesis** of ETC blocks 0 to 5,100,000 (`ChainImporter.importChainFileStrict` over a chain file; **the source is this project's own ETC mainnet sync, exported with `fukuii etc export <file> 0 5100000` (the user, 2026-11-07, T010; exported 2026-11-07, `baselines/README.md`)**; a core-geth export or a fukuii full sync with SNAP off are the fallbacks), and a Mordor import from genesis to 2,600,000 (era 0 to 1, Agharta 301,243, Phoenix 999,983, ECIP-1099 2,520,000) | ETH: every state root, receipt root and gas-used equal, and `requestsHash` and `blockAccessListHash` equal explicitly. ETC: **every block validates against its canonical header** (state root, receipts root including the pre-Atlantis intermediate roots, gas used), node-set equality with the pinned jar **every 100,000 blocks**, and every miner and ommer balance equal across the 5,000,000 era boundary and Mordor's two. At Sepolia and Mordor scale the position store walked from the anchor equals a `StackTrie` rebuild. `app.db.state.record.tombstones` is recorded over the ETC import and the Mordor runs (a non-zero count is explained before the bound is frozen, M15). Mordor also under `archive` (EG-10) |
 | EG-2 | ethereum/tests and EEST on the ported harnesses | the ETH job and the ETC job green; **`ForkChoiceBlockchainTestsSpec`** (Istanbul and Berlin, i.e. Phoenix and Magneto, through `reorganise`) green under `basic` and `archive`; the pre-Byzantium and EIP-150 networks green (intermediate-root receipts) |
 | EG-3 | the matrices of C3b to C6: reorg (PoS and PoW), ETC PoW, crash, isolation and concurrency, fault injection | all green; I1 to I6 asserted; **the deterministic interleaving test** over the importer commit, `moveHead`, `newPayload` and a builder view gives a position map equal to a from-scratch replay; the fault-injection runs never produce INVALID, `markInvalidRecursive`, `reportInvalid` or a delete; the no-anchor refusal and the escalation tests (hysteresis, cool-down, loop guard, kill at every step) pass |
-| EG-4 | **Fresh Sepolia sync with 24 h of head following (the T063 rerun)**, under a real consensus client | no `[PATH-PUBLISH]`; hand-off time, disk (expect about 150 GB below T063's 300-340 GB), import p50 and p99 and `[IMPORT-COMMIT]` against the pinned jar (DC-14), heap and RSS, overlay gauges, `app.db.state.view.stale` and `.retries`, the audit's first pass clean; **`app.db.state.record.tombstones == 0`** (a tombstone at the head would turn a routine depth-1 reorg into a multi-hour re-SNAP) |
+| EG-4 | **Fresh Sepolia sync with 24 h of head following (the T063 rerun)**, under a real consensus client | no `[PATH-PUBLISH]`; hand-off time, disk, recorded and **marked without expiry** (the user, 2026-11-27, open item 7 option (b): EG-4 is accepted on its current run; the earlier expectation of about 150 GB, below T063's 300-340 GB, assumed no history below the hand-off and moved to T313 and SC-020), with the backfill's progress, import p50 and p99 and `[IMPORT-COMMIT]` recorded as a first DC-14 baseline on cloud hardware (a GCP VM with no pinned-jar run on the same VM, so a new baseline, not a delta; the user, 2026-11-25), heap and RSS, overlay gauges, `app.db.state.view.stale` and `.retries`, the audit's first pass clean; **`app.db.state.record.tombstones == 0`** (a tombstone at the head would turn a routine depth-1 reorg into a multi-hour re-SNAP) |
 | EG-5 | **T064's intent on a FRESH datadir** | on a fresh Mordor datadir and then on EG-4's datadir once its measurements are taken: rows deleted, bytes corrupted and positions moved are found and filled, the hand-off completes with no copy, and the audit's first pass records its time and findings |
-| EG-6 | **ETC end to end** | a fresh Mordor SNAP sync and 24 h of head following with a local miner, **and a private ETC-config PoW net** (two or three fukuii miners plus a core-geth) that produces routine depth 1 to 3 forks, **with Olympia at a low block** (treasury credit every block, the base-fee floor, genesis `HefPostOlympia`): mined blocks valid, each mined block's root equal to its import root (with ommers), ECIP-1017 rewards unchanged, M7 and M10 |
+| EG-6 | **ETC end to end** | a fresh Mordor SNAP sync and 24 h of head following with a local miner (running on dev-node since 2026-11-21), **and a private ETC-config PoW net** (two or three fukuii miners plus a core-geth) that produces routine depth 1 to 3 forks, **with Olympia at a low block** (treasury credit every block, the base-fee floor, genesis `HefPostOlympia`): mined blocks valid, each mined block's root equal to its import root (with ommers), ECIP-1017 rewards unchanged, M7 and M10. **The private-net half is skipped** (the user, 2026-11-20: no Olympia core-geth on the host); Olympia is covered in process (#1901, #1937) |
 | EG-7 | repository gates | `sbt pp`; the 016 ratchet; the 017 and stateless-closure dependency checks (DC-8): `NibblePath` is in `mpt/`, no new `db/` import reaches the closure; the grep ratchets (state accessors, hash-only walkers) |
 | EG-8 | DC-14 figures in every slice's PR | p50 and p99 `[IMPORT-TIMING]`, longest read wait, bytes written per block, database size, RSS, `[STORAGE-PERF]` |
 | EG-9 | **Checkpoint v2 round trip, both chains** | export from the Mordor and Sepolia nodes, import into fresh datadirs: every root equal; the ETC resync time recorded (SC-013). The **ETC mainnet half is EG-12's export**: import it into a fresh datadir, check root equality, follow the head for 1 h |
-| EG-10 | **Both pruning modes, and the retired one** | `archive` passes EG-1's Mordor and Platåberget runs; a test shows `pruning.mode = "inmemory"` is **rejected at start on both chains** with the message naming the retired mode and the two that remain; the finalization durability test (kill -9 right after the synced commit) passes under `basic` and `archive` |
+| EG-10 | **Both pruning modes, and the retired one** | `archive` passes EG-1's Mordor and Sepolia runs (the Platåberget half is dropped, 2026-11-25); a test shows `pruning.mode = "inmemory"` is **rejected at start on both chains** with the message naming the retired mode and the two that remain; the finalization durability test (kill -9 right after the synced commit) passes under `basic` and `archive` |
 | EG-11 | after C8b, on the final tree | `grep` for every removed symbol is empty; `sbt pp`; an EG-1 subset and a short head-follow on each chain, with the flag gone |
-| EG-12 | **First successful ETC mainnet sync** *(user decision, 2026-11-06; fukuii has never completed one; forge's route)* | a fresh ETC mainnet **SNAP sync on the unified layout with public ETC peers** reaches the head with no copy and the root equal to the head's `stateRoot`, then follows the head for 24 h. **Passes only with:** zero rejected canonical blocks; zero `REORG-EXEC-FAIL`; the number of routine fork moves (depth 1 to 2) followed, recorded; **the ancestor-window check** (BLOCKHASH in the first 256 blocks and an ommer whose parent is below the pivot) passing; the number of snap-capable ETC peers recorded at start (**fewer than 2: the user decides whether a declared local core-geth peer is allowed in the run**); time, disk, heap, RSS and CPU recorded against spec 007's finding. The node then exports the first ETC v2 archive, which is re-imported (EG-9) and followed for 1 h. **Ownership:** C5a the ancestor window, C6 ETC enablement and mainnet readiness (guard removal, peer precondition and logging, the PoW-specific hand-off checks, the run harness), C5c the export, C7 the run. **C8a does not merge before EG-12 passes.** A checkpoint is impossible as a route (no archive exists) and a sync from genesis takes one to three months |
+| EG-12 | **First successful ETC mainnet sync** *(user decision, 2026-11-06; fukuii has never completed one; forge's route)* | a fresh ETC mainnet **SNAP sync on the unified layout with public ETC peers** reaches the head with no copy and the root equal to the head's `stateRoot`, then follows the head for 24 h. **Passes only with:** zero rejected canonical blocks; zero `REORG-EXEC-FAIL`; the number of routine fork moves (depth 1 to 2) followed, recorded; **the ancestor-window check** (BLOCKHASH in the first 256 blocks and an ommer whose parent is below the pivot) passing; the number of snap-capable ETC peers recorded at start, from the `[SNAP-PEERS]` line (**a declared local core-geth peer counts toward the precondition**, the user, 2026-11-18, and the line says how many were declared); time, disk, heap, RSS and CPU recorded against spec 007's finding. The node then exports the first ETC v2 archive, which is re-imported (EG-9) and followed for 1 h. **Ownership:** C5a the ancestor window, C6 ETC enablement and mainnet readiness (guard removal, peer precondition and logging, the PoW-specific hand-off checks, the run harness), C5c the export, C7 the run. **C8a does not merge before EG-12 passes.** A checkpoint is impossible as a route (no archive exists) and a sync from genesis takes one to three months. **The run waits for the NVMe drive** (the user, 2026-11-20); C8a waits with it |
 | EG-13 | **Hive and EEST** | each suite at least equals the pinned jar's recorded baseline: `ethereum/engine` (paris, shanghai, cancun, prague, osaka and amsterdam variants; the reorg, sidechain, invalid-ancestor, "Re-org to Previously Validated Sidechain" and "Transaction Re-Org" families), `ethereum/rpc-compat`, `ethereum/graphql`, `ethereum/consensus`, and EEST `consume-engine` and `consume-rlp` for Cancun through Amsterdam (eip7928, eip6780, eip7610, eip8246 and the 7002, 7251 and 8282 system contracts) |
 | EG-14 | **A consensus-client devnet** (kurtosis `ethereum-package`: Lighthouse or Prysm, fukuii and a second execution client) | induced reorgs (a late block, a partition) are followed; the crash matrix under a real consensus client: **kill -9 between `newPayload` and `forkchoiceUpdated`, restart with no peers, the consensus client reaches VALID with no resync**; **an induced escalation**: lower `state.retention.max-blocks` on the devnet and force a deeper reorg, then assert SYNCING (forkchoiceUpdated) and ACCEPTED (newPayload) during the re-SNAP, then VALID, with no manual step, one escalation only (cool-down), and `t`, `u` and CF `v` cleared at its start |
-| EG-15 | **Platåberget live head-follow, at least 6 h**, beside EG-4 | it has the largest blocks, where `max-layer-bytes`, the tombstone guard and the `forkchoiceUpdated` latency (M6, against an 8 s consensus-client timeout) bind; **`app.db.state.record.tombstones == 0`** over the whole run, and the largest diff reported against `max-record-bytes` (M1) |
+| EG-15 | ~~**Platåberget live head-follow, at least 6 h**, beside EG-4~~ **DROPPED** (the user, 2026-11-25: Platåberget was retired on 2026-10-28, so its gate is dropped (B-068); EG-4 and EG-14 carry the ETH tombstone guard and the `forkchoiceUpdated` latency) | ~~it has the largest blocks, where `max-layer-bytes`, the tombstone guard and the `forkchoiceUpdated` latency (M6, against an 8 s consensus-client timeout) bind; **`app.db.state.record.tombstones == 0`** over the whole run, and the largest diff reported against `max-record-bytes` (M1)~~ |
 | EG-16 | **RPC under catch-up** | rpc-compat and `debug_traceBlock` during a regular-sync burst: the stale-view rate is measured (M5 extended), no request returns a stale-view error, and import latency stays within the DC-14 bound |
 
 ### Risks and rollback, per slice
@@ -4708,10 +1113,12 @@ the PR on staging.
 | C4e | a heavier PoW branch cannot be adopted; a shallow fork is refused on length; a refusal strands the node | the 33-, 50- and 64-block cases; escalation counters; M13 | switch the PoW arm to reverse-then-commit with rollback (data-model 6.4) |
 | C5a | the guard refuses a good datadir or stamps a bad one; hand-off waits forever on the ancestor window | the guard table; M12 | guard off |
 | C5b | the audit or the importer deletes a valid node | the stale-never-deletes and the different-valid-node tests | guard off |
-| C5c | the v2 stream and importer disagree; a version 1 archive or a wrong-chain archive is imported | round-trip tests; the golden stream; the v1 and genesis-hash refusal tests | revert; the format is a one-way door, so it is signed in round 2 |
+| C5c | the v2 stream and importer disagree; a version 1 archive or a wrong-chain archive is imported (ETH and ETC share a genesis hash); a truncated state imports as complete; a failed import is retried on every start and wipes a SNAP run; PR1 ships without PR2 and Hash-layout import is broken | round-trip tests; the three golden streams; the v1, chain-id, genesis-hash and expected-hash refusal tests; the fifth assertion; the no-retry test; PR1 and PR2 in one release | revert; the format is a one-way door, pinned 2026-11-18 (data-model E.1) and signed by forge and beacon at PR1 |
 | C6 | ETC SNAP or mining breaks on the unified layout | EG-6; EG-12; the ETC PoW matrix | guard off |
 | C7 | the gate fails, or EG-12 does not pass | any EG item | C8 does not merge; fix forward |
 | C8a, C8b | a deleted path was still used; the oracle jar is lost | `grep`, `sbt pp`, EG-11 | revert the PR on staging |
+| C9a | the prune deletes a row at or above the cutoff (or an `l` row a kept block owns); a backfill refetches below the floor; a half-pruned range is served as held; a named point or an ETC hash is wrong; the node advertises history it lacks or refuses a good datadir | the prune kill test; the floor test with reset and re-peg; the `l` compare-hash test; the answer tables; the policy table against geth's and the signed ETC hashes; the start-up refusal test | `history.chain = none` (the default) stops new deletes; deleted history comes back only by a resync, or on ETH a later era import (H2); **on ETC there is no era1 archive, so it is one-way**: the prune starts only on an explicit setting |
+| C9b | a block is in neither store after a kill; a read misses the frozen copy; the freezer path is lost | the migration kill test; fall-through fixtures; the path refusal | the freezer is opt-in; with the path lost the node refuses to start, and a resync is the recovery |
 
 ### Specialist routing (additions for Track C)
 
@@ -4720,7 +1127,7 @@ the PR on staging.
   recorded in the S0 records, and the applied round-2 changes are verified at the owning slice's PR); **before code** on C1, C3b, C3c, C4b, C4e, C5c and C6; reviews every other slice; owns the ETC gate (EG-1 ETC, EG-2's
   `ForkChoiceBlockchainTestsSpec`, EG-6, EG-9 ETC, EG-12).
 - `beacon`: signs the ETH side of every item; **before code** on C1, C2a, C3b, C3c, C4b, C4d and C5c; reviews every other slice;
-  owns EG-1 for ETH, EG-4, EG-13, EG-14, EG-15.
+  owns EG-1 for ETH, EG-4, EG-13 and EG-14 (EG-15 dropped, 2026-11-25).
 - `conduit`: C2b RPC signatures, the stale-view retry and rpc-compat; the RPC harness port in C3c; confirms
   `debug_executionWitness` and the trace paths are unchanged; EG-16.
 - `herald`: C2b SNAP serving by root view and the window clamp; the `GetNodeData` answer; C5a and C6 peer behaviour (the
@@ -4730,9 +1137,22 @@ the PR on staging.
 - `prism`: non-consensus review of C2a, C3a, C4a, C5a, C5b, C8a, C8b.
 - `wraith`: compile fallout from the `MptStorage` additions, the `commitWith` mode and the deletions.
 - `flow`, `loom`, `mithril`: not needed.
+- **C9a and C9b (B-552, 2026-11-27).** One design for every chain (the user: ETC follows ETH). `vault` owns both: the
+  floor under the backfill cursors, the prune's write and delete order (intent first under `commitSync`, the cursor in
+  each batch, `l` compare-hash under the import lock, compaction in slices with its marker), the freezer's append, fsync
+  and delete order, its repair and the path rules. `conduit`: the RPC predicate and its table (4444, -32000 in the gap,
+  `earliest`, `eth_getLogs` and `trace_filter` up front, `eth_capabilities`, Engine payload bodies, GraphQL, MCP).
+  `herald`: `Status` and `BlockRangeUpdate` (when, and decreases), body and receipt serving, the backfill's peer
+  choice by advertised range, SNAP serving unchanged. `beacon`: the ETH semantics, **before code**: the named points for
+  mainnet, Sepolia and Hoodi, `pivot` on PoS, `none` as the default, the PoS freezer threshold. `forge`: **before
+  code**: the ETC named point set (activated forks only, at least `spiral`), each hash from a verified archive checked
+  against two clients (T329), `pivot` and the ommer window on PoW, the ETC consensus invariants under a cutoff, and the
+  PoW freezer threshold against the reorg depth. `eye` validates; `prism` reviews the docs and the non-consensus code.
 
 
 ### Project-structure additions and deletions (for plan.md "Source Code")
+
+As built through C6; the deletions are C8a's and C8b's.
 
 ```text
 src/main/scala/com/chipprbots/ethereum/db/storage/
@@ -4740,14 +1160,16 @@ src/main/scala/com/chipprbots/ethereum/db/storage/
 ├── MptStorageDecorator.scala         # NEW: forwards every member; the wrapping implementors derive from it
 ├── PathHandoffSample.scala           # NEW: the spec 022 D9 sample, ported from PathToHashExporter
 ├── StateLayoutGuard.scala            # NEW: the one marker, the one rule
-├── AncestorWindow.scala              # NEW: 256 headers and 6 bodies below the pivot, a hand-off precondition
+├── AncestorWindow.scala              # NEW: 256 headers below the pivot, and up to 5 bodies (B-302), a hand-off precondition
 └── pathstate/                        # NEW package
     ├── PathStateStorage.scala, PathMptStorage.scala, PathStagedState.scala, PathPrefetchReader.scala, StateLock.scala
     ├── BlockDiff.scala, BlockDiffCodec.scala, ChangesetStorage.scala
     ├── StateOverlay.scala, ForwardLayer.scala, ReverseIndex.scala, StateView.scala
-    ├── HeadMove.scala, StateRecovery.scala   # moveHead, startup reconciliation I1 and I6; local re-execution
+    ├── MoveBatch.scala                # the batch of a head move; moveHead itself is a member of PathStateStorage
     └── StateExceptions.scala         # the StateFault hierarchy: StaleStateViewException, ReorgTooDeep, StateUnavailable, BranchTooLarge
 src/main/scala/com/chipprbots/ethereum/mpt/NibblePath.scala   # NEW (in mpt/, so the stateless closure gains no db/ import)
+src/main/scala/com/chipprbots/ethereum/domain/StateReconciliation.scala   # NEW: startup reconciliation, I1 rule 4 and I6
+src/main/scala/com/chipprbots/ethereum/ledger/StateRecovery.scala        # NEW: local re-execution of a state no longer held
 src/main/scala/com/chipprbots/ethereum/blockchain/checkpoint/ # CheckpointArchive v2, exporter, importer (C5c)
 src/main/resources/conf/base/state.conf                        # NEW: fukuii.state.*; the guard key is deleted in C8b
 
@@ -4756,7 +1178,10 @@ DELETED in C8a/C8b: snap/PathToHashExporter.scala, StorageScheme, SnapHashTrie a
   StateStorage.scala, inmemory-pruning-node-caching.conf, the storage-scheme config key (no deprecation window)
 ```
 
-### What the rest of spec 018 must change when this plan is accepted (not done here)
+### What the rest of spec 018 must change when this plan is accepted
+
+Tracked by T017 (C0, open). As of 2026-11-21 spec.md has Scope item 10 and FR-033 (the `inmemory` retirement) applied;
+the rest of the list is not yet applied (verify against spec.md when T017 is closed).
 
 - `spec.md` Scope items 6, 8 and 10 and `plan.md` Phase 3: item 10 is **one gate** (no 10a/10b); F2 (changesets), F3
   (path-aware resolution) and the hand-off part of F4 move to Track C; F4 keeps only what Track E needs.
@@ -4765,74 +1190,83 @@ DELETED in C8a/C8b: snap/PathToHashExporter.scala, StorageScheme, SnapHashTrie a
   G-7 is met by Track C. DC-11's two-engine "one minor release" window is also removed under the standing rule (spec
   clarification of DC-11); both engines coexist only within Track E as its differential oracle.
 - `spec.md` FR-010 and Key Entities: the record key is `blockHash ++ kind` with a height index; amendment #2's row records
-  "local part ships in C3a".
+  "local part ships in C3a" (it shipped in #1793).
 - `spec.md` DC-3, OQ-5 and Edge Cases: the `inmemory` mode is **retired** (OQ-5's recommendation), which closes its durability gap by
-  removal; `pruning.mode = "inmemory"` is rejected at start, with no deprecation window. The "`pruning.mode = inmemory`" edge case
-  becomes "rejected at start".
+  removal; `pruning.mode = "inmemory"` is rejected at start, with no deprecation window (#1739). The "`pruning.mode = inmemory`"
+  edge case becomes "rejected at start".
 - `spec.md` Edge Cases: add "a datadir without the layout marker", "a block executed but not promoted at a crash", "a reorg
   deeper than `pruning.history`: `ReorgTooDeep`"; the T063 mid-copy case is now simply "refused".
-- `research.md` 17: replace the Option Y cost row with this plan's sizes once C0 resets them.
+- `research.md` 17: replace the Option Y cost row with this plan's sizes once C0 resets them (T016).
 - `.claude/agent-protocols/storage-rocksdb.md`: the unified-layout rules (anchor, diff, overlay, "never write `t`/`u` outside a
   batch that carries the anchor"), in C8b.
 
-### Decisions made 2026-11-06
+### Remaining open items
 
-1. Option Y reconfirmed, with the size estimate seen. (The estimate has since risen from about 15,000 to about 20,200 added
-   lines after S0 round 1 and to about 21,200 after round 2; the user has not yet seen those figures.)
-2. Write-through confirmed: the disk layer is the canonical head; state, BlockDiff, anchor and best pointer in one batch; no
-   journal.
-3. Checkpoint import onto the unified layout is **funded and required** (C5c): it is ETC's resync path.
-4. T064's intent runs on a **fresh** datadir (EG-5). The held T063 datadir is not used.
-5. **Two pruning modes on both chains, `basic` and `archive`; `inmemory` is retired** (user, later the same day, reversing the
-   earlier "keep all three") and rejected at start. This closes the INF-006 section 4 gap by removal; C4c is withdrawn.
-6. The overlay budget stays a guess until M1 and M2.
-7. **Standing rule:** one infrastructure for both chains; ETC moves and the Hash scheme is retired in this track; no
-   legacy-datadir machinery (the earlier adopt-in-place choice is reversed); no release-level transition, only a short-lived
-   in-development guard removed in the last slice; no 10a/10b split.
-8. **The first successful ETC mainnet sync gates Track C** (EG-12); the old ETC datadir on `fukuii-fc` was deleted on the
-   user's instruction, and fukuii has never synced ETC mainnet.
+The numbers are kept because tasks.md, scripts and code comments cite them ("plan open item 3"). Items 1 and 3 are
+decided; 2, 4 and 5 are partly decided; 6 is open; 7 to 9 were added and decided on 2026-11-27 with C9. Each decision is also in
+the "Decision log".
 
-### Remaining open items (genuinely open)
+1. **The source of ETC blocks 0 to 5,100,000 for EG-1's ETC half. Decided 2026-11-07 (T010).** This project's own ETC
+   mainnet sync on `fukuii-fc` (v0.10.48, SNAP with chain download), stopped, then `fukuii etc export <file> 0 5100000`
+   (`ChainTool`), which writes one chain file from the header-validated canonical chain. Exported 2026-11-07 as
+   `etc-0-5100000.rlp.gz` (size and SHA-256 in `baselines/README.md`); both the pinned jar and the Track C build replay it
+   offline from genesis. It has the one-deterministic-file property of a core-geth export without a core-geth node; a
+   core-geth `export` and a fukuii full sync with SNAP off remain the fallbacks. What depends on it: EG-1's ETC half (blocks
+   0 to 5.1M validated per header, node-set equality with the pinned jar every 100,000 blocks, miner and ommer balances
+   across the 5,000,000 era boundary), and **the only coverage of the pre-Atlantis ETC rules** (ECIP-1010, ECIP-1017 era 0
+   to 1, the pre-Spurious-Dragon rules without EIP-161) and of the pre-Atlantis intermediate-root receipts on real ETC data,
+   since Mordor starts at Atlantis and ethereum/tests has no ETC 3M-8.77M network. EG-12, the Mordor imports from genesis,
+   the ETC ethereum/tests job, EG-6 and every ETH item do not depend on it.
+2. **The pinned oracle jar, its recorded roots and the hive and EEST baselines.** Partly decided: the jar is **v0.12.1**,
+   with v0.11.0 as the fallback (the user, 2026-11-17; `baselines/pinned-jar.md`, T002). **Open: who keeps it and where
+   (the NFS path)** (B-053). It is kept until EG-12 passes, the first ETC archive is imported a second time, and one release
+   past C8b. The recorded roots and the hive and EEST baselines are still to be produced (T003 to T007).
+3. **The snap-peer precondition for EG-12. Decided 2026-11-18: a declared local core-geth peer counts.** An
+   operator-declared static peer (`static-nodes.json`, `sync.snap-sync.snap-server-peers`) counts toward the precondition
+   like any other snap-capable peer. At SNAP's start on the guard the node logs one `[SNAP-PEERS]` line with the count of
+   snap-capable peers on the chain and how many of them were declared, and EG-12's run records that line, so a run that
+   relied on a declared peer says so. With the same decision, a proof-of-work guard node may regular-sync from its genesis
+   on the unified layout: with `do-snap-sync = false`, or when no snap-capable peer comes within
+   `sync.snap-sync.pow-snap-peer-wait` (10 min) of SNAP's start (one WARN with the count). Chains with a terminal total
+   difficulty never fall back from a SNAP start (C6 PR-C, B-067); since 2026-11-24 they take regular sync from the
+   genesis with `do-snap-sync = false`, as PoW does (B-314).
+4. **Hosts for the live gates, and the Ethash DAG on the miners.** Partly decided: EG-6's Mordor half runs on dev-node
+   (since 2026-11-21); EG-6's private ETC-config PoW net is skipped (the user, 2026-11-20: no Olympia core-geth on the host);
+   EG-12 waits for the NVMe drive (the user, 2026-11-20). EG-12 runs on dev-node (started 2026-11-24). The Sepolia gates (EG-4, EG-5, EG-9's Sepolia half, EG-16, and C5a's
+   fresh Sepolia sync) run on a GCP VM that is shut down after each test (the user, 2026-11-25). EG-15 is dropped:
+   Platåberget was retired on 2026-10-28 (the user, 2026-11-25). **Open: the host for EG-14 (the consensus-client devnet).**
+5. **The EIP-8246 text.** Read on 2026-11-07 against the EIP (`baselines/eip-8246-check.md`): it confirms the design, which
+   never depended on it (rule 6 triggers on the parent's storage root, and the one shape it needs, storage cleared and the
+   account kept, is what the code and `AmsterdamSelfDestructSpec` produce). **Open: beacon's sign-off of that read (T008)**,
+   and the pass count of the 658 `eip8246_selfdestruct_no_burn` EEST fixtures on the pinned jar (T009; baseline 1 passing
+   before #1422, `specs/009-amsterdam-fork-support/baselines/eest-v21-amsterdam-2026-09-26.txt:24`).
+6. **Archive view reach** (`state.archive.view-reach = 1024`) and its disk cost, after M1 and M9. **Open** (T234, the user).
+7. **EG-4 and history expiry. Decided 2026-11-27 (the user): option (b).** EG-4 keeps running and is accepted on its
+   current run, with its disk figure recorded and marked **without expiry**; every other EG-4 criterion (hand-off,
+   import timings, tombstones, the audit) is judged as written. The ~150 GB expectation, a node with no history below
+   its hand-off, moves to T313 as SC-020's target for Sepolia with `pivot`. The reason: without C9a the backfill
+   stores the whole history (the 0.12.184 run grew 17 to 20 GB/h, had 3M of 12.2M bodies and no receipts at about
+   21 h, filled a 460 GB disk and needed 1,400 GB), and `merge` keeps nearly all of Sepolia's (#1483). T256 and T313
+   carry it.
+8. **A small-device cutoff. Decided 2026-11-27 (the user): `pivot` is added** ("pivot onward will work"): a fukuii
+   extension geth lacks, on every chain, ETC included, defined in "C9", decision 1a. The default stays `none` on every
+   chain (geth's `all`): the user added a mode, not a default. The default can be revisited after T313 has measured
+   `pivot`. The same day the user agreed that ETC offers named points for its activated forks ("spiral or other named
+   forks"); forge picks the set.
+9. **C9b's shape. Decided 2026-11-27 (vault's review): confirmed with four changes.** A simple append-only freezer in
+   FR-022's segment format, not the `ColdStore` seam (which drops data when full, by design), with E1b and H2 building on
+   it; and: fall-through in `BlockchainReader` with a hash check; `l` decided (it stays hot, windowed, "C9" decision
+   10); a block hash and a CRC32C per record, and a directory fsync; orphans stated (they stay hot until a sweep).
 
-1. **DECIDED 2026-11-07 (user: "this machine should sync etc then we can push to the nfs directory"):** source (c).
-   `fukuii-fc` syncs ETC mainnet with the current release (v0.10.48, SNAP with chain download on, started 2026-11-07).
-   Once it is synced and stopped, `fukuii etc export <file> 0 5100000` (`ChainTool`) writes one chain file from the
-   header-validated canonical chain. That file is pushed to the user's NFS directory, and both the pinned jar and the
-   Track C build replay it offline from genesis.
-   - It keeps (a)'s one-deterministic-file property without a core-geth node.
-   - If the sync fails, (a) and (b) below remain the fallbacks.
 
-   The original candidates (2026-11-06):
-   - (a) a `chain.rlp` from `geth export` (core-geth) on a synced ETC node: is there one, and is its history complete from
-     genesis?
-   - (b) fukuii's own full sync from genesis over p2p with SNAP off, stopped at a height: the whole chain is one to three months
-     (`specs/022-snap-heal-convergence/research.md:351`), early blocks are small, and **M14 in C0 measures 0 to 1M** to say whether
-     it is feasible; it also makes the import itself the oracle.
-   **What in the gate depends on it:** EG-1's ETC half (blocks 0 to 5.1M validated per header, node-set equality with the pinned
-   jar every 100,000 blocks, miner and ommer balances across the 5,000,000 era boundary); **the only coverage of the pre-Atlantis
-   ETC rules** (ECIP-1010, ECIP-1017 era 0 to 1, the pre-Spurious-Dragon rules without EIP-161) and of the pre-Atlantis
-   intermediate-root receipts on real ETC data, since Mordor starts at Atlantis and ethereum/tests has no ETC 3M-8.77M network;
-   **Forge signed S0 item 11 in round 2 without the source: it is logistics, and it gates EG-1's ETC half (C7), not code.** Forge's recommendation: **(a) a core-geth `export` of 0 to 5,100,000 is primary** (one deterministic file replayed by the pinned jar and the new build, no p2p variance); **(b) fukuii's own sync from genesis is acceptable**, since the canonical headers are the root oracle either way and both builds can sync the same heights for the 100k node-set checkpoints, and M14 decides (b)'s cost. The user left the choice open. What does *not* depend on it: EG-12 (the ETC mainnet SNAP sync and 24 h
-   follow), the Mordor imports from genesis, the ETC ethereum/tests job, EG-6, and every ETH item. If no source is named, EG-1's ETC
-   half is unmeetable, item 11 stays open, and ETC's pre-Atlantis rules are covered only by ethereum/tests (Frontier, Homestead,
-   EIP-150) and are not exercised on real data.
-2. **Pinned oracle jar, recorded roots, hive and EEST baselines:** who keeps them, and for how long after the gate (the plan says
-   until EG-12 passes, a second import of the first ETC archive, and one release past C8b).
-3. **The snap-peer precondition for EG-12:** if fewer than 2 snap-capable ETC peers are visible, may a declared local core-geth
-   peer be used? (The user decides, per forge.)
-4. **Hosts for EG-6 (the private ETC-config PoW net), EG-14 (the consensus-client devnet) and EG-15 (Platåberget, 6 h):** which
-   machines, and the Ethash DAG on the miners.
-5. **The EIP-8246 text** has not been read by anyone against the EIP itself (beacon 5f and round 2): neither reviewer had an EIPs clone. C0 reads it and records the pass count of the 658 `eip8246_selfdestruct_no_burn` EEST fixtures (baseline 1 passing before #1422, `specs/009-amsterdam-fork-support/baselines/eest-v21-amsterdam-2026-09-26.txt:24`). Track C's storage design does not depend on the text: rule 6 triggers on the parent's storage root, and the one shape it needs (storage cleared, account kept) is what the code and `AmsterdamSelfDestructSpec` already produce.
-6. **Archive view reach** (`state.archive.view-reach = 1024`) and its disk cost, after M1 and M9.
-
-## Phase 2 — Track E: the engine (after Track C and GT-1; no longer waits for spec 017, clarified 2026-11-06)
+## Phase 2 — Track E: the engine (after Track C and GT-1; it does not wait for spec 017)
 
 Each slice is one PR, behaviour-neutral, with the DC-12 figures in the PR body and SC-001 green.
 
 | Slice | Content | Owner / review |
 | --- | --- | --- |
 | E1 | Contract cleanup (FR-003, FR-026): `IterationError` to the trait; `seekFrom`, `approximateKeyCount`, `iterateSyncRange` on the trait with `EphemDataSource` impls; the three downcasts removed; `compactRange` documented no-op where no compaction; `StorageEngine` enum; the DC-12 typed transaction API with RocksDB and Ephem behind it; `StorageMetrics` seam with the RocksDB impl behind it | vault; prism; mithril (opaque types, inline codecs) |
-| E1b | Segment store (FR-022) for headers, bodies, receipts, behaviour-neutral, golden-bytes kept; `BlockHeadersStorage`/`BlockBodiesStorage`/`ReceiptStorage` move behind it | vault; prism |
+| E1b | Segment store (FR-022) for headers, bodies, receipts, behaviour-neutral, golden-bytes kept; `BlockHeadersStorage`/`BlockBodiesStorage`/`ReceiptStorage` move behind it. **Builds on C9b's freezer** (same format; 2026-11-27): E1b extends it to headers and to the unfrozen range rather than adding a second format | vault; prism |
 | E2 | The chosen engine's `DataSource` (get, multiGet, scanRange, update, updateSync, deleteRange, iterate as bounded windows) + component + config; vendored source and FFM bindings if that is its route; `DataSourceTestBehavior` green on three engines | vault; prism; security note in PR |
 | E3 | Durability mapping (DC-3): `StateAccess` synced commits; `StateIngest` relaxed mode behind `StateIngest.Durability` (adds the second enum value 016 T056 reserved); the DC-1 barrier before `completeSnapSync` on both chains; crash test | vault; forge sign-off (ETC path) |
 | E4 | Reader discipline (DC-5): bounded read txns everywhere `iterate`/`scanRange` are used; oldest-reader gauge + WARN; injected-unbounded-reader test | vault; flow (fs2 `Stream` boundaries) |
@@ -4840,16 +1274,16 @@ Each slice is one PR, behaviour-neutral, with the DC-12 figures in the PR body a
 | E6 | Two-engine import differential in CI (FR-009) on fixed Mordor and Platåberget ranges; ethereum/tests on the new engine | eye |
 | E7 | Operator docs and skills (FR-018) including the ETC checkpoint resync runbook (DC-9); default flip for fresh datadirs; old-layout detection message | vault; conduit for RPC docs; forge for the ETC runbook |
 | E8 | Soaks (24 h Platåberget, 24 h Mordor); SC-003..SC-006, SC-009 reported | eye |
-| E9 | RocksDB removal (DC-11, FR-017), one minor release after E7 | vault |
+| E9 | RocksDB removal (DC-11, FR-017), in Track E once SC-001 and the soaks are green; no operator release window | vault |
 
 Track E exit: SC-001, SC-003, SC-004, SC-006, SC-009 green on both chains; the 1× column of research §15 filled for the
 chosen engine.
 
 ## Phase 3 — Track F: the flat data model (after Track E's SC-001)
 
-*(Revised 2026-11-06.)* Slices F2 (changesets), F3 (path-aware resolution) and F4 (single-write SNAP ingest, the exporter
-and Hash-scheme retirement, ETC on the unified layout) are delivered by **Track C** (Phase 1b, slices C1–C8b). Their rows
-below are kept for history. Track F keeps F1, F5, F6, F6b, F7 and F8, re-based on Track C's layout.
+Slices F2 (changesets), F3 (path-aware resolution) and F4 (single-write SNAP ingest, the exporter and Hash-scheme
+retirement, ETC on the unified layout) are delivered by **Track C** (Phase 1b, slices C1–C8b); their rows below say what
+each was to cover and are not separate work. Track F keeps F1, F5, F6, F6b, F7 and F8, re-based on Track C's layout.
 
 | Slice | Content | Owner / review |
 | --- | --- | --- |
@@ -4860,18 +1294,22 @@ below are kept for history. Track F keeps F1, F5, F6, F6b, F7 and F8, re-based o
 | F5 | Key-set recorder + proof walk (FR-013, DC-7) behind a flag; SC-007 byte-equality against 017's recorder on the differential set; BAL self-check; 017 docs amendment (T-006) approved | beacon; conduit (RPC unchanged); vault |
 | F6 | Flat execution reads (FR-011) under `StateAccess`: `getAccount`/`getStorage` from flat stores; trie updated from the write set at commit; SC-001 under flat reads; `[IMPORT-TIMING]` compared to Track E | **beacon + forge**; eye |
 | F6b | Parallel state root with sparse trie cache (FR-023, DC-13): modified-subtree hashing across independent account and storage subtrees keyed by the BAL (ETH) or the recorded write set (ETC), cache persisting across blocks, invalidated to the common ancestor on reorg; behind a flag; byte-identical roots (SC-001); SC-012 serial-remainder figure | **beacon + forge before implementation**; eye with ethereum/tests and the harness at 30× |
-| F7 | Default on for flat reads and the parallel root once F5, F6 and F6b are green; `storage-scheme` deprecated (DC-9); `TrieReadMemo`, `PrefetchNodeReader` and `DecodedNodeCache` re-evaluated against the sparse trie cache (OQ-11) | vault; prism |
-| F8 | Soaks repeated; the harness at 10× and 30×; SC-002, SC-005, SC-007, SC-008, SC-012, SC-013 reported; pruning modes decided (OQ-3, OQ-5) | eye |
+| F7 | Default on for flat reads and the parallel root once F5, F6 and F6b are green; `storage-scheme` is already gone (deleted in C8b, with no deprecation window); `TrieReadMemo`, `PrefetchNodeReader` and `DecodedNodeCache` re-evaluated against the sparse trie cache (OQ-11) | vault; prism |
+| F8 | Soaks repeated; the harness at 10× and 30×; SC-002, SC-005, SC-007, SC-008, SC-012, SC-013 reported; pruning modes decided (OQ-3; OQ-5 is closed: `inmemory` is retired) | eye |
 
 Track F exit: SC-001..SC-013 green; `.claude/agent-protocols/storage-rocksdb.md` replaced by `storage.md`; CLAUDE.md's
 "Modules" and "vault" rows updated.
 
 ## Phase 4 — Track H: the cold tier (after GT-3; beside Track F; never gating E or F)
 
+History expiry and the second path for frozen history are not in this track: B-552 could not wait for GT-3, so they
+are C9a and C9b in Track C (2026-11-27). The `ColdStore` seam stays for derived, query-oriented data (logs,
+witnesses, aged changesets); frozen bodies and receipts are in C9b's freezer, which H2 reads.
+
 | Slice | Content | Owner / review |
 | --- | --- | --- |
 | H1 | `ColdStore` seam (FR-024): async, bounded queue with depth and drop metrics; `NoopColdStore` default; writers for receipts/logs, witnesses (017 FR-004), aged changesets | vault; flow (queue and backpressure) |
-| H2 | Era/era1 export of history as the file-based cold format (spec 013 §5.6, #1483) | vault; herald (eth/69 `earliestBlock` advertisement) |
+| H2 | Era/era1 export of history as the file-based cold format (spec 013 §5.6, #1483). **Builds on C9b** (2026-11-27): it reads the freezer, and an era import is the way back for history C9a expired. The expiry itself, the earliest-block advertisement and the second history path are C9a's and C9b's, in Track C, not Track H | vault; herald (era import and the advertised range) |
 | H3 | ClickHouse adapter (FR-025) if GT-3 says go: schemas in `data-model.md`, `clickhouse-java` client, operator config, Docker compose example | vault; prism; security note (network egress from the node) |
 | H4 | `eth_getLogs` routing beyond the hot window (FR-025); rpc-compat and graphql unchanged without a cold store (SC-014) | **conduit**; eye |
 
@@ -4915,10 +1353,121 @@ by default until F7. Rollback at any Track H slice: `NoopColdStore`.
 
 - `vault`: everything under `db/` (engine, segments, cold seam); owns INF-007 and the storage protocol rewrite.
 - `forge` (ETC) and `beacon` (ETH): F3, F6, F6b before implementation; E3, F2, F4 sign-off; both review F5. (`UInt256` review is spec 021's.)
-- `herald`: SNAP serving from flat state is unchanged (F4); eth/69 history advertisement (H2).
+- `herald`: SNAP serving from flat state is unchanged (F4); era import and the advertised range (H2); the eth/69 and
+  eth/70 history advertisement and body and receipt serving for expired ranges are C9a's (Track C routing).
+- C9a and C9b (history expiry and the freezer): see "Specialist routing (additions for Track C)".
 - `flow`: fs2 `Stream` boundaries for bounded readers (E4); cold-tier queue and backpressure (H1).
 - `conduit`: `debug_executionWitness` unchanged (F5); RPC docs (E7); `eth_getLogs` routing (H4); Track R executors and codecs (R1–R3).
 - `mithril`: the DC-12 typed API (opaque types, `inline` codecs, enum config) in E1.
 - `eye`: every slice's validation; the differential job; the harness runs; soaks.
 - `prism`: non-consensus review of E1, E1b, E2, F7, H3.
 - `wraith`: compile fallout from the trait cleanup and the `mpt/` signature changes.
+
+## Decision log
+
+The user's decisions for this spec, one line each, oldest first, with where the reasoning is. "IL" is
+[implementation-log.md](./implementation-log.md). Reviewer corrections that the user did not have to decide are in the
+slice sections and data-model.md, not here.
+
+**2026-10-17**
+- The engine is chosen by a measured bake-off (GT-1), not fixed to libmdbx; gigablock volume is the sizing target (the harness at 1×/10×/30×); an optional cold tier is added as Track H (research §13, §14).
+- ETC moves onto the unified layout (DC-9): decided, not gated (this closes the old GT-3 question for ETC).
+- Read serving is in scope: Track R, the GT-1 RPC read-load arm against Geth, Besu, Erigon and Reth, and the deployment topology DC-16 (research §16).
+- OQ-7: the `dbLock` close-fence ships as its own fix PR, once GT-0 has reported (T-010; not shipped as of 2026-11-21).
+- OQ-13: fixed-width `UInt256` goes to spec 021 (R-12, R4).
+- Implementation starts after spec 017 (amended 2026-11-06, below).
+
+**2026-11-06**
+- Track C, the unified path-live layout for both chains, runs first after 0.11.0, on RocksDB, ahead of Track E and of spec 017; spec 017 is parked until execution-specs releases `ExecutionWitness`.
+- Track F's items 6 and 8 and the copy and Hash-scheme retirement of item 10 move into Track C.
+- Standing rule: one infrastructure for both chains (ETH is the build target, ETC comes along); ETC moves and the Hash scheme is retired in this track, with no 10a/10b split; no release-level transition and no "one minor release" windows (DC-11's included), only a short-lived in-development guard removed in the last slice.
+- No legacy-datadir machinery: one layout marker, and a non-empty unmarked datadir is refused at start with no migration (this reverses the earlier adopt-in-place choice for mid-copy datadirs).
+- Option Y (path nodes in place, per-block changesets, an overlay) is reconfirmed with the size estimate seen (about 15,000 lines then; about 21,200 after the S0 reviews, T016 to reset it).
+- Write-through: the disk layer is the canonical head; state, BlockDiff, anchor and best pointer go in one batch; no journal.
+- Only the local part of the changeset (amendment #2) ships.
+- Checkpoint import onto the unified layout is funded and required (C5c): it is ETC's resync path.
+- T064's intent runs on a fresh datadir (EG-5); the held T063 datadir is not used.
+- Two pruning modes on both chains, `basic` and `archive`; `inmemory` is retired and rejected at start (reversing "keep all three" earlier the same day); C4c is withdrawn; this closes the INF-006 section 4 gap by removal.
+- The overlay budget stays a guess until M1 and M2.
+- The first successful ETC mainnet sync gates Track C (EG-12); the old ETC datadir on `fukuii-fc` was deleted on the user's instruction.
+- A pinned release jar outside the tree is the oracle, since no in-tree build can be after C8 (Complexity Tracking).
+
+**2026-11-07**
+- The ETC 0 to 5.1M block source is (c): this project's own ETC mainnet sync on `fukuii-fc` and `fukuii etc export` (T010; open item 1; exported the same day).
+
+**2026-11-11** (IL, "Decisions of 2026-11-11 (user)"; #1795)
+- C3a merges, with CF `v`.
+- 512 blocks of changesets are kept where there is no finality (`state.retention.without-finality`, B-208).
+- One downgrade barrier: the release that first ships CF `v` ships every other such change of the track, with one release note.
+- `snap1` is not advertised on the guard until the node follows the head (ended 2026-11-17, decision 2 below).
+
+**2026-11-12**
+- C3c part 3 is the linear subset only; side blocks, rewinds and the rest go to B-219 (done, #1901) and B-220 (done 2026-11-24; IL, "C3c's leftovers after C4") (IL, "C3c part 3: the linear subset now").
+- Decision 1: execute a heavier branch first, on pinned layers; reverse-then-commit at the pinned cap (IL, "C4a part 3: the bounds").
+- Decision 2: more than 32 payloads in a row ahead of a `forkchoiceUpdated` cost a re-execution from stored bodies at the fork choice; the bounds stay (IL, "C4a part 3: the bounds").
+
+**2026-11-14**
+- A `Finalized` refusal is answered `-38002` (C4d).
+- On PoS, a block of a long branch found invalid moves the head back to the fork choice's last head; on PoW (W4) the executed prefix is kept when it outweighs the old head.
+- The designated-head arm (T170) moves from C4d to C4e.
+- The armed ordered clear lands with C5a, not before; the escalation trigger moves to C5a with it (T163 to T165, T174; #1843).
+- The fork choice's own finalized block is not used to plan against: the `Finalized` refusal stays held against the finalized block named before (IL, "C4d part 2b").
+- A branch longer than the forward layers is committed in place (C4d part 4a), with three side fixes: `eth_syncing` says syncing during an adoption; a never-executed head's arm answers `-38002` where it would reverse the finalized block; `safe` never names a reversed block (IL, "C4d part 4a", "C4d part 4b").
+- Startup reconciliation goes with what is on disk: rule 4 only, rules 2 and 3 not built (IL, "C4b part 4").
+
+**2026-11-15** (C5a intro above; IL, C4e part 6 and C5a)
+- Fork detection (`SYNC-FORK`) moves no state; the fetcher restarts from the common block.
+- The PoW escalation is folded into C5a with the PoS trigger.
+- C5a lifts the refusals of SNAP and of sync on the guard, so a hand-off runs live in this slice.
+- On PoS the gap after a hand-off is closed by an in-place adoption in chunks (`state.recovery.max-catch-up`, 8192).
+- The loop guard of a PoW escalation is permanent per branch: persisted, ended only by an operator (`forget-given-up-branches`).
+- A fault of this node waits for 64 (refused fork choices and 64 slots on PoS, 64 blocks of branch growth on PoW); a chain that cannot be reached escalates at once.
+
+**2026-11-16**
+- The pivot of the sync after an escalation is held to the refused branch; after a bounded number of attempts the requirement is dropped with an ERROR (IL, "C5a, a gate on part 10: the pivot ...", B-307 c1).
+- A fork deeper than the fetcher holds is refused (`ReorgRefusal.BeyondTheFetch`) and left to the escalation (IL, "C5a part 9c").
+- v0.12.0 is cut after C5a part 10 (B-312).
+
+**2026-11-17**
+- C5a part 10, decision 1: a hand-off that left accounts out heals first and is not let through on the guard.
+- Decision 2: SNAP is advertised on the guard (ends the 2026-11-11 decision).
+- Decision 3: regular sync from the genesis is refused on the guard (narrowed for PoW on 2026-11-18, ended on 2026-11-24, below) (IL, "C5a part 10").
+- A store that failed closed is persisted synced as `state.fault` and opens closed until a clear (B-252).
+- The oracle jar is v0.12.1, with v0.11.0 as the fallback (`baselines/pinned-jar.md`).
+
+**2026-11-18**
+- Checkpoint v2, decision 1: the ancestor window comes directly after the header block (data-model E.1).
+- Decision 2: an estimated TD is accepted with a WARN (the TD-exact flag).
+- Decision 3: on PoS the window is headers only and only a finalized block is exported.
+- Decision 4: a failed or killed import is cleared and not retried (`checkpoint.import.refused`, `checkpoint-sync-retry-refused`).
+- Only a content fault records an archive as refused (B-384; data-model E.1, "Names").
+- B-370 (in #1921): the overwrite is done under the lock, after the `AnchorReach` check.
+- Open item 3: a declared local core-geth peer counts toward EG-12's snap-peer precondition, with a `[SNAP-PEERS]` line.
+- A PoW guard node is exempt from the refusal of regular sync from the genesis (`do-snap-sync = false`, or no snap peer within `pow-snap-peer-wait`, 10 min); chains with a TTD keep the refusal (ended on 2026-11-24, below).
+- B-385 is solved as a local fault (#1943).
+
+**2026-11-19**
+- B-369: the audit is enabled, one pass per pivot (#1947).
+- B-074: the hand-off holds when its re-read finds excluded accounts (#1948).
+- B-392: the seal-only first header applies to `forkWeightNotStored` (#1949).
+- B-376: recovery refuses on positions (#1950).
+- B-391: the seal-only first header (#1938).
+
+**2026-11-20**
+- The Olympia treasury is `d6165F3aF4281037bce810621F62B43077Fb0e37` (B-388, #1966).
+- EG-12 / T264 wait for the NVMe drive; C8a waits with them.
+- The private Olympia ETC net (T244's run, T258's half, EG-6's second half) is skipped: there is no Olympia core-geth on the host.
+- EG-6's Mordor half runs on dev-node (open item 4).
+
+**2026-11-21**
+- B-411: state RPCs resolve the block by header, for geth parity (#1976).
+- B-413: the Ethash DAG is memory-mapped off-heap (#1977).
+
+**2026-11-24**
+- B-314: regular sync from the genesis is taken on the guard on every chain, a chain with a TTD included ("allow by default"; ends decision 3 of 2026-11-17). hive's engine simulators, devnets and Ephemery start from the genesis with the consensus client building the chain, and every path-live hive engine test had died at its start on the refusal. Still refused at start: `do-snap-sync = false` on a node that holds no state at all (`PathLiveSync.regularSyncWithNoStateRefusal`).
+
+**2026-11-27**
+- B-552 (history expiry and tiered storage, #1483) is P1 and stays in spec 018: history expiry is key to running nodes on smaller devices. It is placed as Track C slice C9 (C9a expiry, C9b the tiered freezer; "C9: history expiry"), which does not wait for GT-3, C7, C8a or C8b. The slice shape, the defaults (geth's `all`, so `none`) and C9b's form are this plan's proposals for the reviewers; open items 7 (EG-4) and 8 (the default and a small-device cutoff) are the user's.
+- ETC follows ETH: ETC and Mordor get the same C9 design (the same cutoff kinds, `none` by default on every chain, the same RPC and devp2p answers, the same optional freezer); every ETC-only rule and refusal is removed. ETC offers named points for its activated forks ("spiral or other named forks"; forge picks the set, each hash from a verified archive checked against two clients); no unscheduled fork is named. Expiry on ETC is one-way (no era1 archive).
+- Open item 7: option (b). EG-4 is accepted on its current run with its disk figure marked without expiry; the ~150 GB expectation moves to T313 (SC-020).
+- Open item 8: a `pivot` cutoff is added (history from the sync's pivot on; every chain); the default stays `none` and may be revisited after T313 measures `pivot`.

@@ -11,7 +11,7 @@ import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs.given
 import com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryNetwork.Peer
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.Ping
 import com.chipprbots.scalanet.discovery.ethereum.v4.Payload.*
-import com.chipprbots.scalanet.discovery.ethereum.v4.mocks.{MockSigAlg, MockPeerGroup, MockChannel}
+import com.chipprbots.scalanet.discovery.ethereum.v4.mocks.{AwaitCondition, MockSigAlg, MockPeerGroup, MockChannel}
 import com.chipprbots.scalanet.peergroup.Channel.ChannelEvent
 import com.chipprbots.scalanet.peergroup.Channel.MessageReceived
 import com.chipprbots.scalanet.NetUtils.aRandomAddress
@@ -195,7 +195,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
   it should "return Some Nodes if the peer responds" in test {
     new Fixture:
       override lazy val config = defaultConfig.copy(
-        kademliaTimeout = 250.millis
+        kademliaTimeout = 3.seconds
       )
 
       override val test = for
@@ -214,7 +214,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
   it should "collect responses up to the timeout" in test {
     new Fixture:
       override lazy val config = defaultConfig.copy(
-        kademliaTimeout = 500.millis,
+        kademliaTimeout = 3.seconds,
         kademliaBucketSize = 16
       )
 
@@ -407,9 +407,12 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
         msg1 <- channel.nextMessageFromSUT()
 
         _ <- token.complete(()).void
+        // Cancelling interrupts the channel's stream asynchronously; its release (the refcount hitting 0) is the
+        // observable end of handling. Without waiting for it the second ping can still be served.
+        _ <- AwaitCondition.until(IO(channel.isClosed))(identity)
 
         _ <- channel.sendPayloadToSUT(ping, remotePrivateKey)
-        msg2 <- channel.nextMessageFromSUT()
+        msg2 <- channel.nextMessageFromSUT(MockChannel.AbsenceWait)
       yield
         msg1 should not be empty
         msg2 shouldBe empty
@@ -424,8 +427,9 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
       override val test = for
         _ <- network.startHandling(StubDiscoveryRPC())
         channel <- peerGroup.createServerChannel(from = remoteAddress)
-        _ <- IO.sleep(config.messageExpiration + 100.millis)
-      yield channel.isClosed shouldBe true
+        // The idle timeout fires after `messageExpiration`; wait for the close itself rather than a fixed delay.
+        closed <- AwaitCondition.until(IO(channel.isClosed))(identity)
+      yield closed shouldBe true
   }
 
   it should "ignore incoming response messages" in test {
@@ -438,7 +442,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
         )
         channel <- peerGroup.createServerChannel(from = remoteAddress)
         _ <- channel.sendPayloadToSUT(Neighbors(Nil, validExpiration), remotePrivateKey)
-        msg1 <- channel.nextMessageFromSUT()
+        msg1 <- channel.nextMessageFromSUT(MockChannel.AbsenceWait)
         _ <- channel.sendPayloadToSUT(FindNode(remotePublicKey, validExpiration), remotePrivateKey)
         msg2 <- channel.nextMessageFromSUT()
       yield
@@ -461,7 +465,8 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
         packet <- channel.sendPayloadToSUT(ping, remotePrivateKey)
         msg <- channel.nextMessageFromSUT()
       yield assertMessageFrom(publicKey, msg) { case Pong(to, pingHash, expiration, enrSeq) =>
-        to shouldBe toNodeAddress(localAddress)
+        // discv4.md: Pong.to is the address the Ping was received from, i.e. the remote peer, not the local node.
+        to shouldBe toNodeAddress(remoteAddress)
         pingHash shouldBe packet.hash
         assertExpirationSet(expiration)
         enrSeq shouldBe Some(localENRSeq)
@@ -561,7 +566,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
           channel <- peerGroup.createServerChannel(from = remoteAddress)
           request = requestMap(rpc)
           _ <- channel.sendPayloadToSUT(request, remotePrivateKey)
-          msg <- channel.nextMessageFromSUT()
+          msg <- channel.nextMessageFromSUT(MockChannel.AbsenceWait)
         yield msg shouldBe empty
     }
 
@@ -580,7 +585,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
             case p: Payload.HasExpiration[?] => p.withExpiration(invalidExpiration)
             case p                           => p
           _ <- channel.sendPayloadToSUT(request, remotePrivateKey)
-          msg <- channel.nextMessageFromSUT()
+          msg <- channel.nextMessageFromSUT(MockChannel.AbsenceWait)
         yield
           msg shouldBe empty
           called shouldBe false
@@ -641,7 +646,7 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
           channel <- peerGroup.createServerChannel(from = remoteAddress)
           request = requestMap(rpc)
           _ <- channel.sendPayloadToSUT(request, remotePrivateKey)
-          msg1 <- channel.nextMessageFromSUT()
+          msg1 <- channel.nextMessageFromSUT(MockChannel.AbsenceWait)
           _ <- channel.sendPayloadToSUT(request, remotePrivateKey)
           msg2 <- channel.nextMessageFromSUT()
         yield
@@ -660,10 +665,10 @@ class DiscoveryNetworkSpec extends AsyncFlatSpec with Matchers:
             BitVector(randomBytes(3))
           )
           _ <- channel.sendMessageToSUT(garbage)
-          msg1 <- channel.nextMessageFromSUT()
+          msg1 <- channel.nextMessageFromSUT(MockChannel.AbsenceWait)
           request = requestMap(rpc)
           _ <- channel.sendPayloadToSUT(request, remotePrivateKey)
-          msg2 <- channel.nextMessageFromSUT()
+          msg2 <- channel.nextMessageFromSUT(MockChannel.AbsenceWait)
         yield
           msg1 shouldBe empty
           msg2 shouldBe empty
@@ -717,9 +722,11 @@ object DiscoveryNetworkSpec extends Matchers:
     )
 
   val defaultConfig = DiscoveryConfig.default.copy(
-    requestTimeout = 100.millis,
+    // Generous: a request that is answered returns as soon as the answer arrives; only the tests that expect a
+    // timeout wait this long. A tight value makes every answered request race a loaded machine.
+    requestTimeout = 2.seconds,
     messageExpiration = 60.seconds,
-    kademliaTimeout = 250.millis,
+    kademliaTimeout = 3.seconds,
     kademliaBucketSize = 16,
     maxClockDrift = Duration.Zero
   )
@@ -777,8 +784,14 @@ object DiscoveryNetworkSpec extends Matchers:
         config = config
       ).unsafeRunSync()
 
+    // The wall clock when the fixture was created; the SUT stamps messages some time after this and before the
+    // assertion runs, so the expiration must fall between the two. (A fixed +-3 s window around the assertion time
+    // fails whenever the machine is slow enough to delay the assertion by that much.)
+    val createdAtSeconds: Long = currentTimeSeconds
+
     def assertExpirationSet(expiration: Long) =
-      expiration shouldBe (currentTimeSeconds + config.messageExpiration.toSeconds) +- 3
+      val ttl = config.messageExpiration.toSeconds
+      expiration should ((be >= (createdAtSeconds + ttl)).and(be <= (currentTimeSeconds + ttl)))
 
     def validExpiration =
       currentTimeSeconds + config.messageExpiration.toSeconds

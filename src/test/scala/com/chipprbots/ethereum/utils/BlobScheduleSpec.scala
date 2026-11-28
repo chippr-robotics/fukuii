@@ -185,12 +185,108 @@ class BlobScheduleSpec extends AnyFlatSpec with Matchers:
       include("cancun.max is not an integer")
   }
 
-  it should "refuse unknown fork and field keys, and bpo3+" taggedAs (UnitTest) in {
-    failure("blob-schedule { bpo3 { target = 1, max = 2, base-fee-update-fraction = 3 } }") should
-      include("unknown fork key(s) bpo3")
+  it should "refuse unknown fork and field keys, and BPO forks beyond bpo5" taggedAs (UnitTest) in {
+    failure("blob-schedule { bpo6 { target = 1, max = 2, base-fee-update-fraction = 3 } }") should
+      include("unknown fork key(s) bpo6")
     failure("blob-schedule { cancun { target = 3, max = 6, base-fee-update-fraction = 1, maxBlobs = 9 } }") should
       include("unknown key(s) maxBlobs")
-    failure("bpo3-timestamp = 100") should include("bpo3-timestamp is declared")
+    failure("bpo6-timestamp = 100") should include("bpo6-timestamp is declared")
+    failure("bpo0-timestamp = 100") should include("bpo0-timestamp is declared")
+  }
+
+  // --- BPO3..BPO5 (B-443) ---------------------------------------------------------------------------------------
+
+  /** execution-specs tests@v21.0.0 `BPO3ToBPO4AtTime15k` fixtures' `config.blobSchedule`, verbatim (hex decoded). */
+  private val eestSchedule =
+    """blob-schedule {
+      |  cancun { target = 3, max = 6, base-fee-update-fraction = 3338477 }
+      |  prague { target = 6, max = 9, base-fee-update-fraction = 5007716 }
+      |  osaka { target = 6, max = 9, base-fee-update-fraction = 5007716 }
+      |  bpo1 { target = 10, max = 15, base-fee-update-fraction = 8346193 }
+      |  bpo2 { target = 14, max = 21, base-fee-update-fraction = 11684671 }
+      |  bpo3 { target = 21, max = 32, base-fee-update-fraction = 20609697 }
+      |  bpo4 { target = 14, max = 21, base-fee-update-fraction = 13739630 }
+      |}
+      |cancun-timestamp = 0
+      |prague-timestamp = 0
+      |osaka-timestamp = 0
+      |bpo1-timestamp = 0
+      |bpo2-timestamp = 0
+      |""".stripMargin
+
+  it should "load bpo3..bpo5 timestamps and entries, and resolve each fork at its boundary" taggedAs (UnitTest) in {
+    val c = load(eestSchedule + "bpo3-timestamp = 15000\nbpo4-timestamp = 30000")
+    c.forkTimestamps.bpo3Timestamp shouldBe Some(15000L)
+    c.forkTimestamps.bpo4Timestamp shouldBe Some(30000L)
+    c.forkTimestamps.bpo5Timestamp shouldBe None
+    c.blobSchedule.bpo3 shouldBe Some(BlobParams.Bpo3)
+    c.blobSchedule.bpo4 shouldBe Some(BlobParams.Bpo4)
+    c.blobParamsAt(Timestamp(14999L)) shouldBe Some(BlobParams.Bpo2)
+    c.blobParamsAt(Timestamp(15000L)) shouldBe Some(BlobParams.Bpo3)
+    c.blobParamsAt(Timestamp(29999L)) shouldBe Some(BlobParams.Bpo3)
+    // BPO4 LOWERS the parameters again: the latest fork wins, not the largest value.
+    c.blobParamsAt(Timestamp(30000L)) shouldBe Some(BlobParams.Bpo4)
+    c.blobParamsAt(Timestamp(Long.MaxValue)) shouldBe Some(BlobParams.Bpo4)
+    c.latestBpoAt(Timestamp(14999L)) shouldBe Some(2)
+    c.latestBpoAt(Timestamp(15000L)) shouldBe Some(3)
+    c.latestBpoAt(Timestamp(30000L)) shouldBe Some(4)
+
+    val five = load(
+      eestSchedule +
+        """bpo3-timestamp = 10
+          |bpo4-timestamp = 20
+          |bpo5-timestamp = 30
+          |blob-schedule.bpo5 { target = 30, max = 40, base-fee-update-fraction = 99 }""".stripMargin
+    )
+    five.blobParamsAt(Timestamp(29L)) shouldBe Some(BlobParams.Bpo4)
+    five.blobParamsAt(Timestamp(30L)) shouldBe Some(BlobParams(30, 40, BigInt(99)))
+    five.latestBpoAt(Timestamp(30L)) shouldBe Some(5)
+  }
+
+  it should "refuse a declared bpo3, bpo4 or bpo5 timestamp without an entry" taggedAs (UnitTest) in {
+    val noBpo4 = eestSchedule.replace("  bpo4 { target = 14, max = 21, base-fee-update-fraction = 13739630 }\n", "")
+    failure(noBpo4 + "bpo3-timestamp = 10\nbpo4-timestamp = 20") should
+      include("bpo4-timestamp is declared but blob-schedule has no bpo4 entry")
+    failure(eestSchedule + "bpo3-timestamp = 10\nbpo4-timestamp = 20\nbpo5-timestamp = 30") should
+      include("no bpo5 entry")
+  }
+
+  it should "refuse bpo3..bpo5 out of go-ethereum's fork order, Amsterdam before BPO3 included" taggedAs (
+    UnitTest
+  ) in {
+    failure(eestSchedule.replace("bpo2-timestamp = 0", "bpo2-timestamp = 20") + "bpo3-timestamp = 10") should
+      include("bpo2-timestamp (20) is after bpo3-timestamp (10)")
+    failure(eestSchedule + "bpo3-timestamp = 30\nbpo4-timestamp = 20") should
+      include("bpo3-timestamp (30) is after bpo4-timestamp (20)")
+    failure(eestSchedule + "amsterdam-timestamp = 20\nbpo3-timestamp = 10") should
+      include("amsterdam-timestamp (20) is after bpo3-timestamp (10)")
+    // Undeclared forks are skipped, as in go-ethereum's CheckConfigForkOrder: bpo2 -> bpo4 with no bpo3 is ordered.
+    load(eestSchedule + "bpo4-timestamp = 10").blobParamsAt(Timestamp(10L)) shouldBe Some(BlobParams.Bpo4)
+    // Amsterdam then BPO3 is go-ethereum's order; Amsterdam still inherits BPO2's entry.
+    val glam = load(
+      eestSchedule + "amsterdam-timestamp = 10\nbpo3-timestamp = 20\n" +
+        "blob-schedule.amsterdam { target = 14, max = 21, base-fee-update-fraction = 11684671 }"
+    )
+    glam.blobParamsAt(Timestamp(19L)) shouldBe Some(BlobParams.Bpo2)
+    glam.blobParamsAt(Timestamp(20L)) shouldBe Some(BlobParams.Bpo3)
+  }
+
+  "a code-built schedule" should "fall back to the previous entry for a BPO fork it has no entry for" taggedAs (
+    UnitTest
+  ) in {
+    // go-ethereum eip4844.latestBlobConfig: `IsBPO3(time) && s.BPO3 != nil`, else the next fork down.
+    val forks = ForkTimestamps(
+      cancunTimestamp = Some(0L),
+      pragueTimestamp = Some(0L),
+      bpo1Timestamp = Some(0L),
+      bpo2Timestamp = Some(0L),
+      bpo3Timestamp = Some(100L)
+    )
+    BlobSchedule.GethDefaults.paramsAt(Timestamp(100L), forks) shouldBe Some(BlobParams.Bpo2)
+    BlobSchedule.GethDefaults.copy(bpo3 = Some(BlobParams.Bpo3)).paramsAt(Timestamp(100L), forks) shouldBe
+      Some(BlobParams.Bpo3)
+    BlobSchedule.GethDefaults.copy(bpo3 = Some(BlobParams.Bpo3)).paramsAt(Timestamp(99L), forks) shouldBe
+      Some(BlobParams.Bpo2)
   }
 
   it should "refuse blob-fork timestamps out of fork order" taggedAs (UnitTest) in {

@@ -6,7 +6,7 @@ import com.chipprbots.scalanet.discovery.crypto.{PublicKey, Signature}
 import com.chipprbots.scalanet.discovery.ethereum.{EthereumNodeRecord, Node}
 import com.chipprbots.scalanet.discovery.ethereum.KeyValueTag, KeyValueTag.NetworkId
 import com.chipprbots.scalanet.discovery.ethereum.codecs.DefaultCodecs
-import com.chipprbots.scalanet.discovery.ethereum.v4.mocks.MockSigAlg
+import com.chipprbots.scalanet.discovery.ethereum.v4.mocks.{AwaitCondition, MockSigAlg}
 import com.chipprbots.scalanet.discovery.ethereum.v4.DiscoveryNetwork.Peer
 import com.chipprbots.scalanet.discovery.ethereum.v4.KBucketsWithSubnetLimits.SubnetLimits
 import com.chipprbots.scalanet.kademlia.Xor
@@ -270,9 +270,8 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
     new BondingFixture:
       override val test = for
         _ <- service.bond(remotePeer)
-        // Allow the ENR fetching to finish.
-        _ <- stateRef.get.flatMap(_.fetchEnrMap.get(remotePeer).fold(IO.sleep(100.millis))(_.get.void))
-        state <- stateRef.get
+        // The ENR fetch runs in the background; wait for it to land in the state.
+        state <- AwaitCondition.until(stateRef.get)(_.enrMap.contains(remotePublicKey))
       yield
         state.enrMap(remotePublicKey) shouldBe remoteENR
         state.nodeMap(remotePublicKey) shouldBe remoteNode
@@ -518,10 +517,11 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
       override val test = for
         _ <- stateRef.update(_.setEnrolled)
         maybeEnrSeq <- service.ping(remotePeer)(None)
-        // Wait for any ongoing bonding and ENR fetching to finish.
-        _ <- stateRef.get.flatMap(_.bondingResultsMap.get(remotePeer).fold(IO.unit)(_.pongReceived.get.void))
-        _ <- stateRef.get.flatMap(_.fetchEnrMap.get(remotePeer).fold(IO.unit)(_.get.void))
-        state <- stateRef.get
+        // Bonding and the ENR fetch are `.start`ed in the background after the Pong is returned, so the state may not
+        // have a bonding entry yet. Wait for the outcome itself instead of for an entry that may not exist.
+        state <- AwaitCondition.until(stateRef.get)(s =>
+          s.enrMap.contains(remotePeer.id) && s.lastPongTimestampMap.contains(remotePeer)
+        )
       yield
         maybeEnrSeq shouldBe Some(Some(localENR.content.seq))
         state.nodeMap(remotePeer.id) shouldBe remoteNode
@@ -859,11 +859,16 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
         _ <- addRemotePeer
         nodes1 <- service.getNodes
         _ <- service.lookup(targetPublicKey)
-        nodes2 <- service.getNodes
-        state <- stateRef.get
+        // The lookup leaves ENR fetches running in the background, so `getNodes` and the state snapshot are two reads
+        // that can straddle an update. Read the pair again until they agree: once the background work settles they
+        // must, and if they never do the guard in `until` fails the test.
+        (nodes2, state) <- AwaitCondition.until(service.getNodes.product(stateRef.get)) { case (nodes, state) =>
+          nodes.size == state.enrMap.size
+        }
       yield
         nodes0 shouldBe Set(localNode)
         nodes1 shouldBe Set(localNode, remoteNode)
+        nodes2 should contain(localNode)
         nodes2.size shouldBe state.enrMap.size
   }
 
@@ -940,8 +945,8 @@ class DiscoveryServiceSpec extends AsyncFlatSpec with Matchers with TableDrivenP
           _.withLastPongTimestamp(remotePeer, time0)
         }
         _ <- service.updateExternalAddress(newIP)
-        _ <- IO.sleep(250.millis) // It's running in the background.
-        state <- stateRef.get
+        // The pings run in the background; wait until the new Pong timestamp lands.
+        state <- AwaitCondition.until(stateRef.get)(_.lastPongTimestampMap(remotePeer) > time0)
       yield state.lastPongTimestampMap(remotePeer) should be > time0
   }
 

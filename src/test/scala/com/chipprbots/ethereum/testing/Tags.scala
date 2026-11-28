@@ -100,8 +100,20 @@ object Tags:
     *   - State root calculation
     *   - RLP encoding/decoding
     *   - Network throughput
+    *
+    * A wall clock is not deterministic, so `testEssential` and `testStandard` exclude the tag (`-l BenchmarkTest` in
+    * build.sbt) and `testComprehensive` runs it (B-555). Keep a timed suite's untimed checks in an untagged case.
     */
   object BenchmarkTest extends Tag("BenchmarkTest")
+
+  /** Differential suites run at full volume (spec 021 GT-2, research R-12): at least 10^7 generated cases per operation
+    * against a test-tree oracle, so minutes of CPU per run.
+    *
+    * Excluded from `testEssential` and `testStandard` (`-l DifferentialTest` in build.sbt) and from the Coverage job.
+    * CI runs them in their own step: nightly, and on PRs that touch `domain/UInt256*` or `vm/`. Each full suite has a
+    * fast sibling (about 10^4 cases per operation, tagged `VMTest`) that stays in Tier 1.
+    */
+  object DifferentialTest extends Tag("DifferentialTest")
 
   /** Long-running stress tests. Reserved for future use — no tests currently use this tag. */
   object StressTest extends Tag("StressTest")

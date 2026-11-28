@@ -2,15 +2,16 @@ package com.chipprbots.ethereum.blockchain.sync.snap.actors.bytecode
 
 import java.net.InetSocketAddress
 
+import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.TestInbox
 import org.apache.pekko.actor.typed.ActorRef
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.util.ByteString
 
 import scala.collection.mutable
-import scala.concurrent.duration.FiniteDuration
+import scala.concurrent.duration.*
 
-import org.scalatest.flatspec.AnyFlatSpec
+import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.blockchain.sync.snap.ByteCodeTask
@@ -43,6 +44,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerActor
 import com.chipprbots.ethereum.network.PeerId
+import com.chipprbots.ethereum.network.PeerScoringManager
 import com.chipprbots.ethereum.network.p2p.messages.SNAP.ByteCodes
 import com.chipprbots.ethereum.testing.NoRandomAccessSeq
 import com.chipprbots.ethereum.testing.Tags.UnitTest
@@ -55,7 +57,8 @@ import com.chipprbots.ethereum.testing.TestEvmCodeStorage
   */
 private[actors] class StubByteCodeResponseHandlingState(
     val bytecodeStore: EvmCodeStorage,
-    val snapSyncController: ActorRef[SNAPSyncController.Command]
+    val snapSyncController: ActorRef[SNAPSyncController.Command],
+    val requestTracker: SNAPRequestTracker
 ) extends ByteCodeResponseHandlingState
     with ByteCodeEnv
     with ByteCodeDispatchApi
@@ -78,7 +81,6 @@ private[actors] class StubByteCodeResponseHandlingState(
   def context: ActorContext[ByteCodeCoordinator.Command] = notUsed("context")
   val log: org.slf4j.Logger = org.slf4j.LoggerFactory.getLogger(classOf[StubByteCodeResponseHandlingState])
   def networkPeerManager: ActorRef[NetworkPeerManagerActor.Command] = notUsed("networkPeerManager")
-  def requestTracker: SNAPRequestTracker = notUsed("requestTracker")
   val cooldownConfig: ByteCodeCoordinator.ByteCodePeerCooldownConfig =
     ByteCodeCoordinator.ByteCodePeerCooldownConfig.default
   def intakeBudget: Option[SnapIntakeBudget] = None
@@ -125,17 +127,36 @@ private[actors] class StubByteCodeResponseHandlingState(
   * coordinator environment and its two callee Api traits. The response cases read and write
   * `ByteCodeResponseHandlingState`; the intake cases cover the #1501 `skipPresent` check and the dedup pass.
   */
-class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
+class ByteCodeResponseHandlingSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers:
+
+  implicit private val scheduler: org.apache.pekko.actor.Scheduler = system.classicSystem.scheduler
 
   private val config = ByteCodeCoordinator.ByteCodePeerCooldownConfig.default
 
   private type Module = StubByteCodeResponseHandlingState & ByteCodeResponseHandling
 
-  private def newModule(): (Module, TestInbox[SNAPSyncController.Command]) =
+  private def newModule(
+      tracker: SNAPRequestTracker = new SNAPRequestTracker(),
+      store: EvmCodeStorage = new TestEvmCodeStorage()
+  ): (Module, TestInbox[SNAPSyncController.Command]) =
     val controller = TestInbox[SNAPSyncController.Command]()
     val module =
-      new StubByteCodeResponseHandlingState(new TestEvmCodeStorage(), controller.ref) with ByteCodeResponseHandling
+      new StubByteCodeResponseHandlingState(store, controller.ref, tracker) with ByteCodeResponseHandling
     (module, controller)
+
+  /** A code store whose every write fails, as a full or read-only disk would (B-488). */
+  private def failingStore: EvmCodeStorage =
+    new EvmCodeStorage(
+      new com.chipprbots.ethereum.db.dataSource.EphemDataSource(Map.empty):
+        override def update(dataSourceUpdates: Seq[com.chipprbots.ethereum.db.dataSource.DataUpdate]): Unit =
+          throw new java.io.IOException("injected write failure")
+    )
+
+  /** A tracker that feeds `scorer`, holding request 7 for `p` as the dispatch registers it. */
+  private def trackerHolding(p: Peer, scorer: PeerScoringManager): SNAPRequestTracker =
+    val tracker = new SNAPRequestTracker(scorer = Some(scorer))
+    tracker.trackRequest(BigInt(7), p, SNAPRequestTracker.RequestType.GetByteCodes, timeout = 1.hour)(())
+    tracker
 
   private def peer(id: String): Peer =
     Peer(PeerId(id), new InetSocketAddress("127.0.0.1", 30303), TestInbox[PeerActor.Command]().ref, false)
@@ -181,6 +202,26 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     m.calls.toSeq shouldBe Seq(s"grow p1 1000 ${codes.map(_.size).sum}", "clear p1")
     m.cooldowns shouldBe empty
     m.completionChecks shouldBe 1
+  }
+
+  it should "report a failed store to the controller and not blame the peer, keeping the task whole (B-488)" taggedAs UnitTest in {
+    val (m, controller) = newModule(store = failingStore)
+    val worker = TestInbox[ByteCodeWorker.Command]()
+    val p = peer("p1")
+    val codes = Seq(code(1), code(2))
+    val task = inFlight(m, codes.map(kec256(_)), worker.ref, p)
+
+    m.handleByteCodesResponse(ByteCodes(BigInt(7), codes))
+
+    m.activeTasks shouldBe empty
+    withClue("re-queued whole, so no code is skipped: ")(m.pendingTasks.toSeq shouldBe Seq(task.copy(pending = false)))
+    m.completedTaskCount shouldBe 0L
+    val faults = controller.receiveAll().collect { case f: SNAPSyncController.SnapStoreFaulted => f }
+    faults.map(_.where) shouldBe Seq("bytecode (2 codes)")
+    withClue("a local fault is not the peer's: ")(m.cooldowns shouldBe empty)
+    m.calls.toSeq shouldBe empty
+    worker.receiveAll() shouldBe Seq(ByteCodeWorkerRelease(BigInt(7)))
+    m.idled.toSeq shouldBe Seq(worker.ref)
   }
 
   it should "re-queue a partly served task's remainder and keep the task open" taggedAs UnitTest in {
@@ -257,6 +298,42 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     m.cooldowns shouldBe empty
   }
 
+  it should "credit the peer for a valid reply, which the worker never sees (B-332)" taggedAs UnitTest in {
+    val p = peer("p1")
+    val scorer = new PeerScoringManager()
+    val tracker = trackerHolding(p, scorer)
+    val (m, _) = newModule(tracker)
+    val worker = TestInbox[ByteCodeWorker.Command]()
+    val codes = Seq(code(1), code(2))
+    inFlight(m, codes.map(kec256(_)), worker.ref, p)
+
+    m.handleByteCodesResponse(ByteCodes(BigInt(7), codes))
+
+    tracker.isPending(BigInt(7)) shouldBe false
+    scorer.getScore(p.id).responsesReceived shouldBe 1
+    // The worker's release completes with 0 items: the request is gone, so it changes nothing.
+    worker.receiveAll() shouldBe Seq(ByteCodeWorkerRelease(BigInt(7)))
+    tracker.completeRequest(BigInt(7), 0) shouldBe None
+    scorer.getScore(p.id).responsesReceived shouldBe 1
+  }
+
+  it should "credit an empty reply as an answer, and an invalid one not at all (B-332)" taggedAs UnitTest in {
+    val p = peer("p1")
+    val emptyScorer = new PeerScoringManager()
+    val (empty, _) = newModule(trackerHolding(p, emptyScorer))
+    inFlight(empty, Seq(kec256(code(1))), TestInbox[ByteCodeWorker.Command]().ref, p)
+    empty.handleByteCodesResponse(ByteCodes(BigInt(7), Seq.empty))
+    emptyScorer.getScore(p.id).responsesReceived shouldBe 1
+
+    val invalidScorer = new PeerScoringManager()
+    val invalidTracker = trackerHolding(p, invalidScorer)
+    val (invalid, _) = newModule(invalidTracker)
+    inFlight(invalid, Seq(kec256(code(1)), kec256(code(2))), TestInbox[ByteCodeWorker.Command]().ref, p)
+    invalid.handleByteCodesResponse(ByteCodes(BigInt(7), Seq(code(2), code(1)))) // out of request order
+    invalidScorer.getScore(p.id).responsesReceived shouldBe 0
+    invalidTracker.isPending(BigInt(7)) shouldBe true // the worker's release ends it, with 0 items
+  }
+
   it should "ignore a response for an unknown request" taggedAs UnitTest in {
     val (m, controller) = newModule()
 
@@ -294,7 +371,8 @@ class ByteCodeResponseHandlingSpec extends AnyFlatSpec with Matchers:
     val failingCodes = new TestEvmCodeStorage():
       override def put(key: ByteString, value: ByteString): DataSourceBatchUpdate =
         throw new RuntimeException("injected code write failure")
-    val m = new StubByteCodeResponseHandlingState(failingCodes, controller.ref) with ByteCodeResponseHandling
+    val m = new StubByteCodeResponseHandlingState(failingCodes, controller.ref, new SNAPRequestTracker())
+      with ByteCodeResponseHandling
     val worker = TestInbox[ByteCodeWorker.Command]()
     val c = code(1)
     inFlight(m, Seq(kec256(c)), worker.ref, peer("p1"))

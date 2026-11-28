@@ -58,7 +58,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
         monetary-policy {
@@ -111,7 +110,8 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "0"
         max-code-size = "24576"
         account-start-nonce = "0"
-        gas-tie-breaker = false
+        # removed (B-284): a chain file that still sets it loads, and the key is ignored
+        gas-tie-breaker = true
         eth-compatible-storage = true
         bootstrap-nodes = []
         monetary-policy {
@@ -176,7 +176,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
         monetary-policy {
@@ -223,7 +222,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
         monetary-policy {
@@ -273,7 +271,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
         monetary-policy {
@@ -322,7 +319,6 @@ class BlockchainsConfigSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
         difficulty-bomb-removal-block-number = "5900000"
         max-code-size = "24576"
         account-start-nonce = "0"
-        gas-tie-breaker = false
         eth-compatible-storage = true
         bootstrap-nodes = []
         monetary-policy {

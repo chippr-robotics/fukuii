@@ -70,6 +70,23 @@ sbt "IntegrationTest / testOnly com.chipprbots.ethereum.ethtest.*"
 **Expected Runtime:** 20-30 minutes
 **Timeout:** 60 minutes
 
+#### Legacy BlockchainTests (job `legacy-blockchain-tests`)
+
+`LegacyPreByzantiumBlockchainTestsSpec` needs the ethereum/legacytests fixtures, which are not vendored, and cancels
+without them, as it does in the job above. A second job of the same workflow checks them out sparsely
+(`Constantinople/BlockchainTests` and `Cancun/BlockchainTests`, 14,193 files), pinned by commit (`LEGACY_TESTS_SHA`),
+and runs the spec with `FUKUII_LEGACY_TESTS_REQUIRED=1`, under which a missing or partial corpus fails instead of
+cancelling. Two slices: Frontier/Homestead/EIP150/EIP158 (6,817 vectors) and Byzantium..Berlin (54,497). Their
+known-failure lists are empty, so any failing vector fails the job. To run it locally:
+
+```bash
+FUKUII_LEGACY_TESTS_REQUIRED=1 \
+FUKUII_LEGACY_TESTS_DIRS=<legacytests>/Constantinople/BlockchainTests:<legacytests>/Cancun/BlockchainTests \
+sbt -J-Xmx6g -J-Xss4M "IntegrationTest / testOnly *LegacyPreByzantiumBlockchainTestsSpec"
+```
+
+**Timeout:** 90 minutes
+
 #### Artifacts
 
 1. **ethereum-tests-nightly-logs**

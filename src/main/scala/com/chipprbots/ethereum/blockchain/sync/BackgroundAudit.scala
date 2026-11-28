@@ -46,6 +46,8 @@ import com.chipprbots.ethereum.db.storage.RawNodeRead
 import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.SnapSyncProgressStorage
 import com.chipprbots.ethereum.db.storage.StateStorage
+import com.chipprbots.ethereum.db.storage.pathstate.PositionRepairs
+import com.chipprbots.ethereum.db.storage.pathstate.StateUnavailable
 import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -70,7 +72,9 @@ import com.chipprbots.ethereum.utils.Config.SyncConfig
   *
   * '''Threads.''' Reads run in Futures on the blocking dispatcher, one batch at a time, and their results come back as
   * messages carrying the pass's generation. Every write happens on this actor (spawned on the blocking dispatcher too,
-  * since a repair can wait on `commitLock`), so a Future that outlives a stop writes nothing (decision 9).
+  * since a repair can wait on `commitLock`), so a Future that outlives a stop writes nothing (decision 9). The one
+  * exception is a repair or delete by position, which can wait for a whole head move: it runs in a Future too and its
+  * answer comes back as a message, the hole staying in flight until then.
   */
 object BackgroundAudit:
 
@@ -156,7 +160,8 @@ object BackgroundAudit:
       nowMillis: () => Long = () => System.currentTimeMillis(),
       readEc: Option[ExecutionContext] = None,
       settings: Settings = Settings(),
-      nanoTime: () => Long = () => System.nanoTime()
+      nanoTime: () => Long = () => System.nanoTime(),
+      positions: Option[PositionRepairs] = None
   )
 
   sealed trait Command
@@ -184,6 +189,14 @@ object BackgroundAudit:
       extends Command
   final private case class HoleRefreshed(generation: Long, hole: AuditHole, outcome: Try[AuditWalk.Settled])
       extends Command
+  final private case class PositionRepaired(generation: Long, hole: AuditHole, outcome: Try[RepairOutcome])
+      extends Command
+  final private case class PositionDeleted(
+      generation: Long,
+      hole: AuditHole,
+      where: String,
+      outcome: Try[BadEntryDelete]
+  ) extends Command
   final private case class FetchReply(response: BlockFetcher.FetchResponse) extends Command
   final private case class FetchTimedOut(hash: ByteString) extends Command
 
@@ -208,7 +221,8 @@ object BackgroundAudit:
       code: EvmCodeStorage,
       networkPeerManager: ActorRef[NetworkPeerManagerActor.Command],
       peerEventBus: ActorRef[PeerEventBusActor.Command],
-      syncConfig: SyncConfig
+      syncConfig: SyncConfig,
+      positions: Option[PositionRepairs] = None
   ): Behavior[Command] =
     apply(
       Deps(
@@ -216,10 +230,40 @@ object BackgroundAudit:
         new SnapSyncProgressStorage(appState.dataSource),
         state,
         code,
-        new StorageReader(blockchainReader, appState, state, code),
-        privateFetcher(networkPeerManager, peerEventBus, syncConfig)
+        positions.fold[AuditReader](new StorageReader(blockchainReader, appState, state, code))(repairs =>
+          new PositionReader(
+            hash => blockchainReader.getBlockHeaderByHash(BlockHash(hash)).map(_.unixTimestamp.toLong),
+            repairs,
+            code
+          )
+        ),
+        privateFetcher(networkPeerManager, peerEventBus, syncConfig),
+        positions = positions
       )
     )
+
+  /** What the walk reads on the unified layout (spec 018 C5b): the rows of CF `t` and `u` by position, read directly
+    * with no cache in front, and the anchor's block as the head. The audit's root is the anchor's, not the best
+    * block's: the best block may be ahead of the state on disk by forward layers, and only the anchor's rows are there
+    * to read. A block commit that moves the anchor under the walk makes some positions "moved", which the walk counts
+    * and resolves again from the new anchor's root, as it does for a re-peg on the hash store.
+    */
+  final class PositionReader(
+      timestampOf: ByteString => Option[Long],
+      positions: PositionRepairs,
+      code: EvmCodeStorage
+  ) extends AuditReader:
+    override def nodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
+      throw new UnsupportedOperationException(
+        "A position store cannot find nodes by hash alone: the audit reads them by position"
+      )
+    override def nodesAt(requests: Seq[(AuditPosition, ByteString)]): Seq[RawNodeRead] =
+      positions.rawRowsAt(requests.map((at, hash) => (at.key, hash)))
+    override def codes(hashes: Seq[ByteString]): Seq[Option[ByteString]] = code.multiGetNoFill(hashes)
+    override def head(): Option[AuditHead] =
+      positions.anchor.flatMap(held =>
+        timestampOf(held.hash).map(seconds => AuditHead(held.number, held.stateRoot, seconds))
+      )
 
   /** What the walk reads: the hash store on both schemes (what import reads, and Path publishes into at finalisation),
     * a read-only view with nothing in its buffer, and the best block by its hash, as `getBestBlock` has it.
@@ -266,6 +310,11 @@ object BackgroundAudit:
 
   private val PrivateBlacklistSize: Int = 1000
 
+  /** How many times a repair by position may find its position no longer needed before the position is counted
+    * unresolved, so that a walk and a judgement that disagree end the pass and do not loop.
+    */
+  private[sync] val MaxNotReached: Int = 3
+
   def apply(deps: Deps): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -291,6 +340,11 @@ object BackgroundAudit:
     private val holes = mutable.Queue.empty[AuditHole]
     private val holeHashes = mutable.Set.empty[ByteString]
     private var fetching: Option[AuditHole] = None
+    // A write by position runs off the actor and is not yet answered: the hole stays `fetching` meanwhile, so no pass
+    // ends under it and no second write starts, and a late reply or timeout for it is not acted on.
+    private var writing: Boolean = false
+    // How many times a position was found no longer what the anchor needs when a repair of it was tried, this pass.
+    private val notReached = mutable.Map.empty[AuditPosition, Int]
     private var pass: Long = 0L
     private var badEntries: AuditBadEntries =
       deps.progress.readAuditBadEntries().flatMap(AuditBadEntries.decode).getOrElse(AuditBadEntries())
@@ -331,12 +385,18 @@ object BackgroundAudit:
             onHoleRefreshed(hole, outcome)
           case _: HoleRefreshed =>
             Behaviors.same
-          case FetchReply(BlockFetcher.FetchedStateNode(data)) =>
-            onFetchReply(data.values)
+          case PositionRepaired(gen, hole, outcome) if gen == generation =>
+            onPositionRepaired(hole, outcome)
+          case PositionDeleted(gen, hole, where, outcome) if gen == generation =>
+            onPositionDeleted(hole, where, outcome)
+          case _: PositionRepaired | _: PositionDeleted =>
+            Behaviors.same // of a pass that has ended
+          case FetchReply(BlockFetcher.FetchedStateNode(nodes)) =>
+            onFetchReply(nodes)
           case FetchReply(_) =>
             Behaviors.same
           case FetchTimedOut(hash) =>
-            fetching.filter(_.hash == hash).fold(Behaviors.same[Command])(onFetchTimedOut)
+            fetching.filter(h => h.hash == hash && !writing).fold(Behaviors.same[Command])(onFetchTimedOut)
           case ProgressTick =>
             logProgress()
             Behaviors.same
@@ -385,6 +445,8 @@ object BackgroundAudit:
       holes.clear()
       holeHashes.clear()
       fetching = None
+      writing = false
+      notReached.clear()
       servedBad.clear()
       codeFilter = new AuditCodeFilter(settings.codeFilterEntries)
       saidUnservable = false
@@ -625,7 +687,7 @@ object BackgroundAudit:
           case None                                      => AuditWalk.Settled.Retry
           case Some(head) if head.stateRoot == hole.root => AuditWalk.Settled.Hole(hole)
           case Some(head) =>
-            AuditWalk.settle(hole.position, head, h => reader.nodes(Seq(h)).head, () => reader.head())
+            AuditWalk.settle(hole.position, head, (at, h) => reader.nodesAt(Seq((at, h))).head, () => reader.head())
       }(using readEc)
       ctx.pipeToSelf(work)(outcome => HoleRefreshed(gen, hole, outcome))
 
@@ -684,36 +746,74 @@ object BackgroundAudit:
 
     private def onFetchReply(values: Seq[ByteString]): Behavior[Command] =
       fetching match
-        case None => Behaviors.same // a reply after its timeout
+        case None               => Behaviors.same // a reply after its timeout
+        case Some(_) if writing => Behaviors.same // a late reply for a hole whose write is under way
         case Some(hole) if values.isEmpty =>
           timers.cancel(FetchTimer)
-          fetching = None
           counters = counters.copy(unresolved = counters.unresolved + 1)
           changedSincePersist = true
-          if hole.fault.isBad then onBadEntryUnserved(hole)
-          else
+          val writeStarted = hole.fault.isBad && onBadEntryUnserved(hole)
+          if !hole.fault.isBad then
             log.warn(
               s"[HEAL-AUDIT] Peers could not serve ${hole.position.describe} (${AuditWalk.hexOf(hole.hash)}). This pass " +
                 "is not clean, and the next looks again. Import's retry budget is not touched"
             )
-          afterFetchEnded()
+          if writeStarted then Behaviors.same // the delete's answer ends this fetch
+          else
+            fetching = None
+            afterFetchEnded()
         case Some(hole) =>
           values.headOption match
             case Some(bytes) if ByteString(kec256(bytes.toArray)) == hole.hash =>
               timers.cancel(FetchTimer)
-              repair(hole, bytes)
-              fetching = None
               changedSincePersist = true
-              afterFetchEnded()
+              deps.positions match
+                case Some(repairs) if !hole.isCode =>
+                  // Off the actor: a repair waits for a head move under way, which can be several batches long, and a
+                  // store that has failed closed throws.
+                  writing = true
+                  val gen = generation
+                  val work = Future(repairs.repairNodeAt(hole.position.key, hole.hash, bytes.toArray))(using readEc)
+                  ctx.pipeToSelf(work)(outcome => PositionRepaired(gen, hole, outcome))
+                  Behaviors.same
+                case _ =>
+                  afterRepair(hole, writeNow(hole, bytes))
+                  fetching = None
+                  afterFetchEnded()
             case _ => Behaviors.same // late, for a fetch this one replaced: the timer still holds this one
 
     /** On the actor, not in a Future: decision 1. A store that cannot write throws, and the supervisor takes it from
-      * the saved place.
+      * the saved place. The write by position is the exception: it can wait for a whole head move, so it runs on the
+      * blocking dispatcher and answers as [[PositionRepaired]] ([[onPositionRepaired]]).
       */
-    private def repair(hole: AuditHole, bytes: ByteString): Unit =
-      val outcome =
-        if hole.isCode then deps.code.repairCode(hole.hash, bytes)
-        else deps.state.repairNode(hole.hash, bytes.toArray, latestHead.fold(hole.rootNumber)(_.number))
+    private def writeNow(hole: AuditHole, bytes: ByteString): RepairOutcome =
+      if hole.isCode then deps.code.repairCode(hole.hash, bytes)
+      else deps.state.repairNode(hole.hash, bytes.toArray, latestHead.fold(hole.rootNumber)(_.number))
+
+    /** The answer of a repair by position. A store that has failed closed refuses it: that stops this audit, logged,
+      * and the actor lives on. The next start resumes from the saved place. Any other failure is thrown, as a write on
+      * the actor would be, for the supervisor.
+      */
+    private def onPositionRepaired(hole: AuditHole, outcome: Try[RepairOutcome]): Behavior[Command] =
+      writing = false
+      outcome match
+        case Success(done) =>
+          afterRepair(hole, done)
+          fetching = None
+          afterFetchEnded()
+        case Failure(e: StateUnavailable) => stopForUnavailableState(s"repair of ${hole.position.describe}", e)
+        case Failure(e)                   => throw e
+
+    private def stopForUnavailableState(what: String, e: StateUnavailable): Behavior[Command] =
+      log.error(
+        s"[HEAL-AUDIT] The state store refused the $what: ${e.getMessage}. The audit stops here, with its place " +
+          "saved, and resumes when the node is started again",
+        e
+      )
+      persist()
+      Behaviors.stopped
+
+    private def afterRepair(hole: AuditHole, outcome: RepairOutcome): Unit =
       outcome match
         case RepairOutcome.Written =>
           counters = counters.copy(repaired = counters.repaired + 1)
@@ -722,10 +822,35 @@ object BackgroundAudit:
           log.info(s"[HEAL-AUDIT] ${hole.position.describe} was written while its fetch ran")
         case RepairOutcome.Rejected => // the fetcher and the check above have hashed these bytes: unreachable
           counters = counters.copy(unresolved = counters.unresolved + 1)
+        case RepairOutcome.NotReached =>
+          // The anchor moved, or the anchor's root no longer needs this node there: not a repair of this state. The
+          // position is looked at again from the current anchor.
+          counters = counters.copy(moved = counters.moved + 1)
+          log.info(s"[HEAL-AUDIT] ${hole.position.describe} is no longer what the anchor's root needs: not written")
+          notReached.update(hole.position, notReached.getOrElse(hole.position, 0) + 1)
+        case RepairOutcome.Overwrote =>
+          // A node that decodes sat where the anchor's root names this one: the store logged it at ERROR and counted it.
+          counters = counters.copy(repaired = counters.repaired + 1)
+          log.info(s"[HEAL-AUDIT] Repaired ${hole.position.describe} (${AuditWalk.hexOf(hole.hash)}) over another node")
       if hole.fault.isBad then servedBad += hole.hash
       clearBadEntry(hole.hash)
       // Whatever was missing below it comes next.
-      if !hole.isCode then stack.append(AuditFrame(hole.position, Some(hole.hash)))
+      if !hole.isCode then
+        if deps.positions.isEmpty then stack.append(AuditFrame(hole.position, Some(hole.hash)))
+        else
+          // By position, a position that was not repaired is resolved again from the anchor, up to MaxNotReached
+          // times: `AuditWalk.resolve` and `AnchorReach` could disagree for good. Not for bytes that were rejected.
+          outcome match
+            case RepairOutcome.Rejected => ()
+            case RepairOutcome.NotReached =>
+              if notReached.getOrElse(hole.position, 0) >= MaxNotReached then
+                counters = counters.copy(unresolved = counters.unresolved + 1)
+                log.error(
+                  s"[HEAL-AUDIT] ${hole.position.describe} was found not needed by the anchor's root $MaxNotReached " +
+                    "times while a repair of it was tried: it is left unresolved, and this pass is not clean"
+                )
+              else stack.append(AuditFrame(hole.position, None))
+            case _ => stack.append(AuditFrame(hole.position, Some(hole.hash)))
 
     private def clearBadEntry(hash: ByteString): Unit =
       if badEntries.entries.contains(hash) then
@@ -737,7 +862,7 @@ object BackgroundAudit:
       * commit lock, which covers block commits and not an on-demand write, so the delete reads again after the look. On
       * the actor, as every write here is.
       */
-    private def onBadEntryUnserved(hole: AuditHole): Unit =
+    private def onBadEntryUnserved(hole: AuditHole): Boolean =
       val (book, count) =
         badEntries.exhausted(hole.hash, pass, deps.nowMillis(), settings.passBackoff.toMillis)
       if book != badEntries then
@@ -751,6 +876,7 @@ object BackgroundAudit:
             s"[HEAL-AUDIT] Peers could not serve $where, which ${hole.fault.describe}. Over " +
               s"${AuditBadEntries.MaxEntries} such entries are on record, so this one is not, and will not be deleted"
           )
+          false
         case Some(passes) if passes < AuditBadEntries.DeleteAfterPasses =>
           if !saidUnservable then
             saidUnservable = true
@@ -759,15 +885,41 @@ object BackgroundAudit:
                 s"${AuditBadEntries.DeleteAfterPasses} before it is deleted. Nothing below it is trusted, and this pass " +
                 "is not clean"
             )
+          false
         case Some(_) => deleteBadEntry(hole, where)
 
-    private def deleteBadEntry(hole: AuditHole, where: String): Unit =
-      val reader = deps.reader
-      val read: ByteString => RawNodeRead = hash => reader.nodes(Seq(hash)).head
-      val reached = () => reader.head().exists(head => AuditWalk.stillNeeds(hole, head.stateRoot, read))
-      val outcome =
-        if hole.isCode then deps.code.deleteBadCode(hole.hash, reached)
-        else deps.state.deleteBadNode(hole.hash, reached)
+    /** True when the delete runs off the actor (by position) and answers as [[PositionDeleted]]. */
+    private def deleteBadEntry(hole: AuditHole, where: String): Boolean =
+      deps.positions match
+        case Some(repairs) if !hole.isCode =>
+          // The position store judges under its own lock, from the anchor's root: the walk's `reached` is not asked.
+          // Off the actor, as the repair is: it waits for a head move under way.
+          writing = true
+          val gen = generation
+          val work = Future(repairs.deleteBadNodeAt(hole.position.key, hole.hash))(using readEc)
+          ctx.pipeToSelf(work)(outcome => PositionDeleted(gen, hole, where, outcome))
+          true
+        case _ =>
+          val reader = deps.reader
+          val read: AuditWalk.AuditRead = (at, hash) => reader.nodesAt(Seq((at, hash))).head
+          val reached = () => reader.head().exists(head => AuditWalk.stillNeeds(hole, head.stateRoot, read))
+          val outcome =
+            if hole.isCode then deps.code.deleteBadCode(hole.hash, reached)
+            else deps.state.deleteBadNode(hole.hash, reached)
+          afterDelete(hole, where, outcome)
+          false
+
+    private def onPositionDeleted(hole: AuditHole, where: String, outcome: Try[BadEntryDelete]): Behavior[Command] =
+      writing = false
+      outcome match
+        case Success(done) =>
+          afterDelete(hole, where, done)
+          fetching = None
+          afterFetchEnded()
+        case Failure(e: StateUnavailable) => stopForUnavailableState(s"delete at $where", e)
+        case Failure(e)                   => throw e
+
+    private def afterDelete(hole: AuditHole, where: String, outcome: BadEntryDelete): Unit =
       clearBadEntry(hole.hash)
       outcome match
         case BadEntryDelete.Deleted =>
@@ -790,6 +942,14 @@ object BackgroundAudit:
           )
         case BadEntryDelete.NotReached =>
           log.info(s"[HEAL-AUDIT] The current root no longer needs $where: nothing deleted")
+        case BadEntryDelete.DifferentNode =>
+          // Never deleted when it decodes and is another than the one expected. A fetched copy of the expected node
+          // overwrites it (`repairNodeAt`), which is how this hole is closed.
+          counters = counters.copy(unfollowable = counters.unfollowable + 1)
+          log.error(
+            s"[HEAL-AUDIT] $where holds a node that decodes and is not the one expected, so it stays. What is below it " +
+              "goes unseen, and this pass is not clean"
+          )
 
     /** `BlockImporter` takes the two apart: one missing contract is rarely alone, so the first goes to a bulk scan. */
     private def whatFollowsADelete(hole: AuditHole): String =

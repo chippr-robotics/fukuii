@@ -14,8 +14,6 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import org.json4s.DefaultFormats
 import org.json4s.Formats
 import org.json4s.JArray
@@ -52,6 +50,7 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor.PeerInfo
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.RemoteStatus
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.nodebuilder.TestNode
+import com.chipprbots.ethereum.testing.LogCapture.Capture
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.testmode.TestModeComponentsProvider
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
@@ -148,6 +147,34 @@ class JsonRpcControllerSpec
       case Some(JObject(fields)) => fields.map(_._1).toSet
       case other                 => fail(s"unexpected rpc_modules result: $other")
 
+  it should "serve the allowlist methods where admin is granted, and only there (spec 030 FR-059)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new JsonRpcControllerFixture:
+    val admin = new AdminService(
+      new java.util.concurrent.atomic.AtomicReference(null),
+      null,
+      null,
+      com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig,
+      5.seconds,
+      "/tmp",
+      new com.chipprbots.ethereum.network.BlockedIPRegistry(Set.empty),
+      null,
+      () => cats.effect.IO.pure(com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.NotSyncing)
+    )(using system.scheduler)
+    val controller: JsonRpcController = jsonRpcController.copy(adminService = admin)
+    controller
+      .forApis(Seq("admin"))
+      .handleRequest(newJsonRpcRequest("admin_getNodesAllowlist"))
+      .unsafeRunSync()
+      .error shouldBe
+      None
+    controller
+      .forApis(Seq("eth", "net", "web3"))
+      .handleRequest(newJsonRpcRequest("admin_getNodesAllowlist"))
+      .unsafeRunSync() should
+      haveError(JsonRpcError.MethodNotFound)
+
   it should "answer MethodNotFound for personal, debug, admin, qa, txpool and trace over HTTP and WebSocket under the shipped defaults" taggedAs (
     UnitTest,
     RPCTest
@@ -163,6 +190,10 @@ class JsonRpcControllerSpec
       "debug_listPeersInfo",
       "admin_nodeInfo",
       "admin_peers",
+      // spec 030 FR-059: the allowlist's runtime edits are in no HTTP or WS default
+      "admin_addNodesToAllowlist",
+      "admin_removeNodesFromAllowlist",
+      "admin_getNodesAllowlist",
       "qa_mineBlocks",
       "txpool_status",
       "trace_block",
@@ -284,10 +315,8 @@ class JsonRpcControllerSpec
     val logger: LogbackLogger = LoggerFactory.getLogger(classOf[JsonRpcController]) match
       case logback: LogbackLogger => logback
       case other                  => fail(s"expected a logback logger, got $other")
-    val appender: ListAppender[ILoggingEvent] = new ListAppender[ILoggingEvent]
     val previousLevel: Level = logger.getLevel
-    appender.start()
-    logger.addAppender(appender)
+    val appender: Capture = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.INFO)
     try
       val perTransport = jsonRpcController.perTransport
@@ -300,7 +329,7 @@ class JsonRpcControllerSpec
       }
       deprecations should have size 1
     finally
-      logger.detachAppender(appender)
+      appender.close()
       logger.setLevel(previousLevel)
 
   it should "let the test namespace answer miner_setEtherbase when test and miner are both enabled, in any order" taggedAs (

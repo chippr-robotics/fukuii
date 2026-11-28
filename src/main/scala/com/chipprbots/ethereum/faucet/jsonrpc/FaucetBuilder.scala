@@ -6,6 +6,7 @@ import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.Await
 import scala.concurrent.ExecutionContextExecutor
+import scala.concurrent.duration.*
 
 import com.typesafe.config.ConfigFactory
 
@@ -15,7 +16,6 @@ import com.chipprbots.ethereum.jsonrpc.server.controllers.ApisBase
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController.JsonRpcConfig
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer
 import com.chipprbots.ethereum.keystore.KeyStoreImpl
-import com.chipprbots.ethereum.security.SSLContextBuilder
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.utils.KeyStoreConfig
 import com.chipprbots.ethereum.utils.Logger
@@ -31,8 +31,8 @@ trait FaucetControllerBuilder:
   given runtime: IORuntime = IORuntime.global
 
 trait FaucetRpcServiceBuilder:
-  self: FaucetConfigBuilder & FaucetControllerBuilder & ActorSystemBuilder & SecureRandomBuilder & ShutdownHookBuilder &
-    SSLContextBuilder =>
+  self: FaucetConfigBuilder & FaucetControllerBuilder & ActorSystemBuilder & SecureRandomBuilder &
+    ShutdownHookBuilder =>
 
   val keyStore =
     new KeyStoreImpl(
@@ -44,7 +44,7 @@ trait FaucetRpcServiceBuilder:
     new WalletRpcClient(
       faucetConfig.rpcClient.address,
       faucetConfig.rpcClient.timeout,
-      () => sslContext("faucet.rpc-client")
+      () => FaucetRpcClientTls.context(rawConfig, rawFukuiiConfig, secureRandom)
     )
   val walletService = new WalletService(walletRpcClient, keyStore, faucetConfig)
   val faucetSupervisor: FaucetSupervisor = new FaucetSupervisor(walletService, faucetConfig, shutdown)
@@ -74,14 +74,14 @@ trait FaucetJsonRpcControllerBuilder:
   val faucetJsonRpcController = new FaucetJsonRpcController(faucetRpcService, jsonRpcConfig, system)
 
 trait FaucetJsonRpcHttpServerBuilder:
-  self: ActorSystemBuilder & JsonRpcConfigBuilder & SecureRandomBuilder & FaucetJsonRpcHealthCheckBuilder &
-    FaucetJsonRpcControllerBuilder & SSLContextBuilder =>
+  self: ActorSystemBuilder & FaucetConfigBuilder & JsonRpcConfigBuilder & SecureRandomBuilder &
+    FaucetJsonRpcHealthCheckBuilder & FaucetJsonRpcControllerBuilder =>
 
   val faucetJsonRpcHttpServer: Either[String, JsonRpcHttpServer] = JsonRpcHttpServer(
     faucetJsonRpcController,
     faucetJsonRpcHealthCheck,
     jsonRpcConfig.httpServerConfig,
-    () => sslContext("fukuii.network.rpc.http")
+    () => com.chipprbots.ethereum.tls.TlsServerEngine.rpcHttp(rawFukuiiConfig, secureRandom)
   )
 
 trait ShutdownHookBuilder:
@@ -104,7 +104,6 @@ class FaucetServer
     with ApisBuilder
     with JsonRpcConfigBuilder
     with SecureRandomBuilder
-    with SSLContextBuilder
     with FaucetControllerBuilder
     with FaucetRpcServiceBuilder
     with FaucetJsonRpcHealthCheckBuilder
@@ -117,9 +116,30 @@ class FaucetServer
 
   def start(): Unit =
     log.info("About to start Faucet JSON-RPC server")
+    // spec 030 FR-008, FR-010: the faucet's listener is on the same profiles, validated before it binds
+    com.chipprbots.ethereum.tls.TlsStartupCheck.run(rawFukuiiConfig) match
+      case Left(message) => throw new IllegalStateException(message)
+      case Right(lines)  => lines.foreach(line => log.info(line.render))
     startJsonRpcHttpServer()
 
   private def startJsonRpcHttpServer() =
     faucetJsonRpcHttpServer match
-      case Right(jsonRpcServer) => jsonRpcServer.run()
-      case Left(error)          => throw new RuntimeException(s"$error")
+      case Right(jsonRpcServer) =>
+        // Awaited: a bind that fails (a TLS context that cannot be built, an address in use) stops the faucet, it is
+        // not left to a future nobody reads (B-148).
+        FaucetServer.awaitBind(jsonRpcServer.run(), faucetConfig.shutdownTimeout.min(10.seconds)) match
+          case Right(binding) => log.info(s"Faucet JSON-RPC server bound to ${binding.localAddress}")
+          case Left(message)  => throw new IllegalStateException(message)
+      case Left(error) => throw new RuntimeException(s"$error")
+
+object FaucetServer:
+
+  /** Waits for the faucet's HTTP bind; a failure is the message to stop with, naming the key to fix. */
+  def awaitBind[A](bind: => scala.concurrent.Future[A], timeout: FiniteDuration): Either[String, A] =
+    try Right(Await.result(bind, timeout))
+    catch
+      case scala.util.control.NonFatal(e) =>
+        Left(
+          s"Refusing to start: the faucet JSON-RPC server cannot start (${e.getClass.getSimpleName}: ${e.getMessage}). " +
+            "Check fukuii.network.rpc.http (mode, interface, port, tls, certificate)."
+        )

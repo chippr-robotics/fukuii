@@ -23,6 +23,7 @@ import com.chipprbots.ethereum.domain.BlockchainReader
 import com.chipprbots.ethereum.domain.branch.BestBranch
 import com.chipprbots.ethereum.jsonrpc.AkkaTaskOps.*
 import com.chipprbots.ethereum.network.BlockedIPRegistry
+import com.chipprbots.ethereum.network.NodeAllowlist
 import com.chipprbots.ethereum.network.PeerManagerActor
 import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ForkBlockNumbers
@@ -109,6 +110,13 @@ object AdminService:
     */
   case class AdminMaxPeersRequest(maxPeers: Int)
   case class AdminMaxPeersResponse(success: Boolean)
+
+  // Spec 030 FR-056 (contracts/admin-allowlist.md): the node allowlist's runtime edits.
+  case class AdminAllowlistEditRequest(entries: Seq[String])
+  case class AdminAllowlistEditResponse(success: Boolean)
+  case class AdminGetNodesAllowlistRequest()
+  case class AllowlistNode(id: String, enode: Option[String], sources: Seq[String])
+  case class AdminGetNodesAllowlistResponse(enabled: Boolean, file: Option[String], nodes: Seq[AllowlistNode])
 
   private val ValidLogLevels = Set("OFF", "ERROR", "WARN", "INFO", "DEBUG", "TRACE", "ALL")
 
@@ -254,7 +262,15 @@ class AdminService(
     // The node's sync status, read before admin_importChain: SyncController's GetStatus.
     syncStatus: () => IO[SyncProtocol.Status],
     // The configured connection limits, for the dashboard's previews; None where they are not known (tests).
-    peerLimitsConfig: Option[AdminService.PeerLimits] = None
+    peerLimitsConfig: Option[AdminService.PeerLimits] = None,
+    // Spec 030 FR-052: admin_addPeer and admin_addTrustedPeer refuse a node that is not on the allowlist.
+    allowlist: NodeAllowlist = NodeAllowlist.Disabled,
+    // Spec 030 FR-056: the store the admin_ allowlist edits persist through; None where the allowlist is off.
+    allowlistStore: Option[com.chipprbots.ethereum.network.NodeAllowlistStore] = None,
+    // B-093: the name admin_nodeInfo gives (go-ethereum: the node's client id, as its Hello says it), and where
+    // admin_peers learns each peer's own (the Hello clientId the handshake read). None: the peers' names are not known.
+    clientId: String = "fukuii",
+    networkPeerManager: Option[typed.ActorRef[com.chipprbots.ethereum.network.NetworkPeerManagerActor.Command]] = None
 )(implicit scheduler: typed.Scheduler)
     extends Logger:
   import AdminService.*
@@ -327,7 +343,7 @@ class AdminService(
             id = nodeId,
             ip = Some(host),
             listenAddr = Some(listenAddr),
-            name = "fukuii/v0.1",
+            name = clientId,
             ports = Map("listener" -> port, "discovery" -> port),
             protocols = Map("eth" -> ethInfo),
             activeFork = fork
@@ -340,7 +356,7 @@ class AdminService(
             id = nodeId,
             ip = None,
             listenAddr = None,
-            name = "fukuii/v0.1",
+            name = clientId,
             ports = Map.empty,
             protocols = Map("eth" -> ethInfo),
             activeFork = fork
@@ -352,13 +368,27 @@ class AdminService(
     * PeerManagerActor.GetPeers instead (actor-based P2P, no EthPeers).
     */
   def peers(@unused req: AdminPeersRequest): ServiceResponse[AdminPeersResponse] =
+    // go-ethereum's `name` is the peer's Hello clientId; a peer still handshaking has none yet and is named by address.
+    val clientIds: IO[Map[com.chipprbots.ethereum.network.PeerId, String]] = networkPeerManager match
+      case None => IO.pure(Map.empty)
+      case Some(npm) =>
+        npm
+          .askForTyped[com.chipprbots.ethereum.network.NetworkPeerManagerActor.HandshakedPeers](
+            com.chipprbots.ethereum.network.NetworkPeerManagerActor.GetHandshakedPeersCmd(_)
+          )
+          .map(_.peers.map { case (p, info) => p.id -> info.remoteStatus.remoteClientId })
+          .handleError(_ => Map.empty)
     peerManager
       .askForTyped[PeerManagerActor.Peers](PeerManagerActor.GetPeersCmd(_))
-      .map { peersResult =>
+      .flatMap(peersResult => clientIds.map(names => (peersResult, names)))
+      .map { (peersResult, names) =>
         val peerInfos = peersResult.peers.map { case (peer, _) =>
           AdminPeerInfo(
             id = peer.nodeId.map(bs => Hex.toHexString(bs.toArray)).getOrElse(peer.id.value),
-            name = s"fukuii-peer/${peer.remoteAddress}",
+            name = names
+              .get(peer.id)
+              .filter(_.nonEmpty)
+              .getOrElse(s"fukuii-peer/${peer.remoteAddress.getHostString}:${peer.remoteAddress.getPort}"),
             remoteAddress = peer.remoteAddress.toString,
             inbound = peer.incomingConnection
           )
@@ -376,6 +406,9 @@ class AdminService(
     */
   def addPeer(req: AdminAddPeerRequest): ServiceResponse[AdminAddPeerResponse] =
     parseEnode(req.enodeUrl) match
+      case Right(uri) if allowlist.refusalFor(uri).isDefined =>
+        allowlist.recordRejection(inbound = false)
+        IO.pure(Left(JsonRpcError.LogicError(allowlist.refusalFor(uri).getOrElse(""))))
       case Right(uri) =>
         peerManager
           .askForTyped[PeerManagerActor.AddMaintainedPeerResponse](ref =>
@@ -488,15 +521,22 @@ class AdminService(
           chainImporter
             .importChainFileStrict(req.file)(using blockchainConfig)
             .left
-            .map(failure => JsonRpcError.LogicError(failure.describe))
+            .map { failure =>
+              failure.fault match
+                // another thread's adoption holds the head: nothing of the block was written, ask again (B-462)
+                case Some(_: com.chipprbots.ethereum.db.storage.pathstate.StateBusy) =>
+                  JsonRpcError.HeadBusy.copy(data = Some(org.json4s.JString(failure.describe)))
+                case _ => JsonRpcError.LogicError(failure.describe)
+            }
             .map(_ => AdminImportChainResponse(true))
         }
     }
 
   /** Blocks an IP address (B-277): the node refuses inbound connections from it, does not dial it (any path, maintained
-    * and trusted peers included) and disconnects the peers connected from it now. Discovery (UDP) packets are not
-    * blocked. The block lasts until the node restarts. The address must be an IP literal (never resolved); it is kept
-    * in its canonical form. The response is whether the address was newly blocked.
+    * and trusted peers included) and disconnects the peers connected from it now. Discovery drops its UDP packets and
+    * sends it none (B-288). The block lasts until the node restarts; `network.peer.blocked-ips` keeps one across
+    * restarts. The address must be an IP literal (never resolved); it is kept in its canonical form. The response is
+    * whether the address was newly blocked.
     */
   def blockIP(req: AdminBlockIPRequest): ServiceResponse[AdminBlockIPResponse] =
     canonicalIp(req.ip) match
@@ -565,6 +605,9 @@ class AdminService(
     */
   def addTrustedPeer(req: AdminAddTrustedPeerRequest): ServiceResponse[AdminAddTrustedPeerResponse] =
     parseEnode(req.enodeUrl) match
+      case Right(uri) if allowlist.refusalFor(uri).isDefined =>
+        allowlist.recordRejection(inbound = false)
+        IO.pure(Left(JsonRpcError.LogicError(allowlist.refusalFor(uri).getOrElse(""))))
       case Right(uri) =>
         peerManager
           .askForTyped[PeerManagerActor.AddTrustedPeerResponse](ref => PeerManagerActor.AddTrustedPeerCmd(uri, ref))
@@ -600,6 +643,56 @@ class AdminService(
   /** core-geth admin_maxPeers: sets max connected peers at runtime. core-geth reference: eth/api_admin.go MaxPeers —
     * sets handler.maxPeers + p2pServer.MaxPeers.
     */
+  /** `admin_addNodesToAllowlist` and `admin_removeNodesFromAllowlist` (spec 030 FR-056, FR-057): all-or-nothing, the
+    * file written before the answer. Every successful edit is logged at INFO with the caller (FR-059): its identity
+    * rule's name, or the transport for an IPC or anonymous caller.
+    */
+  def editAllowlist(
+      op: com.chipprbots.ethereum.network.AllowlistEdit,
+      req: AdminAllowlistEditRequest,
+      caller: String
+  ): ServiceResponse[AdminAllowlistEditResponse] = IO {
+    import com.chipprbots.ethereum.network.EditError
+    import com.chipprbots.ethereum.network.NodeAllowlistStore
+    allowlistStore match
+      case None => Left(JsonRpcError.LogicError(NodeAllowlistStore.DisabledMessage))
+      case Some(store) =>
+        store.edit(op, req.entries) match
+          case Right(n) =>
+            val ids = req.entries.flatMap(e =>
+              com.chipprbots.ethereum.network.NodeAllowlist
+                .parseEntry(e)
+                .toOption
+                .map(p => NodeAllowlistStore.prefix(p.id))
+            )
+            val verb = if op == com.chipprbots.ethereum.network.AllowlistEdit.Add then "added" else "removed"
+            log.info(s"Allowlist: $verb $n node(s) [${ids.mkString(", ")}] by $caller")
+            Right(AdminAllowlistEditResponse(true))
+          case Left(EditError.InvalidParams(message)) => Left(JsonRpcError.InvalidParams(message))
+          case Left(EditError.Refused(message))       => Left(JsonRpcError.LogicError(message))
+  }
+
+  /** `admin_getNodesAllowlist` (FR-056): whether the allowlist is on, its file, and every listed node, by id. */
+  def getNodesAllowlist(@unused req: AdminGetNodesAllowlistRequest): ServiceResponse[AdminGetNodesAllowlistResponse] =
+    IO.pure {
+      import com.chipprbots.ethereum.network.NodeAllowlistStore
+      Right(
+        AdminGetNodesAllowlistResponse(
+          enabled = allowlist.enabled,
+          file = allowlistStore.flatMap(_.filePath).map(_.toString),
+          nodes = allowlist.snapshot.entries.values.toSeq
+            .map(e =>
+              AllowlistNode(
+                com.chipprbots.ethereum.utils.Hex.toHexString(e.id.toArray),
+                e.enode.map(_.toString),
+                e.sources.toSeq.sortBy(_.ordinal).map(NodeAllowlistStore.sourceName)
+              )
+            )
+            .sortBy(_.id)
+        )
+      )
+    }
+
   def maxPeers(req: AdminMaxPeersRequest): ServiceResponse[AdminMaxPeersResponse] =
     // A negative limit means nothing. 0 is accepted, as it always was: the node then dials no one.
     if req.maxPeers < 0 then

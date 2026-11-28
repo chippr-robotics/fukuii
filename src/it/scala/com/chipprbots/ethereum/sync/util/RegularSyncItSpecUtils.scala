@@ -11,6 +11,9 @@ import cats.effect.unsafe.IORuntime
 
 import scala.concurrent.duration.*
 
+import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import org.bouncycastle.util.encoders.Hex
+
 import com.chipprbots.ethereum.Mocks.MockValidatorsAlwaysSucceed
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
@@ -32,11 +35,16 @@ import com.chipprbots.ethereum.consensus.pow
 import com.chipprbots.ethereum.consensus.pow.EthashConfig
 import com.chipprbots.ethereum.consensus.pow.PoWMining
 import com.chipprbots.ethereum.consensus.pow.validators.ValidatorsExecutor
+import com.chipprbots.ethereum.crypto.kec256
+import com.chipprbots.ethereum.crypto.keyPairFromPrvKey
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.ledger.*
-import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.nodebuilder.VmSetup
 import com.chipprbots.ethereum.ommers.OmmersPool
+import com.chipprbots.ethereum.rlp
+import com.chipprbots.ethereum.rlp.RLPList
+import com.chipprbots.ethereum.rlp.RLPValue
+import com.chipprbots.ethereum.rlp.UInt256RLPImplicits.*
 import com.chipprbots.ethereum.sync.util.SyncCommonItSpecUtils.*
 import com.chipprbots.ethereum.sync.util.SyncCommonItSpecUtils.FakePeerCustomConfig.defaultConfig
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
@@ -56,8 +64,26 @@ object RegularSyncItSpecUtils:
 
   object ValidatorsExecutorAlwaysSucceed extends ValidatorsExecutorAlwaysSucceed
 
-  class FakePeer(peerName: String, fakePeerCustomConfig: FakePeerCustomConfig)
-      extends CommonFakePeer(peerName, fakePeerCustomConfig):
+  /** The harness validators with the one check that import's real validator makes after executing a block: the header's
+    * state root and gas used against what this peer's own execution of the block gave. It is the real
+    * `ValidatorsExecutor.validateBlockAfterExecution` (the receipts check inside it still reads the always-valid block
+    * validator, as the rest of the harness does), so a peer built with this rejects a block whose root its execution
+    * does not reproduce.
+    */
+  class ValidatorsExecutorChecksStateRoot extends ValidatorsExecutorAlwaysSucceed:
+    override def validateBlockAfterExecution(
+        block: Block,
+        stateRootHash: ByteString,
+        receipts: Seq[Receipt],
+        gasUsed: BigInt
+    )(implicit blockchainConfig: BlockchainConfig): Either[BlockExecutionError, BlockExecutionSuccess] =
+      ValidatorsExecutor.validateBlockAfterExecution(this, block, stateRootHash, receipts, gasUsed)
+
+  class FakePeer(
+      peerName: String,
+      fakePeerCustomConfig: FakePeerCustomConfig,
+      existingDataDir: Option[java.nio.file.Path] = None
+  ) extends CommonFakePeer(peerName, fakePeerCustomConfig, existingDataDir):
 
     def buildEthashMining(): pow.PoWMining =
       val miningConfig: MiningConfig = MiningConfig(Config.config)
@@ -71,7 +97,8 @@ object RegularSyncItSpecUtils:
           bl,
           blockchainReader,
           fullConfig,
-          ValidatorsExecutorAlwaysSucceed,
+          if fakePeerCustomConfig.validateStateRoots then new ValidatorsExecutorChecksStateRoot
+          else ValidatorsExecutorAlwaysSucceed,
           NoAdditionalPoWData
         )
       mining
@@ -274,16 +301,98 @@ object RegularSyncItSpecUtils:
           .flatMap(_ => mineNewBlocks(delay, nBlocks - 1)(updateWorldForBlock))
       else IO(())
 
-    private def getMptForBlock(block: Block) =
-      InMemoryWorldStateProxy(
-        storagesInstance.storages.evmCodeStorage,
-        bl.getBackingMptStorage(block.number.value),
-        (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
-        UInt256.Zero,
-        ByteString(MerklePatriciaTrie.EmptyRootHash),
-        noEmptyAccounts = false,
-        ethCompatibleStorage = true
+    /** A child of `parent` that carries the transactions `plans` describe, signed by [[ExecutedChain.Sender]] with its
+      * next nonces, and sealed with the state root, gas used and receipts that executing it gives. Executing writes the
+      * block's state nodes into this peer's store, so the state the header names is here.
+      */
+    def sealChild(parent: Block, plans: Seq[ExecutedChain.TxPlan], beneficiary: Address): (Block, Seq[Receipt]) =
+      val firstNonce = getMptForBlock(parent).getAccount(ExecutedChain.Sender).fold(BigInt(0))(_.nonce.toBigInt)
+      val txs = plans.zipWithIndex.map { case (plan, i) =>
+        SignedTransaction.sign(
+          LegacyTransaction(
+            nonce = firstNonce + i,
+            gasPrice = GasPrice(1),
+            gasLimit = GasAmount(plan.gasLimit),
+            receivingAddress = plan.receiver,
+            value = plan.value,
+            payload = plan.payload
+          ),
+          ExecutedChain.SenderKeyPair,
+          None
+        )
+      }
+      val template = parent.header.copy(
+        parentHash = parent.hash,
+        number = parent.number + 1,
+        beneficiary = beneficiary.bytes,
+        gasLimit = GasAmount(ExecutedChain.BlockGasLimit),
+        gasUsed = GasAmount.Zero
       )
+      val unsealed = Block(template, BlockBody(txs, Nil))
+      blockExecution.executeBlockNoValidation(unsealed) match
+        case Right((receipts, gasUsed, stateRoot)) =>
+          (
+            unsealed.copy(header = template.copy(stateRoot = TrieRoot(stateRoot), gasUsed = GasAmount(gasUsed))),
+            receipts
+          )
+        case Left(error) =>
+          throw new IllegalStateException(s"$peerName could not execute its own block ${template.number}: $error")
+
+    /** Extends this peer's chain to block `n` with executed blocks (see [[sealChild]]), saving and broadcasting each.
+      * `plansFor` gives the transactions of the block with the number it is given.
+      */
+    def importExecutedBlocksUntil(n: BigInt, beneficiary: Address = ExecutedChain.Miner)(
+        plansFor: BigInt => Seq[ExecutedChain.TxPlan]
+    ): IO[Unit] =
+      IO(blockchainReader.getBestBlock.get).flatMap { best =>
+        if best.number.value >= n then IO.unit
+        else
+          IO {
+            val weight = blockchainReader.getChainWeightByHash(best.hash).get
+            val (child, receipts) = sealChild(best, plansFor(best.number.value + 1), beneficiary)
+            val childWeight = weight.increase(child.header)
+            blockchainWriter.save(child, receipts, childWeight, saveAsBestBlock = true)
+            broadcastBlock(child, childWeight)
+          }.flatMap(_ => importExecutedBlocksUntil(n, beneficiary)(plansFor))
+      }
+
+    /** Extends this peer's chain by one executed block whose header `forge` then alters, and saves and broadcasts it as
+      * the best block. The block's own transactions run as in [[sealChild]], so the peer that gets it executes them,
+      * and gets a state root and gas used that differ from what `forge` left in the header.
+      */
+    def importForgedBlock(plans: Seq[ExecutedChain.TxPlan], beneficiary: Address = ExecutedChain.Miner)(
+        forge: BlockHeader => BlockHeader
+    ): IO[Block] =
+      IO {
+        val best = blockchainReader.getBestBlock.get
+        val weight = blockchainReader.getChainWeightByHash(best.hash).get
+        val (honest, receipts) = sealChild(best, plans, beneficiary)
+        val forged = honest.copy(header = forge(honest.header))
+        val forgedWeight = weight.increase(forged.header)
+        blockchainWriter.save(forged, receipts, forgedWeight, saveAsBestBlock = true)
+        broadcastBlock(forged, forgedWeight)
+        forged
+      }
+
+    /** Mines `count` executed blocks on top of the best block through this peer's running regular sync, one at a time:
+      * each is handed to the importer, and the next is built only once the importer has made it the best block. Regular
+      * sync must already be started, or the importer does not exist and the block is dropped; the wait then times out.
+      */
+    def mineExecutedBlocks(count: Int, beneficiary: Address = ExecutedChain.Miner)(
+        plansFor: BigInt => Seq[ExecutedChain.TxPlan]
+    ): IO[Unit] =
+      if count <= 0 then IO.unit
+      else
+        IO {
+          val best = blockchainReader.getBestBlock.get
+          val (child, _) = sealChild(best, plansFor(best.number.value + 1), beneficiary)
+          regularSync ! SyncProtocol.MinedBlock(child)
+          child
+        }.flatMap { child =>
+          retryUntilWithDelay(IO(blockchainReader.getBestBlock.map(_.hash)), 50.millis, 400)(
+            _.contains(child.hash)
+          )
+        }.flatMap(_ => mineExecutedBlocks(count - 1, beneficiary)(plansFor))
 
     private def broadcastBlock(block: Block, weight: ChainWeight) =
       broadcasterActor ! BroadcastBlock(BlockToBroadcast(block, weight))
@@ -308,6 +417,39 @@ object RegularSyncItSpecUtils:
       )
       val newWeight = parentWeight.increase(newBlock.header)
       (newBlock, newWeight, parentWorld)
+
+  /** What the executed-block builders of [[FakePeer]] need: one sender, whose key the tests hold, and one miner. The
+    * sender is funded by mining to it, so its transactions start at block 2.
+    */
+  object ExecutedChain:
+    val SenderKeyPair: AsymmetricCipherKeyPair =
+      keyPairFromPrvKey(BigInt(1, Hex.decode("f3202185c84325302d43887e90a2e23e7bc058d0450bb58ef2f7585765d7d48b")))
+    val Sender: Address = Address(SenderKeyPair)
+
+    /** The beneficiary of the blocks the tests build: the sender, so block rewards fund its transactions. */
+    val Miner: Address = Sender
+    val OtherMiner: Address = Address(0x6d696e)
+    val BlockGasLimit: BigInt = 8000000
+
+    /** One transaction of a block: `receiver` empty creates a contract from `payload`. */
+    final case class TxPlan(receiver: Option[Address], value: BigInt, payload: ByteString, gasLimit: BigInt = 300000)
+
+    val NoTransactions: BigInt => Seq[TxPlan] = _ => Nil
+
+    def transferTo(receiver: Address, value: BigInt): TxPlan = TxPlan(Some(receiver), value, ByteString.empty)
+
+    /** Init code that stores each `(key, value)` and stops, creating a contract with no code but that storage. Keys and
+      * values must fit two bytes.
+      */
+    def storingInitCode(entries: Seq[(BigInt, BigInt)]): ByteString =
+      val sstore = 0x55
+      val push2 = 0x61
+      def push(v: BigInt): Seq[Byte] = Seq(push2.toByte, (v >> 8).toByte, v.toByte)
+      ByteString(entries.flatMap { case (k, v) => push(v) ++ push(k) :+ sstore.toByte }.toArray :+ 0.toByte)
+
+    /** The address a contract created by `creator` with account nonce `nonce` has (yellow paper equation 82). */
+    def contractAddress(creator: Address, nonce: BigInt): Address =
+      Address(kec256(rlp.encode(RLPList(RLPValue(creator.bytes.toArray), UInt256(nonce).toRLPEncodable))))
 
   object FakePeer:
 
@@ -335,3 +477,30 @@ object RegularSyncItSpecUtils:
         peer1 <- start1FakePeerRes(fakePeerCustomConfig1, "Peer1")
         peer2 <- start1FakePeerRes(fakePeerCustomConfig2, "Peer2")
       yield (peer1, peer2)
+
+    def start3FakePeersRes(
+        fakePeerCustomConfig1: FakePeerCustomConfig = defaultConfig,
+        fakePeerCustomConfig2: FakePeerCustomConfig = defaultConfig,
+        fakePeerCustomConfig3: FakePeerCustomConfig = defaultConfig
+    ): Resource[IO, (FakePeer, FakePeer, FakePeer)] =
+      for
+        peer1 <- start1FakePeerRes(fakePeerCustomConfig1, "Peer1")
+        peer2 <- start1FakePeerRes(fakePeerCustomConfig2, "Peer2")
+        peer3 <- start1FakePeerRes(fakePeerCustomConfig3, "Peer3")
+      yield (peer1, peer2, peer3)
+
+    /** `stopped`, which must have been [[CommonFakePeer.stop]]ped, started again on its data directory: the same
+      * database, with a new node key, a new listen address and no running actors of the old one. The peer is shut down
+      * (its directory destroyed) when the resource is released.
+      */
+    def restartedRes(
+        stopped: FakePeer,
+        peerName: String,
+        fakePeerCustomConfig: FakePeerCustomConfig = defaultConfig
+    ): Resource[IO, FakePeer] =
+      Resource.make {
+        for
+          peer <- IO(new FakePeer(peerName, fakePeerCustomConfig, Some(stopped.tempDir)))
+          _ <- peer.startPeer()
+        yield peer
+      }(_.shutdown())

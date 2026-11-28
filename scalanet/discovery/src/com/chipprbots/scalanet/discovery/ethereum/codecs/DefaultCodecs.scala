@@ -17,26 +17,36 @@ import scodec.bits.BitVector
 import scodec.bits.ByteVector
 import scodec.codecs.bits
 import scodec.codecs.discriminated
+import scodec.codecs.fixedSizeBits
 import scodec.codecs.int32
 import scodec.codecs.list
+import scodec.codecs.listOfN
 import scodec.codecs.uint16
 import scodec.codecs.uint4
+import scodec.codecs.uint8
 import scodec.codecs.uint64
 import scodec.codecs.variableSizeBytes
 
 object DefaultCodecs:
 
+  // Every codec below is used in a position that is followed by more fields, so each one must be self-delimiting:
+  // a bare `bits` is greedy on decode and swallows the rest of the buffer, leaving the next field with 0 bits.
+
+  /** A discv4 node ID: the 64 byte uncompressed secp256k1 public key without the 0x04 prefix. */
   given publicKeyCodec: Codec[PublicKey] =
-    bits.xmap(PublicKey(_), (pk: PublicKey) => pk.value)
+    fixedSizeBits(512L, bits).xmap(PublicKey(_), (pk: PublicKey) => pk.value)
 
+  // Length-prefixed, since the size depends on the SigAlg (64 bytes in an ENR, 65 with the recovery ID in a packet).
   given signatureCodec: Codec[Signature] =
-    bits.xmap(Signature(_), (sig: Signature) => sig.value)
+    variableSizeBytes(uint8, bits).xmap(Signature(_), (sig: Signature) => sig.value)
 
+  /** Keccak256 hash, 32 bytes. */
   given hashCodec: Codec[Hash] =
-    bits.xmap(Hash(_), (h: Hash) => h.value)
+    fixedSizeBits(256L, bits).xmap(Hash(_), (h: Hash) => h.value)
 
+  // Length-prefixed: 4 bytes for IPv4, 16 for IPv6.
   given inetAddressCodec: Codec[InetAddress] =
-    bits.xmap(
+    variableSizeBytes(uint8, bits).xmap(
       bv => InetAddress.getByAddress(bv.toByteArray),
       ip => BitVector(ip.getAddress)
     )
@@ -87,7 +97,7 @@ object DefaultCodecs:
 
   // Ping codec
   given pingCodec: Codec[Ping] =
-    val optionalLong = scodec.codecs.optional(scodec.codecs.provide(true), uint64)
+    val optionalLong = scodec.codecs.optional(scodec.codecs.bool, uint64)
     (int32 :: addressCodec :: addressCodec :: uint64 :: optionalLong).xmap(
       { case (version, from, to, expiration, enrSeq) =>
         Ping(version, from, to, expiration.toLong, enrSeq.map(_.toLong))
@@ -97,7 +107,7 @@ object DefaultCodecs:
 
   // Pong codec
   given pongCodec: Codec[Pong] =
-    val optionalLong = scodec.codecs.optional(scodec.codecs.provide(true), uint64)
+    val optionalLong = scodec.codecs.optional(scodec.codecs.bool, uint64)
     (addressCodec :: hashCodec :: uint64 :: optionalLong).xmap(
       { case (to, pingHash, expiration, enrSeq) =>
         Pong(to, pingHash, expiration.toLong, enrSeq.map(_.toLong))
@@ -114,7 +124,7 @@ object DefaultCodecs:
 
   // Neighbors codec
   given neighborsCodec: Codec[Neighbors] =
-    (list(nodeCodec) :: uint64).xmap(
+    (listOfN(uint8, nodeCodec) :: uint64).xmap(
       { case (nodes, expiration) => Neighbors(nodes, expiration.toLong) },
       (n: Neighbors) => (n.nodes, BigInt(n.expiration))
     )

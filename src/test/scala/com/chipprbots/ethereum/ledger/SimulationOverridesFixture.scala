@@ -163,7 +163,9 @@ trait SimulationOverridesFixture extends AmsterdamFixtureVectors with Matchers:
     val funded = setup.emptyWorld
       .saveAccount(senderAddress, Account(balance = UInt256(SenderBalance)))
       .saveAccount(Sink, Account(balance = UInt256(1)))
-    InMemoryWorldStateProxy.persistState(contract(contract(funded, Pauser, PauserCode), Exerciser, ExerciseCode))
+    InMemoryWorldStateProxy.persistStateAndWriteCode(
+      contract(contract(funded, Pauser, PauserCode), Exerciser, ExerciseCode)
+    )
 
   // ── Transactions ────────────────────────────────────────────────────────────
 

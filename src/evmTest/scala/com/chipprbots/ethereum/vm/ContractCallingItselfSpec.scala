@@ -6,11 +6,11 @@ import org.scalatest.freespec.AnyFreeSpec
 import com.chipprbots.ethereum.domain.UInt256
 
 // scalastyle:off magic.number
-class ContractCallingItselfSpec extends AnyFreeSpec with Matchers {
+class ContractCallingItselfSpec extends AnyFreeSpec with Matchers:
 
   "EVM running ContractCallingItself contract" - {
 
-    "should handle a call to itself" in new EvmTestEnv {
+    "should handle a call to itself" in new EvmTestEnv:
       val (_, contract) = deployContract("ContractCallingItself")
 
       contract.getSomeVar().call().returnData shouldBe UInt256(10).bytes
@@ -19,7 +19,4 @@ class ContractCallingItselfSpec extends AnyFreeSpec with Matchers {
       result.error shouldBe None
 
       contract.getSomeVar().call().returnData shouldBe UInt256(20).bytes
-    }
   }
-
-}

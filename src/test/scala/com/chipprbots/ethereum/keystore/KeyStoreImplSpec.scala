@@ -1,16 +1,12 @@
 package com.chipprbots.ethereum.keystore
 
 import java.io.File
-import java.nio.file.FileSystemException
-import java.nio.file.FileSystems
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 
 import org.apache.pekko.util.ByteString
-
-import scala.util.Try
 
 import org.apache.commons.io.FileUtils
 import org.bouncycastle.util.encoders.Hex
@@ -104,9 +100,12 @@ class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter wit
     assert(res1.isRight)
 
   it should "return an error when the keystore dir cannot be initialized" taggedAs (UnitTest) in new TestSetup:
-    assertThrows[FileSystemException] {
+    // B-205: this expected the FileSystemException that the old setup's own chown threw (as a non-root user) before the
+    // keystore was ever made, so it tested nothing; as root the chown worked and it failed. The keystore refuses with:
+    val refused: IllegalArgumentException = intercept[IllegalArgumentException] {
       new KeyStoreImpl(testFailingPathConfig, secureRandom)
     }
+    refused.getMessage should include("Could not initialise keystore directory")
 
   it should "return an error when the keystore dir cannot be read or written" taggedAs (UnitTest) in new TestSetup:
     clearKeyStore()
@@ -142,14 +141,12 @@ class KeyStoreImplSpec extends AnyFlatSpec with Matchers with BeforeAndAfter wit
     object testFailingPathConfig extends KeyStoreConfig:
 
       override val allowNoPassphrase: Boolean = keyStoreConfig.allowNoPassphrase
+      // A directory under a regular file: no user can create it, root included (B-205: the test used to hand a
+      // directory to root, which refused nothing when the tests ran as root, as in a cloud container).
       override val keyStoreDir: String =
-        val tmpDir: Path = Files.createTempDirectory("mentis-keystore")
-        val principalLookupService = FileSystems.getDefault.getUserPrincipalLookupService
-        val rootOrAdminPrincipal = Try(principalLookupService.lookupPrincipalByName("root")).orElse(Try {
-          principalLookupService.lookupPrincipalByName("Administrator")
-        })
-        Files.setOwner(tmpDir, rootOrAdminPrincipal.get)
-        tmpDir.toString
+        val file: Path = Files.createTempFile("fukuii-keystore-parent", ".file")
+        file.toFile.deleteOnExit()
+        file.resolve("keystore").toString
       override val minimalPassphraseLength: Int = keyStoreConfig.minimalPassphraseLength
     object noEmptyAllowedConfig extends KeyStoreConfig:
       override val allowNoPassphrase: Boolean = false

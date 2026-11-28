@@ -42,6 +42,12 @@ trait Consensus:
     val _ = blocks
     false
 
+  /** The proof-of-work fork choice this consensus weighs branches by (B-284): the one instance every other weighing of
+    * the node shares (`BranchResolution`, the fork recovery's guard, the escalation's), so that a tie a coin decides is
+    * decided once. [[ConsensusImpl]] holds the node's; any other consensus keeps a tie's head.
+    */
+  def powForkChoice: PowForkChoice = PowForkChoice.HeavierOnly
+
 object Consensus:
   /* This return type for consensus is probably overcomplicated for now because some information is needed
    * to keep the compatibility with the current code (particularly for the block queue handling), and be able
@@ -64,9 +70,29 @@ object Consensus:
   case class ExtendedCurrentBestBranchPartially(blockImportData: List[BlockData], failureBranch: BranchExecutionFailure)
       extends ConsensusResult
 
-  /** The new branch was selected but was not an extension of the best branch. */
-  case class SelectedNewBestBranch(oldBranch: List[Block], newBranch: List[Block], weights: List[ChainWeight])
-      extends ConsensusResult
+  /** The new branch was selected but was not an extension of the best branch. `oldBranch` is the blocks it moved the
+    * head off, ascending: all of them, or the nearest the old head of a reorganisation deeper than the bound
+    * (`ConsensusImpl.OldBranchToldAtMost`; B-296). `newBranch` is the blocks it moved the head onto, ascending, the new
+    * head last: all of them, or the nearest the new head under the same bound (B-344), one to one with `weights`. Its
+    * last `branchBlocks` are blocks of the branch evaluated, executed in this call; the ones before them are side
+    * blocks stored earlier that the branch stands on (B-297), which no new-head event is sent for (B-344; core-geth).
+    */
+  case class SelectedNewBestBranch(
+      oldBranch: List[Block],
+      newBranch: List[Block],
+      weights: List[ChainWeight],
+      branchBlocks: Int
+  ) extends ConsensusResult
+
+  /** The new branch was selected, was not an extension of the best branch, and did not execute completely: what of it
+    * was executed outweighed the best branch and replaced it, and a later block of it failed (B-291).
+    */
+  case class SelectedNewBestBranchPartially(
+      oldBranch: List[Block],
+      newBranch: List[Block],
+      weights: List[ChainWeight],
+      failureBranch: BranchExecutionFailure
+  ) extends ConsensusResult
 
   /** The proposed new branch was not better than the current best one. */
   case object KeptCurrentBestBranch extends ConsensusResult
@@ -125,6 +151,22 @@ object Consensus:
       imported: List[BlockData] = Nil,
       blocksToEnqueue: List[Block] = Nil
   ) extends ConsensusResult
+
+  /** A [[ConsensusStateFault]] after which the head was left, by a move back that failed, on side blocks the branch
+    * stands on (`fork.parentSideChain`) and on no block of the branch (B-461). `headOn` are those of them the head's
+    * chain holds, oldest first, the head last, each with its weight (at most as many as a reorganisation tells of a new
+    * branch). They are no part of the batch: `imported` is empty, and the importer counts none of them as imported.
+    * They are told as the head, as a reorganisation tells the side blocks it stands on.
+    *
+    * Equal to, and matched exactly like, the [[ConsensusStateFault]] it extends: only [[headLeftOn]] reads `headOn`.
+    */
+  final class HeadLeftOnSideBlocks(fault: StateFault, blocksToEnqueue: List[Block], val headOn: List[BlockData])
+      extends ConsensusStateFault(fault, Nil, blocksToEnqueue)
+
+  /** The side blocks a result tells as the head ([[HeadLeftOnSideBlocks]]), or none. */
+  def headLeftOn(result: ConsensusResult): List[BlockData] = result match
+    case left: HeadLeftOnSideBlocks => left.headOn
+    case _                          => Nil
 
   /** A block hit a missing state node. `imported` is the prefix of the batch that executed and validated BEFORE it:
     * those blocks are already adopted (state and best block), exactly as a successful shorter batch would have left

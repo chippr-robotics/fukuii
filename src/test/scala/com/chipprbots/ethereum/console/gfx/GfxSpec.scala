@@ -25,6 +25,35 @@ class GfxSpec extends AnyFlatSpec with Matchers:
 
   private def sheet(name: String): Array[Byte] = resource(s"/tui/art/$name")
 
+  /** A PNG of `width × height` pixels all `argb`: RGBA, one IDAT, no filter. */
+  private def png(width: Int, height: Int, argb: Int): Array[Byte] =
+    def chunk(kind: String, body: Array[Byte]): Array[Byte] =
+      val crc = new java.util.zip.CRC32()
+      crc.update(kind.getBytes(StandardCharsets.US_ASCII))
+      crc.update(body)
+      ByteBuffer
+        .allocate(12 + body.length)
+        .putInt(body.length)
+        .put(kind.getBytes(StandardCharsets.US_ASCII))
+        .put(body)
+        .putInt(crc.getValue.toInt)
+        .array()
+    val header = ByteBuffer.allocate(13).putInt(width).putInt(height).put(Array[Byte](8, 6, 0, 0, 0)).array()
+    val row = Array[Byte](0) ++ Array
+      .fill(width)(
+        Array((argb >> 16).toByte, (argb >> 8).toByte, argb.toByte, (argb >>> 24).toByte)
+      )
+      .flatten
+    val raw = Array.fill(height)(row).flatten
+    val deflater = new java.util.zip.Deflater()
+    deflater.setInput(raw)
+    deflater.finish()
+    val buffer = new Array[Byte](raw.length + 1024)
+    val data = buffer.take(deflater.deflate(buffer))
+    deflater.end()
+    Array(0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n').map(_.toByte) ++ chunk("IHDR", header) ++ chunk("IDAT", data) ++
+      chunk("IEND", Array.empty)
+
   // ---- the palette --------------------------------------------------------------------------------------------------
 
   "The palette" should "be the 240 xterm colours from 16, each found again by its RGB" taggedAs (UnitTest) in {
@@ -70,6 +99,61 @@ class GfxSpec extends AnyFlatSpec with Matchers:
     an[IllegalArgumentException] should be thrownBy PixelBuffer(1, 1, Array[Byte](5)) // not a sprite colour
   }
 
+  // ---- bitmaps ------------------------------------------------------------------------------------------------------
+
+  private val Red = 0xffff0000
+  private val Blue = 0xff0000ff
+
+  "A bitmap" should "keep full colour and soft alpha, and send them as RGBA" taggedAs (UnitTest) in {
+    val b = Bitmap(2, 1, Array(0x80123456, 0x00abcdef))
+    b(0, 0) shouldBe 0x80123456
+    b(1, 0) shouldBe 0 // no alpha: no colour either, so two that look alike are equal
+    b shouldBe Bitmap(2, 1, Array(0x80123456, 0))
+    b.rgba.toSeq.map(_ & 0xff) shouldBe Seq(0x12, 0x34, 0x56, 0x80, 0, 0, 0, 0)
+    b.nonEmpty shouldBe true
+    Bitmap.empty(3, 3).nonEmpty shouldBe false
+    Bitmap.of(small)(1, 0) shouldBe (0xff000000 | Palette.rgb(196))
+    Bitmap.of(small)(0, 1) shouldBe 0
+    Kitty.upload(7, small) shouldBe Kitty.upload(7, Bitmap.of(small))
+  }
+
+  it should "shrink by averaging what each new pixel covers, and grow by blending neighbours" taggedAs (UnitTest) in {
+    val stripes = Bitmap(4, 2, Array(Red, Blue, Red, Blue, Red, Blue, Red, Blue))
+    val half = stripes.resize(2, 1)
+    (half.width, half.height) shouldBe ((2, 1))
+    half(0, 0) shouldBe 0xff800080 // red and blue, half each
+    half(1, 0) shouldBe half(0, 0)
+    stripes.resize(4, 2) shouldBe stripes
+    val grown = Bitmap(2, 1, Array(Red, Blue)).resize(4, 1)
+    grown(0, 0) shouldBe Red // the edges keep their colour
+    grown(3, 0) shouldBe Blue
+    (grown(1, 0) >> 16 & 0xff) should be > (grown(1, 0) & 0xff) // nearer red than blue
+    (grown(2, 0) & 0xff) should be > (grown(2, 0) >> 16 & 0xff)
+  }
+
+  it should "lend a transparent pixel's colour to nothing: a soft edge keeps the colour of what shows" taggedAs (
+    UnitTest
+  ) in {
+    val edge = Bitmap(2, 1, Array(Red, 0x000000ff)).resize(1, 1)
+    edge(0, 0) shouldBe 0x80ff0000 // half covered, and red: not purple
+  }
+
+  "A sprite" should "enlarge pixel art by whole squares, and fit drawn art to the cell smoothly" taggedAs (UnitTest) in {
+    val stripes = PixelBuffer(8, 16, Array.tabulate(8 * 16)(i => (if i % 2 == 0 then 46 else 196).toByte))
+    val still = Seq(PoseArt("still", 1, Seq((0, 1))))
+    val pixelArt = Sprite("p", 1, 1, still, PixelBuffer.empty(1, 2), Bitmap.of(stripes))
+    pixelArt.density shouldBe 1
+    val big = pixelArt.hiFrame(0, 0, 3)
+    (big.width, big.height) shouldBe ((24, 48))
+    big(0, 0) shouldBe big(2, 2) // a 3 × 3 square, untouched
+    Set(big(0, 0), big(3, 0)) shouldBe Set(0xff000000 | Palette.rgb(46), 0xff000000 | Palette.rgb(196))
+    val drawn = pixelArt.copy(hi = Bitmap(16, 32, Array.fill(16 * 32)(0xff336699)), drawn = true)
+    drawn.density shouldBe 2
+    drawn.hiFrame(0, 0).width shouldBe 16
+    drawn.hiFrame(0, 0, 1)(4, 4) shouldBe 0xff336699
+    (drawn.hiFrame(0, 0, 3).width, drawn.hiFrame(0, 0, 3).height) shouldBe ((24, 48))
+  }
+
   // ---- the PNG reader -----------------------------------------------------------------------------------------------
 
   /** `name` → the SHA-256 the art script wrote for that sheet's pixels. */
@@ -86,13 +170,22 @@ class GfxSpec extends AnyFlatSpec with Matchers:
     md.update(b.indices)
     md.digest().map(x => f"${x & 0xff}%02x").mkString
 
+  /** A `hi` sheet's hash: its width and height, then every pixel as `0xAARRGGBB`, four bytes each, big-endian. */
+  private def hashOf(b: Bitmap): String =
+    val md = MessageDigest.getInstance("SHA-256")
+    md.update(ByteBuffer.allocate(8).putInt(b.width).putInt(b.height).array())
+    val pixels = ByteBuffer.allocate(b.width * b.height * 4)
+    b.argb.foreach(pixels.putInt)
+    md.update(pixels.array())
+    md.digest().map(x => f"${x & 0xff}%02x").mkString
+
   "The PNG reader" should "read every shipped sheet to the pixels the art script drew" taggedAs (UnitTest) in {
     drawn.size should be >= 12
     val store = ArtStore.bundled()
     store.problems shouldBe empty
     for (name, hash) <- drawn do
       val sprite = store.sprite(name.takeWhile(_ != '.')).get
-      withClue(s"$name: ")(hashOf(if name.contains(".lo.") then sprite.lo else sprite.hi) shouldBe hash)
+      withClue(s"$name: ")((if name.contains(".lo.") then hashOf(sprite.lo) else hashOf(sprite.hi)) shouldBe hash)
   }
 
   it should "refuse what is not a sheet, and say why" taggedAs (UnitTest) in {
@@ -117,15 +210,20 @@ class GfxSpec extends AnyFlatSpec with Matchers:
     val mascot = store.sprite("mascot").get
     mascot.poses.map(_.name) shouldBe ArtStore.Poses
     mascot.poses.map(_.frames) shouldBe Seq(2, 4, 2, 2, 2, 2, 4)
-    (mascot.hi.width, mascot.hi.height) shouldBe ((32 * 8 * 4, 16 * 16 * 7))
+    // Drawn art, at twice the VGA cell: sharp on a high-density display, fitted down on any other.
+    (mascot.density, mascot.drawn) shouldBe ((2, true))
+    (mascot.hi.width, mascot.hi.height) shouldBe ((32 * 16 * 4, 16 * 32 * 7))
     (mascot.lo.width, mascot.lo.height) shouldBe ((32, 32 * 7))
     for pose <- mascot.poses.indices do
       mascot.loFrame(pose).nonEmpty shouldBe true
       (mascot.loFrame(pose).width, mascot.loFrame(pose).height) shouldBe ((32, 32))
       for frame <- 0 until mascot.poses(pose).frames do
         val f = mascot.hiFrame(pose, frame)
-        (f.width, f.height) shouldBe ((256, 256))
+        (f.width, f.height) shouldBe ((512, 512))
         f.nonEmpty shouldBe true
+        val small = mascot.hiFrame(pose, frame, 1)
+        (small.width, small.height) shouldBe ((256, 256))
+        mascot.hiFrame(pose, frame, 2) shouldBe f
     store.sprite("network-etc").get.poses.map(_.frames) shouldBe Seq(1)
   }
 
@@ -172,6 +270,17 @@ class GfxSpec extends AnyFlatSpec with Matchers:
     missing.sprite("mascot") should not be empty // the others load
     val wrongSize = storeWith { case "badge.lo.png" => Some(sheet("badge-large.lo.png")) }
     wrongSize.problems.mkString should include("badge.lo.png: is 32x32, must be 16x16")
+    // A hi sheet comes at either density, and in any colour; a third size is refused, naming both.
+    val stretched = storeWith { case "badge.hi.png" => Some(sheet("badge-large.hi.png")) }
+    stretched.problems.mkString should include("badge.hi.png: is 512x512, must be 128x128 or 256x256")
+    val lowDensity = storeWith { case "network-etc.hi.png" => Some(png(128, 128, 0xc0123456)) }
+    lowDensity.problems shouldBe empty
+    (lowDensity.sprite("network-etc").get.density, lowDensity.sprite("network-etc").get.drawn) shouldBe ((1, true))
+    // A lo sheet keeps to the 240 colours and hard edges: block mode draws only those.
+    val offPalette = storeWith { case "network-etc.lo.png" => Some(png(16, 16, 0xff123456)) }
+    offPalette.problems.mkString should include("network-etc.lo.png: a colour outside the 240 (#123456)")
+    val soft = storeWith { case "network-etc.lo.png" => Some(png(16, 16, 0x80000000 | Palette.rgb(46))) }
+    soft.problems.mkString should include("network-etc.lo.png: has half-transparent pixels")
     val noScene = storeWith { case n if n.startsWith("splash-scene") => None }
     noScene.problems shouldBe empty // the scene is optional
     noScene.sprite("splash-scene") shouldBe None
@@ -274,23 +383,48 @@ class GfxSpec extends AnyFlatSpec with Matchers:
     first should include("X=2,Y=12")
     val (again, same) = PixelLayer.diff(layer, Seq(mascot(2, 0)), cell, art)
     again shouldBe ""
-    same shouldBe layer
+    // Only the bookkeeping of when each image was last shown moves.
+    same.copy(frame = layer.frame, shownAt = layer.shownAt) shouldBe layer
+  }
+
+  // B-259: the images the terminal holds were never freed until a clear; at scale 4 the mascot's frames alone are about
+  // 112 MB, a third of kitty's quota.
+  it should "free the least recently shown images off screen once the budget is passed, and send one again when shown" taggedAs (
+    UnitTest
+  ) in {
+    val frameBytes = 256L * 256 * 4
+    val budget = 2 * frameBytes
+    val (_, a) = PixelLayer.diff(PixelLayer.Empty, Seq(mascot(1, 0)), cell, art, budget)
+    val (_, b) = PixelLayer.diff(a, Seq(mascot(1, 1)), cell, art, budget)
+    b.heldBytes shouldBe 2 * frameBytes
+    val (third, c) = PixelLayer.diff(b, Seq(mascot(1, 2)), cell, art, budget)
+    // Three frames held, two allowed: the least recently shown, frame 0 (image 1), is freed with its data.
+    third should include(s"${Esc}_Ga=d,d=I,i=1,q=2")
+    c.heldBytes shouldBe 2 * frameBytes
+    c.images.values.toSet shouldBe Set(2, 3)
+    // Shown again, it is sent again, under a new id: a freed image's id is never reused.
+    val (back, d) = PixelLayer.diff(c, Seq(mascot(1, 0)), cell, art, budget)
+    uploads(back) shouldBe 1
+    d.images.get(PixelLayer.ImageKey.Frame("mascot", 1, 0, PixelLayer.scale(cell))) shouldBe Some(4)
+    // The image on screen is never freed, whatever it costs.
+    val (_, tiny) = PixelLayer.diff(PixelLayer.Empty, Seq(mascot(1, 0)), cell, art, budgetBytes = 1)
+    tiny.images should have size 1
   }
 
   it should "change a frame with one placement and one removal, and send a frame it has shown no second time" taggedAs (
     UnitTest
   ) in {
-    val (_, a) = PixelLayer.diff(PixelLayer.Empty, Seq(mascot(2, 0)), cell, art)
-    val (blink, b) = PixelLayer.diff(a, Seq(mascot(2, 1)), cell, art)
+    val (_, a) = PixelLayer.diff(PixelLayer.Empty, Seq(mascot(1, 0)), cell, art)
+    val (blink, b) = PixelLayer.diff(a, Seq(mascot(1, 1)), cell, art)
     uploads(blink) shouldBe 1 // the blink frame, the first time
     places(blink) shouldBe 1
     removes(blink) shouldBe 1
     blink.indexOf("a=p,") should be < blink.indexOf("a=d,") // the new one first: no flicker
-    val (back, c) = PixelLayer.diff(b, Seq(mascot(2, 0)), cell, art)
+    val (back, c) = PixelLayer.diff(b, Seq(mascot(1, 0)), cell, art)
     uploads(back) shouldBe 0
     places(back) shouldBe 1
     back.length should be < 120 // a frame change costs no pixel data (FR-017)
-    val (blinkAgain, _) = PixelLayer.diff(c, Seq(mascot(2, 1)), cell, art)
+    val (blinkAgain, _) = PixelLayer.diff(c, Seq(mascot(1, 1)), cell, art)
     uploads(blinkAgain) shouldBe 0
   }
 

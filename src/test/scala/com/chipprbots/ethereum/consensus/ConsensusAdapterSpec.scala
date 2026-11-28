@@ -22,6 +22,7 @@ import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportFailed
 import com.chipprbots.ethereum.blockchain.sync.regular.BlockImportedToTop
 import com.chipprbots.ethereum.blockchain.sync.regular.ChainReorganised
 import com.chipprbots.ethereum.blockchain.sync.regular.DuplicateBlock
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportedPartially
 import com.chipprbots.ethereum.blockchain.sync.regular.UnknownParent
 import com.chipprbots.ethereum.consensus.mining.*
 import com.chipprbots.ethereum.consensus.validators.*
@@ -40,7 +41,6 @@ import com.chipprbots.ethereum.ledger.EphemBlockchain
 import com.chipprbots.ethereum.ledger.MockBlockchain
 import com.chipprbots.ethereum.ledger.OmmersTestSetup
 import com.chipprbots.ethereum.ledger.TestSetupWithVmAndValidators
-import com.chipprbots.ethereum.mpt.LeafNode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
@@ -97,6 +97,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     blockQueue.enqueueBlock.expects(block, bestNum).returning(Some(Leaf(hash, newWeight)))
     blockQueue.getBranch.expects(BlockHash(hash), true).returning(List(block))
+    // the block that became the head leaves the queue (B-503)
+    blockQueue.removeImported.expects(List(BlockHash(hash))).returning(())
 
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
     // BlockExecution asks for the block's staged state storage first (the stubbed execution below never uses it) ...
@@ -130,21 +132,22 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     blockQueue.getBranch.expects(BlockHash(hash), true).returning(List(block))
 
     val mptStorage: MptStorage = mock[MptStorage]
-    val mptNode: LeafNode = LeafNode(
-      ByteString(MerklePatriciaTrie.EmptyRootHash),
-      ByteString(MerklePatriciaTrie.EmptyRootHash),
-      Some(MerklePatriciaTrie.EmptyRootHash),
-      Some(MerklePatriciaTrie.EmptyRootHash)
-    )
+    // the hash layout: a trie error is answered by its text, which the importer escalates by (B-450)
+    (() => blockchainReader.holdsStateInPlace).expects().anyNumberOfTimes().returning(false)
 
     blockchainReader.getBlockHeaderByHash.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchainReader.getBlockHeaderByNumber.expects(*).anyNumberOfTimes().returning(Some(block.header))
     blockchain.stageBlockState.expects(*).returning(StagedBlockState.direct(mptStorage))
     // The world asks for the account trie's view of the storage, which for a hash-keyed store is the store itself.
     mptStorage.forOwner.expects(None).returning(mptStorage)
-    mptStorage.getAt.expects(*, *).returning(mptNode)
+    // The state read fails with a trie error. (This used to be a leaf whose cached encoding was not a node, which only
+    // failed because the trie re-decoded every node it read; it no longer does, B-204.)
+    mptStorage.getAt.expects(*, *).throwing(new MerklePatriciaTrie.MPTException("Invalid Node"))
 
-    blockQueue.removeSubtree.expects(*)
+    // A trie error that is not a missing node is this node's own state fault (spec 022 T062): the block was not
+    // judged, so it is queued again and not dropped as an invalid block's subtree is (B-336)
+    blockQueue.enqueueBlock.expects(block, bestNum).returning(None)
+    blockQueue.removeSubtree.expects(*).never()
 
     whenReady(consensusAdapter.evaluateBranchBlock(block).unsafeToFuture())(
       _ shouldBe BlockImportFailed(
@@ -235,7 +238,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       _ shouldEqual BlockEnqueued
     )
     whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock2).unsafeToFuture()) { result =>
-      result shouldEqual ChainReorganised(oldBranch, newBranch, List(newWeight2, newWeight3))
+      result shouldEqual ChainReorganised(oldBranch, newBranch, List(newWeight2, newWeight3), 2)
     }
 
     // Saving new blocks, because it's part of executeBlocks method mechanism
@@ -435,7 +438,7 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
       _ shouldEqual BlockEnqueued
     )
     whenReady(withMockedBlockExecution.evaluateBranchBlock(newBlock3WithOmmer).unsafeToFuture()) { result =>
-      result shouldEqual ChainReorganised(oldBranch, newBranch, List(newWeight2, newWeight3))
+      result shouldEqual ChainReorganised(oldBranch, newBranch, List(newWeight2, newWeight3), 2)
     }
 
     // Saving new blocks, because it's part of executeBlocks method mechanism
@@ -458,9 +461,11 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock1: Block = getBlock(bestNum - 1, difficulty = 101, parent = currentBestBlock.header.hash.value)
     val newBlock2: Block = getBlock(bestNum, difficulty = 105, parent = newBlock1.header.hash.value)
 
+    // B-511: on the hash layout a batch onto the head is executed a block at a time, under the head's lock, so that a
+    // fork choice waits a hold and a block, not the whole batch: one call per block, ending at the first that fails
     (mockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2), *, *, *)
+      .expects(List(newBlock1), *, *, *)
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
@@ -489,9 +494,11 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock2: Block = getBlock(bestNum + 2, difficulty = 105, parent = newBlock1.header.hash.value)
     val newBlock2bis: Block = getBlock(bestNum + 2, difficulty = 50, parent = newBlock1.header.hash.value)
 
+    // B-511: on the hash layout a batch onto the head is executed a block at a time, under the head's lock, so that a
+    // fork choice waits a hold and a block, not the whole batch: one call per block, ending at the first that fails
     (mockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2), *, *, *)
+      .expects(List(newBlock1), *, *, *)
       .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
@@ -524,10 +531,16 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     val newBlock3: Block = getBlock(bestNum + 3, difficulty = 105, parent = newBlock2.header.hash.value)
     val newBlock3bis: Block = getBlock(bestNum + 3, difficulty = 50, parent = newBlock2.header.hash.value)
 
+    // B-511: on the hash layout a batch onto the head is executed a block at a time, under the head's lock, so that a
+    // fork choice waits a hold and a block, not the whole batch: one call per block, ending at the first that fails
     (mockExecution
       .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
-      .expects(List(newBlock1, newBlock2, newBlock3), *, *, *)
-      .returning((List(BlockData(newBlock1, Nil, currentWeight.increase(newBlock1.header))), Some(execError)))
+      .expects(List(newBlock1), *, *, *)
+      .returning((List(BlockData(newBlock1, Nil, currentWeight.increase(newBlock1.header))), None))
+    (mockExecution
+      .executeAndValidateBlocks(_: List[Block], _: ChainWeight, _: Boolean)(using _: BlockchainConfig))
+      .expects(List(newBlock2), *, *, *)
+      .returning((Nil, Some(execError)))
     val consensusAdapterWithFailingExecution: ConsensusAdapter = blockImportWithMockedBlockExecution(mockExecution)
 
     whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock2).unsafeToFuture()) { result =>
@@ -544,7 +557,12 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
     }
 
     whenReady(consensusAdapterWithFailingExecution.evaluateBranchBlock(newBlock1).unsafeToFuture()) { result =>
-      result shouldBe a[BlockImportedToTop]
+      // B-338: block 1 is imported, and block 2's failure is answered with it
+      result shouldBe ImportedPartially(
+        BlockImportedToTop(List(BlockData(newBlock1, Nil, currentWeight.increase(newBlock1.header)))),
+        newBlock2.hash.value,
+        execError.toString
+      )
       blockQueue.isQueued(newBlock2.hash) shouldBe false
       blockQueue.isQueued(newBlock3.hash) shouldBe false
       blockQueue.isQueued(newBlock3bis.hash) shouldBe false
@@ -606,6 +624,8 @@ class ConsensusAdapterSpec extends AnyFlatSpec with Matchers with ScalaFutures w
 
     override def setBestBlock(block: Block): CallHandler0[BigInt] =
       (() => blockchainReader.getBestBlock).expects().anyNumberOfTimes().returning(Some(block))
+      // read again under the head's lock on the hash layout, before a batch is executed (B-511)
+      (() => blockchainReader.getBestBlockHeader).expects().anyNumberOfTimes().returning(Some(block.header))
       (() => blockchainReader.getBestBlockNumber).expects().anyNumberOfTimes().returning(block.header.number.value)
 
     override def setBestBlockNumber(num: BigInt): CallHandler0[BigInt] =

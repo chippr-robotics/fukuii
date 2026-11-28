@@ -22,6 +22,7 @@ import scala.util.Try
 
 import com.typesafe.config.ConfigFactory
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
+import org.bouncycastle.crypto.params.ECPublicKeyParameters
 
 import com.chipprbots.ethereum.blockchain.data.ChainImporter
 import com.chipprbots.ethereum.blockchain.data.GenesisDataLoader
@@ -64,7 +65,6 @@ import com.chipprbots.ethereum.network.handshaker.NetworkHandshakerConfiguration
 import com.chipprbots.ethereum.network.p2p.messages.Capability
 import com.chipprbots.ethereum.network.rlpx.AuthHandshaker
 import com.chipprbots.ethereum.ommers.OmmersPool
-import com.chipprbots.ethereum.security.SSLContextBuilder
 import com.chipprbots.ethereum.security.SecureRandomBuilder
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
 import com.chipprbots.ethereum.transactions.TransactionHistoryService
@@ -173,12 +173,47 @@ trait StorageBuilder:
           override protected def stateConfig: com.chipprbots.ethereum.db.storage.pathstate.StateConfig =
             com.chipprbots.ethereum.db.storage.pathstate.StateConfig(self.instanceConfig.config)
 
+/** The P2P node-ID allowlist (spec 030 FR-050): built from `network.peer.node-allowlist`, the static nodes and the
+  * bootnodes. A static node or bootnode that is not listed is a startup error (FR-053), thrown as an
+  * `IllegalStateException` when this is first forced; `BaseNode.start` forces it before anything binds.
+  */
+trait NodeAllowlistBuilder:
+  self: InstanceConfigProvider & NodeKeyBuilder & BlockchainConfigBuilder =>
+
+  lazy val nodeAllowlistStore: Option[NodeAllowlistStore] =
+    val path = "network.peer.node-allowlist"
+    val section = if instanceConfig.config.hasPath(path) then Some(instanceConfig.config.getConfig(path)) else None
+    val ownId = Some(ByteString(nodeKey.getPublic.asInstanceOf[ECPublicKeyParameters].toNodeId))
+    NodeAllowlistStore.fromConfig(
+      section,
+      StaticNodesLoader.load(instanceConfig.config.getString("datadir")),
+      blockchainConfig.bootstrapNodes.toSeq,
+      ownId
+    ) match
+      case Right(store) => store
+      case Left(why)    => throw new IllegalStateException(s"Refusing to start: $why")
+
+  /** Permits everything when the allowlist is off. */
+  lazy val nodeAllowlist: NodeAllowlist = nodeAllowlistStore.map(_.allowlist).getOrElse(NodeAllowlist.Disabled)
+
+  /** How often the allowlist file is checked for changes. */
+  lazy val nodeAllowlistReloadInterval: FiniteDuration =
+    val path = "network.peer.node-allowlist.reload-interval"
+    if instanceConfig.config.hasPath(path) then instanceConfig.config.getDuration(path).toMillis.millis
+    else NodeAllowlistStore.DefaultReloadInterval
+
 trait DiscoveryConfigBuilder extends BlockchainConfigBuilder with StorageBuilder:
   self: InstanceConfigProvider & ActorSystemBuilder =>
   // Config load does no DNS (H9): it keeps the EIP-1459 domain names, and PeerDiscoveryManager walks them in the
   // background once the node is up.
   lazy val discoveryConfig: DiscoveryConfig =
-    DiscoveryConfig(instanceConfig.config, blockchainConfig.bootstrapNodes, blockchainConfig.dnsDiscoveryDomains)
+    DiscoveryConfig(
+      instanceConfig.config,
+      blockchainConfig.bootstrapNodes,
+      blockchainConfig.dnsDiscoveryDomains,
+      // Read from config, not from the allowlist built at start, so this builder needs no more than it did.
+      allowlistEnabled = NodeAllowlistStore.isEnabled(instanceConfig.config)
+    )
 
   // Rejects ENRs with `eth` key fork IDs that don't match the local chain — stops cross-network peers (BSC, mainnet,
   // etc.) from burning outbound dial slots when shared DNS trees include mis-tagged entries. See PR #1249. Mirrors
@@ -219,7 +254,7 @@ trait KnownNodesManagerBuilder:
 
 trait PeerDiscoveryManagerBuilder:
   self: ActorSystemBuilder & NodeStatusBuilder & DiscoveryConfigBuilder & DiscoveryServiceBuilder & StorageBuilder &
-    BlockchainBuilder & InstanceConfigProvider =>
+    BlockchainBuilder & InstanceConfigProvider & BlacklistBuilder =>
 
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
@@ -260,6 +295,7 @@ trait PeerDiscoveryManagerBuilder:
               tcpPort = instanceConfig.Network.Server.port,
               nodeStatusHolder,
               storagesInstance.storages.knownNodesStorage,
+              isBlocked = address => blockedIPRegistry.isBlocked(address),
               forkIdTag = Some(
                 new com.chipprbots.ethereum.network.discovery.ForkIdTag(
                   genesisHash = () => blockchainReader.genesisHeader.hash.value,
@@ -284,6 +320,8 @@ trait PeerDiscoveryManagerBuilder:
     )
 
 trait BlacklistBuilder:
+  self: InstanceConfigProvider =>
+
   private val blacklistSize: Int = 1000
 
   /** Spec 027 slice 4a: the one peer scorer of the node, exporting its scores to [[NetworkMetrics]]. It observes: no
@@ -299,10 +337,14 @@ trait BlacklistBuilder:
       blockedIPRegistry
     )
 
-  /** The addresses the operator blocked (`admin_blockIP`); the blacklist above refuses them. In memory: it lasts until
-    * the node restarts (the `blocked-ips` config is not read yet).
+  /** The addresses the operator blocked: `network.peer.blocked-ips` at start, then `admin_blockIP` / the TUI's peer
+    * block until the node restarts. The blacklist above refuses them, and discovery drops their packets (B-288). An
+    * entry that is not an IP address refuses the start.
     */
-  lazy val blockedIPRegistry: BlockedIPRegistry = new BlockedIPRegistry(Set.empty)
+  lazy val blockedIPRegistry: BlockedIPRegistry =
+    BlockedIPRegistry.fromConfig(instanceConfig.config) match
+      case Right(registry) => registry
+      case Left(why)       => throw new IllegalStateException(s"Refusing to start: $why")
 
 trait NodeStatusBuilder:
 
@@ -334,7 +376,7 @@ trait BlockQueueBuilder:
 
 trait ConsensusBuilder:
   self: BlockchainBuilder & BlockQueueBuilder & MiningBuilder & ActorSystemBuilder & StorageBuilder &
-    BlockchainConfigBuilder & InstanceConfigProvider =>
+    BlockchainConfigBuilder & InstanceConfigProvider & SyncConfigBuilder =>
 
   import com.chipprbots.ethereum.consensus.engine.DesignatedHead
   import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
@@ -381,6 +423,21 @@ trait ConsensusBuilder:
   lazy val branchHandOff: com.chipprbots.ethereum.consensus.engine.BranchHandOff.LateBound =
     new com.chipprbots.ethereum.consensus.engine.BranchHandOff.LateBound
 
+  /** The node's proof-of-work fork choice (B-284): core-geth's `ForkChoice.ReorgNeeded` with its tie rule, a block of
+    * this node's miner kept or taken on a tie at its height (`shouldPreserve`: the beneficiary is the etherbase, read
+    * as `miner_setEtherbase` leaves it), a coin from a real random source otherwise. One instance for every weighing of
+    * the node (the consensus, the importer's branch resolution and fork recovery, the escalation's feed), so that a
+    * coin is tossed once for a pair of blocks. On a chain that declares a terminal total difficulty (the ETH family) a
+    * tie keeps the head, as before: the consensus layer names the head there.
+    */
+  lazy val powForkChoice: com.chipprbots.ethereum.consensus.PowForkChoice =
+    if blockchainConfig.terminalTotalDifficulty.isEmpty then
+      // this node's own blocks: the etherbase an operator chose, or the coinbase it mines to (forge N-c)
+      com.chipprbots.ethereum.consensus.PowForkChoice.ofEtherbase(() =>
+        coinbaseProvider.ownBlocksEtherbase(mining.config.generic.miningEnabled)
+      )
+    else com.chipprbots.ethereum.consensus.PowForkChoice.HeavierOnly
+
   lazy val consensus: Consensus =
     new ConsensusImpl(
       blockchainReader,
@@ -389,18 +446,23 @@ trait ConsensusBuilder:
       Some(invalidChainReporter),
       Some(designatedHead),
       blockchain,
-      Some(branchHandOff)
+      Some(branchHandOff),
+      // what of a reorganisation is told is what the block queue keeps behind the head (B-345)
+      oldBranchToldAtMost = syncConfig.maxQueuedBlockNumberBehind,
+      powForkChoice = powForkChoice
     )
 
   lazy val chainImporter: ChainImporter =
     new ChainImporter(
       blockchainReader,
-      blockchainWriter,
       blockExecution,
-      blockValidation,
       Some((block: Block, config: BlockchainConfig) =>
         consensusAdapter.evaluateBranchBlock(block)(using IORuntime.global, config)
-      )
+      ),
+      // on the unified layout, a block after the merge that is not built on the head is adopted on layers (B-220)
+      Some(ChainImporter.adoptingOnLayers(blockchainReader, blockchainWriter, blockExecution, blockchain)),
+      // on the hash store, a block after the merge stored with its state is made the head without being executed again
+      Some(ChainImporter.knownBlockAsHead(blockchainReader, blockchainWriter, blockchain))
     )
 
   /** The count of what the node could not follow, on the unified layout (spec 018 C5a part 6): 64 refused fork choices
@@ -465,9 +527,21 @@ trait ConsensusBuilder:
             com.chipprbots.ethereum.consensus.mess.ArtificialFinality.shouldRejectReorg
           )
         ),
-        left => escalationLog.debug("[STATE-ESCALATION] {}", left)
+        left => escalationLog.debug("[STATE-ESCALATION] {}", left),
+        // a block whose header is not stored is the node's own when the hash index names it (B-383)
+        blockchainReader.getCanonicalHashByNumber,
+        // the head `headWeight` weighs: a block whose weight is not stored is weighed from it (B-385)
+        () => blockchainReader.getBestBlockHeader,
+        // a branch is counted by the rule the import takes branches by, its ties included (B-284)
+        powForkChoice
       )
     }
+
+  /** What stops the node when the store failed during an import (B-440): a write refused, a read that failed, or a
+    * store busy [[ConsensusAdapter.BusyBeforeStop]] times with no block made the head, and for at least
+    * [[ConsensusAdapter.BusyStopAfter]]. Nothing but a log line here; [[BaseNode]] wires its stop.
+    */
+  def onFatalStoreFailure: Throwable => Unit = ConsensusAdapter.NoStopWired
 
   lazy val consensusAdapter: ConsensusAdapter =
     new ConsensusAdapter(
@@ -477,7 +551,8 @@ trait ConsensusBuilder:
       blockValidation,
       IORuntime.global,
       Some(invalidChainReporter),
-      powEscalationFeed
+      powEscalationFeed,
+      onFatalStoreFailure
     )
 
 trait ForkResolverBuilder:
@@ -543,7 +618,7 @@ trait PeerManagerActorBuilder:
 
   self: ActorSystemBuilder & HandshakerBuilder & PeerEventBusBuilder & AuthHandshakerBuilder &
     PeerDiscoveryManagerBuilder & DiscoveryConfigBuilder & StorageBuilder & KnownNodesManagerBuilder &
-    PeerStatisticsBuilder & BlacklistBuilder & InstanceConfigProvider =>
+    PeerStatisticsBuilder & BlacklistBuilder & InstanceConfigProvider & NodeAllowlistBuilder =>
 
   lazy val peerConfiguration: PeerConfiguration = instanceConfig.Network.peer
 
@@ -566,12 +641,14 @@ trait PeerManagerActorBuilder:
           handshaker,
           authHandshaker,
           instanceConfig.supportedCapabilities,
-          Some(peerScoringManager)
+          Some(peerScoringManager),
+          nodeAllowlist
         ),
         discoveryConfig,
         blacklist,
         snapGoodPeers = snapGoodPeersOpt,
-        peerScoringManager = Some(peerScoringManager)
+        peerScoringManager = Some(peerScoringManager),
+        allowlist = nodeAllowlist
       ),
       "peer-manager"
     )
@@ -631,9 +708,17 @@ trait BlockchainHostBuilder:
 trait ServerActorBuilder:
 
   self: ActorSystemBuilder & NodeStatusBuilder & BlockchainBuilder & PeerManagerActorBuilder & BlacklistBuilder &
-    InstanceConfigProvider =>
+    InstanceConfigProvider & SecureRandomBuilder =>
 
   lazy val networkConfig = instanceConfig.Network
+
+  /** The client context of the external-IP lookup's HTTPS step (spec 030 FR-044); a profile that does not load stops
+    * the start.
+    */
+  lazy val externalIpTls: javax.net.ssl.SSLContext =
+    com.chipprbots.ethereum.tls.OutboundTls
+      .forSite(instanceConfig.config, "network.server-address.external-ip-tls-profile", secureRandom)
+      .fold(e => throw new IllegalStateException(e.message), identity)
 
   /** What the server actor found out about the node's address (how, when): written by its detection, read by the
     * dashboard (spec 029).
@@ -643,7 +728,7 @@ trait ServerActorBuilder:
   lazy val server: org.apache.pekko.actor.typed.ActorRef[ServerActor.Command] =
     classicSystem.spawn(
       Behaviors
-        .supervise(ServerActor(nodeStatusHolder, peerManager, blacklist, networkAddressInfo))
+        .supervise(ServerActor(nodeStatusHolder, peerManager, blacklist, networkAddressInfo, externalIpTls))
         .onFailure[Throwable](SupervisorStrategy.restartWithBackoff(2.seconds, 60.seconds, 0.1)),
       "server"
     )
@@ -652,11 +737,12 @@ trait Web3ServiceBuilder:
   lazy val web3Service = new Web3Service
 
 trait NetServiceBuilder:
-  this: PeerManagerActorBuilder & NodeStatusBuilder & BlacklistBuilder & InstanceConfigProvider & ActorSystemBuilder =>
+  this: PeerManagerActorBuilder & NodeStatusBuilder & BlacklistBuilder & InstanceConfigProvider & ActorSystemBuilder &
+    NodeAllowlistBuilder =>
 
   lazy val netServiceConfig: NetServiceConfig = NetServiceConfig(instanceConfig.config)
 
-  lazy val netService = new NetService(nodeStatusHolder, peerManager, blacklist, netServiceConfig)(using
+  lazy val netService = new NetService(nodeStatusHolder, peerManager, blacklist, netServiceConfig, nodeAllowlist)(using
     classicSystem.toTyped.scheduler
   )
 
@@ -670,6 +756,12 @@ trait TxGossipGateBuilder:
 
 trait PendingTransactionsManagerBuilder:
   def pendingTransactionsManager: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command]
+
+  /** The head the pool was last reset to (B-515): one per node, shared by the Engine API's fork choice and regular
+    * sync's importer, which both reset the pool.
+    */
+  lazy val txPoolHead: com.chipprbots.ethereum.transactions.TxPoolHead =
+    new com.chipprbots.ethereum.transactions.TxPoolHead
   // Alias kept for callers that reference the Typed ref by the old name.
   def pendingTransactionsManagerTyped: org.apache.pekko.actor.typed.ActorRef[PendingTransactionsManager.Command] =
     pendingTransactionsManager
@@ -741,18 +833,20 @@ trait DebugServiceBuilder:
   lazy val debugService = new DebugService(peerManager, networkPeerManager)(using classicSystem.toTyped.scheduler)
 
 trait EthProofServiceBuilder:
-  self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder =>
+  self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & EthBlocksServiceBuilder =>
 
   lazy val ethProofService: ProofService = new EthProofService(
     blockchain,
     blockchainReader,
     mining.blockGenerator,
-    blockchainConfig.ethCompatibleStorage
+    blockchainConfig.ethCompatibleStorage,
+    forkChoiceManagerForRpc
   )
 
 trait EthInfoServiceBuilder:
   self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & StxLedgerBuilder &
-    KeyStoreBuilder & SyncControllerBuilder & AsyncConfigBuilder & InstanceConfigProvider & ActorSystemBuilder =>
+    KeyStoreBuilder & SyncControllerBuilder & AsyncConfigBuilder & InstanceConfigProvider & ActorSystemBuilder &
+    EthBlocksServiceBuilder =>
 
   lazy val ethInfoService = new EthInfoService(
     blockchain,
@@ -766,7 +860,8 @@ trait EthInfoServiceBuilder:
     asyncConfig.askTimeout,
     classicSystem.toTyped.scheduler,
     com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config),
-    () => stateAdoptionForRpc()
+    () => stateAdoptionForRpc(),
+    forkChoiceManagerForRpc
   )
 
   /** The adoption of a long branch under way on the unified layout, for `eth_syncing` (spec 018 C4d part 4b).
@@ -775,7 +870,7 @@ trait EthInfoServiceBuilder:
   def stateAdoptionForRpc: () => Option[com.chipprbots.ethereum.ledger.StateRecovery.Progress] = () => None
 
 trait EthSimulateServiceBuilder:
-  self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder =>
+  self: StorageBuilder & BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & EthBlocksServiceBuilder =>
 
   lazy val ethSimulateService = new com.chipprbots.ethereum.jsonrpc.EthSimulateService(
     blockchain,
@@ -783,12 +878,14 @@ trait EthSimulateServiceBuilder:
     storagesInstance.storages.evmCodeStorage,
     mining.blockPreparator,
     mining,
-    blockchainConfig
+    blockchainConfig,
+    forkChoiceManagerForRpc
   )
 
 trait EthMiningServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & JSONRpcConfigBuilder & OmmersPoolBuilder &
-    SyncControllerBuilder & PendingTransactionsManagerBuilder & TxPoolConfigBuilder & ActorSystemBuilder =>
+    SyncControllerBuilder & PendingTransactionsManagerBuilder & TxPoolConfigBuilder & ActorSystemBuilder &
+    SecureRandomBuilder & InstanceConfigProvider =>
 
   lazy val ethMiningService = new EthMiningService(
     blockchainReader,
@@ -800,7 +897,11 @@ trait EthMiningServiceBuilder:
     txPoolConfig.getTransactionFromPoolTimeout,
     this,
     coinbaseProvider,
-    classicSystem
+    classicSystem,
+    // the work notifier's client context (spec 030 FR-044); a profile that does not load stops the start
+    com.chipprbots.ethereum.tls.OutboundTls
+      .forSite(instanceConfig.config, "mining.notify-tls-profile", secureRandom)
+      .fold(e => throw new IllegalStateException(e.message), com.chipprbots.ethereum.tls.OutboundTls.pekkoHttpsContext)
   )
 
 /** The node's one gas price oracle (go-ethereum `eth/gasprice`), shared by eth_gasPrice, eth_maxPriorityFeePerGas,
@@ -817,7 +918,8 @@ trait GasPriceOracleBuilder:
 
 trait EthTxServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & PendingTransactionsManagerBuilder & MiningBuilder &
-    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder & InstanceConfigProvider & GasPriceOracleBuilder =>
+    TxPoolConfigBuilder & StorageBuilder & ActorSystemBuilder & InstanceConfigProvider & GasPriceOracleBuilder &
+    EthBlocksServiceBuilder =>
 
   lazy val ethTxService = new EthTxService(
     blockchain,
@@ -828,7 +930,8 @@ trait EthTxServiceBuilder:
     storagesInstance.storages.transactionMappingStorage,
     classicSystem.toTyped.scheduler,
     com.chipprbots.ethereum.jsonrpc.RpcTxSubmission.fromConfig(instanceConfig.config),
-    gasPriceOracleOpt = Some(gasPriceOracle)
+    gasPriceOracleOpt = Some(gasPriceOracle),
+    _forkChoiceManagerOpt = forkChoiceManagerForRpc
   )
 
 trait EthBlocksServiceBuilder:
@@ -852,14 +955,15 @@ trait EthBlocksServiceBuilder:
     )
 
 trait EthUserServiceBuilder:
-  self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & StorageBuilder =>
+  self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & StorageBuilder & EthBlocksServiceBuilder =>
 
   lazy val ethUserService = new EthUserService(
     blockchain,
     blockchainReader,
     mining,
     storagesInstance.storages.evmCodeStorage,
-    this
+    this,
+    forkChoiceManagerForRpc
   )
 
 trait EthFilterServiceBuilder:
@@ -949,7 +1053,8 @@ trait ApisBuilder extends ApisBase:
 
 trait AdminServiceBuilder:
   this: PeerManagerActorBuilder & NodeStatusBuilder & BlockchainBuilder & BlockchainConfigBuilder &
-    InstanceConfigProvider & ActorSystemBuilder & ConsensusBuilder & SyncControllerRefBuilder & BlacklistBuilder =>
+    InstanceConfigProvider & ActorSystemBuilder & ConsensusBuilder & SyncControllerRefBuilder & BlacklistBuilder &
+    NodeAllowlistBuilder & NetworkPeerManagerActorBuilder =>
 
   lazy val adminService: AdminService = new AdminService(
     nodeStatusHolder,
@@ -971,13 +1076,17 @@ trait AdminServiceBuilder:
         scheduler = classicSystem.toTyped.scheduler
       )
     ,
+    clientId = instanceConfig.clientId,
+    networkPeerManager = Some(networkPeerManager),
     peerLimitsConfig = Some(
       AdminService.PeerLimits(
         minOutgoing = peerConfiguration.minOutgoingPeers,
         maxOutgoing = peerConfiguration.maxOutgoingPeers,
         maxIncoming = peerConfiguration.maxIncomingPeers
       )
-    )
+    ),
+    allowlist = nodeAllowlist,
+    allowlistStore = nodeAllowlistStore
   )(using classicSystem.toTyped.scheduler)
 
 trait TxPoolServiceBuilder:
@@ -991,7 +1100,8 @@ trait TxPoolServiceBuilder:
   )
 
 trait DebugTracingServiceBuilder:
-  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider =>
+  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider &
+    EthBlocksServiceBuilder =>
 
   lazy val debugTracingService: com.chipprbots.ethereum.jsonrpc.DebugTracingService =
     new com.chipprbots.ethereum.jsonrpc.DebugTracingService(
@@ -1000,11 +1110,13 @@ trait DebugTracingServiceBuilder:
       mining,
       stxLedger,
       storagesInstance.storages.transactionMappingStorage,
-      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config)
+      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config),
+      _forkChoiceManagerOpt = forkChoiceManagerForRpc
     )
 
 trait TraceServiceBuilder:
-  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider =>
+  this: BlockchainBuilder & StxLedgerBuilder & StorageBuilder & MiningBuilder & InstanceConfigProvider &
+    EthBlocksServiceBuilder =>
 
   lazy val traceService: com.chipprbots.ethereum.jsonrpc.TraceService =
     new com.chipprbots.ethereum.jsonrpc.TraceService(
@@ -1013,7 +1125,8 @@ trait TraceServiceBuilder:
       mining,
       stxLedger,
       storagesInstance.storages.transactionMappingStorage,
-      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config)
+      com.chipprbots.ethereum.jsonrpc.CallTxBuilder.gasCapFrom(instanceConfig.config),
+      _forkChoiceManagerOpt = forkChoiceManagerForRpc
     )
 
 trait JSONRpcConfigBuilder:
@@ -1088,7 +1201,7 @@ trait JSONRpcHealthcheckerBuilder:
 trait EngineApiBuilder extends Logger:
   self: ActorSystemBuilder & BlockchainBuilder & BlockchainConfigBuilder & ConsensusBuilder & StorageBuilder &
     MiningBuilder & PendingTransactionsManagerBuilder & InstanceConfigProvider & JSONRpcControllerBuilder &
-    TxGossipGateBuilder =>
+    TxGossipGateBuilder & SecureRandomBuilder & RpcIdentityBuilder & EventTopicsBuilder =>
 
   import com.chipprbots.ethereum.consensus.engine.*
 
@@ -1101,7 +1214,15 @@ trait EngineApiBuilder extends Logger:
       jwtSecretPath = engineConf.flatMap(c => scala.util.Try(c.getString("jwt-secret-path")).toOption)
     )
 
-  lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(blockchainReader, blockchainWriter, blockchain)
+  lazy val forkChoiceManager: ForkChoiceManager = new ForkChoiceManager(
+    blockchainReader,
+    blockchainWriter,
+    blockchain,
+    onNewCanonical = (block, head) =>
+      blockTopic ! org.apache.pekko.actor.typed.pubsub.Topic.Publish(
+        com.chipprbots.ethereum.jsonrpc.NewBlockImported(block, head)
+      )
+  )
 
   /** The recovery of a state that is no longer held, on the unified layout only (spec 018 C4d part 3). It covers
     * `state.recovery.max-blocks`, and no more than half of `state.overlay.max-forward-layers`: its layers are kept
@@ -1141,7 +1262,8 @@ trait EngineApiBuilder extends Logger:
       txGossipGate = Some(txGossipGate),
       stateHeldInPlace = storagesInstance.storages.pathStateStorage.map(state => () => state.anchor.map(_.hash)),
       stateRecovery = stateRecovery,
-      escalationWatch = escalationWatch
+      escalationWatch = escalationWatch,
+      txPoolHead = txPoolHead
     )(using blockchainConfig, typedScheduler)
 
   // The controller's fork gates read the same schedule its service executes with (not the process-global config, which
@@ -1223,7 +1345,20 @@ trait EngineApiBuilder extends Logger:
     else None
 
   lazy val maybeEngineApiServer: Option[EngineApiHttpServer] =
-    engineApiJwtAuthenticator.map(jwtAuth => new EngineApiHttpServer(engineApiController, jwtAuth, engineApiConfig))
+    engineApiJwtAuthenticator.map(jwtAuth =>
+      new EngineApiHttpServer(
+        engineApiController,
+        jwtAuth,
+        engineApiConfig,
+        tls = () =>
+          com.chipprbots.ethereum.tls.TlsServerEngine
+            .engineApi(instanceConfig.config, secureRandom)
+            .map(_.map { ctx =>
+              tlsReloader.register(com.chipprbots.ethereum.tls.ListenerId.EngineApi.label, ctx)
+              ctx
+            })
+      )
+    )
 
 trait GraphQLServiceBuilder:
   self: BlockchainBuilder & BlockchainConfigBuilder & MiningBuilder & StorageBuilder & EthBlocksServiceBuilder &
@@ -1258,9 +1393,80 @@ trait GraphQLServiceBuilder:
         )
       )
 
+/** The client-certificate identities of the HTTP and WS listeners (spec 030 FR-020–FR-028). A listener resolves
+  * identities only where its `tls.client-auth` is `want` or `need`; each rule's controller is built once, here.
+  */
+trait RpcIdentityBuilder:
+  self: JSONRpcControllerBuilder & JSONRpcConfigBuilder & InstanceConfigProvider =>
+
+  import com.chipprbots.ethereum.jsonrpc.server.http.RpcCallers
+  import com.chipprbots.ethereum.tls.*
+
+  // The start-up check (StdNode.checkTlsAtStart) refuses the start on a rule that does not parse, before any server
+  // is built, so a Left here is never reached by a node that starts.
+  private lazy val identityRules: IdentityRules =
+    IdentityRules
+      .parse(instanceConfig.config, availableApis)
+      .fold(e => throw new IllegalStateException(e.message), identity)
+
+  private def callersFor(
+      listener: Either[TlsConfigError, Option[ResolvedListener]],
+      controller: JsonRpcController,
+      transportApis: Seq[String]
+  ): Option[RpcCallers.Reloadable] =
+    listener.toOption.flatten.filter(TlsStartupCheck.resolvesIdentities).map { _ =>
+      RpcCallers(
+        identityRules,
+        transportApis,
+        (apis, label) => controller.forApis(apis).forCaller(label),
+        IdentityRules.graphQlEnabled(instanceConfig.config)
+      )
+    }
+
+  lazy val rpcHttpCallers: Option[RpcCallers.Reloadable] =
+    callersFor(TlsConfig.rpcHttp(instanceConfig.config), jsonRpcHttpController, jsonRpcConfig.httpApis)
+
+  lazy val rpcWsCallers: Option[RpcCallers.Reloadable] =
+    callersFor(TlsConfig.rpcWs(instanceConfig.config), jsonRpcWsController, jsonRpcConfig.wsApis)
+
+  /** The node's one TLS reload loop (spec 030 FR-030–FR-033): each TLS listener registers its context when it binds,
+    * and the identity-rules file, when one is set, is registered by [[startIdentityReload]].
+    */
+  lazy val tlsReloader: TlsReloader = new TlsReloader()
+
+  /** A listener's TLS context for one bind, registered with the reload loop under the listener's label. */
+  protected def reloading(
+      listener: ListenerId,
+      context: Either[TlsConfigError, TlsServerContext]
+  ): Either[TlsConfigError, TlsServerContext] =
+    context.foreach(c => tlsReloader.register(listener.label, c))
+    context
+
+  /** Re-reads `network.rpc.client-identities-file` on the shortest reload interval of the listeners that resolve
+    * identities (one minute by default), and hands a valid change to both listeners' callers (FR-033). Nothing where
+    * the rules are inline, or no listener resolves identities.
+    */
+  def startIdentityReload(): Unit =
+    val callers = rpcHttpCallers.toList ++ rpcWsCallers.toList
+    IdentityRules.file(instanceConfig.config).toOption.flatten.filter(_ => callers.nonEmpty).foreach { file =>
+      val config = instanceConfig.config
+      val intervals = (TlsConfig.rpcHttp(config).toOption.flatten.toList ++ TlsConfig.rpcWs(config).toOption.flatten)
+        .filter(TlsStartupCheck.resolvesIdentities)
+        .map(_.profile.reload)
+        .filter(_.enabled)
+        .map(_.interval)
+      if intervals.nonEmpty then
+        tlsReloader.registerRules(
+          file,
+          intervals.minBy(_.toMillis),
+          () => IdentityRules.parse(config, availableApis),
+          rules => callers.foreach(_.update(rules))
+        )
+    }
+
 trait JSONRpcHttpServerBuilder:
   self: ActorSystemBuilder & BlockchainBuilder & JSONRpcControllerBuilder & JSONRpcHealthcheckerBuilder &
-    SecureRandomBuilder & JSONRpcConfigBuilder & SSLContextBuilder & GraphQLServiceBuilder =>
+    SecureRandomBuilder & JSONRpcConfigBuilder & GraphQLServiceBuilder & InstanceConfigProvider & RpcIdentityBuilder =>
 
   lazy val maybeJsonRpcHttpServer: Either[String, JsonRpcHttpServer] =
     given org.apache.pekko.actor.ActorSystem = classicSystem
@@ -1268,8 +1474,13 @@ trait JSONRpcHttpServerBuilder:
       jsonRpcHttpController,
       jsonRpcHealthChecker,
       jsonRpcConfig.httpServerConfig,
-      () => sslContext("fukuii.network.rpc.http"),
-      maybeGraphQLService
+      () =>
+        reloading(
+          com.chipprbots.ethereum.tls.ListenerId.RpcHttp,
+          com.chipprbots.ethereum.tls.TlsServerEngine.rpcHttp(instanceConfig.config, secureRandom)
+        ),
+      maybeGraphQLService,
+      rpcHttpCallers
     )
 
 trait JSONRpcIpcServerBuilder:
@@ -1293,13 +1504,22 @@ trait SubscriptionManagerBuilder:
     ref
 
 trait JSONRpcWsServerBuilder:
-  self: ActorSystemBuilder & JSONRpcControllerBuilder & JSONRpcConfigBuilder & SubscriptionManagerBuilder =>
+  self: ActorSystemBuilder & JSONRpcControllerBuilder & JSONRpcConfigBuilder & SubscriptionManagerBuilder &
+    SecureRandomBuilder & InstanceConfigProvider & RpcIdentityBuilder =>
 
   lazy val jsonRpcWsServer: com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer =
     new com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcWsServer(
       jsonRpcWsController,
       subscriptionManager,
-      jsonRpcConfig.wsServerConfig
+      jsonRpcConfig.wsServerConfig,
+      () =>
+        com.chipprbots.ethereum.tls.TlsServerEngine
+          .rpcWs(instanceConfig.config, secureRandom)
+          .map(_.map { ctx =>
+            tlsReloader.register(com.chipprbots.ethereum.tls.ListenerId.RpcWs.label, ctx)
+            ctx
+          }),
+      rpcWsCallers
     )(using classicSystem)
 
 trait OmmersPoolBuilder:
@@ -1336,7 +1556,8 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
   self: ActorSystemBuilder & ServerActorBuilder & BlockchainBuilder & BlockchainConfigBuilder & ConsensusBuilder &
     NodeStatusBuilder & StorageBuilder & StxLedgerBuilder & PeerEventBusBuilder & PendingTransactionsManagerBuilder &
     OmmersPoolBuilder & NetworkPeerManagerActorBuilder & SyncConfigBuilder & ShutdownHookBuilder & MiningBuilder &
-    BlacklistBuilder & MESSBuilder & EventTopicsBuilder & TxGossipGateBuilder =>
+    BlacklistBuilder & MESSBuilder & EventTopicsBuilder & TxGossipGateBuilder & SecureRandomBuilder &
+    InstanceConfigProvider =>
 
   /** Override in concrete builders that also mix in [[EngineApiBuilder]] to enable CL-driven SNAP pivot selection.
     * Defaults to `None` for setups without an Engine API (e.g. ETC mainnet pre-merge wiring). Closes #1207.
@@ -1398,14 +1619,20 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
             forkChoiceManagerForSync.foreach(_.clear())
             // the refusals counted so far are of the state that is gone: the count begins again with the sync
             escalationWatch.foreach(_.stateCleared())
-          stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          // B-465: refused, with nothing written, while an adoption holds the records; asked for again after a while.
+          // Looked at before the recoveries are reset, so that a refused clear leaves them as they were (vault)
+          SyncController.StateEscalationPort.notClearedWhenRefused(pathState.recordsHeld, escalationLog.warn(_)) {
+            stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          }
         def escalated(kind: EscalationKind): Unit = StateMetrics.escalated(kind)
         def regularSyncStarted(): Unit = handler.reset()
         def clearRefused(): Unit = handler.clearRefused(System.currentTimeMillis())
         def clearForBranchRetry(): Boolean =
           def clearNow(): Unit =
             val _ = pathState.clearForBranchRetry(blockchainReader.genesisHeader.hash.value, System.currentTimeMillis())
-          stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          SyncController.StateEscalationPort.notClearedWhenRefused(pathState.recordsHeld, escalationLog.warn(_)) {
+            stateRecoveryForSync.fold { clearNow(); true }(_.reset()(clearNow()))
+          }
     }
 
   /** A sync on the unified layout (spec 018 C5a part 10): the hand-off each SNAP sync ends with, over the rows SNAP
@@ -1417,9 +1644,10 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
       import com.chipprbots.ethereum.db.storage.pathstate.BlockRef
       import com.chipprbots.ethereum.db.storage.pathstate.SyncHandoff
       val storages = storagesInstance.storages
+      val rowStorage = new PathNodeStorage(storages.flatSlotStorage.dataSource)
       val built = new SyncHandoff(
         pathState,
-        new PathNodeStorage(storages.flatSlotStorage.dataSource),
+        rowStorage,
         storages.appStateStorage,
         storages.blockHeadersStorage,
         storages.blockNumberMappingStorage,
@@ -1440,9 +1668,57 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           forkChoiceManagerForSync.foreach(_.clear())
           escalationWatch.foreach(_.stateCleared())
         ,
-        handedOffNow = () => escalationWatch.foreach(_.stateCleared())
+        handedOffNow = () => escalationWatch.foreach(_.stateCleared()),
+        checkpointTarget = new com.chipprbots.ethereum.blockchain.checkpoint.CheckpointImporter.UnifiedTarget(
+          pathState,
+          rowStorage,
+          built,
+          storages.appStateStorage,
+          () =>
+            val header = blockchainReader.genesisHeader
+            BlockRef(header.hash.value, header.number.value, header.stateRoot.value)
+        ),
+        snapPeers = snapPeerPrecondition
       )
     }
+
+  /** The peers the peer manager maintains, kept from the peer event bus for the snap-peer precondition (B-453). */
+  private lazy val maintainedPeerIds: com.chipprbots.ethereum.network.MaintainedPeerIds =
+    val ids = new com.chipprbots.ethereum.network.MaintainedPeerIds
+    classicSystem.spawn(
+      com.chipprbots.ethereum.network.MaintainedPeerIds.behavior(ids, peerEventBus),
+      "maintained-peer-ids"
+    ): Unit
+    ids
+
+  /** What the snap-peer precondition at SNAP's start counts against on the unified layout (spec 018 C6): the shipped
+    * `min-snap-peers` and `pow-snap-peer-wait`, and the node ids of the peers the operator declared, in
+    * `static-nodes.json` and `sync.snap-sync.snap-server-peers` (read here, once), and over `admin_addPeer` (the peer
+    * manager's maintained set, read at each count; B-453).
+    */
+  private def snapPeerPrecondition: com.chipprbots.ethereum.blockchain.sync.PathLiveSync.SnapPeerPrecondition =
+    import com.chipprbots.ethereum.blockchain.sync.snap.SNAPSyncConfig
+    // subscribed now, with the port, not at the first count
+    val added = maintainedPeerIds
+    val snapConfig = scala.util
+      .Try(SNAPSyncConfig.fromConfig(com.chipprbots.ethereum.utils.Config.config.getConfig("sync")))
+      .getOrElse(SNAPSyncConfig())
+    val staticNodes = scala.util
+      .Try(com.chipprbots.ethereum.utils.Config.config.getString("datadir"))
+      .toOption
+      .toSeq
+      .flatMap(com.chipprbots.ethereum.network.StaticNodesLoader.load(_))
+    val declared = (staticNodes ++ snapConfig.snapServerPeers).flatMap { uri =>
+      scala.util
+        .Try(org.apache.pekko.util.ByteString(org.bouncycastle.util.encoders.Hex.decode(uri.getUserInfo)))
+        .toOption
+    }
+    com.chipprbots.ethereum.blockchain.sync.PathLiveSync.SnapPeerPrecondition(
+      snapConfig.minSnapPeers,
+      snapConfig.powSnapPeerWait,
+      declared.filter(_.nonEmpty).toSet,
+      added = () => added.current
+    )
 
   lazy val syncController: org.apache.pekko.actor.typed.ActorRef[SyncController.Command] =
     val ref = classicSystem
@@ -1472,7 +1748,14 @@ trait SyncControllerBuilder extends SyncControllerRefBuilder:
           txGossipGate = txGossipGate,
           peerScoringManager = Some(peerScoringManager),
           stateEscalation = stateEscalationPort,
-          pathLiveSync = pathLiveSyncPort
+          pathLiveSync = pathLiveSyncPort,
+          checkpointHttpClient = () =>
+            com.chipprbots.ethereum.tls.OutboundTls
+              .forSite(instanceConfig.config, "sync.checkpoint-sync-tls-profile", secureRandom)
+              .map(com.chipprbots.ethereum.blockchain.checkpoint.CheckpointDownloader.client)
+              .left
+              .map(_.message),
+          txPoolHead = txPoolHead
         ),
         "sync-controller"
       )
@@ -1495,10 +1778,15 @@ trait PortForwardingBuilder:
   implicit lazy val ioRuntime: IORuntime = IORuntime.global
 
   // protected for testing purposes - allows test fixtures to override with mock implementation
+  /** What became of the UPnP port mapping, for the TUI's `net` report (B-287). */
+  lazy val portMappingState: com.chipprbots.ethereum.network.PortMappingState =
+    new com.chipprbots.ethereum.network.PortMappingState
+
   protected lazy val portForwarding: IO[IO[Unit]] = PortForwarder
     .openPorts(
       Seq(instanceConfig.Network.Server.port),
-      Seq(discoveryConfig.port).filter(_ => discoveryConfig.discoveryEnabled)
+      Seq(discoveryConfig.port).filter(_ => discoveryConfig.discoveryEnabled),
+      portMappingState
     )
     .whenA(instanceConfig.Network.automaticPortForwarding)
     .allocated
@@ -1534,6 +1822,11 @@ trait ShutdownHookBuilder:
   def shutdown: () => Unit = () => {
     /* No default behaviour during shutdown. */
   }
+
+  /** What the JVM's shutdown hook calls: [[shutdown]], unless a builder says otherwise (a node does not wait there for
+    * a stop already under way; B-274, B-426).
+    */
+  def shutdownOnExit(): Unit = shutdown()
 
   lazy val shutdownTimeoutDuration: Duration = instanceConfig.shutdownTimeout
 
@@ -1577,7 +1870,7 @@ private[nodebuilder] object ShutdownHooks:
     new Thread():
       override def run(): Unit =
         val target = if strong != null then strong else weak.get
-        if target != null then target.shutdown()
+        if target != null then target.shutdownOnExit()
 
 trait GenesisDataLoaderBuilder:
   self: BlockchainBuilder & StorageBuilder =>
@@ -1596,6 +1889,7 @@ trait Node
     extends InstanceConfigProvider
     with SecureRandomBuilder
     with NodeKeyBuilder
+    with NodeAllowlistBuilder
     with ActorSystemBuilder
     with TypedActorSystemProvider
     with StorageBuilder
@@ -1635,8 +1929,8 @@ trait Node
     with JSONRpcConfigBuilder
     with JSONRpcHealthcheckerBuilder
     with JSONRpcControllerBuilder
-    with SSLContextBuilder
     with GraphQLServiceBuilder
+    with RpcIdentityBuilder
     with JSONRpcHttpServerBuilder
     with JSONRpcIpcServerBuilder
     with EventTopicsBuilder
@@ -1673,6 +1967,9 @@ trait Node
     with TransactionHistoryServiceBuilder.Default
     with PortForwardingBuilder
     with BlacklistBuilder:
+  // The node's own `secure-random-algo`, not the process's (B-339).
+  override protected def secureRandomAlgo: Option[String] = instanceConfig.secureRandomAlgo
+
   // Resolve conflicting ioRuntime from PeerDiscoveryManagerBuilder and PortForwardingBuilder
   implicit override lazy val ioRuntime: IORuntime = IORuntime.global
 
@@ -1702,7 +1999,6 @@ trait Node
       blockchainReader,
       blockchainWriter,
       forkChoiceManager,
-      Some(pendingTransactionsManagerTyped),
       Some(blockTopic),
       // go-ethereum's --miner.gaslimit equivalent. hive's rpc-compat sets HIVE_TARGET_GAS_LIMIT
       // to 60000000 so every client converges to the same next-block gas limit; fukuii's default

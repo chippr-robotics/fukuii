@@ -100,14 +100,15 @@ object PeerDiscoveryManager:
 
       /** Walk the configured DNS trees off the actor and off `main`, on the discovery runtime's blocking pool. Config
         * load no longer waits for DNS (H9): the static and bootstrap nodes are served from the first request, and these
-        * join them as the walk finds them.
+        * join them as the walk finds them. The trees are walked again every `dnsWalk.recheckInterval` until Stop
+        * (B-035), and the nodes a later walk finds that an earlier one did not join them the same way.
         */
       def startDnsWalk(): Unit =
         if cancelDnsWalk.isEmpty && discoveryConfig.dnsTrees.nonEmpty then
           given IORuntime = runtime
           log.info("Resolving {} DNS discovery tree(s) in the background", discoveryConfig.dnsTrees.size)
           val (_, cancel) = DnsDiscovery
-            .seed(
+            .seedPeriodically(
               discoveryConfig.dnsTrees,
               dnsLookup,
               discoveryConfig.dnsWalk,

@@ -15,7 +15,7 @@ class MerklePatriciaTreeSpeedSpec
     with ScalaCheckPropertyChecks
     with ObjectGenerators
     with Logger
-    with PersistentStorage {
+    with PersistentStorage:
 
   test("Performance test (From: https://github.com/ethereum/wiki/wiki/Benchmarks)", BenchmarkTest) {
     val Rounds = 1000
@@ -29,20 +29,19 @@ class MerklePatriciaTreeSpeedSpec
 
     val trieResult = (0 until Rounds).foldLeft(emptyTrie) { case (recTrie, _) =>
       seed = Node.hashFn(seed)
-      if (!Symmetric) recTrie.put(seed, seed)
-      else {
+      if !Symmetric then recTrie.put(seed, seed)
+      else
         val mykey = seed
         seed = Node.hashFn(seed)
-        val myval = if ((seed(0) & 0xff) % 2 == 1) Array[Byte](seed.last) else seed
+        val myval = if (seed(0) & 0xff) % 2 == 1 then Array[Byte](seed.last) else seed
         recTrie.put(mykey, myval)
-      }
     }
     val rootHash = Hex.toHexString(trieResult.getRootHash)
 
     log.info("Time taken(ms): " + (System.currentTimeMillis - start))
     log.info("Root hash obtained: " + rootHash)
 
-    if (Symmetric) assert(rootHash.take(4) == "36f6" && rootHash.drop(rootHash.length - 4) == "93a3")
+    if Symmetric then assert(rootHash.take(4) == "36f6" && rootHash.drop(rootHash.length - 4) == "93a3")
     else assert(rootHash.take(4) == "da8a" && rootHash.drop(rootHash.length - 4) == "0ca4")
   }
 
@@ -52,7 +51,7 @@ class MerklePatriciaTreeSpeedSpec
     }
   }
 
-  def mptBenchmarkTest(ns: MptStorage): MerklePatriciaTrie[Array[Byte], Array[Byte]] = {
+  def mptBenchmarkTest(ns: MptStorage): MerklePatriciaTrie[Array[Byte], Array[Byte]] =
     val hashFn = crypto.kec256(_: Array[Byte])
 
     val defaultByteArraySer = MerklePatriciaTrie.defaultByteArraySerializable
@@ -63,13 +62,10 @@ class MerklePatriciaTreeSpeedSpec
       val k = hashFn(("hello" + i).getBytes)
       val v = hashFn(("world" + i).getBytes)
 
-      if (i % 100000 == 0) {
+      if i % 100000 == 0 then
         val newT = System.currentTimeMillis()
         val delta = (newT - t) / 1000.0
         t = newT
         log.debug(s"=== $i elements put, time for batch is: $delta sec")
-      }
       trie.put(k, v)
     }
-  }
-}

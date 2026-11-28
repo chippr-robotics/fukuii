@@ -102,6 +102,9 @@ object PoWMiningMetrics extends MetricsContainer:
   def recordMinerRunning(running: Boolean): Unit =
     _minerRunning.set(if running then 1L else 0L)
 
+  /** Whether the built-in miner is mining now, as its coordinator last recorded (B-279: eth_mining reads it). */
+  def isMinerRunning: Boolean = _minerRunning.get() == 1L
+
   /** A DAG build starts for `epoch`: not loaded, no progress, the phase not yet known.
     *
     * The epoch is written last. A poll reads the epoch first and the rest after it (`TuiStatusProbe`), so a poll that

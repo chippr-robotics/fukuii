@@ -221,7 +221,9 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers:
     System.getProperty("fukuii.network.automatic-port-forwarding") shouldBe "false"
     System.getProperty("fukuii.network.discovery.reuse-known-nodes") shouldBe "true"
     System.getProperty("fukuii.sync.blacklist-duration") shouldBe "0.seconds"
-    System.getProperty("fukuii.network.rpc.http.interface") shouldBe "localhost"
+    // B-401: left to the config, whose default is localhost; no property overrides the operator's
+    System.getProperty("fukuii.network.rpc.http.interface") shouldBe null
+    com.typesafe.config.ConfigFactory.load().getString("fukuii.network.rpc.http.interface") shouldBe "localhost"
 
     clearModifierProperties()
   }
@@ -433,8 +435,9 @@ class LauncherIntegrationSpec extends AnyFlatSpec with Matchers:
       System.getProperty("fukuii.sync.blacklist-duration") shouldBe "0.seconds"
     }
 
-    withClue("RPC should be bound to localhost: ") {
-      System.getProperty("fukuii.network.rpc.http.interface") shouldBe "localhost"
+    withClue("RPC should be bound to localhost (B-401: by the config's default, not a property): ") {
+      System.getProperty("fukuii.network.rpc.http.interface") shouldBe null
+      com.typesafe.config.ConfigFactory.load().getString("fukuii.network.rpc.http.interface") shouldBe "localhost"
     }
 
     clearModifierProperties()

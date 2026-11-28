@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicReference
 import org.apache.pekko.util.ByteString
 
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
+import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderDifficultyError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError.HeaderPoWError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderValid
 import com.chipprbots.ethereum.crypto
@@ -30,9 +31,16 @@ object EthashBlockHeaderValidator:
     * @param blockHeader
     *   BlockHeader to validate.
     * @return
-    *   BlockHeaderValid if valid or an BlockHeaderError.HeaderPoWError otherwise
+    *   BlockHeaderValid if valid, HeaderDifficultyError for a difficulty of 0 or below (core-geth `verifySeal` refuses
+    *   it before it hashes: `errInvalidDifficulty`, B-164), or HeaderPoWError otherwise
     */
   def validateHeader(
+      blockHeader: BlockHeader
+  )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] =
+    if blockHeader.difficulty.value.signum <= 0 then Left(HeaderDifficultyError)
+    else validateSeal(blockHeader)
+
+  private def validateSeal(
       blockHeader: BlockHeader
   )(implicit blockchainConfig: BlockchainConfig): Either[BlockHeaderError, BlockHeaderValid] =
     import EthashUtils.*
@@ -64,6 +72,6 @@ object EthashBlockHeaderValidator:
       powCacheData.cache
     )
 
-    if proofOfWork.mixHash == blockHeader.mixHash.value && checkDifficulty(blockHeader.difficulty.toLong, proofOfWork)
+    if proofOfWork.mixHash == blockHeader.mixHash.value && checkDifficulty(blockHeader.difficulty.value, proofOfWork)
     then Right(BlockHeaderValid)
     else Left(HeaderPoWError)

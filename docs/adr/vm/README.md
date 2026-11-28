@@ -19,6 +19,7 @@ Examples:
 - [VM-005: EIP-3860 Implementation](VM-005-eip-3860-implementation.md) - Accepted
 - [VM-006: EIP-6049 Implementation](VM-006-eip-6049-implementation.md) - Accepted
 - [VM-007: EIP-161 noEmptyAccounts Configuration Fix](VM-007-eip-161-noemptyaccounts-fix.md) - Accepted
+- [VM-008: A Windows-capable BLS12-381 backend for the EIP-2537 precompiles](VM-008-windows-bls12-381-backend.md) - Proposed
 
 ## Related Specifications
 
@@ -26,7 +27,7 @@ Examples:
 
 ## Creating a New VM ADR
 
-1. Use the next sequential number (e.g., `VM-008-title.md`)
+1. Use the next sequential number (e.g., `VM-009-title.md`)
 2. Follow the standard ADR template structure
 3. Link it in the index above
 4. Update the main ADR README

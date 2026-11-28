@@ -34,27 +34,47 @@ jobs:
       - name: Install MkDocs
         run: pip install -r requirements-docs.txt
 
-      # Build under _linkcheck/site/ and resolve root-relative links against it, as docs.fukuii.com serves the
-      # site from its root (site_url in mkdocs.yml). Two things depend on that layout:
-      #   - the 404 page's nav links are root-relative (/...), and --root-dir resolves them here;
-      #   - a relative link that escapes the site (../../ops/...) no longer lands inside the repo
-      #     checkout, where it used to resolve by accident while 404ing on the deployed site.
+      # Build under _linkcheck/site/, the site root as docs.fukuii.com serves it (site_url in mkdocs.yml). The
+      # 404 page's nav links are root-relative (/...), and --root-dir resolves them here. A relative link that
+      # escapes the site (../../ops/...) resolves under _linkcheck/, not inside the repo checkout, so it fails here
+      # as it 404s on the deployed site.
       - name: Build documentation
         run: mkdocs build --site-dir _linkcheck/site
 
-      # Two remaps check links that point at this repo against this checkout instead of the network:
-      #   - the site's own deployed URLs (each page's rel=canonical) -> the local build, since the
-      #     deployed site lags a PR that adds pages;
+      # Cache results so unchanged links are not re-fetched on every PR (fewer requests = fewer 5xx/429s).
+      - name: Restore lychee cache
+        uses: actions/cache@v4
+        with:
+          path: .lycheecache
+          key: lychee-${{ github.run_id }}
+          restore-keys: lychee-
+
+      # Three remaps check links that point at this repo against this checkout instead of the network:
+      #   - the site's own deployed URLs (each page's rel=canonical, and old chippr-robotics.github.io/fukuii/
+      #     links) -> the local build, since the deployed site lags a PR that adds pages;
       #   - github.com/.../fukuii/blob|tree/main/<path> -> <path> in the checkout, since main lags
       #     staging until release. A link to a file that does not exist in the tree still fails.
+      # github.com throttles unauthenticated bursts with 503/429. The site has ~180 distinct github.com
+      # links, so: authenticate (GITHUB_TOKEN raises the limit), cap concurrency, and retry with backoff.
+      # bugs.openjdk.org answers every automated client with 403 (bot block, never a dead link), so it
+      # is excluded rather than accepted globally.
       - name: Link Checker
         id: lychee
         uses: lycheeverse/lychee-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           args: >
             --verbose
             --no-progress
             --accept 200,204
+            --cache
+            --max-cache-age 1d
+            --max-concurrency 8
+            --max-retries 4
+            --retry-wait-time 10
+            --timeout 30
+            --exclude 'bugs\.openjdk\.org'
             --root-dir '${{ github.workspace }}/_linkcheck/site'
             --remap '^https://docs\.fukuii\.com/ file://${{ github.workspace }}/_linkcheck/site/'
             --remap '^https://chippr-robotics\.github\.io/fukuii/ file://${{ github.workspace }}/_linkcheck/site/'

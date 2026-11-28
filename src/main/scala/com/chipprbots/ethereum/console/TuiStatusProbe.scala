@@ -138,10 +138,14 @@ class TuiStatusProbe(
     // One wait for all: the asks run concurrently, and whatever has not answered by the deadline missed this poll.
     // The node-local readings are taken meanwhile, so they add nothing to the poll unless they outlast the wait.
     val deadline = wait.fromNow
-    val localSample = readLocal(clock.instant())
+    // The disk and the database are read on their own thread (B-192), started now so they overlap the asks.
+    val slow = slowReads.start()
+    val fast = readLocal(clock.instant())
     (Seq(peersAsk, syncAsk) ++ detailsAsk ++ txpoolAsk ++ poolAsk).foreach(ask =>
       Try(Await.ready(ask, deadline.timeLeft.max(Duration.Zero)))
     )
+    val disk = slowReads.latest(slow, deadline.timeLeft.max(Duration.Zero), clock.instant())
+    val localSample = fast.copy(diskFree = disk.diskFree, diskTotal = disk.diskTotal, storage = disk.storage)
 
     val now = clock.instant()
     val localBest = Try(bestBlockNumber().toLong).getOrElse(0L)
@@ -198,9 +202,6 @@ class TuiStatusProbe(
     yield ((total - before).max(0L).toDouble / wall).min(1.0)
     previousGc = gcMillis.map(_ -> at)
     LocalSample(
-      diskFree = read("the disk free")(local.dataDir.map(local.usableSpace)),
-      // A file system that cannot say its size answers 0.
-      diskTotal = read("the disk size")(local.dataDir.map(local.totalSpace)).filter(_ > 0),
       jvm = read("the heap")(local.heap()).map((used, max) => JvmSample(used, max, gcShare)),
       discovery = read("the discovery counts")(local.discovery()),
       headTimestamp = read("the head timestamp")(local.headTimestamp()),
@@ -214,9 +215,31 @@ class TuiStatusProbe(
       forkId = read("the fork id")(local.forkId()),
       poolCounters = read("the pool's counters")(local.poolCounters()),
       rpc = read("the RPC figures")(local.rpc()),
-      system = read("the process and the machine")(local.system()),
-      storage = read("the database")(local.storage())
+      system = read("the process and the machine")(local.system())
     )
+
+  /** The reads that touch the disk: the datadir's file system (`statvfs`) and the database (B-192). */
+  private val slowReads = new SlowReads(
+    () =>
+      val failing = scala.collection.mutable.Set.empty[String]
+      SlowReading(
+        diskFree = readOn(failing, "the disk free")(local.dataDir.map(local.usableSpace)),
+        // A file system that cannot say its size answers 0.
+        diskTotal = readOn(failing, "the disk size")(local.dataDir.map(local.totalSpace)).filter(_ > 0),
+        storage = readOn(failing, "the database")(local.storage())
+      )
+    ,
+    clock.instant()
+  )
+
+  /** [[read]] for the slow reads' own thread: it logs each failure at DEBUG and touches none of the probe's state. */
+  private def readOn[A](failing: scala.collection.mutable.Set[String], name: String)(f: => Option[A]): Option[A] =
+    Try(f) match
+      case Success(value) => value
+      case Failure(e) =>
+        if failing.add(name) then
+          log.debug("TUI could not read {}: {}", name, Option(e.getMessage).getOrElse(e.toString))
+        None
 
   /** What the pool observer has seen (spec 029 FR-031): kept on the probe's thread, moved on by each poll that reads
     * the pool whole.
@@ -298,6 +321,83 @@ class TuiStatusProbe(
 
 object TuiStatusProbe:
   val DefaultAskTimeout: FiniteDuration = 500.millis
+
+  /** How long the last disk reading is shown while a newer one has not come back (B-192). After it the disk and the
+    * database read as unknown, and a WARN says the read has hung.
+    */
+  val SlowReadMaxAge: java.time.Duration = java.time.Duration.ofSeconds(60)
+
+  /** The disk and database readings, taken together on the slow reads' thread. */
+  final case class SlowReading(diskFree: Option[Long], diskTotal: Option[Long], storage: Option[StorageSample])
+
+  object SlowReading:
+    val Empty: SlowReading = SlowReading(None, None, None)
+
+  /** The reads that can block on the disk (B-192), run on one daemon thread of their own: a hung `statvfs` or RocksDB
+    * read cannot hold up a poll, so the actors' answers are still published and nothing reads Unresponsive for it.
+    *
+    * A poll [[start]]s a read unless the last one is still running, then takes the newest reading at its deadline
+    * ([[latest]]): this poll's if it finished in time, else the last one, for up to [[SlowReadMaxAge]]. The thread ends
+    * when idle and is made again by the next read.
+    */
+  final private[console] class SlowReads(read: () => SlowReading, now: => Instant) extends Logger:
+    // One thread, ended when idle. The queue is unbounded so a submit is never refused: a read's promise completes
+    // inside its task, so the next poll can submit while the worker is still finishing it (prism, B-192 review). At
+    // most one read is queued or running at a time ([[start]]).
+    private val executor =
+      val pool = new java.util.concurrent.ThreadPoolExecutor(
+        1,
+        1,
+        30L,
+        java.util.concurrent.TimeUnit.SECONDS,
+        new java.util.concurrent.LinkedBlockingQueue[Runnable](),
+        (r: Runnable) =>
+          val t = new Thread(r, "TuiDiskReader")
+          t.setDaemon(true)
+          t
+      )
+      pool.allowCoreThreadTimeOut(true)
+      pool
+    private var running: Option[Future[Unit]] = None // guarded by `this`
+    @volatile private var newest: Option[(SlowReading, Instant)] = None
+    @volatile private var startedAt: Instant = Instant.EPOCH
+    @volatile private var warnedHung = false
+
+    /** Start a read, unless one is running: the running one is returned instead. */
+    def start(): Future[Unit] = synchronized {
+      running match
+        case Some(inFlight) if !inFlight.isCompleted => inFlight
+        case _ =>
+          val promise = scala.concurrent.Promise[Unit]()
+          startedAt = now
+          running = Some(promise.future)
+          executor.execute { () =>
+            try
+              val reading = read()
+              newest = Some(reading -> now)
+              warnedHung = false
+            finally promise.success(()): Unit
+          }
+          promise.future
+    }
+
+    /** The newest reading, waiting up to `wait` for `read` to finish; empty when the newest is older than
+      * [[SlowReadMaxAge]] at `at`.
+      */
+    def latest(read: Future[Unit], wait: FiniteDuration, at: Instant): SlowReading =
+      Try(Await.ready(read, wait))
+      newest match
+        case Some((reading, takenAt)) if java.time.Duration.between(takenAt, at).compareTo(SlowReadMaxAge) <= 0 =>
+          reading
+        case _ =>
+          val hungFor = java.time.Duration.between(startedAt, at)
+          if !read.isCompleted && !warnedHung && hungFor.compareTo(SlowReadMaxAge) > 0 then
+            warnedHung = true
+            log.warn(
+              "TUI disk read has not returned for {} s: disk free and database figures read as unknown until it does",
+              hungFor.toSeconds
+            )
+          SlowReading.Empty
 
   /** How long a SNAP progress sample stays displayable. SyncProgressMonitor samples every 30 s. */
   val SnapProgressMaxAgeMillis: Long = 90_000L
@@ -598,14 +698,14 @@ object TuiStatusProbe:
           forkchoiceUpdated = EngineApiMetrics.lastForkchoiceUpdated.map(call),
           newPayload = EngineApiMetrics.lastNewPayload.map(call),
           payloads = PayloadCounts(
-            total = EngineApiMetrics.newPayloadTotal.value().toLong,
-            valid = EngineApiMetrics.newPayloadValid.value().toLong,
-            syncing = EngineApiMetrics.newPayloadSyncing.value().toLong,
-            accepted = EngineApiMetrics.newPayloadAccepted.value().toLong,
+            total = EngineApiMetrics.newPayloadTotal.count().toLong,
+            valid = EngineApiMetrics.newPayloadValid.count().toLong,
+            syncing = EngineApiMetrics.newPayloadSyncing.count().toLong,
+            accepted = EngineApiMetrics.newPayloadAccepted.count().toLong,
             // Each status has its own count since B-193: the invalid count is the INVALID answers alone.
-            invalid = EngineApiMetrics.newPayloadInvalid.value().toLong
+            invalid = EngineApiMetrics.newPayloadInvalid.count().toLong
           ),
-          authFailures = EngineApiMetrics.authFailures.value().toLong,
+          authFailures = EngineApiMetrics.authFailures.count().toLong,
           head = fork.map(f => headHex(f.head)),
           safe = safe.map(_._2),
           finalized = finalized.map(_._2),
@@ -888,8 +988,9 @@ object TuiStatusProbe:
         else if snapSampleFresh then "Syncing (SNAP)"
         else "Syncing (no target yet)"
       (current, target, description)
-    case SyncProtocol.Status.SyncDone   => (localBest, localBest, "Synced")
-    case SyncProtocol.Status.NotSyncing => (localBest, 0L, "Not syncing")
+    case SyncProtocol.Status.SyncDone        => (localBest, localBest, "Synced")
+    case SyncProtocol.Status.NotSyncing      => (localBest, 0L, "Not syncing")
+    case SyncProtocol.Status.Stopped(reason) => (localBest, 0L, s"Sync stopped: $reason")
 
   private[console] def toSnapSyncState(p: SyncProgress): SnapSyncState =
     SnapSyncState(

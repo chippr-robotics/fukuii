@@ -202,7 +202,11 @@ class BlockchainImpl(
         s"Block ${ByteStringUtils.hash2string(blockHash.value)} cannot be removed on the unified state layout: removing " +
           "it moves the best block without the state, which moves only with a move of its head"
       )
-    removeAnyLayout(blockHash)
+    // under the head's lock (B-511): its look at the index and the best block, and its write of both, are one step that a
+    // fork choice is not between
+    CanonicalHeadLock.held(s"the removal of block ${ByteStringUtils.hash2string(blockHash.value)}")(
+      removeAnyLayout(blockHash)
+    )
 
   override def removeChainForNewGenesis(): Unit =
     pathState.flatMap(_.refusalToDestroyState()).foreach(refused => throw new IllegalStateException(refused))

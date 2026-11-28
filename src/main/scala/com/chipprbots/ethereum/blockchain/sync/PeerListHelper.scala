@@ -84,6 +84,13 @@ class PeerListHelper(
   def getPeerWithHighestBlock: Option[PeerWithInfo] =
     peersToDownloadFrom.values.toList.sortBy(_.peerInfo.maxBlockNumber)(using bigIntReverseOrdering).headOption
 
+  /** The peer whose chain is the heaviest by what it advertised (total difficulty on proof of work), the higher block
+    * breaking a tie (B-298): fork choice is by weight, not height, so the peer a fork is resolved against is chosen so
+    * too, as core-geth's sync picks the peer with the highest total difficulty.
+    */
+  def getPeerWithHighestWeight: Option[PeerWithInfo] =
+    peersToDownloadFrom.values.toList.maxByOption(p => (p.peerInfo.chainWeight, p.peerInfo.maxBlockNumber))
+
   def getSnapPeerWithHighestBlock: Option[PeerWithInfo] =
     peersToDownloadFrom.values.toList
       .filter(_.peerInfo.remoteStatus.supportsSnap)
@@ -116,7 +123,13 @@ class PeerListHelper(
             )
           blacklist.add(peerId, duration, reason)
       case None =>
-        log.debug("Attempted to blacklist non-handshaked peer {}", peerId)
+        // A blacklisting that is dropped leaves the peer selectable: WARN, not DEBUG, so a retry that finds a peer that
+        // just failed can be traced to it (B-434).
+        log.warn(
+          "Blacklisting of peer {} dropped, not in the handshaked peer list. Reason: {}",
+          peerId,
+          reason.description
+        )
 
   private def updatePeers(handshaked: Map[Peer, PeerInfo]): Unit =
     val updated = handshaked.map { case (peer, peerInfo) =>

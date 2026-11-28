@@ -5,8 +5,10 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.blockchain.sync.snap.MerkleProofVerifier
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.MptStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.CodeHash
 import com.chipprbots.ethereum.domain.TrieRoot
@@ -224,8 +226,14 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
 
       result.slots should have size 1
       result.slots.head should have size slotValues.size
-      // Left-bound proof always present (proves the left boundary of the served range).
-      result.proof should not be empty
+      // The whole trie is in the reply, so there is no proof (geth handlers.go): the slots alone rebuild the root.
+      result.proof shouldBe empty
+      MerkleProofVerifier(storageRoot).verifyStorageRange(
+        result.slots.head,
+        Seq.empty,
+        zeroHash,
+        maxHash
+      ) shouldBe Right(())
     }
 
   it should "include a proof when startingHash is non-zero" taggedAs UnitTest in {
@@ -251,8 +259,10 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
       accountRoot = _ => Some(storageRoot)
     )
 
-    // Non-zero origin → proof required to prove the left boundary.
+    // Non-zero origin → proof of the origin (left edge) and the last slot (right edge).
     result.proof should not be empty
+    MerkleProofVerifier(storageRoot)
+      .verifyStorageRange(result.slots.head, result.proof, nonZeroStart, result.slots.head.last._1) shouldBe Right(())
   }
 
   it should "include both a left-bound and right-bound proof when response is truncated" taggedAs UnitTest in {
@@ -278,8 +288,10 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
     )
 
     result.slots.head.size should be < slotValues.size
-    // Truncated → proof present.
+    // Truncated → proof of the origin and the last slot returned, and it verifies against this account's root.
     result.proof should not be empty
+    MerkleProofVerifier(storageRoot)
+      .verifyStorageRange(result.slots.head, result.proof, zeroHash, result.slots.head.last._1) shouldBe Right(())
   }
 
   it should "return all requested accounts' slots when budget is sufficient" taggedAs UnitTest in {
@@ -317,7 +329,11 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
     result.slots should have size 2
     result.slots(0) should have size 3
     result.slots(1) should have size 3
-    result.proof should not be empty // left-bound proof always present for first account
+    // B-566: both tries are complete, so there is no proof. A client applies a proof to the LAST slot-set (geth
+    // sync.go); the old reply proved the first account, and geth checked account 2 against account 1's proof.
+    result.proof shouldBe empty
+    MerkleProofVerifier(root1).verifyStorageRange(result.slots(0), Seq.empty, zeroHash, maxHash) shouldBe Right(())
+    MerkleProofVerifier(root2).verifyStorageRange(result.slots(1), Seq.empty, zeroHash, maxHash) shouldBe Right(())
   }
 
   it should "stop after the first account and emit proofs when budget is exceeded on that account" taggedAs UnitTest in {
@@ -376,10 +392,78 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
       accountRoot = _ => None
     )
 
-    // Unknown account → empty slot list for that account, no proof.
-    result.slots should have size 1
-    result.slots.head shouldBe empty
+    // Unknown account → the reply ends there, as geth refuses the request. An empty slot-set would tell the client
+    // that the account has no storage.
+    result.slots shouldBe empty
     result.proof shouldBe empty
+  }
+
+  it should "prove only the last slot-set when a later account is capped, as a go-ethereum client verifies it (B-566)" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val small = (1 to 3).map(i => kec256(ByteString(s"b566-small-$i")) -> ByteString(Array.fill[Byte](32)(1.toByte)))
+    val big = (1 to 64).map(i => kec256(ByteString(s"b566-big-$i")) -> ByteString(Array.fill[Byte](32)(2.toByte)))
+    val root1 = buildStorageTrie(small, storage)
+    val root2 = buildStorageTrie(big, storage)
+    val hash1 = kec256(ByteString("b566-account-1"))
+    val hash2 = kec256(ByteString("b566-account-2"))
+    val (stateRoot, _) =
+      buildAccountTrie(Seq(hash1 -> accountWithStorage(root1), hash2 -> accountWithStorage(root2)), storage)
+    val rootMap = Map(hash1 -> root1, hash2 -> root2)
+
+    // Room for account 1 in full and part of account 2: (32 + 33) bytes a slot.
+    val result = SnapServer.serveStorageRanges(
+      requestId = 1,
+      rootHash = stateRoot,
+      accountHashes = Seq(hash1, hash2),
+      startingHash = zeroHash,
+      limitHash = maxHash,
+      responseBytes = BigInt(65 * 10),
+      storage = storage,
+      accountRoot = rootMap.get
+    )
+
+    result.slots should have size 2
+    result.slots(0) should have size small.size
+    result.slots(1).size should be < big.size
+    result.proof should not be empty
+    // geth's client: every slot-set but the last is verified without a proof, the last one with the reply's proof
+    // from its origin (zero: the origin is the first account's) to its last key.
+    MerkleProofVerifier(root1).verifyStorageRange(result.slots(0), Seq.empty, zeroHash, maxHash) shouldBe Right(())
+    MerkleProofVerifier(root2)
+      .verifyStorageRange(result.slots(1), result.proof, zeroHash, result.slots(1).last._1) shouldBe Right(())
+    // and the proof is not account 1's: checked against account 1 it fails, which is what geth saw before the fix
+    MerkleProofVerifier(root1)
+      .verifyStorageRange(result.slots(0), result.proof, zeroHash, result.slots(0).last._1) should not be Right(())
+  }
+
+  it should "end the reply at the first account when the origin is non-zero (B-566)" taggedAs UnitTest in {
+    val storage = new TestMptStorage()
+    val slots1 = (1 to 6).map(i => kec256(ByteString(s"b566-origin-$i")) -> ByteString(Array.fill[Byte](32)(3.toByte)))
+    val slots2 = (1 to 3).map(i => kec256(ByteString(s"b566-next-$i")) -> ByteString(Array.fill[Byte](32)(4.toByte)))
+    val root1 = buildStorageTrie(slots1, storage)
+    val root2 = buildStorageTrie(slots2, storage)
+    val hash1 = kec256(ByteString("b566-origin-account-1"))
+    val hash2 = kec256(ByteString("b566-origin-account-2"))
+    val (stateRoot, _) =
+      buildAccountTrie(Seq(hash1 -> accountWithStorage(root1), hash2 -> accountWithStorage(root2)), storage)
+    val rootMap = Map(hash1 -> root1, hash2 -> root2)
+    val origin = slots1.map(_._1).sorted(using Ordering.by[ByteString, BigInt](bs => BigInt(1, bs.toArray)))(2)
+
+    val result = SnapServer.serveStorageRanges(
+      requestId = 1,
+      rootHash = stateRoot,
+      accountHashes = Seq(hash1, hash2),
+      startingHash = origin,
+      limitHash = maxHash,
+      responseBytes = bigBudget,
+      storage = storage,
+      accountRoot = rootMap.get
+    )
+
+    // the proved range ends the reply: account 2 is not served
+    result.slots should have size 1
+    MerkleProofVerifier(root1)
+      .verifyStorageRange(result.slots.head, result.proof, origin, result.slots.head.last._1) shouldBe Right(())
   }
 
   // ═══════════════════════════════════════════════════════════════════════════
@@ -539,4 +623,210 @@ class SnapServerSpec extends AnyFlatSpec with Matchers:
     val result = SnapServer.serveByteCodes(1, Seq(randomHash), bigBudget, storage)
 
     result.codes shouldBe empty
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // B-213 — a node that cannot be read answers the request with nothing, never a hole
+  //
+  // go-ethereum (eth/protocols/snap/handlers.go): ServiceGetAccountRangeQuery and ServiceGetStorageRangesQuery return
+  // `nil, nil` when a proof cannot be built (a missing or corrupt node on the path), and so does a missing root;
+  // ServiceGetTrieNodesQuery answers a missing root with nothing and skips only the single node it cannot get.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /** A store whose reads of chosen hashes fail, as a pruned or damaged one does. */
+  private class FailingStorage extends TestMptStorage:
+    var failures: Map[ByteString, RuntimeException] = Map.empty
+    override def get(key: Array[Byte]): MptNode =
+      failures.get(ByteString(key)).foreach(e => throw e)
+      super.get(key)
+
+  /** The hashes of the root's children that are stored as their own nodes. */
+  private def childHashes(root: ByteString, storage: MptStorage): Seq[ByteString] =
+    storage.get(root.toArray) match
+      case BranchNode(children, _, _, _, _) => children.collect { case HashNode(h) => ByteString(h) }.toSeq
+      case other                            => fail(s"expected a branch root, got $other")
+
+  private def snapServerLogs(f: => Unit): List[ch.qos.logback.classic.spi.ILoggingEvent] =
+    import scala.jdk.CollectionConverters.*
+    val logger = org.slf4j.LoggerFactory
+      .getLogger(SnapServer.getClass)
+      .asInstanceOf[ch.qos.logback.classic.Logger]
+    val appender = new ch.qos.logback.core.read.ListAppender[ch.qos.logback.classic.spi.ILoggingEvent]
+    appender.start()
+    logger.addAppender(appender)
+    val levelBefore = logger.getLevel
+    logger.setLevel(ch.qos.logback.classic.Level.DEBUG)
+    try f
+    finally
+      logger.setLevel(levelBefore)
+      logger.detachAppender(appender)
+    appender.list.asScala.toList
+
+  private def accountTrieWithFailingStorage(): (ByteString, FailingStorage, Seq[ByteString]) =
+    val storage = new FailingStorage
+    val (root, _) = buildAccountTrie(sampleKeys(16).map(_ -> eoa()), storage)
+    val children = childHashes(root, storage)
+    children.size should be >= 2
+    (root, storage, children)
+
+  private def accountRange(root: ByteString, storage: MptStorage) =
+    SnapServer.serveAccountRange(1, root, zeroHash, maxHash, bigBudget, storage)
+
+  "SnapServer (B-213)" should "answer a range with nothing when an interior node is missing" taggedAs UnitTest in {
+    val (root, storage, children) = accountTrieWithFailingStorage()
+    val whole = accountRange(root, storage)
+    whole.accounts should have size 16
+
+    storage.failures = Map(children.head -> new MerklePatriciaTrie.MissingNodeException(children.head))
+
+    val result = accountRange(root, storage)
+    result.accounts shouldBe empty
+    result.proof shouldBe empty
+  }
+
+  it should "still serve a range that neither reads nor proves through the damaged subtree" taggedAs UnitTest in {
+    val (root, storage, children) = accountTrieWithFailingStorage()
+    val whole = accountRange(root, storage)
+    storage.failures = Map(children.last -> new MerklePatriciaTrie.MissingNodeException(children.last))
+
+    // a truncated range from the front: its leaf and both of its proof paths lie in the first subtree
+    val result = SnapServer.serveAccountRange(1, root, zeroHash, maxHash, BigInt(1), storage)
+    result.accounts should have size 1
+    result.accounts.head shouldBe whole.accounts.head
+    result.proof should not be empty
+  }
+
+  it should "answer a range with nothing when the root is missing" taggedAs UnitTest in {
+    val (root, storage, _) = accountTrieWithFailingStorage()
+    storage.failures = Map(root -> new MerklePatriciaTrie.MissingRootNodeException(root))
+
+    val result = accountRange(root, storage)
+    result.accounts shouldBe empty
+    result.proof shouldBe empty
+  }
+
+  it should "answer a range with nothing for a corrupt node, and say the node once" taggedAs UnitTest in {
+    val (root, storage, children) = accountTrieWithFailingStorage()
+    val bad = ByteString(kec256(ByteString("snap-serve corrupt node, logged once")))
+    storage.failures = Map(children.head -> new MerklePatriciaTrie.CorruptNodeException(bad, "bytes fail keccak"))
+
+    val logs = snapServerLogs {
+      (1 to 3).foreach { _ =>
+        val result = accountRange(root, storage)
+        result.accounts shouldBe empty
+        result.proof shouldBe empty
+      }
+    }
+    val corrupt = logs.filter(_.getFormattedMessage.contains("[STATE-CORRUPT]"))
+    corrupt should have size 1
+    corrupt.head.getLevel shouldBe ch.qos.logback.classic.Level.ERROR
+    corrupt.head.getFormattedMessage should include(bad.toArray.map("%02x".format(_)).mkString)
+  }
+
+  it should "not call a missing node corrupt in the log" taggedAs UnitTest in {
+    val (root, storage, children) = accountTrieWithFailingStorage()
+    storage.failures = Map(children.head -> new MerklePatriciaTrie.MissingNodeException(children.head))
+
+    val logs = snapServerLogs(accountRange(root, storage))
+    logs.filter(_.getLevel.isGreaterOrEqual(ch.qos.logback.classic.Level.WARN)) shouldBe empty
+  }
+
+  it should "answer storage ranges with nothing when a storage trie node cannot be read" taggedAs UnitTest in {
+    val storage = new FailingStorage
+    val slotKeys = (1 to 16).map(i => kec256(ByteString(s"slot-$i")))
+    val storageRoot = buildStorageTrie(slotKeys.map(_ -> ByteString(Array.fill[Byte](32)(1.toByte))), storage)
+    val accountHash = kec256(ByteString("account-with-storage"))
+    val (stateRoot, _) = buildAccountTrie(Seq(accountHash -> accountWithStorage(storageRoot)), storage)
+
+    def serve() = SnapServer.serveStorageRanges(
+      1,
+      stateRoot,
+      Seq(accountHash),
+      zeroHash,
+      maxHash,
+      bigBudget,
+      storage,
+      accountRoot = _ => Some(storageRoot)
+    )
+    serve().slots.head should have size 16
+
+    val child = childHashes(storageRoot, storage).head
+    storage.failures = Map(child -> new MerklePatriciaTrie.MissingNodeException(child))
+    val missing = serve()
+    missing.slots shouldBe empty
+    missing.proof shouldBe empty
+
+    storage.failures = Map(child -> new MerklePatriciaTrie.CorruptNodeException(child, "bytes fail keccak"))
+    val corrupt = serve()
+    corrupt.slots shouldBe empty
+    corrupt.proof shouldBe empty
+  }
+
+  it should "answer storage ranges with nothing when the account's storage root is not in the store" taggedAs UnitTest in {
+    val storage = new FailingStorage
+    val accountHash = kec256(ByteString("account-with-lost-storage"))
+    val lostRoot = kec256(ByteString("a storage root nobody has"))
+    val (stateRoot, _) = buildAccountTrie(Seq(accountHash -> accountWithStorage(lostRoot)), storage)
+
+    val result = SnapServer.serveStorageRanges(
+      1,
+      stateRoot,
+      Seq(accountHash),
+      zeroHash,
+      maxHash,
+      bigBudget,
+      storage,
+      accountRoot = _ => Some(lostRoot)
+    )
+    // not an account that has no slots: that would be an account whose storage is empty
+    result.slots shouldBe empty
+    result.proof shouldBe empty
+  }
+
+  it should "answer storage ranges with nothing when the account trie cannot be read to the account" taggedAs UnitTest in {
+    val (root, storage, children) = accountTrieWithFailingStorage()
+    val keys = sampleKeys(16)
+    storage.failures = children.map(c => c -> new MerklePatriciaTrie.MissingNodeException(c)).toMap
+    val lookup = SnapServer.storageRootOf(root, storage)
+
+    val result = SnapServer.serveStorageRanges(
+      1,
+      root,
+      keys.take(3),
+      zeroHash,
+      maxHash,
+      bigBudget,
+      storage,
+      accountRoot = h => lookup(h)
+    )
+    result.slots shouldBe empty
+    result.proof shouldBe empty
+  }
+
+  it should "leave out only the node it cannot read from a trie-nodes answer, as go-ethereum does" taggedAs UnitTest in {
+    val (root, storage, children) = accountTrieWithFailingStorage()
+    val rootRead = SnapServer.serveTrieNodes(1, root, Seq(Seq(hpRootPath)), bigBudget, storage)
+    rootRead.nodes should have size 1
+    rootRead.nodes.head should not be empty
+
+    // the child at nibble `n` of the root: HP odd-length path with the one nibble
+    val rootBranch = storage.get(root.toArray).asInstanceOf[BranchNode]
+    val nibble = rootBranch.children.indexWhere { case HashNode(h) => ByteString(h) == children.head; case _ => false }
+    val childPath = ByteString(Array((0x10 | nibble).toByte))
+    val ok = SnapServer.serveTrieNodes(1, root, Seq(Seq(childPath), Seq(hpRootPath)), bigBudget, storage)
+    ok.nodes.map(n => ByteString(kec256(n))).head shouldBe children.head
+
+    storage.failures = Map(children.head -> new MerklePatriciaTrie.CorruptNodeException(children.head, "x"))
+    val result = SnapServer.serveTrieNodes(1, root, Seq(Seq(childPath), Seq(hpRootPath)), bigBudget, storage)
+    // the unreadable node is an empty placeholder (never a served node-shaped hole); the root is still served
+    result.nodes should have size 2
+    result.nodes.head shouldBe empty
+    ByteString(kec256(result.nodes(1))) shouldBe root
+  }
+
+  it should "answer a trie-nodes request with nothing when the root is missing" taggedAs UnitTest in {
+    val (root, storage, _) = accountTrieWithFailingStorage()
+    storage.failures = Map(root -> new MerklePatriciaTrie.MissingRootNodeException(root))
+
+    SnapServer.serveTrieNodes(1, root, Seq(Seq(hpRootPath)), bigBudget, storage).nodes shouldBe empty
   }

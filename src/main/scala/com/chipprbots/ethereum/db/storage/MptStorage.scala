@@ -40,6 +40,20 @@ trait MptStorage:
   def rawNodes(hashes: Seq[ByteString]): Seq[RawNodeRead] =
     hashes.map(hash => RawNodeRead.decoding(RawNodeRead.Bytes(get(hash.toArray).encode)))
 
+  /** Whether this store holds the node `hash` names, for a caller that wants presence and nothing else (B-034): one raw
+    * read, nothing decoded and the block cache not filled, judged as `NodeFault.provablyBad` judges it. An entry that
+    * is not the node (a wrapper that does not unwrap, bytes that fail keccak) is not held, and neither is a node that
+    * cannot be read; bytes that pass keccak are held, decoded or not. Where the entry is to be repaired, read
+    * [[rawNodes]], which says which of the three it is.
+    */
+  def holdsNode(hash: ByteString): Boolean =
+    try
+      rawNodes(Seq(hash)) match
+        case Seq(RawNodeRead.Absent) => false
+        case Seq(raw)                => !NodeFault.provablyBad(hash, raw)
+        case _                       => false
+    catch case NonFatal(_) => false
+
   /** Store pre-encoded trie nodes directly by hash, bypassing trie collapse. Used by state healing to insert individual
     * nodes fetched from peers.
     *
@@ -95,6 +109,20 @@ trait MptStorage:
 
   /** [[rawNodes]] for nodes named by position and hash. */
   def rawNodesAt(requests: Seq[(NibblePath, ByteString)]): Seq[RawNodeRead] = rawNodes(requests.map(_._2))
+
+  /** [[holdsNode]] for the node `hash` names at `path` of the trie this storage is for (see [[forOwner]]): one raw read
+    * by [[rawNodesAt]], nothing decoded, judged as `NodeFault.provablyBad` judges it. What the recovery scans ask of a
+    * storage trie's root (spec 018 C5b, T219).
+    *
+    * Unlike [[holdsNode]] it does not turn a failing read into "not held": a scan that read an absent root as missing
+    * would fetch what is there, and one that could not read at all (a store that failed, a state that moved) is a scan
+    * that did not run. Only the row's own answer, absent or not the node, says "not held".
+    */
+  def holdsNodeAt(path: NibblePath, hash: ByteString): Boolean =
+    rawNodesAt(Seq((path, hash))) match
+      case Seq(RawNodeRead.Absent) => false
+      case Seq(raw)                => !NodeFault.provablyBad(hash, raw)
+      case _                       => false
 
 class SerializingMptStorage(storage: NodesKeyValueStorage, val executionCache: Option[DecodedNodeCache] = None)
     extends MptStorage:
@@ -188,7 +216,7 @@ object SerializingMptStorage extends Logger:
       size() > MaxLoggedCorrupt
 
   /** True the first time `hash` is met, until it is forgotten. */
-  private[storage] def firstReport(hash: ByteString): Boolean =
+  private[ethereum] def firstReport(hash: ByteString): Boolean =
     loggedCorrupt.synchronized(loggedCorrupt.put(hash, java.lang.Boolean.TRUE) == null)
 
   /** The exception for a stored entry that is not the node `hash` names, logged the first time that hash is met. At

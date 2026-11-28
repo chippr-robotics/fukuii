@@ -9,6 +9,7 @@ import org.apache.pekko.util.ByteString
 import scala.concurrent.Await
 import scala.concurrent.duration.*
 
+import com.typesafe.config.ConfigFactory
 import org.scalatest.flatspec.AnyFlatSpecLike
 import org.scalatest.matchers.should.Matchers
 
@@ -46,7 +47,25 @@ import com.chipprbots.ethereum.testing.TestMptStorage
   * dropped: a Typed `Behavior` exposes no `underlyingActor`. The behavioral coverage that survives is asserted through
   * observable effects on the `networkPeerManager` and `snapSyncController` probes — the same approach used in BCC/SRC.
   */
-class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers:
+class AccountRangeCoordinatorSpec
+    extends ScalaTestWithActorTestKit(
+      // A failure bound, never a pause: every wait in this suite ends on the event it waits for. The typed testkit's
+      // 3 s default fails the first test of a run on a loaded 4-core host (cold JVM, 8 busy threads), and its late
+      // reply to the shared `statusProbe` then breaks the next test that reads it.
+      ConfigFactory
+        .parseString("pekko.actor.testkit.typed.single-expect-default = 20s")
+        .withFallback(ConfigFactory.load())
+    )
+    with AnyFlatSpecLike
+    with Matchers
+    with org.scalatest.BeforeAndAfterAll:
+
+  // B-305, B-368: the task-file directories of every coordinator go once the suite is done, after the test kit has
+  // stopped the coordinators (so none is still writing to one)
+  private val tempDirs = new com.chipprbots.ethereum.testing.TempDirs
+  override protected def afterAll(): Unit =
+    try super.afterAll()
+    finally tempDirs.deleteAll()
 
   implicit private val classicSystem: org.apache.pekko.actor.ActorSystem = system.classicSystem
   private val statusProbe = testKit.createTestProbe[AccountRangeStats]()
@@ -74,7 +93,10 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
         initialMaxInFlightPerPeer = initialMaxInFlightPerPeer,
         accountTrieEcOverride = Some(classicSystem.dispatcher),
         stateIngest = hashSchemeIngest,
-        intakeBudget = intakeBudget
+        intakeBudget = intakeBudget,
+        // B-368: the task files go in a directory the suite removes, not java.io.tmpdir (the controller, which owns
+        // the storage and code-hash files in production, is a probe here, so nothing else deletes them)
+        taskFileDir = Some(tempDirs.create("arc-task-files"))
       )
     )
 
@@ -138,7 +160,8 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
             carriedTaskFiles = carried,
             accountTrieEcOverride = Some(classicSystem.dispatcher),
             storageScheme = StorageScheme.Path,
-            stateIngest = pathSchemeIngest(app, nodes)
+            stateIngest = pathSchemeIngest(app, nodes),
+            taskFileDir = Some(tempDirs.create("arc-task-files"))
           )
         )
         .onFailure[Throwable](org.apache.pekko.actor.typed.SupervisorStrategy.restart)
@@ -161,7 +184,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
   // The user's decision, 2026-11-01: with the task files it is a resume, and a resume keeps it.
   it should "keep the marker when the launch resumed its ranges" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-restart-resume")
+    val dir = tempDirs.create("arc-restart-resume")
     val storage = java.nio.file.Files.write(dir.resolve("fukuii-contract-storage-r"), Array.emptyByteArray)
     val codes = java.nio.file.Files.write(dir.resolve("fukuii-unique-codehashes-r"), Array.emptyByteArray)
     val task = AccountTask.createInitialTasks(ByteString.empty, 1).head
@@ -188,6 +211,21 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
         3.seconds
       )
       .toTyped[AccountRangeCoordinator.WorkerMessage]
+
+  /** A mailbox round trip: when it returns, the coordinator has handled every message sent to it before the call.
+    * Dispatch is decided inside the coordinator (`activeTasks` is filled when it hands a task to a worker, before the
+    * worker is even running), so `tasksActive` not growing proves no request was, or ever will be, sent for the
+    * messages before the barrier: the spawned worker cannot send what the coordinator never gave it. This is what turns
+    * a "nothing is sent" check into a bounded one, in place of a fixed `expectNoMessage` wait.
+    */
+  private def settle(
+      coordinator: org.apache.pekko.actor.typed.ActorRef[AccountRangeCoordinator.Command]
+  ): AccountRangeStats =
+    coordinator ! AccountRangeCoordinator.AccountGetProgress(statusProbe.ref)
+    statusProbe.expectMessageType[AccountRangeStats]
+
+  /** The send to a probe is synchronous, so after a [[settle]] a message the coordinator sent is already queued. */
+  private val Now = Duration.Zero
 
   "AccountRangeCoordinator" should "initialize and create workers on demand" taggedAs UnitTest in {
     val stateRoot = kec256(ByteString("test-state-root"))
@@ -260,7 +298,8 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
       )
       coordinator ! AccountRangeCoordinator.StartAccountRangeSync(stateRoot)
       coordinator ! AccountRangeCoordinator.PeerAvailable(peer)
-      networkPeerManager.expectNoMessage(500.millis)
+      settle(coordinator).tasksActive shouldBe 0 // the gate held: nothing was handed to a worker
+      networkPeerManager.expectNoMessage(Now)
 
       // The bytecode queue drains. Nothing is sent to the coordinator: its own recheck must notice.
       budget.byteCodeQueueDepth(0L)
@@ -313,8 +352,9 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     coordinator ! AccountRangeCoordinator.StartAccountRangeSync(stateRoot)
     coordinator ! AccountRangeCoordinator.CheckCompletion
 
-    // Should not complete immediately (tasks pending)
-    snapSyncController.expectNoMessage(500.milliseconds)
+    // Should not complete immediately (tasks pending): the barrier shows CheckCompletion was handled
+    settle(coordinator).tasksPending should be > 0
+    snapSyncController.expectNoMessage(Now)
   }
 
   it should "handle task failures gracefully" taggedAs UnitTest in {
@@ -555,7 +595,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     statusProbe.expectMessageType[AccountRangeStats]
 
     // PivotStateUnservable must NOT have been sent — peer was not marked stateless for rootR2
-    snapSyncController.expectNoMessage(200.millis)
+    snapSyncController.expectNoMessage(Now)
   }
 
   // ── postStop sends AccountRangeProgress snapshot ───────────────────────────
@@ -686,19 +726,25 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     val reqId = sendMsg.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg.requestId
     val worker = resolveWorkerChild(coordinator)
 
-    // Worker times out — fires TaskFailed("Request timeout") to coordinator.
+    // Worker times out — fires TaskFailed("Request timeout") to coordinator. Coordinator requeues; the controller
+    // receives no escalation (not enough retries).
     worker ! AccountRangeCoordinator.RequestTimeout(reqId)
 
-    // Coordinator requeues; controller receives no escalation (not enough retries).
-    snapSyncController.expectNoMessage(300.millis)
-
     // Late AccountRangeResponse arrives at worker (now in idle state) — must be silently dropped;
-    // coordinator must NOT receive a second TaskFailed or TaskComplete for this request.
+    // coordinator must NOT receive a second TaskFailed or TaskComplete for this request. The mailbox is FIFO, so the
+    // worker takes the timeout before the late response.
     worker ! AccountRangeCoordinator.AccountRangeResponseMsg(
       AccountRange(requestId = reqId, accounts = Seq.empty, proof = Seq.empty)
     )
 
-    snapSyncController.expectNoMessage(300.millis)
+    // Barrier on the worker, which the coordinator cannot reach: a PoisonPill queues behind both messages above, and
+    // once the worker has terminated everything it sent the coordinator is already ahead of the coordinator's own
+    // `AccountGetProgress` below. Neither a settled coordinator nor a quiet window would show that by itself.
+    worker.toClassic ! org.apache.pekko.actor.PoisonPill
+    val workerGone = testKit.createTestProbe[Any]()
+    workerGone.expectTerminated(worker, 10.seconds)
+    settle(coordinator)
+    snapSyncController.expectNoMessage(Now)
   }
 
   // ── Peer cooldown (gray-list) ──────────────────────────────────────────────
@@ -738,7 +784,6 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     val sendMsg1 = networkPeerManager.expectMessageType[NetworkPeerManagerActor.SendMessageCmd]
     sendMsg1.peerId shouldBe peer1.id
     val reqId1 = sendMsg1.message.asInstanceOf[GetAccountRangeEnc].underlyingMsg.requestId
-    val worker1 = resolveWorkerChild(coordinator)
 
     // B-313: peer2 is known to the coordinator before peer1's failure reaches it, and takes the other task. In the other
     // order the rule is not this one: with peer1 the only peer it knows, the eligible-set floor revives the cooling peer
@@ -750,19 +795,20 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
     // peer1 times out: it enters cooldown, and its task is requeued. Seen through the coordinator's own count, so
     // nothing below runs before the failure has reached it.
-    worker1 ! AccountRangeCoordinator.RequestTimeout(reqId1)
-    val stats = testKit.createTestProbe[AccountRangeStats]()
-    eventually {
-      coordinator ! AccountRangeCoordinator.AccountGetProgress(stats.ref)
-      val now = stats.expectMessageType[AccountRangeStats]
-      now.tasksPending shouldBe 1
-      now.tasksActive shouldBe 1
-    }
+    // Delivered to the coordinator directly: the worker would send this same message, one hop later, and nothing
+    // observable says when it has.
+    coordinator ! AccountRangeCoordinator.TaskFailed(reqId1, "Request timeout")
+    val failed = settle(coordinator)
+    failed.tasksPending shouldBe 1
+    failed.tasksActive shouldBe 1
 
     // The requeued task is not sent to the cooling peer1 (peer2 is busy with its own), nor when peer1 is announced again
     // while it cools
     coordinator ! AccountRangeCoordinator.PeerAvailable(peer1)
-    networkPeerManager.expectNoMessage(500.millis)
+    val after = settle(coordinator)
+    after.tasksPending shouldBe 1 // nothing was handed out
+    after.tasksActive shouldBe 1
+    networkPeerManager.expectNoMessage(Now)
   }
 
   // ── Resume durability (StackTrie path, observable via dispatch behaviour) ──
@@ -791,7 +837,10 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     coord ! AccountRangeCoordinator.PeerAvailable(peer)
 
     // Nothing to download — no GetAccountRange dispatched.
-    networkPeerManager.expectNoMessage(500.millis)
+    val stats = settle(coord)
+    stats.tasksPending shouldBe 0
+    stats.tasksActive shouldBe 0
+    networkPeerManager.expectNoMessage(Now)
 
     testKit.stop(coord)
   }
@@ -820,7 +869,8 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     coord ! AccountRangeCoordinator.StorageQueuePressure(paused = true)
     coord ! AccountRangeCoordinator.PeerAvailable(peer)
 
-    networkPeerManager.expectNoMessage(500.millis)
+    settle(coord).tasksActive shouldBe 0
+    networkPeerManager.expectNoMessage(Now)
 
     // Release: the coordinator wakes up and dispatches against the known peer.
     coord ! AccountRangeCoordinator.StorageQueuePressure(paused = false)
@@ -849,11 +899,13 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     coord ! AccountRangeCoordinator.ByteCodeQueuePressure(paused = true)
     coord ! AccountRangeCoordinator.PeerAvailable(peer)
 
-    networkPeerManager.expectNoMessage(500.millis)
+    settle(coord).tasksActive shouldBe 0
+    networkPeerManager.expectNoMessage(Now)
 
     // Release storage only — bytecode is still engaged, so dispatch must remain paused.
     coord ! AccountRangeCoordinator.StorageQueuePressure(paused = false)
-    networkPeerManager.expectNoMessage(500.millis)
+    settle(coord).tasksActive shouldBe 0
+    networkPeerManager.expectNoMessage(Now)
 
     // Release bytecode — set is now empty, dispatch resumes.
     coord ! AccountRangeCoordinator.ByteCodeQueuePressure(paused = false)
@@ -914,7 +966,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
 
     // The progress reply above is a barrier: all ten ticks were processed. Before the fix the third tick sent
     // PivotStateUnservable here; now nothing may reach the controller.
-    snapSyncController.expectNoMessage(300.millis)
+    snapSyncController.expectNoMessage(Now)
     testKit.stop(coord)
   }
 
@@ -1010,7 +1062,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   private val midCursor: ByteString = ByteString(Array.fill(32)(0x40.toByte))
 
   "A resumed AccountRangeCoordinator" should "resume a partial range from its cursor and replay the carried contract work (pivot change / in-process restart)" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-resume-")
+    val dir = tempDirs.create("arc-resume-")
     val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val nm = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val controller = testKit.createTestProbe[SNAPSyncController.Command]()
@@ -1047,7 +1099,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   it should "resume the same way after a simulated process restart through the persisted checkpoint" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-restart-")
+    val dir = tempDirs.create("arc-restart-")
     val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val root = kec256(ByteString("restart-root"))
 
@@ -1103,7 +1155,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
     (ByteString(e.take(32)), ByteString(e.drop(32)))
 
   it should "replay only the carried storage tasks that have no completion marker (restart after finished work)" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-done-")
+    val dir = tempDirs.create("arc-done-")
     val carried = previousTaskFiles(dir, counted = 4, codeCounted = 2)
     val done = new SnapStorageDoneStorage(EphemDataSource())
     // Tasks 0 and 2 finished before the restart. Task 1's account finished too, but under a DIFFERENT storage root
@@ -1130,7 +1182,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   it should "not skip a task because of a marker a superseded coordinator wrote after the clear" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-done-race-")
+    val dir = tempDirs.create("arc-done-race-")
     val account = kec256(ByteString("race-account"))
     val oldRoot = kec256(ByteString("race-root-old"))
     val newRoot = kec256(ByteString("race-root-new"))
@@ -1166,7 +1218,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   it should "replay every carried storage task when no completion markers exist (old checkpoint, first restart)" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-done-none-")
+    val dir = tempDirs.create("arc-done-none-")
     val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val controller = testKit.createTestProbe[SNAPSyncController.Command]()
     val coord = spawnResumed(
@@ -1185,7 +1237,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   it should "re-download a partial range from its start when no task files are carried (legacy record)" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-legacy-")
+    val dir = tempDirs.create("arc-legacy-")
     val nm = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
     val controller = testKit.createTestProbe[SNAPSyncController.Command]()
     val coord = spawnResumed(
@@ -1205,7 +1257,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   "AccountResumeCheckpoint / checkResumable" should "reject other versions, a mismatched range layout and short task files" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-gate-")
+    val dir = tempDirs.create("arc-gate-")
     val files = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val cp = AccountResumeCheckpoint(
       ByteString(Array.fill(32)(1.toByte)),
@@ -1230,7 +1282,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   // ── #1597: a range completed before a restart must stay in every later checkpoint ──
 
   "A resumed AccountRangeCoordinator (#1597)" should "keep a range that was complete before a restart in every later checkpoint, across two restarts" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-1597-")
+    val dir = tempDirs.create("arc-1597-")
     val carried = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val layout2 = AccountTask.createInitialTasks(ByteString.empty, 2).map(_.last)
     val doneLast = layout2(0)
@@ -1273,7 +1325,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   "SNAPSyncController.fillResumeLayout (#1597)" should "fill the missing ranges of a strict subset of the layout as complete" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-1597-fill-")
+    val dir = tempDirs.create("arc-1597-fill-")
     val files = previousTaskFiles(dir, counted = 3, codeCounted = 2)
     val layout16 = AccountTask.createInitialTasks(ByteString.empty, 16)
     val full = layout16.map(t => t.last -> t.next).toMap
@@ -1371,7 +1423,7 @@ class AccountRangeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFl
   }
 
   "Superseded task files (N4)" should "be deleted only after a newer checkpoint exists, and a crash before that still resumes" taggedAs UnitTest in {
-    val dir = java.nio.file.Files.createTempDirectory("arc-sweep-")
+    val dir = tempDirs.create("arc-sweep-")
     // Source files named like real coordinator files, so the sweep recognises them.
     val srcStorage = StorageTaskFile.createFile(Some(dir), "fukuii-contract-storage-", ".bin")
     val srcCode = StorageTaskFile.createFile(Some(dir), "fukuii-unique-codehashes-", ".bin")

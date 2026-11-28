@@ -118,7 +118,7 @@ private[console] object OpsPanels:
     else if room == 0 then Seq(title)
     else
       (title +: rows.take(room - 1)) :+ fit(
-        text(s"   … ${rows.size - (room - 1)} older attempts not shown at this height", c.t.muted),
+        text(s"   ${c.g.ellipsis.text} ${rows.size - (room - 1)} older attempts not shown at this height", c.t.muted),
         w,
         c.g
       )
@@ -172,7 +172,7 @@ private[console] object OpsPanels:
       val page = all.slice(first, first + shown)
       (title +: page.zipWithIndex.map((spec, i) => actionRow(c, spec, selected.contains(first + i), w))) :+ fit(
         text(
-          s" … ${all.size - page.size} more actions on other pages (${first + 1} to ${first + page.size} of ${all.size} shown)",
+          s" ${c.g.ellipsis.text} ${all.size - page.size} more actions on other pages (${first + 1} to ${first + page.size} of ${all.size} shown)",
           c.t.muted
         ),
         w,
@@ -212,7 +212,7 @@ private[console] object OpsPanels:
     val matching = if needle.isEmpty then rows else rows.filter(_.toLowerCase(Locale.ROOT).contains(needle))
     def title(w: Int): AttributedString =
       val parts = found match
-        case None if reading => Seq("reading…")
+        case None if reading => Seq(s"reading${c.g.ellipsis.text}")
         case None =>
           Seq(
             s.actions.unavailable
@@ -238,11 +238,15 @@ private[console] object OpsPanels:
         else if n <= 2 then page
         else
           // The rows not on screen are counted on the first and the last row of the page, in place of a row each.
-          val head = if above > 0 then Vector(s"… $above rows above (Up, PgUp)") else Vector.empty
-          val tail = if below > 0 then Vector(s"… $below rows below (Down, PgDn)") else Vector.empty
+          val head = if above > 0 then Vector(s"${c.g.ellipsis.text} $above rows above (Up, PgUp)") else Vector.empty
+          val tail = if below > 0 then Vector(s"${c.g.ellipsis.text} $below rows below (Down, PgDn)") else Vector.empty
           head ++ page.slice(head.size, page.size - tail.size) ++ tail
       shown.map(line =>
-        fit(text(" " + TuiText.external(line, c.g), if line.startsWith("…") then c.t.muted else c.t.value), w, c.g)
+        fit(
+          text(" " + TuiText.external(line, c.g), if line.startsWith(c.g.ellipsis.text) then c.t.muted else c.t.value),
+          w,
+          c.g
+        )
       )
     Seq(
       vitalsPanel(c, withSummary = true),

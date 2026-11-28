@@ -1,7 +1,5 @@
 package com.chipprbots.ethereum.jsonrpc.server.http
 
-import javax.net.ssl.SSLContext
-
 import org.apache.pekko.actor.ActorSystem
 import org.apache.pekko.http.cors.javadsl.CorsRejection
 import org.apache.pekko.http.cors.scaladsl.CorsDirectives.*
@@ -22,7 +20,10 @@ import scala.concurrent.duration.*
 import com.typesafe.config.Config as TypesafeConfig
 import org.json4s.DefaultFormats
 import org.json4s.Formats
+import org.json4s.JArray
 import org.json4s.JInt
+import org.json4s.JValue
+import org.json4s.jvalue2extractable
 import org.json4s.native
 import org.json4s.native.Serialization
 
@@ -34,7 +35,9 @@ import com.chipprbots.ethereum.jsonrpc.graphql.GraphQLService
 import com.chipprbots.ethereum.jsonrpc.serialization.JsonSerializers
 import com.chipprbots.ethereum.jsonrpc.server.controllers.JsonRpcBaseController
 import com.chipprbots.ethereum.jsonrpc.server.http.JsonRpcHttpServer.JsonRpcHttpServerConfig
-import com.chipprbots.ethereum.security.SSLError
+import com.chipprbots.ethereum.tls.IdentityRules
+import com.chipprbots.ethereum.tls.TlsConfigError
+import com.chipprbots.ethereum.tls.TlsServerContext
 import com.chipprbots.ethereum.utils.BuildInfo
 import com.chipprbots.ethereum.utils.ConfigUtils
 import com.chipprbots.ethereum.utils.Logger
@@ -47,15 +50,27 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
   /** Optional GraphQL endpoint, mounted at `POST /graphql` when defined. */
   val graphQLService: Option[GraphQLService] = None
 
+  /** Who is served by which controller (spec 030 FR-020–FR-028). By default every request is served by
+    * [[jsonRpcController]]; a listener that asks for client certificates resolves each caller from its TLS session.
+    */
+  def callers: RpcCallers = RpcCallers.none(jsonRpcController)
+
+  /** The caller of this request, from the TLS session Pekko puts on it (`ssl-session-attribute`, research D-2). */
+  private def caller: Directive1[RpcCaller] =
+    optionalAttribute(AttributeKeys.sslSession).map(info => callers.forSession(info.map(_.session)))
+
+  private val graphQlDisabled: HttpResponse =
+    HttpResponse(
+      status = StatusCodes.NotFound,
+      entity = HttpEntity(ContentTypes.`application/json`, """{"errors":[{"message":"graphql disabled"}]}""")
+    )
+
   given runtime: IORuntime = IORuntime.global
   given serialization: Serialization.type = native.Serialization
 
   given formats: Formats = DefaultFormats + JsonSerializers.RpcErrorJsonSerializer
 
   def corsAllowedOrigins: HttpOriginMatcher
-
-  lazy val jsonRpcErrorCodes: List[Int] =
-    List(JsonRpcError.InvalidRequest.code, JsonRpcError.ParseError.code, JsonRpcError.InvalidParams().code)
 
   val corsSettings: CorsSettings = (CorsSettings.defaultSettings: @annotation.nowarn("cat=deprecation"))
     .withAllowGenericHttpRequests(true)
@@ -65,8 +80,10 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
     RejectionHandler
       .newBuilder()
       .handle {
+        // A body that is not JSON-RPC is answered with the -32700 error in a 200 response, as go-ethereum's HTTP server
+        // answers every JSON-RPC error (rpc/http.go); the status says only whether HTTP itself failed (B-025).
         case _: MalformedRequestContentRejection =>
-          complete((StatusCodes.BadRequest, JsonRpcResponse("2.0", None, Some(JsonRpcError.ParseError), JInt(0))))
+          complete((StatusCodes.OK, JsonRpcResponse("2.0", None, Some(JsonRpcError.ParseError), JInt(0))))
         case _: CorsRejection =>
           complete(StatusCodes.Forbidden)
       }
@@ -85,73 +102,77 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
       } ~ (path("buildinfo") & pathEndOrSingleSlash & get) {
         handleBuildInfo()
       } ~ path("graphql") {
-        post {
+        (post & caller) { who =>
           graphQLService match
-            case Some(svc) =>
+            case Some(svc) if who.graphQl =>
               extractStrictEntity(5.seconds) { entity =>
                 val body = entity.data.utf8String
                 handleGraphQL(svc, body)
               }
+            case Some(_) =>
+              // A caller whose rule does not list graphql gets what a node without GraphQL answers (FR-028).
+              who.label.foreach(l => RpcNamespaceDenials.record(l, IdentityRules.GraphQl, "POST /graphql", "http"))
+              complete(graphQlDisabled)
             case None =>
-              complete(
-                HttpResponse(
-                  status = StatusCodes.NotFound,
-                  entity =
-                    HttpEntity(ContentTypes.`application/json`, """{"errors":[{"message":"graphql disabled"}]}""")
-                )
-              )
+              complete(graphQlDisabled)
         }
-      } ~ (pathEndOrSingleSlash & post) {
-        // Materialize the request entity BEFORE the two `entity(as[...])` alternatives below.
-        //
-        // Those alternatives are tried in order, and for a BATCH request (a JSON array) the
-        // first one MUST fail — an array is not a single JsonRpcRequest. Pekko then tries the
-        // second. That only works if the entity can be read twice. A streamed entity
-        // (HttpEntity.Default / Chunked) is a one-shot source: the first failed unmarshal
-        // drains it, the second alternative rejects too, and myRejectionHandler above turns
-        // the resulting MalformedRequestContentRejection into
-        //   400 {"jsonrpc":"2.0","error":{"code":-32700,...},"id":0}
-        // for a batch that was perfectly well-formed.
-        //
-        // Whether a given batch arrives Strict or streamed depends on TCP arrival timing, so
-        // the bug is intermittent and load-dependent: measured in hive's engine-withdrawals
-        // suite failing after 1, 3, 5, 7, 11, 19 or 25 successful batches, or not at all
-        // within 30, for the SAME test with the SAME payloads across two runs.
-        //
-        // toStrictEntity gives both alternatives a re-readable buffered entity. The GraphQL
-        // branch above already does this with extractStrictEntity for the same reason.
-        toStrictEntity(5.seconds) {
-          entity(as[JsonRpcRequest]) {
-            case statusReq if statusReq.method == FaucetJsonRpcController.Status =>
-              handleRequest(statusReq)
-            case jsonReq =>
-              rateLimit {
-                handleRequest(jsonReq)
-              }
-          } ~ entity(as[Seq[JsonRpcRequest]]) {
-            case _ if config.rateLimit.enabled =>
-              complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
-            case reqSeq =>
-              complete {
-                reqSeq.toList
-                  .traverse(request => jsonRpcController.handleRequest(request))
-                  .unsafeToFuture()
-              }
-          }
+      } ~ (pathEndOrSingleSlash & post & caller) { who =>
+        val controller = who.controller
+        // The body is parsed once, as JSON, and routed by its shape: an array is a batch, anything else one request
+        // (B-105). It used to be unmarshalled as a single request first and, for a batch, failed and was parsed again
+        // as a list; that needed the entity buffered to be read twice (toStrictEntity), since a streamed entity is a
+        // one-shot source and a batch then failed with -32700 depending on TCP timing (hive engine-withdrawals). One
+        // read needs neither. A body that is not JSON, or not requests, is still the -32700 of myRejectionHandler.
+        entity(as[JValue]) {
+          case JArray(items) =>
+            asRequests(items) match
+              case Left(rejection) => reject(rejection)
+              case Right(_) if config.rateLimit.enabled =>
+                complete(StatusCodes.MethodNotAllowed, JsonRpcError.MethodNotFound)
+              case Right(reqSeq) =>
+                // each element is answered on its own, by the caller's controller (US3 scenario 3)
+                complete {
+                  reqSeq
+                    .traverse(request => controller.handleRequest(request))
+                    .unsafeToFuture()
+                }
+          case single =>
+            asRequests(List(single)) match
+              case Left(rejection) => reject(rejection)
+              case Right(statusReq :: Nil) if statusReq.method == FaucetJsonRpcController.Status =>
+                handleRequest(controller, statusReq)
+              case Right(jsonReq :: Nil) =>
+                rateLimit {
+                  handleRequest(controller, jsonReq)
+                }
+              case Right(_) =>
+                reject(MalformedRequestContentRejection("not one JSON-RPC request", new IllegalStateException))
         }
       }
     }
   }
 
-  def handleRequest(request: JsonRpcRequest): StandardRoute =
-    complete(handleResponse(jsonRpcController.handleRequest(request)).unsafeToFuture())
+  /** `values` read as JSON-RPC requests, as the entity unmarshaller read them before (B-105); a value that is not one
+    * is a malformed body, as it was.
+    */
+  private def asRequests(values: List[JValue]): Either[Rejection, List[JsonRpcRequest]] =
+    values.traverse { value =>
+      scala.util
+        .Try(value.extract[JsonRpcRequest])
+        .toEither
+        .left
+        .map(e => MalformedRequestContentRejection(Option(e.getMessage).getOrElse(e.toString), e))
+    }
 
-  private def handleResponse(f: IO[JsonRpcResponse]): IO[(StatusCode, JsonRpcResponse)] = f.map { jsonRpcResponse =>
-    jsonRpcResponse.error match
-      case Some(JsonRpcError(error, _, _)) if jsonRpcErrorCodes.contains(error) =>
-        (StatusCodes.BadRequest, jsonRpcResponse)
-      case _ => (StatusCodes.OK, jsonRpcResponse)
-  }
+  def handleRequest(request: JsonRpcRequest): StandardRoute = handleRequest(jsonRpcController, request)
+
+  private def handleRequest(controller: JsonRpcBaseController, request: JsonRpcRequest): StandardRoute =
+    complete(handleResponse(controller.handleRequest(request)).unsafeToFuture())
+
+  // Every JSON-RPC answer, error or not, is a 200: the error is in the body (go-ethereum rpc/http.go). Parse errors,
+  // invalid requests and invalid params answered 400 here before (B-025).
+  private def handleResponse(f: IO[JsonRpcResponse]): IO[(StatusCode, JsonRpcResponse)] =
+    f.map(jsonRpcResponse => (StatusCodes.OK, jsonRpcResponse))
 
   /** The actor system the server binds in. */
   def actorSystem: ActorSystem
@@ -179,7 +200,7 @@ trait JsonRpcHttpServer extends Json4sSupport with Logger:
     new ServerLifecycle(RpcCallStats.Http, () => bind(), callStats, stopDeadline)(using actorSystem.dispatcher)
 
   /** Whether the server speaks TLS (`mode = https`), for the dashboard's previews. */
-  def isTls: Boolean = config.mode == "https"
+  def isTls: Boolean = config.tlsEnabled
 
   /** Starts the server and returns the binding future: `lifecycle.start()` in the servers that bind.
     *
@@ -272,20 +293,28 @@ object JsonRpcHttpServer extends Logger:
       jsonRpcController: JsonRpcBaseController,
       jsonRpcHealthchecker: JsonRpcHealthChecker,
       config: JsonRpcHttpServerConfig,
-      fSslContext: () => Either[SSLError, SSLContext],
-      graphQLService: Option[GraphQLService] = None
+      fTlsContext: () => Either[TlsConfigError, TlsServerContext],
+      graphQLService: Option[GraphQLService] = None,
+      tlsCallers: Option[RpcCallers] = None
   )(implicit actorSystem: ActorSystem): Either[String, JsonRpcHttpServer] =
     config.mode match
+      // `tls { enabled = true }` makes the server secure under either mode value; `mode = "https"` is the deprecated
+      // form of the same (spec 030 FR-007), and the start-up check refuses the two together.
+      case "http" | "https" if config.tlsEnabled =>
+        Right(
+          new SecureJsonRpcHttpServer(
+            jsonRpcController,
+            jsonRpcHealthchecker,
+            config,
+            fTlsContext,
+            graphQLService,
+            tlsCallers
+          )(using actorSystem)
+        )
       case "http" =>
         Right(
           new InsecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, graphQLService)(using
             actorSystem
-          )
-        )
-      case "https" =>
-        Right(
-          new SecureJsonRpcHttpServer(jsonRpcController, jsonRpcHealthchecker, config, fSslContext, graphQLService)(
-            using actorSystem
           )
         )
       case _ => Left(s"Cannot start JSON RPC server: Invalid mode ${config.mode} selected")
@@ -308,6 +337,12 @@ object JsonRpcHttpServer extends Logger:
     val enabled: Boolean
     val interface: String
     val port: Int
+
+    /** `network.rpc.http.tls.enabled` (spec 030); false where a configuration does not carry the block. */
+    val tlsBlockEnabled: Boolean = false
+
+    /** The listener speaks TLS: from its `tls` block, or from the deprecated `mode = "https"`. */
+    def tlsEnabled: Boolean = tlsBlockEnabled || mode == "https"
     val corsAllowedOrigins: HttpOriginMatcher
     val rateLimit: RateLimitConfig
 
@@ -320,6 +355,8 @@ object JsonRpcHttpServer extends Logger:
         override val enabled: Boolean = rpcHttpConfig.getBoolean("enabled")
         override val interface: String = rpcHttpConfig.getString("interface")
         override val port: Int = rpcHttpConfig.getInt("port")
+        override val tlsBlockEnabled: Boolean =
+          rpcHttpConfig.hasPath("tls.enabled") && rpcHttpConfig.getBoolean("tls.enabled")
 
         override val corsAllowedOrigins: HttpOriginMatcher =
           ConfigUtils.parseCorsAllowedOrigins(rpcHttpConfig, "cors-allowed-origins")

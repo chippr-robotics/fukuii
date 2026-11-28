@@ -163,6 +163,37 @@ object AdminJsonMethodsImplicits extends JsonMethodsImplicits:
           case _                                      => Left(InvalidParams())
       override def encodeJson(t: AdminRemoveTrustedPeerResponse): JValue = JBool(t.success)
 
+  // Spec 030 FR-056 (contracts/admin-allowlist.md): one array of enode URIs or node ids.
+  given admin_editAllowlist: (JsonMethodDecoder[AdminAllowlistEditRequest] & JsonEncoder[AdminAllowlistEditResponse]) =
+    new JsonMethodDecoder[AdminAllowlistEditRequest] with JsonEncoder[AdminAllowlistEditResponse]:
+      override def decodeJson(params: Option[JsonAST.JArray]): Either[JsonRpcError, AdminAllowlistEditRequest] =
+        params match
+          case Some(JArray(JArray(items) :: Nil)) =>
+            items
+              .foldLeft[Either[JsonRpcError, Vector[String]]](Right(Vector.empty)) {
+                case (acc, JString(s)) => acc.map(_ :+ s)
+                case (_, other)        => Left(InvalidParams(s"invalid enode or node id: ${other.toString.take(80)}"))
+              }
+              .map(AdminAllowlistEditRequest(_))
+          case _ => Left(InvalidParams("expected one array of enode URIs or node ids"))
+      override def encodeJson(t: AdminAllowlistEditResponse): JValue = JBool(t.success)
+
+  given admin_getNodesAllowlist
+      : (NoParamsMethodDecoder[AdminGetNodesAllowlistRequest] & JsonEncoder[AdminGetNodesAllowlistResponse]) =
+    new NoParamsMethodDecoder(AdminGetNodesAllowlistRequest()) with JsonEncoder[AdminGetNodesAllowlistResponse]:
+      override def encodeJson(t: AdminGetNodesAllowlistResponse): JValue =
+        JObject(
+          "enabled" -> JBool(t.enabled),
+          "file" -> t.file.map(JString(_)).getOrElse(JNull),
+          "nodes" -> JArray(t.nodes.toList.map { n =>
+            JObject(
+              "id" -> JString(n.id),
+              "enode" -> n.enode.map(JString(_)).getOrElse(JNull),
+              "sources" -> JArray(n.sources.toList.map(JString(_)))
+            )
+          })
+        )
+
   given admin_maxPeers: (JsonMethodDecoder[AdminMaxPeersRequest] & JsonEncoder[AdminMaxPeersResponse]) =
     new JsonMethodDecoder[AdminMaxPeersRequest] with JsonEncoder[AdminMaxPeersResponse]:
       override def decodeJson(

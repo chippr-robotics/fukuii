@@ -1,0 +1,44 @@
+{
+ "id": "review-1782",
+ "agent": "herald",
+ "chain": "both",
+ "source_prs": [
+  1782
+ ],
+ "base_sha": "5c77ecbbc80b6a8f558cfcf869e7871f000ade56",
+ "prompt": "Review the uncommitted wiring of the peer scorer into the network and SNAP request paths before merge.",
+ "expected": {
+  "review_sha": "c1e1aede5d7fb85a4738afb935ba824a853bc0b2",
+  "review_ref": "pull/1782/head",
+  "files": [
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/SNAPRequestTracker.scala",
+   "src/main/scala/com/chipprbots/ethereum/network/PeerScoringManager.scala",
+   "src/main/scala/com/chipprbots/ethereum/blockchain/sync/snap/actors/ByteCodeWorker.scala"
+  ],
+  "must_not": [],
+  "gold_summary": "SNAPRequestTracker.completeRequest credits a response on abandon paths (pivot refresh, disconnect); the bytecode worker release defaults to 1 item; the eviction key evicts an idle connected peer before crawlers that failed the handshake; the scorer's export runs under the tracker's synchronized lock; the log string is built eagerly on the hottest event."
+ },
+ "rubric": [
+  "Abandoned requests (refresh, disconnect) are credited as responses",
+  "The bytecode release / timeout path defaults to 1 item",
+  "Eviction by oldest lastSeen/firstSeen drops an idle connected peer before never-seen-alive (failed-handshake) entries",
+  "Scorer export/callback runs under the tracker lock",
+  "Eager log-string construction on a hot path"
+ ],
+ "protocol": [
+  "herald: compare with the reference client's peer handling",
+  "read-only: no edits"
+ ],
+ "leak_markers": [
+  "#1782",
+  "d89867c50",
+  "bf69f01f",
+  "064e6022",
+  "scoreTimeout"
+ ],
+ "sprint": "0.12.1",
+ "type": "review",
+ "read_only": true,
+ "budget_usd": 3,
+ "timeout_s": 2400
+}

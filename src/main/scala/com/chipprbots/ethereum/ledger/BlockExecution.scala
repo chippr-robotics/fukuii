@@ -9,6 +9,7 @@ import scala.annotation.tailrec
 import com.chipprbots.ethereum.consensus.pow.validators.OmmersValidator.OmmersError
 import com.chipprbots.ethereum.consensus.validators.BlockHeaderError
 import com.chipprbots.ethereum.consensus.validators.std.StdBlockValidator.BlockError
+import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
 import com.chipprbots.ethereum.db.storage.SerializingMptStorage
 import com.chipprbots.ethereum.db.storage.StagedBlockState
@@ -90,6 +91,26 @@ class BlockExecution(
           result
     })
 
+  /** Writes the code `world` deployed to the code store, in a write of its own, for a path that writes the block's
+    * state straight through and so has no state batch for the code to join: see
+    * [[InMemoryWorldStateProxy.deployedCodeWrite]]. A staged block hands its code to its staged state instead
+    * ([[StagedBlockState.stageCode]], B-454), and every other execution leaves its code in its world (B-230).
+    */
+  def writeDeployedCode(world: InMemoryWorldStateProxy): Unit =
+    InMemoryWorldStateProxy.deployedCodeWrite(world).foreach(_.commit())
+
+  /** [[writeDeployedCode]] of code taken out of its world: a proposer's build, kept as a block's state. */
+  def writeDeployedCode(code: Map[ByteString, ByteString]): Unit =
+    deployedCodeWrite(code).foreach(_.commit())
+
+  /** The write of code taken out of its world, not committed: for a caller that writes it in the batch of the block
+    * that refers to it (`testing_commitBlockV1` on the hash store, B-466). None when there is no code.
+    */
+  def deployedCodeWrite(
+      code: Map[ByteString, ByteString]
+  ): Option[com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate] =
+    InMemoryWorldStateProxy.deployedCodeWrite(code, evmCodeStorage)
+
   /** Times the block's database commit (one atomic batch since #1465), which `[IMPORT-TIMING]` ends before. */
   private def timedCommit[A](block: Block)(body: => A): A =
     val t = System.nanoTime()
@@ -133,7 +154,12 @@ class BlockExecution(
         )
         _ <- validateRequestsHash(block, result.executionRequests)
         _ <- validateBlockAccessList(block, result.blockAccessList)
-      yield (result.receipts, result.executionRequests, result.blockAccessList)
+      yield
+        // The block is valid: the code it deployed is handed to the staged state, whose commit writes it in the same
+        // batch as the state that refers to it (B-230, B-454). A block that failed above stages none, and a commit the
+        // caller refuses (a head that moved, a branch too large to hold) discards it with the state.
+        InMemoryWorldStateProxy.deployedCodeWrite(result.worldState).foreach(staged.stageCode)
+        (result.receipts, result.executionRequests, result.blockAccessList)
 
     if blockExecResult.isRight then
       log.debug(s"Block ${block.header.number} (with hash: ${block.header.hashAsHexString}) executed correctly")
@@ -141,7 +167,8 @@ class BlockExecution(
     blockExecResult
 
   /** Executes a block without pre/post validation. Returns the execution result including receipts, gasUsed, and the
-    * persisted world state. Used by ChainImporter for trusted block import where only state correctness matters.
+    * persisted world state. It writes the block's trie nodes and code before anything is validated, so no import path
+    * uses it: the chain import goes through [[executeAndAdoptBlockIf]] (B-455). Test harnesses that replay vectors do.
     */
   def executeBlockNoValidation(
       block: Block
@@ -151,8 +178,8 @@ class BlockExecution(
     }
 
   /** [[executeBlockNoValidation]] plus the EIP-7685 requests and the EIP-7928 block access list execution produced, so
-    * an import path that validates after the fact (ChainImporter) can check the header's `requestsHash` with
-    * [[validateRequestsHash]] and its `blockAccessListHash` with [[validateBlockAccessList]].
+    * a caller that validates after the fact can check the header's `requestsHash` with [[validateRequestsHash]] and its
+    * `blockAccessListHash` with [[validateBlockAccessList]].
     */
   def executeBlockNoValidationWithRequests(
       block: Block
@@ -160,6 +187,10 @@ class BlockExecution(
       blockchainConfig: BlockchainConfig
   ): Either[BlockExecutionError, (Seq[Receipt], BigInt, ByteString, Seq[ByteString], Option[BlockAccessList])] =
     executeBlock(block).map { result =>
+      // This path writes the block's trie nodes straight through as it executes, and its caller validates and stores
+      // the block afterwards; the block's code is written here, as `persistState` wrote it before B-230. No import
+      // path runs it (B-455).
+      writeDeployedCode(result.worldState)
       (
         result.receipts,
         result.gasUsed,
@@ -239,9 +270,9 @@ class BlockExecution(
     *
     * Where what it persists goes depends on the state layout; see [[buildInitialWorld]]. On the hash store the trie
     * nodes reach the store, by their hashes, where the import of the same block finds them already written. On the
-    * unified layout they go to a layer of this execution's own and are dropped with it: nothing is written but contract
-    * code, which is kept by its hash on both. Either way no block, receipt or head is written here, and a block that
-    * was built is executed again when it is imported.
+    * unified layout they go to a layer of this execution's own and are dropped with it. Contract code is written on
+    * neither: it stays in the returned world (`deployedCode`, B-230). Either way no block, receipt or head is written
+    * here, and a block that was built is executed again when it is imported, which writes its code.
     */
   def executeForProposer(
       block: Block
@@ -646,10 +677,62 @@ class BlockExecution(
         base.and(blockchainWriter.storeBlockAccessList(blockToExecute.header.hash, bal))
       )
     timedCommit(blockToExecute)(
-      staged.commitWith(blockToExecute.header.number.value, blockHash, Some(withAccessList))
+      staged.commitWith(
+        blockToExecute.header.number.value,
+        blockHash,
+        Some(if adoptEachBlock then withIndexLeft(blockToExecute, withAccessList) else withAccessList)
+      )
     )
     BlockImportGate.record(blockHash, executed)
     Right(newBlockData)
+
+  /** `commit`, the rows of a block committed as the head, with what clears the index of blocks by number above it where
+    * the block leaves the chain the index names (B-482, B-492): on the unified layout only.
+    *
+    * On the unified layout the index is the ancestry of the head (I6), but for what a sync leaves above the pivot it
+    * hands off at: the index runs ahead of the head there, and a catch-up (`StateRecovery.catchUp`) commits the blocks
+    * above the head one by one, with no move of the head to clear it. A block leaves the chain the index names where
+    * the index names another block at its height, or names none there and names one at the height above (a gap, left by
+    * a removal that stopped at the first height with no entry): its entries above the block, and the lookups of the
+    * transactions only the blocks they name hold, go in the block's own batch, as a move of the head clears them
+    * (`BlockchainWriter.canonicalHeadUpdate`, go-ethereum's `reorg`). In the same batch, so that no stop between two
+    * writes leaves them behind. Where the index names the block itself, the entries above it are of its own chain, and
+    * stay until each is committed over; where it names nothing at the block's height nor at the one above, there is
+    * nothing to clear. The height above is read only when the block's own height has no entry.
+    *
+    * Those rows come first in the batch, and the block's own after them: a batch is written in order, so the block's
+    * index entry, its best-block rows and its transactions' lookups are the block's own whatever the clean-up reads. It
+    * reads the block's body by its hash, and a block not stored yet would have the lookups of the transactions it
+    * shares with the blocks it drops deleted, after its own were written, if the clean-up came last.
+    *
+    * Its size: one delete per height above the block that the index names, up to the first height it does not, and one
+    * per distinct transaction of the blocks dropped. That is the index a sync ran ahead of the head, which the bound of
+    * a catch-up (`state.recovery.max-catch-up`) does not limit: the sync's index may run past the head the catch-up
+    * goes to. All of it is written as the one batch of the block's commit, under the state lock, which is held for that
+    * one write; so it is said, at INFO, and at WARN from `BlockExecution.IndexLeftWarnRows` rows.
+    *
+    * The rows are read before the state lock is taken; the commit refuses there unless the block's parent is still the
+    * block whose state the disk holds, and on this layout only a commit or a move of the head writes the index, each
+    * under that lock. A move away and back between the read and the commit clears the entries above the parent itself,
+    * and the rows then delete what is gone already.
+    */
+  private def withIndexLeft(block: Block, commit: DataSourceBatchUpdate): DataSourceBatchUpdate =
+    val number = block.header.number.value
+    def leaves: Boolean =
+      blockchainReader.getCanonicalHashByNumber(number) match
+        case Some(named) => named != block.header.hash
+        case None        => blockchainReader.getCanonicalHashByNumber(number + 1).isDefined
+    if !blockchainReader.holdsStateInPlace || !leaves then commit
+    else
+      val update = blockchainWriter.canonicalHeadUpdate(block.header, blockchainReader)
+      val rows = update.cleared + update.droppedTxLookups
+      val line =
+        s"Block ${block.idTag} leaves the index of blocks by number: ${update.cleared} height(s) above it and " +
+          s"${update.droppedTxLookups} transaction lookup(s) of the blocks dropped are deleted in its commit"
+      if rows >= BlockExecution.IndexLeftWarnRows then
+        log.warn(s"$line, $rows rows in the one batch written under the state lock")
+      else log.info(line)
+      update.batch.and(commit)
 
   /** One block onto the head, for an operator chain import holding [[ChainInsertLock.exclusive]], and for the adoption
     * of a long branch on the unified layout (`StateRecovery`, which holds it shared, as any import): the same
@@ -782,6 +865,11 @@ class BlockExecution(
     BlockExecution.depositRequests(receipts)
 
 object BlockExecution:
+
+  /** From how many rows the clean-up of the index a block leaves (B-482) is said at WARN: all of them are written in
+    * the block's one commit batch, under the state lock.
+    */
+  val IndexLeftWarnRows: Int = 10000
 
   /** How a batch of blocks ended ([[BlockExecution.executeAndValidateBlocksWithAccessLists]]), with the fault of this
     * node's own state told apart from an error of the block.
@@ -1005,8 +1093,9 @@ object BlockExecution:
     * (EEST `test_system_call_execution_grant`, `_execution_boundary`, `_reservoir_boundary`). fukuii previously granted
     * the 31,566,720 total as execution gas, with no reservoir.
     *
-    * Pre-Amsterdam (ETH Prague/Osaka) the reservoir is 0 and the context is the one the EIP-7002/7251 calls always had.
-    * ETC never builds one: its only system-contract write, EIP-2935 at Olympia, is a direct storage write.
+    * Pre-Amsterdam (ETH Cancun to Osaka) the reservoir is 0 and the context is the one the EIP-7002/7251 calls always
+    * had, and the EIP-4788 / EIP-2935 calls to non-canonical code (B-517) share it. On ETC the only system contract is
+    * EIP-2935's from Olympia (B-528): the canonical code gets the direct storage write, other code this context.
     *
     * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); empty, as every real block has it, the
     * context is what it was.
@@ -1060,16 +1149,24 @@ object BlockExecution:
 
   /** A block's state changes before its first transaction, in block import's order: the DAO fork block's drain; then,
     * from Amsterdam, the EIP-4788 / EIP-2935 system calls (EIP-7928 block access index 0), and before it the direct
-    * storage writes of EIP-4788 (ETH from Cancun) and EIP-2935 (ETH from Prague, ETC from Olympia).
+    * storage writes of EIP-4788 (ETH from Cancun) and EIP-2935 (ETH from Prague, ETC from Olympia) where the canonical
+    * contract is the code at the address, and on ETH a system call running any other code there (B-517).
     *
-    * One function for block import (`executeBlockTransactions`) and block building (`BlockPreparator.prepareBlock`), so
-    * the state a miner builds a block on is the state import executes it on.
+    * One function for block import (`executeBlockTransactions`), block building (`BlockPreparator.prepareBlock`),
+    * eth_simulateV1 (`SimulatedBlockSystemCalls.preamble`) and the trace replays (`StxLedger.advanceWorldToTx`), so the
+    * state a miner builds a block on, a simulation runs its calls on and a trace replays a transaction on is the state
+    * import executes the block on.
+    *
+    * `precompileRelocations` is eth_simulateV1's (see [[requestSystemCalls]]); it reaches only the parts of the
+    * preamble that run the EVM: the Amsterdam system calls, and before Amsterdam the EIP-4788 / EIP-2935 call to a
+    * contract whose code is not the canonical one. Every other caller leaves it empty.
     */
   private[ethereum] def applyBlockPreamble(
       block: Block,
       blockHeaderNumber: BigInt,
       initialWorld: InMemoryWorldStateProxy,
-      accessList: Option[BlockAccessListBuilder]
+      accessList: Option[BlockAccessListBuilder],
+      precompileRelocations: Map[Address, Address] = Map.empty
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     val worldAfterDao = blockchainConfig.daoForkConfig match
       case Some(daoForkConfig) if daoForkConfig.isDaoForkBlock(blockHeaderNumber) =>
@@ -1080,7 +1177,8 @@ object BlockExecution:
       // Amsterdam: EIP-4788 and EIP-2935 run as real system calls (see `applyAmsterdamPreambleSystemCalls`), which
       // share EIP-7928 block access index 0.
       val preambleReads = accessList.map(_ => new BlockAccessRecorder)
-      val afterPreamble = applyAmsterdamPreambleSystemCalls(block.header, worldAfterDao, preambleReads)
+      val afterPreamble =
+        applyAmsterdamPreambleSystemCalls(block.header, worldAfterDao, preambleReads, precompileRelocations)
       for
         builder <- accessList
         reads <- preambleReads
@@ -1088,10 +1186,10 @@ object BlockExecution:
       afterPreamble
     else
       // EIP-4788: Store parent beacon block root in system contract (post-Cancun)
-      val worldAfterBeaconRoot = applyEip4788(block, worldAfterDao)
+      val worldAfterBeaconRoot = applyEip4788(block, worldAfterDao, precompileRelocations)
 
       // EIP-2935: Store parent block hash in history storage contract
-      applyEip2935(block, worldAfterBeaconRoot)
+      applyEip2935(block, worldAfterBeaconRoot, precompileRelocations)
 
   /** EIP-4788: Store the parent beacon block root in the beacon root system contract.
     *
@@ -1102,7 +1200,8 @@ object BlockExecution:
     */
   private def applyEip4788(
       block: Block,
-      world: InMemoryWorldStateProxy
+      world: InMemoryWorldStateProxy,
+      precompileRelocations: Map[Address, Address]
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     // Only apply post-Cancun (when parentBeaconBlockRoot is present)
     block.header.parentBeaconBlockRoot match
@@ -1132,7 +1231,23 @@ object BlockExecution:
         // EIP explicitly permits: "Clients may decide to omit an explicit EVM call and directly
         // set the storage values." It is only valid when the canonical contract is the one
         // deployed there, which is why the code-presence guard is a hard precondition.
-        if world.getCode(BeaconRootContractAddress).isEmpty then world
+        //
+        // Any other code is run, as go-ethereum's ProcessBeaconBlockRoot runs whatever is there (B-517): a SYSTEM_ADDRESS
+        // call with 30,000,000 gas whose failure is ignored. The direct write gave such code's account the canonical
+        // contract's slots instead. Every public network has the canonical contract, so its blocks keep the direct
+        // write, byte for byte; the call is reached on a chain (a test genesis) or an eth_simulateV1 state override
+        // that puts other code at the address.
+        val code = world.getCode(BeaconRootContractAddress)
+        if code.isEmpty then world
+        else if code != BeaconRootsCode then
+          uncheckedSystemCall(
+            block.header,
+            world,
+            BeaconRootContractAddress,
+            beaconRoot.value,
+            accessRecorder = None,
+            precompileRelocations
+          )
         else
           val storage = world.getStorage(BeaconRootContractAddress)
           val s1 = storage.store(timestampIdx.toBigInt, timestamp.toBigInt)
@@ -1141,14 +1256,16 @@ object BlockExecution:
 
       case _ => world
 
-  /** EIP-2935: Deploy history storage contract at fork block and store parent block hash.
+  /** EIP-2935: store the parent block hash in the history contract, from Prague (ETH) or Olympia (ETC).
     *
-    * At the Olympia activation block, deploys the history storage contract (sets nonce=1 and code). At every
-    * post-Olympia block, writes the parent hash to storage slot (blockNumber - 1) % HistoryServeWindow.
+    * The client never deploys the contract: EIP-2935's own deploy transaction does (B-528, and
+    * docs/runbooks/olympia-eip2935-deployment.md). With no code at the address nothing happens; with the canonical code
+    * the parent hash goes to slot (blockNumber - 1) % HistoryServeWindow; other code runs as a system call.
     */
   private def applyEip2935(
       block: Block,
-      world: InMemoryWorldStateProxy
+      world: InMemoryWorldStateProxy,
+      precompileRelocations: Map[Address, Address]
   )(implicit blockchainConfig: BlockchainConfig): InMemoryWorldStateProxy =
     val blockNumber = block.header.number.value
     // EIP-2935 activates at Prague on ETH chains (timestamp fork), or at Olympia on ETC chains (block number fork).
@@ -1156,35 +1273,36 @@ object BlockExecution:
     val etcOlympiaActive = blockchainConfig.networkType == com.chipprbots.ethereum.utils.NetworkType.ETC &&
       blockNumber >= blockchainConfig.forkBlockNumbers.olympiaBlockNumber
     if !pragueActive && !etcOlympiaActive then world
-    // ETH (Prague): EIP-2935 "if no code exists at HISTORY_STORAGE_ADDRESS, the call must fail silently".
-    // Exactly as for EIP-4788 (see applyEip4788), the client MUST NOT deploy the contract itself: on ETH it is
-    // deployed by a regular transaction, and go-ethereum's ProcessParentBlockHash is a SYSTEM_ADDRESS call with
-    // value 0, which under EIP-158 returns without creating anything when the account does not exist. Self-deploying
-    // here wrote an account (nonce 1, code) plus a slot the reference does not have, and forked the state root of
-    // the first Prague block on any chain that deploys the contract in-chain rather than in genesis (EEST
-    // test_system_contract_deployment[CancunToPragueAtTime15k-deploy_after_fork / deploy_on_fork_block]).
-    else if !etcOlympiaActive && world.getCode(HistoryStorageAddress).isEmpty then world
+    // EIP-2935 "if no code exists at HISTORY_STORAGE_ADDRESS, the call must fail silently", on ETH (Prague) and on
+    // ETC (Olympia) alike. Exactly as for EIP-4788 (see applyEip4788), the client MUST NOT deploy the contract itself:
+    // it is deployed by EIP-2935's own deploy transaction (Nick's method, the same on every chain), and go-ethereum's
+    // ProcessParentBlockHash is a SYSTEM_ADDRESS call with value 0, which under EIP-158 returns without creating
+    // anything when the account does not exist. Self-deploying here wrote an account (nonce 1, code) plus a slot the
+    // reference does not have, and forked the state root of the first Prague block on any chain that deploys the
+    // contract in-chain rather than in genesis (EEST test_system_contract_deployment[CancunToPragueAtTime15k-
+    // deploy_after_fork / deploy_on_fork_block]).
+    // ETC (B-528): ECIP-1121 adopts EIP-2935 unmodified, so Olympia takes this same path. The client deploy at the
+    // Olympia block, which the first Olympia scaffold (a7d2a2e771) copied from the Cancun self-deploy before #1407
+    // removed it from ETH, is gone: the contract must be deployed on each ETC network before Olympia activates.
+    else if world.getCode(HistoryStorageAddress).isEmpty then world
+    // Code other than the canonical contract is run, as go-ethereum's ProcessParentBlockHash runs it (B-517; see
+    // applyEip4788). The direct write below is the canonical contract's effect, so public networks keep it.
+    else if world.getCode(HistoryStorageAddress) != HistoryStorageCode then
+      uncheckedSystemCall(
+        block.header,
+        world,
+        HistoryStorageAddress,
+        block.header.parentHash.value,
+        accessRecorder = None,
+        precompileRelocations
+      )
     else
-      // ETC (Olympia, ECIP-1112): the history contract IS deployed by the client at activation, so deploy it here
-      // if absent (genesis may pre-deploy it). Code presence is the sole guard. Tying deployment to
-      // isActivationBlock caused IllegalStateException when processing a post-activation block on a fresh world:
-      // the account was absent so getStorage threw.
-      val w1 = if world.getCode(HistoryStorageAddress).isEmpty then
-        val account = world
-          .getAccount(HistoryStorageAddress)
-          .getOrElse(Account.empty(blockchainConfig.accountStartNonce))
-          .copy(nonce = UInt256(1))
-        world
-          .saveAccount(HistoryStorageAddress, account)
-          .saveCode(HistoryStorageAddress, HistoryStorageCode)
-      else world
-
-      // Store parent hash at slot (blockNumber - 1) % HistoryServeWindow
+      // The canonical contract's effect: the parent hash at slot (blockNumber - 1) % HistoryServeWindow.
       val parentHashValue = UInt256(block.header.parentHash.value)
       val slot = (blockNumber - 1) % HistoryServeWindow
-      val storage = w1.getStorage(HistoryStorageAddress)
+      val storage = world.getStorage(HistoryStorageAddress)
       val updatedStorage = storage.store(slot, parentHashValue.toBigInt)
-      w1.saveStorage(HistoryStorageAddress, updatedStorage)
+      world.saveStorage(HistoryStorageAddress, updatedStorage)
 
   /** This function updates worldState transferring balance from drainList accounts to refundContract address
     *
@@ -1224,7 +1342,8 @@ object BlockExecution:
     * With the canonical contracts the storage is the same as the direct writes: the beacon roots contract stores the
     * timestamp and the root at slots `timestamp % 8191` and `timestamp % 8191 + 8191`, and the history contract stores
     * the parent hash at slot `(number - 1) % 8191` (asserted in AmsterdamSystemCallSpec). Every earlier fork and every
-    * ETC fork keep the direct writes.
+    * ETC fork keep the direct writes for the canonical contracts; before Amsterdam, other code at either ETH address,
+    * and at the history address on ETC from Olympia (B-528), is run by the same [[uncheckedSystemCall]] (B-517).
     *
     * Here in the companion rather than on the class so that block execution and the trace replays of an Amsterdam block
     * (`StxLedger.advanceWorldToTx`) run one and the same preamble.
@@ -1254,7 +1373,7 @@ object BlockExecution:
     * ignored — the call's state changes are dropped and the block stays valid. No code at `target` means nothing to run
     * and nothing changes, as for any zero-value call to an account without code.
     */
-  private def uncheckedSystemCall(
+  private[ledger] def uncheckedSystemCall(
       header: BlockHeader,
       world: InMemoryWorldStateProxy,
       target: Address,
@@ -1414,6 +1533,11 @@ object ChainInsertLock:
 
   /** Whether this thread holds the lock [[exclusive]]ly. For assertions (`ChainWeightReconcile`'s finish, #1654). */
   def heldExclusivelyByCurrentThread: Boolean = lock.isWriteLockedByCurrentThread
+
+  /** Whether this thread holds the lock, shared or exclusively: the head's lock is taken before it, never inside it
+    * (`CanonicalHeadLock`'s check of the order, B-511).
+    */
+  def heldByCurrentThread: Boolean = lock.isWriteLockedByCurrentThread || lock.getReadHoldCount > 0
 
 /** Serialises block execution + commit per block hash, across every path that executes blocks (the Engine API's
   * `newPayload` and the regular-sync importer).

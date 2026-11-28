@@ -26,13 +26,26 @@ Enterprise mode is designed for:
 
 When you launch Fukuii with the `enterprise` modifier, it automatically configures:
 
-1. **Disabled Public Discovery**: No connection to public Ethereum networks
-2. **Bootstrap-Only Peering**: Peers discovered only through configured bootstrap nodes
+1. **Disabled Public Discovery**: `network.discovery.discovery-enabled = false`
+2. **Static-Nodes-Only Peering**: the node dials only the nodes in `<datadir>/static-nodes.json`; the chain's
+   `bootstrap-nodes` and DNS discovery are ignored, unless your configuration sets
+   `fukuii.network.discovery.use-bootstrap-nodes`, which the modifier then leaves as you set it
 3. **Disabled Port Forwarding**: No UPnP/NAT-PMP (unnecessary in enterprise LANs)
-4. **Localhost RPC Binding**: API endpoints bound to localhost by default for security
-5. **Disabled Peer Blacklisting**: Allows faster recovery in controlled environments
-6. **Optimized Sync Settings**: Configuration tuned for private network characteristics
-7. **TLS Support**: For production deployments, configure TLS/HTTPS for RPC endpoints (see [TLS Operations Guide](tls-operations.md))
+4. **Localhost RPC Binding**: JSON-RPC HTTP is bound to `localhost`, the built-in default. The modifier does not
+   pin it: set `fukuii.network.rpc.http.interface` in your configuration to serve other hosts (see
+   [Exposing RPC](#exposing-rpc-beyond-the-host))
+5. **Disabled Sync Blacklisting**: `sync.blacklist-duration = 0`, so peers are retried at once in a controlled network
+
+The modifier sets nothing else. Security for traffic between services and organizations is configured explicitly:
+
+- **TLS and mutual TLS on the node's listeners**: JSON-RPC HTTP and WebSocket, the Engine API and metrics take a
+  `tls { enabled, profile, client-auth }` block; `client-auth = "need"` authenticates every client by certificate, and
+  identity rules grant each client certificate its own JSON-RPC namespaces. See the
+  [TLS Operations runbook](tls-operations.md).
+- **The P2P node allowlist**: `network.peer.node-allowlist` admits only listed node IDs, inbound and outbound, and
+  turns discovery off. See [Peering](peering.md#consortium-node-allowlist).
+- **The bind rule**: a listener on a non-loopback interface refuses to start in plaintext unless its
+  `allow-insecure-bind = true` is set ([migration](tls-operations.md#migration)).
 
 ## Quick Start
 
@@ -103,7 +116,6 @@ cat > /opt/fukuii/chains/myenterprise-chain.conf << 'EOF'
     reward-reduction-rate = 0
   }
   
-  gas-tie-breaker = false
   eth-compatible-storage = true
   
   bootstrap-nodes = [
@@ -133,11 +145,10 @@ fukuii {
   
   network {
     rpc {
-      http {
-        # Override enterprise default to expose on network if needed
-        # WARNING: Only do this on trusted networks with proper firewall rules
-        # interface = "0.0.0.0"
-      }
+      # Local administration (admin_nodeInfo, admin_addPeer, the allowlist methods) over the IPC socket,
+      # which file permissions protect; IPC serves the admin namespace by default
+      ipc.enabled = true
+      # JSON-RPC HTTP is on localhost unless rpc.http.interface says otherwise; see "Exposing RPC beyond the host"
     }
   }
 }
@@ -153,15 +164,11 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
 
 ### 4. Get Bootstrap Node Information
 
-Query the first node for its enode URL:
+Query the first node for its enode URL over the IPC socket (`admin` is not served over HTTP by default):
 
 ```bash
-curl -X POST --data '{
-  "jsonrpc":"2.0",
-  "method":"admin_nodeInfo",
-  "params":[],
-  "id":1
-}' http://localhost:8546 | jq '.result.enode'
+echo '{"jsonrpc":"2.0","method":"admin_nodeInfo","params":[],"id":1}' \
+  | socat - UNIX-CONNECT:$HOME/.fukuii/myenterprise/fukuii.ipc | jq '.result.enode'
 ```
 
 Output will be something like:
@@ -169,15 +176,21 @@ Output will be something like:
 "enode://abcd1234...@192.168.1.100:30303"
 ```
 
-### 5. Update Chain Configuration with Bootstrap Nodes
+### 5. List the Members in static-nodes.json
 
-Edit `/opt/fukuii/chains/myenterprise-chain.conf` and add the bootstrap node:
+Under the `enterprise` modifier the node dials only the nodes in `static-nodes.json` in its datadir; the chain's
+`bootstrap-nodes` are ignored. On each node, list the other members:
 
-```hocon
-bootstrap-nodes = [
+```bash
+cat > ~/.fukuii/myenterprise/static-nodes.json << 'EOF'
+[
   "enode://abcd1234...@192.168.1.100:30303"
 ]
+EOF
 ```
+
+See [Static Nodes Configuration](../for-operators/static-nodes-configuration.md). To also refuse every node that is
+not a member, turn on the [node allowlist](#p2p-node-allowlist).
 
 ### 6. Launch Additional Nodes
 
@@ -201,7 +214,10 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
 **Security**:
 - Firewall rules restrict P2P ports to internal network
 - RPC endpoints exposed only to application servers
-- TLS/mTLS for inter-service communication
+- mTLS between the application servers and the node: the RPC listener has `tls { enabled = true, profile, client-auth
+  = "need" }` and a truststore holding the internal CA, and each application server presents its own client
+  certificate ([Security Hardening](#security-hardening), step 3)
+- Metrics scraped over TLS (`metrics.tls`), or kept on loopback
 
 **Example Deployment**:
 ```
@@ -236,9 +252,13 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
 - Cross-organization VPN or dedicated network
 
 **Security**:
-- Mutual TLS authentication between organizations
+- **Between the organizations' nodes (P2P)**: the [node allowlist](#p2p-node-allowlist). RLPx, the peer protocol, is
+  not TLS: its handshake already proves each node's key, and the allowlist admits only the consortium's node IDs. It
+  is enforced right after the handshake and on every dial, and turns discovery off
+- **Into each organization's RPC**: mutual TLS (`client-auth = "need"`) with a truststore holding the CAs of the
+  organizations allowed to call, and identity rules granting each one its namespaces
 - Each organization controls their own validator keys
-- Shared governance for network changes
+- Shared governance for network changes, including the membership list (the allowlist file)
 
 **Example Deployment**:
 ```
@@ -291,7 +311,9 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
    chain-id = "0x15B38"  # Must be unique
    ```
 
-3. **Bootstrap Nodes**: Maintain at least 2-3 bootstrap nodes for reliability
+3. **Peer List**: keep at least 2-3 well-connected members listed for reliability. Under the `enterprise` modifier
+   that list is `<datadir>/static-nodes.json` (same enode format); the chain's `bootstrap-nodes` below are used only
+   by nodes launched without the modifier
    ```hocon
    bootstrap-nodes = [
      "enode://node1@192.168.1.100:30303",
@@ -313,13 +335,14 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
    sudo ufw allow from 192.168.2.0/24 to any port 8546 proto tcp
    ```
 
-2. **RPC Security**:
+2. **RPC Security**: least privilege per transport. HTTP and WebSocket serve `eth,net,web3,fukuii` by default;
+   `admin`, `personal` and `debug` belong on the IPC socket or behind an identity rule, never in a network
+   listener's `apis`.
    ```hocon
    network {
      rpc {
        http {
-         # Bind to specific interface, not 0.0.0.0
-         interface = "192.168.2.10"
+         apis = "eth,net,web3"
          
          # Enable rate limiting
          rate-limit {
@@ -334,25 +357,33 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
    }
    ```
 
-3. **TLS/HTTPS for RPC**: generate this node's own keystore and password, for example
-   `tls/gen-cert.sh --out-dir /opt/fukuii/tls --name keystore --san DNS:fukuii-1.internal,IP:192.168.2.10`
-   (writes `keystore.p12`, `keystore.password` and `keystore.crt`), or use a CA-issued certificate:
+3. **Mutual TLS for RPC**: issue the node a server certificate and each application server a client certificate from
+   your CA (or, for a test, from the CA `tls/gen-cert.sh ca` makes; see
+   [TLS Operations](tls-operations.md#a-test-ca-server-and-client-certificates-mtls)), then:
    ```hocon
-   network {
-     rpc {
-       http {
-         mode = "https"
-         certificate {
-           keystore-path = "/opt/fukuii/tls/keystore.p12"
-           keystore-type = "pkcs12"
-           password-file = "/opt/fukuii/tls/keystore.password"
-         }
-       }
+   fukuii {
+     tls.profiles.rpc {
+       keystore   { path = "/opt/fukuii/tls/node.p12", type = "pkcs12", password-file = "/opt/fukuii/tls/node.password" }
+       truststore { path = "/opt/fukuii/tls/fukuii-ca-truststore.p12", type = "pkcs12", password-file = "/opt/fukuii/tls/fukuii-ca-truststore.password" }
+     }
+     network.rpc {
+       http.tls { enabled = true, profile = "rpc", client-auth = "need" }
+       ws.tls   { enabled = true, profile = "rpc", client-auth = "need" }
+       # Optional: one operator certificate gets admin on top of the listener's apis
+       client-identities = [
+         { name = "ops", match { san-dns = "ops.internal" }, apis = "eth,net,web3,admin" }
+       ]
      }
    }
    ```
+   The node refuses to start on any TLS misconfiguration, reloads renewed certificates without a restart, and
+   exports `app_tls_handshake_failures_total` and `app_tls_certificate_expiry_seconds`. The deprecated
+   `mode = "https"` with a `certificate` block still maps to a server-only profile until it is removed in 0.13.0; do
+   not use it for new deployments.
 
-4. **Node Key Management**:
+4. **P2P Node Allowlist**: see [P2P Node Allowlist](#p2p-node-allowlist) below.
+
+5. **Node Key Management**: the node key is the node's P2P identity, which the allowlist lists:
    ```bash
    # Secure node key file
    chmod 600 ~/.fukuii/myenterprise/node.key
@@ -360,6 +391,52 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
    # Regular backup of keys
    cp ~/.fukuii/myenterprise/node.key /secure/backup/location/
    ```
+
+### Exposing RPC Beyond the Host
+
+JSON-RPC HTTP listens on `localhost` by default, with or without the `enterprise` modifier. To serve it to
+application servers on other hosts, set the interface and TLS in your configuration, and launch with the modifier as
+usual (`fukuii enterprise -Dconfig.file=...`):
+
+```hocon
+fukuii {
+  network {
+    rpc.http {
+      interface = "192.168.2.10"
+      tls { enabled = true, profile = "rpc", client-auth = "need" }
+    }
+  }
+}
+```
+
+Before B-401 the modifier set the interface as a JVM system property, which overrode this setting, and this
+section said to launch without the modifier; that is no longer needed. The WebSocket listener
+(`network.rpc.ws.interface`) is set the same way.
+
+On a non-loopback interface, TLS is required: without `tls.enabled = true` the node refuses to start unless
+`allow-insecure-bind = true` is set for that listener, which accepts plaintext deliberately (and logs a WARN line at
+every start). See [the migration section](tls-operations.md#migration).
+
+### P2P Node Allowlist
+
+For a consortium, admit only the members' node IDs:
+
+```hocon
+fukuii.network.peer.node-allowlist {
+  enabled = true
+  file = "/opt/fukuii/allowlist.json"     # JSON array in the static-nodes.json format; runtime edits write here
+  # nodes = [ "enode://<128 hex>@192.168.1.101:30303" ]   # entries that only a restart changes
+}
+```
+
+- The remote node's ID is checked right after the RLPx handshake (before any devp2p message) and before every dial;
+  an unlisted node is dropped. Discovery (discv4, discv5, DNS) does not run while the allowlist is on.
+- Every node in `static-nodes.json` and every chain bootstrap node must be on the list, or the node refuses to start.
+- Changes take effect without a restart: edit the file (checked every `reload-interval`, default one minute), or call
+  `admin_addNodesToAllowlist` / `admin_removeNodesFromAllowlist` over IPC (or for a client certificate whose identity
+  rule grants `admin`). A removed node is disconnected.
+
+Full reference: [Peering → Consortium Node Allowlist](peering.md#consortium-node-allowlist).
 
 ### Performance Optimization
 
@@ -417,11 +494,14 @@ fukuii enterprise -Dconfig.file=/opt/fukuii/enterprise-node.conf
    ```
 
 2. **Metrics Collection**:
-   Enable Prometheus metrics for monitoring:
+   Enable Prometheus metrics for monitoring. The endpoint binds `localhost` by default; a Prometheus server on
+   another host needs `interface` set, and then TLS (or `allow-insecure-bind = true`):
    ```hocon
    metrics {
      enabled = true
      port = 9095
+     # interface = "192.168.2.10"
+     # tls { enabled = true, profile = "rpc", client-auth = "need" }   # Prometheus presents a client certificate
    }
    ```
 
@@ -522,7 +602,8 @@ fukuii enterprise -Dconfig.file=validator.conf
 **Symptoms**: Peer count remains 0
 
 **Solutions**:
-1. Verify bootstrap nodes are reachable:
+1. Verify the nodes in `static-nodes.json` are reachable (under the `enterprise` modifier the chain's
+   `bootstrap-nodes` are not used):
    ```bash
    nc -zv 192.168.1.100 30303
    ```
@@ -531,14 +612,13 @@ fukuii enterprise -Dconfig.file=validator.conf
 
 3. Verify network IDs match across all nodes
 
-4. Manually add peer:
+4. With the node allowlist on, check both sides list each other: `admin_getNodesAllowlist`, and
+   `app_p2p_allowlist_rejections_total{direction}` rising on the node that refuses
+
+5. Manually add peer (over IPC, where `admin` is served; with the allowlist on, the node must be listed first):
    ```bash
-   curl -X POST --data '{
-     "jsonrpc":"2.0",
-     "method":"admin_addPeer",
-     "params":["enode://...@IP:PORT"],
-     "id":1
-   }' http://localhost:8546
+   echo '{"jsonrpc":"2.0","method":"admin_addPeer","params":["enode://...@IP:PORT"],"id":1}' \
+     | socat - UNIX-CONNECT:$HOME/.fukuii/myenterprise/fukuii.ipc
    ```
 
 ### Genesis Hash Mismatch
@@ -575,7 +655,8 @@ curl -X POST --data '{
 1. Launch new node with same chain configuration
 2. Sync with network (will download full chain)
 3. Enable mining once synced
-4. Update all nodes' bootstrap node lists
+4. Add the new node to every member's `static-nodes.json` and, with the node allowlist on, to the allowlist
+   (`admin_addNodesToAllowlist` or the allowlist file) before it first connects
 
 ### Network Upgrades
 
@@ -596,7 +677,8 @@ berlin-block-number = "100000"
 - [Custom Networks Runbook](custom-networks.md) - Detailed configuration reference
 - [Node Configuration](node-configuration.md) - General node settings
 - [Security Runbook](security.md) - Security best practices
-- [TLS Operations](tls-operations.md) - Setting up HTTPS for RPC
+- [TLS Operations](tls-operations.md) - TLS profiles, mutual TLS, identity rules and rotation on every listener
+- [Peering](peering.md#consortium-node-allowlist) - The P2P node allowlist and its `admin_` methods
 
 ## Support and Resources
 

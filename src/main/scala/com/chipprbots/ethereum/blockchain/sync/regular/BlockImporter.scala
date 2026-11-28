@@ -15,6 +15,7 @@ import cats.data.NonEmptyList
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 
+import scala.annotation.tailrec
 import scala.compiletime.asMatchable
 import scala.concurrent.duration.*
 import scala.util.Failure
@@ -24,6 +25,7 @@ import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.blockchain.sync.Blacklist
 import com.chipprbots.ethereum.blockchain.sync.Blacklist.BlacklistReason
+import com.chipprbots.ethereum.blockchain.sync.HeadChainWeight
 import com.chipprbots.ethereum.blockchain.sync.PeersClient
 import com.chipprbots.ethereum.blockchain.sync.StoredBodyCheck
 import com.chipprbots.ethereum.blockchain.sync.SyncController
@@ -38,16 +40,22 @@ import com.chipprbots.ethereum.consensus.Consensus
 import com.chipprbots.ethereum.consensus.ConsensusAdapter
 import com.chipprbots.ethereum.consensus.ReorgStateHandler
 import com.chipprbots.ethereum.consensus.engine.InvalidChainReporter
+import com.chipprbots.ethereum.consensus.mess.ArtificialFinality
 import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.storage.AncestorWindow
 import com.chipprbots.ethereum.db.storage.BadEntryDelete
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.RepairOutcome
 import com.chipprbots.ethereum.db.storage.StateStorage
 import com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored
+import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
 import com.chipprbots.ethereum.db.storage.pathstate.HandedToRecovery
+import com.chipprbots.ethereum.db.storage.pathstate.PositionKey
 import com.chipprbots.ethereum.db.storage.pathstate.RefusedForThisHead
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
+import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.*
 import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.jsonrpc.NewBlockImported
@@ -61,18 +69,32 @@ import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.network.PeerEventBusActor.Command as PeerEventBusCommand
 import com.chipprbots.ethereum.network.PeerId
-import com.chipprbots.ethereum.network.p2p.messages.ETHPackets.NodeData
 import com.chipprbots.ethereum.nodebuilder.BlockchainConfigBuilder
 import com.chipprbots.ethereum.ommers.OmmersPool
 import com.chipprbots.ethereum.ommers.OmmersPool.AddOmmers
 import com.chipprbots.ethereum.transactions.PendingTransactionsManager
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager.AddUncheckedTransactions
-import com.chipprbots.ethereum.transactions.PendingTransactionsManager.RemoveTransactions
+import com.chipprbots.ethereum.transactions.TxPoolHead
+import com.chipprbots.ethereum.transactions.TxPoolReset
 import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.FunctorOps.*
 
 object BlockImporter:
+
+  private val rewindLog =
+    org.slf4j.LoggerFactory.getLogger("com.chipprbots.ethereum.blockchain.sync.regular.BlockImporter")
+
+  /** How many fetched nodes in a row the position store may decline before the fetch is taken as exhausted. A decline
+    * is the anchor moving under the fetch, or another node sitting at the position (spec 018 data-model 7.5); the
+    * import is tried again at once, and a state that keeps declining ends in the exhausted fetch's back-off and, past
+    * [[StuckEscapeThreshold]] of those, a re-SNAP.
+    */
+  val MaxRepairDeclines: Int = 3
+
+  /** An outcome that wrote nothing and left the node still missing from the state the import reads. */
+  def declined(outcome: RepairOutcome): Boolean = outcome match
+    case RepairOutcome.Written | RepairOutcome.AlreadyValid => false
+    case _                                                  => true
   // After this many consecutive state-node-fetch exhausts on the same block, regular sync
   // is deemed terminally stuck and we escalate to SNAP re-sync via SyncProtocol.RegularSyncStuck.
   // A fetch that runs exhausts after about 160 s (StateNodeFetcher's 30 tries, 5 s apart plus each request's own short
@@ -85,6 +107,19 @@ object BlockImporter:
   // From this many faults of this node's own state in a row on one block, the block's tries are spaced out by
   // exhaustBackoff. Nothing is escalated: what the node does when the fault stays is a later slice's (spec 018, C4b).
   val StateFaultBackoffAfter: Int = 3
+
+  // A branch refused because the head moved after it was weighed (B-315) is tried again at once, uncounted by the streak
+  // above, for as long as each refusal finds the head higher than any before it: a head that climbs is a chain that
+  // grows, which is new information and cannot go on without blocks being committed. From this many refusals in a row
+  // of the same branch with the head no higher (a head moved back and forth, or sideways, between the weighing and the
+  // move), the tries are spaced out by exhaustBackoff, as they are for any busy head. The same three as the streak's: a
+  // head that does not climb is no newer information than an adoption that holds it, and is backed off no later.
+  val HeadMovedRetriesWithoutProgress: Int = 3
+
+  /** What regular sync does with a branch refused because the head moved after it was weighed (B-315). */
+  private[regular] enum HeadMovedRetry:
+    case AtOnce
+    case BackOff(refusals: Int)
 
   // How often a block waiting on a missing node is imported again. A variable only so a spec can shorten it.
   private[regular] var resolvingRetryInterval: FiniteDuration = 30.seconds
@@ -124,6 +159,21 @@ object BlockImporter:
   // B-007 (#1683): how many blocks in a row a peer may announce (NewBlock) whose parent never arrives, before it is
   // blacklisted for it. Below this, a block whose parent this node lacks is a gap of ours and nobody is blamed.
   val OrphanAnnounceStrikeThreshold: Int = 5
+
+  /** How far from the best block an orphan announce's header may be for its seal to be checked (B-140). An Ethash epoch
+    * is at least 30,000 blocks, so within this the seal is checked with the cache of the best block's epoch or of the
+    * one next to it, which real blocks need too: an announce cannot make the validator build the cache of a far epoch
+    * (seconds of work) and evict the head's. An orphan beyond it is counted as a strike, unchecked, as before.
+    */
+  val OrphanSealCheckDistance: Int = 1024
+
+  /** Why a peer whose orphan announces reached [[OrphanAnnounceStrikeThreshold]] is blamed (B-007). Not a header that
+    * failed validation: the peers client exempts maintained (static and trusted) peers from it (B-143).
+    */
+  def orphanStrikesReason(strikes: Int, lastHash: String): BlacklistReason =
+    BlacklistReason.BlockImportError(
+      s"announced $strikes blocks in a row whose parent never arrived, the last $lastHash"
+    )
 
   // Peers whose orphan announcements are counted at once. Past it the count starts over (see OrphanAnnounceStrikes).
   private val MaxTrackedAnnouncers: Int = 256
@@ -194,13 +244,24 @@ object BlockImporter:
 
   /** SYNC-FORK rewind of the canonical index to `target`, plus the reference-count undo of the blocks it
     * un-canonicalises. '''The hash layout only''': on the unified state layout the head moves with the state and a fork
-    * is judged by weight, so fork recovery moves nothing there (spec 018 C4e part 6).
+    * is judged by weight, so fork recovery moves nothing there (spec 018 C4e part 6). The head's lock is taken on
+    * either layout; on the unified one nothing else takes it.
     *
     * `setCanonicalChainHead` deletes the index entries target+1..currentBest and moves best, but never touches state
     * bookkeeping: those blocks keep their applied `bd` records while no longer canonical, so under basic pruning the
     * replacement branch's execution can prune nodes it still uses (MissingNode). Same undo `ConsensusImpl.settleHead`
     * performs for a reorg (#1471). The hashes must be read BEFORE the rewind removes the index. A block with no record
     * (SNAP-synced) is a no-op; a block later re-executed rewrites its record as applied, so the undo is safe.
+    *
+    * Under [[CanonicalHeadLock]], the reads and the write alike (B-511): a fork choice is never between them. One that
+    * came after the caller read `currentBest` is seen here. When the index no longer names `targetHash` at `target`,
+    * the head is on another chain now and nothing is rewound. Otherwise every entry above `target` goes, up to the
+    * highest of `currentBest`, the best block now and the last entry of the index above them, so that nothing a fork
+    * choice wrote above `currentBest` is left above the new head.
+    *
+    * @return
+    *   whether it rewound: false when the index no longer names `targetHash` at `target`, and nothing moved. The caller
+    *   then fetches from above the head as it is, not from above `target`, a block of a chain the head has left
     */
   private[regular] def rewindCanonicalChain(
       reader: BlockchainReader,
@@ -208,20 +269,45 @@ object BlockImporter:
       reorgState: ReorgStateHandler,
       target: BigInt,
       targetHash: BlockHash,
-      currentBest: BigInt
-  ): Unit =
-    val abandoned: Seq[(BigInt, ByteString)] =
-      if currentBest > target then
-        ((target + 1) to currentBest).flatMap(n => reader.getCanonicalHashByNumber(n).map(h => (n, h.value)))
-      else Nil
-    writer.setCanonicalChainHead(target, targetHash, currentBest)
-    if abandoned.nonEmpty then reorgState.abandonBlockStates(abandoned)
+      currentBest: BigInt,
+      // what the branch resolver removed above the common block before this ran (B-248): their entries of the index are
+      // gone, so they are not found by number here
+      discarded: Seq[(BigInt, ByteString)] = Nil
+  ): Boolean =
+    CanonicalHeadLock.held(s"the rewind of the canonical chain to block $target") {
+      if !reader.getCanonicalHashByNumber(target).contains(targetHash) then
+        rewindLog.warn(
+          s"[SYNC-FORK] Not rewinding to block $target (${targetHash.toHexString}): the index names " +
+            s"${reader.getCanonicalHashByNumber(target).fold("no block")(_.toHexString)} there now, a fork choice " +
+            s"moved the head (best block ${reader.getBestBlockNumber})"
+        )
+        false
+      else
+        val below = currentBest.max(reader.getBestBlockNumber)
+        // the last entry of the index above them, up to the first height that has none
+        val top = LazyList
+          .iterate(below + 1)(_ + 1)
+          .takeWhile(reader.getCanonicalHashByNumber(_).isDefined)
+          .lastOption
+          .getOrElse(below)
+        val indexed: Seq[(BigInt, ByteString)] =
+          if top > target then
+            ((target + 1) to top).flatMap(n => reader.getCanonicalHashByNumber(n).map(h => (n, h.value)))
+          else Nil
+        val abandoned = (indexed ++ discarded.filter(_._1 > target)).distinctBy(_._1).sortBy(_._1)
+        writer.setCanonicalChainHead(target, targetHash, top)
+        if abandoned.nonEmpty then reorgState.abandonBlockStates(abandoned)
+        true
+    }
 
   private[regular] case object SyncRetryTick extends Command
   private[regular] val RetryKey = "BlockImporterRetry"
 
   // What holds the import lock while a branch out of reach is told to the escalation's feed (B-300 g).
   private[regular] val BranchOutOfReachHolder: String = "the escalation of a branch out of reach"
+
+  // What holds the import lock while a hole no repair fills is told to the escalation's feed (spec 018 C5b, B-291).
+  private[regular] val UnrepairedHoleHolder: String = "the escalation of a hole no repair fills"
 
   /** The most headers of a branch out of reach fetched for the escalation (B-300 g; forge). The fetch stops as soon as
     * they outweigh the head, so this bounds only a branch that never does, or whose weight cannot be read: enough to
@@ -286,17 +372,39 @@ object BlockImporter:
       findMissingContractCode: Block => Option[ByteString]
   ): Option[(Block, List[Block])] =
     notImportedBlocks match
-      case Nil => None
+      case Nil          => None
       case head :: tail =>
-        err.asMatchable match
-          case at: BlockImportFailedAt if at.failingBlockHash != head.hash.value =>
+        // the block the failure names: a failed import's, or a partial import's (B-338), whose prefix the importer
+        // counts as imported, so that it is `head` unless the batch does not hold it
+        val named: Option[ByteString] = err.asMatchable match
+          case at: BlockImportFailedAt    => Some(at.failingBlockHash)
+          case partial: ImportedPartially => Some(partial.failingBlockHash)
+          case _                          => None
+        named.filter(_ != head.hash.value) match
+          case Some(failingBlockHash) =>
             if !reportingLive then None
             else
-              notImportedBlocks.dropWhile(_.hash.value != at.failingBlockHash) match
+              notImportedBlocks.dropWhile(_.hash.value != failingBlockHash) match
                 case failing :: rest if findMissingContractCode(failing).isEmpty =>
                   Some(failing -> InvalidChainReporter.provenDescendants(failing, rest))
                 case _ => None
-          case _ => Some(head -> InvalidChainReporter.provenDescendants(head, tail))
+          case None => Some(head -> InvalidChainReporter.provenDescendants(head, tail))
+
+  /** The number of the block a partial import ([[ImportedPartially]]) failed on: the one after the head its move left,
+    * as execution stops at the first block that fails. None for a move onto no block.
+    */
+  private[ethereum] def failingBlockNumber(headMove: BlockImportedToTop | ChainReorganised): Option[BigInt] =
+    val head = headMove match
+      case BlockImportedToTop(imported)         => imported.lastOption.map(_.block)
+      case ChainReorganised(_, newBranch, _, _) => newBranch.lastOption
+    head.map(_.number.value + 1)
+
+  /** The blocks of `batch` before the one named `failingBlockHash`: what a partial import ([[ImportedPartially]],
+    * B-338) made the head of the batch, which the importer counts as imported. None when the batch does not hold it.
+    */
+  private[ethereum] def beforeTheFailing(batch: List[Block], failingBlockHash: ByteString): List[Block] =
+    val at = batch.indexWhere(_.hash.value == failingBlockHash)
+    if at < 0 then Nil else batch.take(at)
 
   // scalastyle:off parameter.number
   def apply(
@@ -321,7 +429,9 @@ object BlockImporter:
       peersClient: Option[TypedActorRef[PeersClient.Command]] = None,
       reorgState: ReorgStateHandler = ReorgStateHandler.NoOp,
       exhausts: ExhaustCount,
-      importLock: ImportLock
+      importLock: ImportLock,
+      // the head the pool was last reset to, the node's one, shared with the fork choice's resets (B-515)
+      txPoolHead: TxPoolHead = new TxPoolHead
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
@@ -349,7 +459,8 @@ object BlockImporter:
           peersClient.map(pc => new BlockAccessListFetcher(pc)(using ctx.system.scheduler)),
           reorgState,
           exhausts,
-          importLock
+          importLock,
+          txPoolHead
         )
         // Started as it is spawned: a separate start message was what a re-spawned importer never got (#1705).
         logic.starting()
@@ -359,6 +470,10 @@ object BlockImporter:
   // Mined blocks an importer keeps while it waits for the import lock to start. More than a few would mean a start held
   // far longer than any import takes.
   private[regular] val StartStashCapacity: Int = 16
+
+  // State nodes an importer holds while an import runs, for that import's ImportDone (B-408). One in practice: the
+  // fetcher answers one request at a time.
+  private[regular] val HeldNodesCapacity: Int = 4
 
   sealed trait Command
   case class MinedBlock(block: Block) extends Command
@@ -384,6 +499,12 @@ object BlockImporter:
       extends Command
   final private[regular] case class BranchResolverStopped(resolver: TypedActorRef[FastSyncBranchResolverActor.Command])
       extends Command
+
+  /** A SYNC-FORK rewind of the hash layout, made under the import lock (B-012): the block the fetcher goes on from, and
+    * why; or the failure of the rewind.
+    */
+  final private[regular] case class Rewound(from: BigInt, reason: String) extends Command
+  final private[regular] case class RewindFailed(error: Throwable) extends Command
   // The best block, read under the import lock as the importer starts; or the failure to read it.
   final private[regular] case class StartFrom(bestBlock: BigInt) extends Command
   final private[regular] case class StartFailed(error: Throwable) extends Command
@@ -497,7 +618,8 @@ final private class BlockImporterLogic(
     balFetcher: Option[BlockAccessListFetcher],
     reorgState: ReorgStateHandler,
     exhausts: BlockImporter.ExhaustCount,
-    importLock: ImportLock
+    importLock: ImportLock,
+    txPoolHead: TxPoolHead
 ):
   import BlockImporter.*
   import configBuilder.*
@@ -514,8 +636,21 @@ final private class BlockImporterLogic(
     ctx.messageAdapter[BlockFetcher.FetchResponse](FetcherResponse(_))
 
   private var pendingStateNodeHash: Option[ByteString] = None
+  // Where the missing node of `pendingStateNodeHash` sits, on the unified layout (spec 018 C5b): the position its fetch
+  // is written to. None for code, and for a hole whose position the exception could not say.
+  private var pendingFetchPosition: Option[PositionKey] = None
+  // Fetched nodes the position store declined in a row, bounded by BlockImporter.MaxRepairDeclines (data-model 7.5).
+  private var repairDeclines: Int = 0
+  // The hole the escalation's feed was last told of, on the unified layout, by the failing block and the tip of the
+  // batch: told again only when the tip is higher, since the feed counts how far a refused branch grows (B-291). Cleared
+  // with the exhausts, when a block is imported or a node is written.
+  private var holeToldFor: Option[(ByteString, BigInt)] = None
   // An exhausted fetch that arrived while an import ran, for that import's ImportDone to act on (#1694).
   private var exhaustedDuringImport: Boolean = false
+  // State nodes that arrived while an import ran, oldest first, for that import's ImportDone to act on (B-408). The
+  // import sends its fetch from inside its own IO, before its ImportDone moves the importer into the wait: a node
+  // answered in that gap was written as a late arrival, and the wait then ran out its 30 s for a node already there.
+  private var nodesDuringImport: Vector[Seq[ByteString]] = Vector.empty
   private var unknownParentStrikes: Map[ByteString, Int] = Map.empty
 
   // The blocks a fork recovery was already started for, on the unified state layout (spec 018 C4e part 6). Nothing is
@@ -528,6 +663,37 @@ final private class BlockImporterLogic(
     * C, C4b): cleared by any block that is imported.
     */
   private var stateFaultStreak: Option[(ByteString, Int)] = None
+
+  /** The block the import last stopped at because the head moved after its branch was weighed (B-315), the highest head
+    * such a refusal of it found, and how many of its refusals in a row found the head no higher than that (the first
+    * counts one). Cleared by any block that is imported and by any other fault of this node's state.
+    */
+  private var headMovedStreak: Option[(ByteString, BigInt, Int)] = None
+
+  /** For a fault that is a branch refused because the head moved after it was weighed (B-315): whether it is tried
+    * again at once or backed off ([[BlockImporter.HeadMovedRetriesWithoutProgress]]), with the streak of such refusals
+    * moved on. `None` for any other fault, which ends that streak.
+    */
+  private def headMovedSinceWeighed(fault: StateFault, failedBlock: Block): Option[HeadMovedRetry] =
+    fault match
+      case busy: StateBusy =>
+        busy.cause match
+          case StateBusy.Cause.HeadMovedSinceWeighed(head) =>
+            val (highest, refusals) = headMovedStreak match
+              case Some((hash, highest, refusals)) if hash == failedBlock.hash.value =>
+                if head > highest then (head, 1) else (highest, refusals + 1)
+              case _ => (head, 1)
+            headMovedStreak = Some((failedBlock.hash.value, highest, refusals))
+            Some(
+              if refusals < BlockImporter.HeadMovedRetriesWithoutProgress then HeadMovedRetry.AtOnce
+              else HeadMovedRetry.BackOff(refusals)
+            )
+          case StateBusy.Cause.HeldByAnother =>
+            headMovedStreak = None
+            None
+      case _ =>
+        headMovedStreak = None
+        None
 
   /** The fetch of ancestor bodies in flight (B-301): the block whose import wanted them, the hashes asked for, and when
     * (`System.nanoTime`). One at a time, freed by its answer in every behaviour, or, if the answer is lost, by
@@ -638,11 +804,23 @@ final private class BlockImporterLogic(
         val bodiesArrived = ancestorBodiesStoredFor.filter(hash => stateFaultStreak.exists(_._1 == hash))
         ancestorBodiesStoredFor = None
         bodiesArrived.foreach(clearStateFaultStreak)
+        // A node that arrived during the import and is the one it now waits for is handed to that wait, once, after
+        // the move into it (B-408), and an exhausted fetch that also arrived is then moot; any other node is saved as
+        // a late arrival, as it was before.
+        val waitedFor = reported match
+          case _: ResolvingMissingNode => pendingStateNodeHash
+          case _                       => None
+        val arrived = nodesDuringImport
+        nodesDuringImport = Vector.empty
+        val answer = arrived.find(nodes => waitedFor.contains(kec256(nodes.head)))
+        arrived.filterNot(answer.contains).foreach(saveLateNode)
         val newBehavior = reported match
+          case r: ResolvingMissingNode if answer.isDefined          => r.copy(alreadyExhausted = false)
           case r: ResolvingMissingNode if exhaustedDuringImport     => r.copy(alreadyExhausted = true)
           case BackingOffAfterStateFault if bodiesArrived.isDefined => RunningAfterFetcherRewind
           case other                                                => other
         exhaustedDuringImport = false
+        answer.foreach(data => selfRef ! FetcherResponse(BlockFetcher.FetchedStateNode(data)))
         // Always Nil on a PoW chain (nothing is ever deferred there), which leaves every arm below as it was.
         val deferred = state.deferredBatches
         // On the unified layout only a batch's import ends the resolution of a branch: a block imported on its own
@@ -713,26 +891,26 @@ final private class BlockImporterLogic(
       // An exhausted fetch, landing while an import runs: a 30 s retry of the blocked import, most likely. Dropped, it
       // was lost, and the re-import started the fetch again from its first try. So that import's ImportDone ends its
       // wait with it, if it waits on a node again (forge, #1694).
-      case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.isEmpty && state.importing =>
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodes)) if nodes.isEmpty && state.importing =>
         exhaustedDuringImport = true
+        Behaviors.same
+
+      // A state node, landing while an import runs: most likely the answer to the fetch that import has just sent, which
+      // its ImportDone then waits for. Held for that ImportDone (B-408), as an exhausted fetch is (#1694).
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodes)) if nodes.nonEmpty && state.importing =>
+        // The fetcher answers one request at a time, so one node is held in practice. A fetcher that answers more
+        // cannot grow the list without bound: past the cap the oldest is saved as a late arrival, as before B-408.
+        if nodesDuringImport.size >= HeldNodesCapacity then
+          saveLateNode(nodesDuringImport.head)
+          nodesDuringImport = nodesDuringImport.tail
+        nodesDuringImport = nodesDuringImport :+ nodes
         Behaviors.same
 
       // Late-arriving state node from a previous resolvingMissingNode phase.
       // ReceiveTimeout may have moved us back to running before the fetch completed.
       // Save the node so the next import attempt finds it in storage.
-      case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.nonEmpty =>
-        val node = nodeData.values.head
-        val hash = kec256(node)
-        log.info("Saving late-arriving fetched state node {}", ByteStringUtils.hash2string(hash))
-        // repairNode, not saveNode (#1692): a node already there and valid is left as it is. A blind upsert at one
-        // reference could lower the count a block commit or the audit had set, and the node would be pruned while live.
-        // on the unified layout only code is fetched (spec 018 C5a part 10, forge): the trie store is not written
-        if !blockchainWriter.holdsStateInPlace then
-          val outcome = stateStorage.repairNode(hash, node.toArray, blockchainReader.getBestBlockNumber)
-          log.debug("Late-arriving state node {}: {}", ByteStringUtils.hash2string(hash), outcome)
-        // Also save as contract code in case this was a bytecode fetch
-        try evmCodeStorage.put(hash, node).commit()
-        catch case _: Exception => ()
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodes)) if nodes.nonEmpty =>
+        saveLateNode(nodes)
         Behaviors.same
 
       case StartForkRecovery(failedBlockNumber, beyondTheFetch) =>
@@ -741,65 +919,108 @@ final private class BlockImporterLogic(
       case _ => Behaviors.same
     }
 
+  /** The fetch of the missing node ended with nothing: StateNodeFetcher exhausted its retries, or a node it brought was
+    * not written (see [[repairFetched]]) as many times as [[BlockImporter.MaxRepairDeclines]] allows.
+    */
+  private def fetchExhausted(blocksToRetry: NonEmptyList[Block], state: ImporterState): Behavior[Command] =
+    // StateNodeFetcher exhausted MaxStateNodeFetchRetries on this missing node — no current peer
+    // can serve it via SNAP GetTrieNodes (typical: pivot fell out of the 128-block serve window
+    // on every connected peer).
+    val blockNum = blocksToRetry.head.number.value
+    val consecutiveExhausts = exhausts.increment()
+    val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
+
+    if consecutiveExhausts >= BlockImporter.StuckEscapeThreshold && !blockchainWriter.holdsStateInPlace then
+      // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
+      // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
+      // via SNAP (SyncController does so even with do-snap-sync off). Reset our local counter so
+      // we don't re-fire if SyncController bounces us back to regular sync. Nothing caps how often
+      // this cycle repeats (the SNAP↔fast escape hatch that used to was removed with fast sync);
+      // each SNAP re-sync starts from a pivot above the block we were stuck on.
+      log.error(
+        "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
+        blockNum,
+        consecutiveExhausts,
+        missingHashStr
+      )
+      exhausts.reset()
+      pendingStateNodeHash = None
+      pendingFetchPosition = None
+      supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
+      // Don't transition further — SyncController will PoisonPill regular sync.
+      Behaviors.same
+    else
+      // On the unified layout RegularSyncStuck is ignored by the controller (the escalation gives the state up, and
+      // only when it is told): at the threshold the hole is told to its feed, once for each tip, and the import
+      // is tried again at the back-off's pace as after any exhaust, not in the resolving loop (forge, B-291).
+      if consecutiveExhausts >= BlockImporter.StuckEscapeThreshold then escalateUnrepairedHole(blocksToRetry)
+      log.error(
+        "State node recovery failed after max retries for block {} (consecutive exhausts: {}/{}) — backing off {}s before retry",
+        blockNum,
+        consecutiveExhausts,
+        BlockImporter.StuckEscapeThreshold,
+        BlockImporter.exhaustBackoff.toSeconds
+      )
+      fetcher ! BlockFetcher.InvalidateBlocksFrom(
+        blockNum,
+        "state node unrecoverable after max retries",
+        shouldBlacklist = false
+      )
+      // Don't self ! PickBlocks — that would immediately retry the same block.
+      timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.exhaustBackoff)
+      running(state)
+
+  /** Tells the escalation's feed of a hole the importer could not fill (see [[ConsensusAdapter.holeNotRepaired]]).
+    * Under the import lock, off the actor: the feed reads the head's weight and is told one import at a time.
+    */
+  private def escalateUnrepairedHole(blocksToRetry: NonEmptyList[Block]): Unit =
+    val failing = blocksToRetry.head
+    val tip = blocksToRetry.last.number.value
+    val told = holeToldFor.exists { case (hash, at) => hash == failing.hash.value && at >= tip }
+    if told then
+      log.warning(
+        "[STATE-ESCALATION] The hole under block {} was told to the escalation already: not told again at this tip",
+        failing.number
+      )
+    else
+      holeToldFor = Some((failing.hash.value, tip))
+      val missing = pendingStateNodeHash.fold(new MissingNodeException(ByteString.empty))(hash =>
+        pendingFetchPosition.fold(new MissingNodeException(hash))(position =>
+          new MissingNodeException(hash).withLocation(position.hp)
+        )
+      )
+      log.error(
+        "[STATE-ESCALATION] Block {} cannot be imported: a node of the state this node holds is missing and no fetch " +
+          "fills it ({}). The escalation is told; no SNAP re-sync starts over this state",
+        failing.number,
+        missing.getMessage
+      )
+      importLock
+        .guardAs(UnrepairedHoleHolder)(IO.delay(consensus.holeNotRepaired(blocksToRetry.toList, missing)))
+        .handleError(ex =>
+          log.error(ex, "The escalation could not be told of a hole no repair fills: {}", ex.getMessage)
+        )
+        .unsafeRunAndForget()
+
   private def resolvingMissingNode(blocksToRetry: NonEmptyList[Block], blockImportType: BlockImportType)(
       state: ImporterState
   ): Behavior[Command] =
     Behaviors.receiveMessage {
-      case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) if nodeData.values.isEmpty =>
-        // StateNodeFetcher exhausted MaxStateNodeFetchRetries on this missing node — no current peer
-        // can serve it via SNAP GetTrieNodes (typical: pivot fell out of the 128-block serve window
-        // on every connected peer).
-        val blockNum = blocksToRetry.head.number.value
-        val consecutiveExhausts = exhausts.increment()
-        val missingHashStr = pendingStateNodeHash.map(ByteStringUtils.hash2string).getOrElse("<unknown>")
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodes)) if nodes.isEmpty =>
+        fetchExhausted(blocksToRetry, state)
 
-        if consecutiveExhausts >= BlockImporter.StuckEscapeThreshold then
-          // Multiple consecutive exhausts mean peers genuinely don't have our parent state and
-          // never will (we're far behind their snap-serve window). The only recovery is to re-pivot
-          // via SNAP (SyncController does so even with do-snap-sync off). Reset our local counter so
-          // we don't re-fire if SyncController bounces us back to regular sync. Nothing caps how often
-          // this cycle repeats (the SNAP↔fast escape hatch that used to was removed with fast sync);
-          // each SNAP re-sync starts from a pivot above the block we were stuck on.
-          log.error(
-            "Regular sync stuck on block {} after {} consecutive state-node exhausts (missing {}); requesting SNAP re-sync",
-            blockNum,
-            consecutiveExhausts,
-            missingHashStr
-          )
-          exhausts.reset()
-          pendingStateNodeHash = None
-          supervisor ! SyncProtocol.RegularSyncStuck(blockNum, missingHashStr)
-          // Don't transition further — SyncController will PoisonPill regular sync.
-          Behaviors.same
-        else
-          log.error(
-            "State node recovery failed after max retries for block {} (consecutive exhausts: {}/{}) — backing off {}s before retry",
-            blockNum,
-            consecutiveExhausts,
-            BlockImporter.StuckEscapeThreshold,
-            BlockImporter.exhaustBackoff.toSeconds
-          )
-          fetcher ! BlockFetcher.InvalidateBlocksFrom(
-            blockNum,
-            "state node unrecoverable after max retries",
-            shouldBlacklist = false
-          )
-          // Don't self ! PickBlocks — that would immediately retry the same block.
-          timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.exhaustBackoff)
-          running(state)
-
-      case FetcherResponse(BlockFetcher.FetchedStateNode(nodeData)) =>
-        val node = nodeData.values.head
+      case FetcherResponse(BlockFetcher.FetchedStateNode(nodes)) =>
+        val node = nodes.head
         val hash = kec256(node)
         log.info(
           "Received missing state node {}, saving and retrying block {}",
           ByteStringUtils.hash2string(hash),
           blocksToRetry.head.number
         )
-        // repairNode, not saveNode (#1692): see the late-arriving case above.
-        if !blockchainWriter.holdsStateInPlace then
-          val outcome = stateStorage.repairNode(hash, node.toArray, blocksToRetry.head.number.value)
-          log.debug("Missing state node {}: {}", ByteStringUtils.hash2string(hash), outcome)
+        // repairFetched, not a blind upsert (#1692): see the late-arriving case above.
+        val outcome = repairFetched(hash, node, blocksToRetry.head.number.value)
+        outcome.foreach(o => log.debug("Missing state node {}: {}", ByteStringUtils.hash2string(hash), o))
+        if outcome.exists(BlockImporter.declined) then repairDeclines += 1 else repairDeclines = 0
         // Also save as contract code — if this was a code fetch, the hash is the codeHash
         // and the data is the bytecode. EvmCodeStorage is keyed by codeHash, same as the fetch.
         try evmCodeStorage.put(hash, node).commit()
@@ -807,9 +1028,23 @@ final private class BlockImporterLogic(
           case _: Exception => ()
           // Successful state-node delivery — reset stuck-counter so a later transient failure on a
           // different block doesn't escalate to SNAP re-sync prematurely.
-        exhausts.reset()
-        pendingStateNodeHash = None
-        importBlocks(blocksToRetry, blockImportType)(state)
+        if repairDeclines >= BlockImporter.MaxRepairDeclines then
+          // The position store declined the node that many times in a row (the anchor moved each time, or another
+          // node sits there): said as an exhausted fetch, which has its own back-off and its own escalation.
+          log.warning(
+            "The state store declined node {} {} times in a row: treated as an exhausted fetch",
+            ByteStringUtils.hash2string(hash),
+            repairDeclines
+          )
+          repairDeclines = 0
+          fetchExhausted(blocksToRetry, state)
+        else
+          if repairDeclines == 0 then
+            exhausts.reset()
+            holeToldFor = None
+          pendingStateNodeHash = None
+          pendingFetchPosition = None
+          importBlocks(blocksToRetry, blockImportType)(state)
 
       case SyncRetryTick =>
         log.warning(
@@ -843,9 +1078,10 @@ final private class BlockImporterLogic(
 
   /** If `fault` is a window of ancestors this node does not hold whole below `block`, what of it is missing is looked
     * up, and the bodies, if that is what is missing, are asked for (B-301). The ommers of a PoW block are checked
-    * against its parent and the five blocks below it, header and body; after a SNAP sync the bodies may not be stored,
-    * and nothing else fetches them when the node was restarted straight into regular sync. Called on the import's
-    * thread: it only reads, and asks the importer, on its own thread, for the fetch.
+    * against the headers of its parent and the five blocks below it, and the bodies of the nearest five that have
+    * ommers (B-302); after a SNAP sync the bodies may not be stored, and nothing else fetches them when the node was
+    * restarted straight into regular sync. Called on the import's thread: it only reads, and asks the importer, on its
+    * own thread, for the fetch.
     *
     * A header missing from that window is logged and nothing is fetched: a body cannot be checked without its header. A
     * header missing further down, which the ommers' check does not read, does not stop the fetch.
@@ -1065,7 +1301,7 @@ final private class BlockImporterLogic(
       case ResolvingMissingNode(blocksToRetry, alreadyExhausted) =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, BlockImporter.resolvingRetryInterval)
         // Sent here, not from the import: there it would reach `running`, which does not wait on a node.
-        if alreadyExhausted then selfRef ! FetcherResponse(BlockFetcher.FetchedStateNode(NodeData(Nil)))
+        if alreadyExhausted then selfRef ! FetcherResponse(BlockFetcher.FetchedStateNode(Nil))
         resolvingMissingNode(blocksToRetry, blockImportType)(state)
       case ResolvingBranch(from, upTo) =>
         timers.startTimerWithFixedDelay(RetryKey, SyncRetryTick, syncConfig.syncRetryInterval)
@@ -1125,8 +1361,10 @@ final private class BlockImporterLogic(
         // no longer counts towards a re-SNAP (forge, #1694).
         if importedBlocks.nonEmpty then
           exhausts.reset()
+          holeToldFor = None
           floorGapRewinds.reset()
           stateFaultStreak = None
+          headMovedStreak = None
 
         errorOpt match
           case None      => Running
@@ -1165,8 +1403,10 @@ final private class BlockImporterLogic(
                   failedBlock.number,
                   e.location.isDefined
                 )
-                deleteIfCorrupt(e.hash, failedBlock.number.value)
+                val position = e.location.map(PositionKey(None, _))
+                deleteIfCorrupt(e.hash, failedBlock.number.value, position)
                 pendingStateNodeHash = Some(e.hash)
+                pendingFetchPosition = position
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case e: MissingStorageNodeException =>
@@ -1198,14 +1438,16 @@ final private class BlockImporterLogic(
                   else if paths.isDefined then "position found"
                   else "position not found"
                 )
-                deleteIfCorrupt(e.hash, failedBlock.number.value)
+                val position = paths.flatMap(_ => e.location).map(PositionKey(Some(accountHash), _))
+                deleteIfCorrupt(e.hash, failedBlock.number.value, position)
                 pendingStateNodeHash = Some(e.hash)
+                pendingFetchPosition = position
                 paths match
                   case Some(_) =>
                     fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                   case None =>
-                    // With no position the fetcher would ask by hash alone (GetNodeData), which no eth/68+ peer serves,
-                    // and wait out its retries for nothing (forge, #1694). So nobody is asked: this is an exhausted
+                    // With no position the fetcher has nothing to ask a peer with (a hash alone is no SNAP request, and
+                    // GetNodeData is gone, EIP-4938), and would only wait out its retries (forge, #1694). So nobody is asked: this is an exhausted
                     // fetch at once, with its backoff, and the audit may fill the hole meanwhile.
                     log.warning(
                       "Storage node {} could not be located under its storage root: asking no peer, and backing off",
@@ -1256,6 +1498,7 @@ final private class BlockImporterLogic(
                   failedBlock.number
                 )
                 pendingStateNodeHash = Some(e.hash)
+                pendingFetchPosition = None
                 fetcher ! BlockFetcher.FetchStateNode(
                   e.hash,
                   fetcherResponseAdapter,
@@ -1280,8 +1523,12 @@ final private class BlockImporterLogic(
                   failedBlock.number,
                   e.location.isDefined
                 )
-                deleteIfCorrupt(e.hash, failedBlock.number.value)
+                // A location with no owner is the account trie's, as the fetch's pathset already takes it to be: were it
+                // a storage trie's, the anchor's root names nothing there and the repair declines.
+                val position = e.location.map(PositionKey(None, _))
+                deleteIfCorrupt(e.hash, failedBlock.number.value, position)
                 pendingStateNodeHash = Some(e.hash)
+                pendingFetchPosition = position
                 fetcher ! BlockFetcher.FetchStateNode(e.hash, fetcherResponseAdapter, parentStateRoot, paths)
                 ResolvingMissingNode(NonEmptyList(notImportedBlocks.head, notImportedBlocks.tail))
               case _ if err.toString.contains("Block has invalid gas used") =>
@@ -1302,8 +1549,8 @@ final private class BlockImporterLogic(
                           .map(_.stateRoot.value)
                       catch case _: Exception => None
                     pendingStateNodeHash = Some(codeHash)
-                    // isByteCode=true routes the fetch through SNAP GetByteCodes (works on ETH68+)
-                    // instead of the legacy GetNodeData path (which has no peers on modern networks).
+                    pendingFetchPosition = None
+                    // isByteCode=true routes the fetch through SNAP GetByteCodes (works on ETH68+, needs no position)
                     fetcher ! BlockFetcher.FetchStateNode(
                       codeHash,
                       fetcherResponseAdapter,
@@ -1356,7 +1603,11 @@ final private class BlockImporterLogic(
                           failedBlock.number
                         )
                     val invalidBlockNr = failedBlock.number.value
-                    fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
+                    fetcher ! BlockFetcher.InvalidateBlocksFrom(
+                      invalidBlockNr,
+                      err.toString,
+                      shouldBlacklist = blamesTheServingPeer
+                    )
                     RunningAfterFetcherRewind
               case UnknownParent =>
                 // The batch hangs from a block this node does not have (B-007, #1683): a gap on our side, found out while
@@ -1382,6 +1633,7 @@ final private class BlockImporterLogic(
                   error
                 )
                 pendingStateNodeHash = None
+                pendingFetchPosition = None
                 ResolvingMissingNode(NonEmptyList(failedBlock, notImportedBlocks.tail), alreadyExhausted = true)
               case BlockImportStateFault(setAside @ (_: RefusedForThisHead | _: HandedToRecovery), _) =>
                 // The consensus layer's branch, refused for what no attempt changes while the head is where it is, or
@@ -1395,6 +1647,7 @@ final private class BlockImporterLogic(
                   setAside.getMessage
                 )
                 stateFaultStreak = None
+                headMovedStreak = None
                 Running
               case BlockImportStateFault(fault, _) =>
                 // The state these blocks are to be executed on is not the one this node holds, or is no longer: the
@@ -1402,42 +1655,109 @@ final private class BlockImporterLogic(
                 // judged. They are fetched again from the first that was not executed, and the peer that served them
                 // is not blamed: it was asked for these blocks and gave them.
                 val failedBlock = notImportedBlocks.head
-                val streak = stateFaultStreak
-                  .collect {
-                    case (hash, count) if hash == failedBlock.hash.value => count
-                  }
-                  .getOrElse(0) + 1
-                stateFaultStreak = Some((failedBlock.hash.value, streak))
-                wantAncestorBodiesOn(fault, failedBlock)
-                fetcher ! BlockFetcher.InvalidateBlocksFrom(
-                  failedBlock.number.value,
-                  "this node's state could not take the block",
-                  shouldBlacklist = false
-                )
-                // A head that moved under the batch is gone at the next try. A fault that stays (a branch this layout
-                // cannot execute yet, a state that is not held) would otherwise be met again at every round trip of
-                // the fetcher, for good: from the third in a row on the same block the tries are spaced out.
-                if streak < BlockImporter.StateFaultBackoffAfter then
-                  log.warning(
-                    "[LOCAL-STATE-FAULT] block {} was not executed on this node's own state, no peer blamed: {}",
-                    failedBlock.number,
-                    fault.getMessage
+                def fetchAgain(): Unit =
+                  fetcher ! BlockFetcher.InvalidateBlocksFrom(
+                    failedBlock.number.value,
+                    "this node's state could not take the block",
+                    shouldBlacklist = false
                   )
-                  RunningAfterFetcherRewind
-                else
-                  if streak == BlockImporter.StateFaultBackoffAfter then
-                    log.error(
-                      "[LOCAL-STATE-FAULT] block {} could not be executed on this node's own state {} times " +
-                        "running; it is tried again every {}s, and no peer is blamed: {}",
+                headMovedSinceWeighed(fault, failedBlock) match
+                  // The branch was weighed against a head that moved before the move to it (B-315). Weighed again, it
+                  // is weighed against the head as it is: tried again at once, and not counted in the streak of state
+                  // faults, whose back-off is for a fault that lasts (B-294's adoption that holds the head).
+                  case Some(HeadMovedRetry.AtOnce) =>
+                    fetchAgain()
+                    log.warning(
+                      "[STATE-BUSY] block {} was not executed: the head moved after its branch was weighed, and it is " +
+                        "tried again at once; no peer blamed: {}",
                       failedBlock.number,
-                      streak,
-                      BlockImporter.exhaustBackoff.toSeconds,
                       fault.getMessage
                     )
-                  BackingOffAfterStateFault
+                    RunningAfterFetcherRewind
+                  // the same branch refused so, in a row, with the head no higher: spaced out as a fault that lasts
+                  case Some(HeadMovedRetry.BackOff(refusals)) =>
+                    fetchAgain()
+                    if refusals == BlockImporter.HeadMovedRetriesWithoutProgress then
+                      log.warning(
+                        "[STATE-BUSY] block {} was refused {} times running because the head moved after its branch " +
+                          "was weighed, with the head no higher; it is tried again every {}s, and no peer is blamed: {}",
+                        failedBlock.number,
+                        refusals,
+                        BlockImporter.exhaustBackoff.toSeconds,
+                        fault.getMessage
+                      )
+                    BackingOffAfterStateFault
+                  case None =>
+                    val streak = stateFaultStreak
+                      .collect {
+                        case (hash, count) if hash == failedBlock.hash.value => count
+                      }
+                      .getOrElse(0) + 1
+                    stateFaultStreak = Some((failedBlock.hash.value, streak))
+                    wantAncestorBodiesOn(fault, failedBlock)
+                    fetchAgain()
+                    // A head that moved under the batch is gone at the next try. A fault that stays (a branch this
+                    // layout cannot execute yet, a state that is not held) would otherwise be met again at every round
+                    // trip of the fetcher, for good: from the third in a row on the same block the tries are spaced
+                    // out. Refused because another thread's adoption holds the head (B-294): no fault of this node's
+                    // state, and said at WARN as busy, never at ERROR; spaced out the same way while it lasts (B-462)
+                    val busy = fault.isInstanceOf[StateBusy]
+                    if streak < BlockImporter.StateFaultBackoffAfter then
+                      if busy then
+                        log.warning(
+                          "[STATE-BUSY] block {} was not executed: another adoption holds the head, no peer blamed: {}",
+                          failedBlock.number,
+                          fault.getMessage
+                        )
+                      else
+                        log.warning(
+                          "[LOCAL-STATE-FAULT] block {} was not executed on this node's own state, no peer blamed: {}",
+                          failedBlock.number,
+                          fault.getMessage
+                        )
+                      RunningAfterFetcherRewind
+                    else
+                      if streak == BlockImporter.StateFaultBackoffAfter then
+                        if busy then
+                          log.warning(
+                            "[STATE-BUSY] block {} was refused {} times running while another adoption holds the " +
+                              "head; it is tried again every {}s, and no peer is blamed: {}",
+                            failedBlock.number,
+                            streak,
+                            BlockImporter.exhaustBackoff.toSeconds,
+                            fault.getMessage
+                          )
+                        else
+                          log.error(
+                            "[LOCAL-STATE-FAULT] block {} could not be executed on this node's own state {} times " +
+                              "running; it is tried again every {}s, and no peer is blamed: {}",
+                            failedBlock.number,
+                            streak,
+                            BlockImporter.exhaustBackoff.toSeconds,
+                            fault.getMessage
+                          )
+                      BackingOffAfterStateFault
+              case partial: ImportedPartially =>
+                // B-338: the prefix is imported (tryImportBlocks), so the first block not imported is the one that
+                // failed. The fetcher goes back to it and the peer that served it is blamed, as for a batch whose first
+                // block failed; the blocks after it, dropped from the queue with it, are fetched again from there. A
+                // gas-used mismatch took the arm above first, which fetches missing code before it blames anyone.
+                // Following a consensus layer, no peer is blamed (B-513, `blamesTheServingPeer`).
+                fetcher ! BlockFetcher.InvalidateBlocksFrom(
+                  notImportedBlocks.head.number.value,
+                  partial.error,
+                  shouldBlacklist = blamesTheServingPeer
+                )
+                RunningAfterFetcherRewind
               case _ =>
+                // a block of the batch failed on its own error: its peer is blamed, but following a consensus layer
+                // (B-513, `blamesTheServingPeer`)
                 val invalidBlockNr = notImportedBlocks.head.number.value
-                fetcher ! BlockFetcher.InvalidateBlocksFrom(invalidBlockNr, err.toString)
+                fetcher ! BlockFetcher.InvalidateBlocksFrom(
+                  invalidBlockNr,
+                  err.toString,
+                  shouldBlacklist = blamesTheServingPeer
+                )
                 RunningAfterFetcherRewind
       }
 
@@ -1460,103 +1780,157 @@ final private class BlockImporterLogic(
         val evaluated =
           balFetcher.fold(IO.pure(Map.empty[ByteString, BlockAccessList]))(_.fetch(nel.toList)).flatMap { accessLists =>
             timedImport(
-              if accessLists.isEmpty then consensus.evaluateBranch(nel)
-              else consensus.evaluateBranchWithAccessLists(nel, accessLists)
+              evaluatedFromThePoolHead(
+                if accessLists.isEmpty then consensus.evaluateBranch(nel)
+                else consensus.evaluateBranchWithAccessLists(nel, accessLists)
+              )
             )
           }
         evaluated.flatMap {
-          case BlockImportedToTop(blockImportData) =>
-            val importedNow = blockImportData.map(_.block)
-            importedNow.foreach(b => unknownParentStrikes -= b.hash.value)
-            importedNow.foreach(b => forkRecoveredFor -= b.hash.value)
-            val imported = importedNow.reverse ::: importedBlocks
-            imported.headOption
-              .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
-            IO.pure((imported, None))
+          case moved: BlockImportedToTop =>
+            IO.pure((batchMovedTheHead(moved, importedBlocks), None))
 
-          case ChainReorganised(_, newBranch, _) =>
-            newBranch.foreach(b => unknownParentStrikes -= b.hash.value)
-            newBranch.foreach(b => forkRecoveredFor -= b.hash.value)
-            val imported = newBranch.reverse ::: importedBlocks
-            imported.headOption
-              .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
-            IO.pure((imported, None))
+          case moved: ChainReorganised =>
+            IO.pure((batchMovedTheHead(moved, importedBlocks), None))
+
+          // B-338: the head moved part of the way, then a block of the batch failed on its own error. The move is told
+          // as the import it is (pool, new-head subscribers, progress), by the same call as above, once; the blocks of
+          // the batch before the failing one are counted as imported, so that the caller's rewind and blame start at
+          // the failing block (core-geth's downloader drops the peer that served it); and the failing block takes a
+          // strike as any failed block does. The blocks after it are not imported, and are fetched again from it.
+          case partial @ ImportedPartially(headMove, failingBlockHash, _) =>
+            batchMovedTheHead(headMove, Nil)
+            // the failing block is always one of the batch: consensus evaluated no other. Were it not, nothing of the
+            // batch is counted and its first block is the one blamed, as for a failure with no prefix
+            val prefix = BlockImporter.beforeTheFailing(nel.toList, failingBlockHash)
+            struck(nel.toList.drop(prefix.size).headOption.getOrElse(nel.head), partial)
+            IO.pure((prefix.reverse ::: importedBlocks, Some(partial)))
 
           case DuplicateBlock | BlockEnqueued =>
             IO.pure((importedBlocks, None))
 
-          case BlockImportFailedDueToMissingNode(missingNodeException, adopted)
+          case missing @ BlockImportFailedDueToMissingNode(missingNodeException, adopted)
               if syncConfig.redownloadMissingStateNodes =>
             // The validated prefix before the failing block is already adopted. Count it, so the retry starts at the
             // failing block and does not re-apply what is already in the database.
-            IO.pure((adoptedPrefix(adopted, importedBlocks), Some(missingNodeException)))
+            IO.pure((adoptedPrefix(adopted, importedBlocks, missing), Some(missingNodeException)))
 
-          case BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
-            IO(adoptedPrefix(adopted, importedBlocks)).flatMap(_ => IO.raiseError(missingNodeException))
+          case missing @ BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
+            IO(adoptedPrefix(adopted, importedBlocks, missing)).flatMap(_ => IO.raiseError(missingNodeException))
 
           // This node's own state could not take a block of the batch (spec 018 Track C, C4b). The prefix that was
           // adopted before it is counted, as above. No strike: the block was not judged, so the peer that sent it is
           // not evicted and no fork is detected.
           case stateFault @ BlockImportStateFault(_, adopted) =>
-            IO.pure((adoptedPrefix(adopted, importedBlocks), Some(stateFault)))
+            IO.pure((adoptedPrefix(adopted, importedBlocks, stateFault), Some(stateFault)))
 
           // This node's own state failed, not the block: no strike, so the peer that sent it is not evicted and no fork
-          // is detected (spec 022 T062). The caller backs off and escalates instead.
+          // is detected (spec 022 T062). The caller backs off and escalates instead. A prefix of the batch that became
+          // the head before the fault is counted as above, so that the escalation starts at the failing block (B-336).
           case err @ BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
-            IO.pure((importedBlocks, Some(err)))
+            IO.pure(
+              (adoptedPrefix(BlockImportFailedAt.importedBefore(err), importedBlocks, err), Some(err))
+            )
 
           case err @ (UnknownParent | BlockImportFailed(_)) =>
-            val failedBlock = nel.head
-            // An orphan batch is a gap of ours, to be fetched: a warning, not an error (B-007).
-            val level = if err == UnknownParent then Logging.WarningLevel else Logging.ErrorLevel
-            log.log(
-              level,
-              "Block {} batch import failed, hash {} parent {}",
-              failedBlock.number,
-              failedBlock.header.hashAsHexString,
-              ByteStringUtils.hash2string(failedBlock.header.parentHash.value)
-            )
-            val strikes = unknownParentStrikes.getOrElse(failedBlock.hash.value, 0) + 1
-            unknownParentStrikes = unknownParentStrikes + (failedBlock.hash.value -> strikes)
-            if strikes == BadBlockEvictionThreshold then
-              log.warning(
-                "BAD-BLOCK-EVICT: block {} (hash={}) import failure x{} — evicting peer",
-                failedBlock.number,
-                failedBlock.header.hashAsHexString,
-                strikes
-              )
-              fetcher ! BlockFetcher.BlockImportFailed(
-                failedBlock.number.value,
-                BlacklistReason
-                  .BlockImportError(s"import failure x$strikes on block ${failedBlock.header.hashAsHexString}")
-              )
-            if strikes >= ForkDetectThreshold && forkRecoveredFor.contains(failedBlock.hash.value) then
-              // only on the unified state layout: nothing was rewound, so this is the same failure again
-              log.error(
-                "[SYNC-FORK] Block {} (hash={}) still fails after a fork recovery was made for it: no other is made " +
-                  "for it. Its strikes start again",
-                failedBlock.number,
-                failedBlock.header.hashAsHexString
-              )
-              // so that the peer that serves it is dropped again at the third, as on the hash layout, where the
-              // strikes start again at every recovery (forge)
-              unknownParentStrikes -= failedBlock.hash.value
-            else if strikes >= ForkDetectThreshold then
-              if blockchainWriter.holdsStateInPlace then forkRecoveredFor += failedBlock.hash.value
-              val ourHashAtHeight = blockchainReader
-                .getBlockHeaderByNumber(failedBlock.number.value)
-                .map(h => ByteStringUtils.hash2string(h.hash.value))
-                .getOrElse("<not found>")
-              log.warning(
-                s"FORK-DETECT: block ${failedBlock.number} (hash=${failedBlock.header.hashAsHexString}) " +
-                  s"has failed $strikes consecutive times. " +
-                  s"Our canonical hash at height ${failedBlock.number}: $ourHashAtHeight. " +
-                  s"Received parent hash: ${ByteStringUtils.hash2string(failedBlock.header.parentHash.value)}. " +
-                  "Triggering chain rollback and header re-sync."
-              )
-              selfRef ! StartForkRecovery(failedBlock.number.value)
+            struck(nel.head, err)
             IO.pure((importedBlocks, Some(err)))
         }
+
+  /** Is the peer that served a block found invalid blamed for it (B-513)? On a proof-of-work chain, yes, as core-geth's
+    * downloader drops the peer that served the block it could not insert: blacklisted at once, and evicted at
+    * [[BadBlockEvictionThreshold]] strikes. Following a consensus layer, no: the branch is the one the consensus layer
+    * named, which every peer serves alike, so blaming the peer that served it drops an honest peer; the fetcher is
+    * still rewound to the failing block, and the consensus layer told the verdict (`reportInvalidChain`). Whole
+    * batches, partial imports, announced blocks and the strikes alike. A block whose parent this node lacks is no
+    * invalid block, and is not concerned.
+    */
+  private def blamesTheServingPeer: Boolean = !branchResolution.followsConsensusLayer
+
+  /** A block of a batch failed, or hangs from a block this node lacks: a strike against it, by its hash. At
+    * [[BadBlockEvictionThreshold]] the peer that serves it is evicted; at [[ForkDetectThreshold]] a fork recovery is
+    * started, once per block on the unified layout.
+    */
+  private def struck(failedBlock: Block, err: Any): Unit =
+    // An orphan batch is a gap of ours, to be fetched: a warning, not an error (B-007).
+    val level = if err == UnknownParent then Logging.WarningLevel else Logging.ErrorLevel
+    log.log(
+      level,
+      "Block {} batch import failed, hash {} parent {}",
+      failedBlock.number,
+      failedBlock.header.hashAsHexString,
+      ByteStringUtils.hash2string(failedBlock.header.parentHash.value)
+    )
+    val strikes = unknownParentStrikes.getOrElse(failedBlock.hash.value, 0) + 1
+    unknownParentStrikes = unknownParentStrikes + (failedBlock.hash.value -> strikes)
+    // following a consensus layer, an invalid block is no fault of the peer that serves it (B-513); one whose parent this
+    // node lacks still evicts its peer at the threshold, as before
+    if strikes == BadBlockEvictionThreshold && !blamesTheServingPeer && err != UnknownParent then
+      log.warning(
+        "BAD-BLOCK-EVICT: block {} (hash={}) import failure x{}: the consensus layer's branch, so no peer is evicted",
+        failedBlock.number,
+        failedBlock.header.hashAsHexString,
+        strikes
+      )
+    else if strikes == BadBlockEvictionThreshold then
+      log.warning(
+        "BAD-BLOCK-EVICT: block {} (hash={}) import failure x{} — evicting peer",
+        failedBlock.number,
+        failedBlock.header.hashAsHexString,
+        strikes
+      )
+      fetcher ! BlockFetcher.BlockImportFailed(
+        failedBlock.number.value,
+        BlacklistReason
+          .BlockImportError(s"import failure x$strikes on block ${failedBlock.header.hashAsHexString}")
+      )
+    if strikes >= ForkDetectThreshold && forkRecoveredFor.contains(failedBlock.hash.value) then
+      // only on the unified state layout: nothing was rewound, so this is the same failure again
+      log.error(
+        "[SYNC-FORK] Block {} (hash={}) still fails after a fork recovery was made for it: no other is made " +
+          "for it. Its strikes start again",
+        failedBlock.number,
+        failedBlock.header.hashAsHexString
+      )
+      // so that the peer that serves it is dropped again at the third, as on the hash layout, where the
+      // strikes start again at every recovery (forge)
+      unknownParentStrikes -= failedBlock.hash.value
+    else if strikes >= ForkDetectThreshold then
+      if blockchainWriter.holdsStateInPlace then forkRecoveredFor += failedBlock.hash.value
+      val ourHashAtHeight = blockchainReader
+        .getBlockHeaderByNumber(failedBlock.number.value)
+        .map(h => ByteStringUtils.hash2string(h.hash.value))
+        .getOrElse("<not found>")
+      log.warning(
+        s"FORK-DETECT: block ${failedBlock.number} (hash=${failedBlock.header.hashAsHexString}) " +
+          s"has failed $strikes consecutive times. " +
+          s"Our canonical hash at height ${failedBlock.number}: $ourHashAtHeight. " +
+          s"Received parent hash: ${ByteStringUtils.hash2string(failedBlock.header.parentHash.value)}. " +
+          "Triggering chain rollback and header re-sync."
+      )
+      selfRef ! StartForkRecovery(failedBlock.number.value)
+
+  /** A batch moved the head (`move`): told as core-geth tells what its downloader inserts ([[tellBatchImported]]), the
+    * blocks moved onto cleared of their strikes, and the new head reported as progress. Returns `importedBlocks` with
+    * the blocks moved onto ahead of them, newest first. One call per move of the head, whatever result carried it.
+    */
+  private def batchMovedTheHead(move: BlockImportedToTop | ChainReorganised, importedBlocks: List[Block]): List[Block] =
+    val onto = move match
+      case BlockImportedToTop(blockImportData) =>
+        val importedNow = blockImportData.map(_.block)
+        tellBatchImported(importedNow, Nil, importedNow)
+        importedNow
+      case ChainReorganised(oldBranch, newBranch, _, branchBlocks) =>
+        // as importBlock tells a reorganisation, peers aside: the pool of every block told, new-head subscribers of
+        // the blocks this import executed, the head always among them (B-344)
+        tellBatchImported(newBranch, oldBranch, newBranch.takeRight(math.max(1, branchBlocks)))
+        newBranch
+    onto.foreach(b => unknownParentStrikes -= b.hash.value)
+    onto.foreach(b => forkRecoveredFor -= b.hash.value)
+    val imported = onto.reverse ::: importedBlocks
+    imported.headOption
+      .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
+    imported
 
   /** Before a missing node is fetched, the entry under its hash goes if it is not that node (spec 022 T062).
     *
@@ -1567,19 +1941,18 @@ final private class BlockImporterLogic(
     * `NoLongerBad`. It runs before any escalation, so a re-SNAP after exhausted fetches never upserts over the junk,
     * which basic pruning's upsert would keep. A store that cannot delete, or a read that fails, leaves the fetch to go
     * ahead as before.
+    *
+    * On the unified layout it is `deleteBadNodeAt`, by the position the exception named (spec 018 C5b): judged under
+    * the state lock against the anchor's root, and a node that decodes is never deleted. With no position it deletes
+    * nothing there: the hash-keyed store is not the one that layout reads.
     */
-  private def deleteIfCorrupt(hash: ByteString, blockNumber: BigInt): Unit =
-    if stateStorage.canRepairNodes then
+  private def deleteIfCorrupt(hash: ByteString, blockNumber: BigInt, position: Option[PositionKey]): Unit =
+    val deletion: Option[BadEntryDelete] =
       try
-        stateStorage.deleteBadNode(hash, () => true) match
-          case BadEntryDelete.Deleted =>
-            log.error(
-              "[STATE-CORRUPT] deleted stored trie node {}: its bytes are not that node (met importing block {}); " +
-                "fetching it from peers",
-              ByteStringUtils.hash2string(hash),
-              blockNumber
-            )
-          case _ => ()
+        if blockchainWriter.holdsStateInPlace then
+          for repairs <- blockchainWriter.positionRepairs; at <- position yield repairs.deleteBadNodeAt(at, hash)
+        else if stateStorage.canRepairNodes then Some(stateStorage.deleteBadNode(hash, () => true))
+        else None
       catch
         case NonFatal(e) =>
           log.error(
@@ -1587,20 +1960,89 @@ final private class BlockImporterLogic(
             "[STATE-CORRUPT] could not check stored trie node {} for corruption; fetching it anyway",
             ByteStringUtils.hash2string(hash)
           )
+          None
+    deletion match
+      case Some(BadEntryDelete.Deleted) =>
+        log.error(
+          "[STATE-CORRUPT] deleted stored trie node {}: its bytes are not that node (met importing block {}); " +
+            "fetching it from peers",
+          ByteStringUtils.hash2string(hash),
+          blockNumber
+        )
+      case _ => ()
+
+  /** Writes a state node the fetcher brought, and says what the store made of it. None where nothing is written to the
+    * trie store: a code fetch, which is stored by the caller under its hash, or (on the unified layout) a node fetched
+    * for no position.
+    *
+    * On the unified layout it is `repairNodeAt` at the position the missing-node exception named (spec 018 C5b,
+    * data-model 7.5): under the state lock, with the anchor compare-and-set, one point write. It runs on the actor's
+    * thread, holds the lock for the walk from the root to the position (about two dozen point reads on mainnet) and one
+    * write, and waits for a move of the head under way. Elsewhere it is `repairNode`, as before: a node already there
+    * and valid is left as it is.
+    */
+  /** Saves a state node no wait is taken by, so the next import finds it in storage. */
+  private def saveLateNode(nodes: Seq[ByteString]): Unit =
+    val node = nodes.head
+    val hash = kec256(node)
+    log.info("Saving late-arriving fetched state node {}", ByteStringUtils.hash2string(hash))
+    // repairFetched, not a blind upsert (#1692): a node already there and valid is left as it is.
+    repairFetched(hash, node, blockchainReader.getBestBlockNumber).foreach { outcome =>
+      log.debug("Late-arriving state node {}: {}", ByteStringUtils.hash2string(hash), outcome)
+    }
+    // Also save as contract code in case this was a bytecode fetch
+    try evmCodeStorage.put(hash, node).commit()
+    catch case _: Exception => ()
+
+  private def repairFetched(hash: ByteString, node: ByteString, blockNumber: BigInt): Option[RepairOutcome] =
+    if !blockchainWriter.holdsStateInPlace then Some(stateStorage.repairNode(hash, node.toArray, blockNumber))
+    else
+      for
+        repairs <- blockchainWriter.positionRepairs
+        position <- pendingFetchPosition
+        expected <- pendingStateNodeHash
+      yield
+      // Bytes that are not the node asked for are no repair of that position
+      if expected != hash then RepairOutcome.Rejected else repairs.repairNodeAt(position, expected, node.toArray)
 
   /** Accounting for the validated prefix of a batch whose later block hit a missing node: those blocks are adopted, so
-    * they are imported like any other (strikes cleared, progress reported) and prepended to `importedBlocks` (newest
-    * first), which is what makes the caller's `blocks.drop(importedBlocks.size)` start at the failing block.
+    * they are imported like any other (strikes cleared, the pool and new-head subscribers told, progress reported) and
+    * prepended to `importedBlocks` (newest first), which is what makes the caller's `blocks.drop(importedBlocks.size)`
+    * start at the failing block. The blocks `result` says the head left ([[MovedOff]]) go back to the pool in the same
+    * reset, as for a reorganisation that went through (B-460), and the side blocks it says the head was left on, of no
+    * batch, leave it with the prefix (B-514); neither is counted, nor told to new-head subscribers.
     */
-  private def adoptedPrefix(adopted: List[BlockData], importedBlocks: List[Block]): List[Block] =
+  private def adoptedPrefix(
+      adopted: List[BlockData],
+      importedBlocks: List[Block],
+      result: BlockImportResult
+  ): List[Block] =
     val adoptedBlocks = adopted.map(_.block)
     adoptedBlocks.foreach(b => unknownParentStrikes -= b.hash.value)
     adoptedBlocks.foreach(b => forkRecoveredFor -= b.hash.value)
+    // the prefix only: the failing block and those after it are not on the chain (B-336, B-337)
+    tellBatchImported(MovedOff.onto(result) ++ adoptedBlocks, MovedOff.by(result), adoptedBlocks)
     val imported = adoptedBlocks.reverse ::: importedBlocks
     if adoptedBlocks.nonEmpty then
       imported.headOption
         .foreach(b => supervisor ! ProgressProtocol.ImportedBlock(b.number.value, internally = false))
     imported
+
+  /** What a fetched batch put on the chain is told as core-geth tells what its downloader inserts (B-448): each block
+    * this import executed is published to new-head subscribers (`insertChain` sends a chain event per block it writes
+    * as canonical), and the pool drops the transactions of the blocks that became canonical and takes back those of the
+    * blocks moved off (core-geth's tx pool resets on the new head). Peers are not told: core-geth broadcasts a block
+    * that was propagated to it or that it mined, never one its downloader inserted, as a peer that serves the batch has
+    * it and the rest fetch it as this node did. Before B-448 a batch told none of them; only [[importBlock]] (announced
+    * and mined blocks) did.
+    *
+    * Bounded: one message per block the import executed or adopted, and a reorganisation's lists are bounded by
+    * consensus (B-296, B-344).
+    */
+  private def tellBatchImported(onto: List[Block], off: List[Block], executed: List[Block]): Unit =
+    updateTxPool(onto, off)
+    offerMovedOffAsOmmer(off)
+    executed.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
 
   /** The consensus call of an import, timed: when it put blocks on the chain, how many and how long it took go to
     * `RegularSyncMetrics` (spec 027 C-7, the TUI's last-import duration). Timed here, around the call, so no consensus
@@ -1608,9 +2050,13 @@ final private class BlockImporterLogic(
     */
   private def timedImport(evaluate: IO[BlockImportResult]): IO[BlockImportResult] =
     evaluate.timed.flatMap { (took, result) =>
+      def moved(move: BlockImportedToTop | ChainReorganised): Int = move match
+        case BlockImportedToTop(imported)         => imported.size
+        case ChainReorganised(_, newBranch, _, _) => newBranch.size
       val blocks = result match
-        case BlockImportedToTop(imported)      => imported.size
-        case ChainReorganised(_, newBranch, _) => newBranch.size
+        case move: BlockImportedToTop          => moved(move)
+        case move: ChainReorganised            => moved(move)
+        case ImportedPartially(headMove, _, _) => moved(headMove)
         case _                                 => 0
       IO(if blocks > 0 then RegularSyncMetrics.recordLastImport(blocks, took.toNanos)).as(result)
     }
@@ -1624,39 +2070,73 @@ final private class BlockImporterLogic(
       internally: Boolean
   )(state: ImporterState): Behavior[Command] =
     def doLog(entry: ImportMessages.LogEntry): Unit = log.log(entry._1, entry._2)
+    def headMoved(move: BlockImportedToTop | ChainReorganised): Unit = move match
+      case BlockImportedToTop(importedBlocksData) =>
+        val (blocks, weights) = importedBlocksData.map(data => (data.block, data.weight)).unzip
+        broadcastBlocks(blocks, weights)
+        updateTxPool(importedBlocksData.map(_.block), Seq.empty)
+        blocks.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
+        // this block tops what was imported; after a partial import (B-338) the last block imported is the head
+        supervisor ! ProgressProtocol.ImportedBlock(blocks.lastOption.fold(block.number)(_.number).value, internally)
+      case ChainReorganised(oldBranch, newBranch, weights, branchBlocks) =>
+        updateTxPool(newBranch, oldBranch)
+        offerMovedOffAsOmmer(oldBranch)
+        // Peers are told of the new head only, as core-geth announces only the block it imported (NewBlock to a
+        // square root of the peers, its hash to the rest), not the side blocks it stands on (B-344). The pool is
+        // told of every block the consensus told, which it bounds. New-head subscribers are told of the blocks this
+        // import executed, the head always among them: core-geth sends a chain event for each block it inserts,
+        // and none for a stored side block a reorganisation makes canonical (B-344).
+        broadcastBlocks(newBranch.lastOption.toList, weights.lastOption.toList)
+        newBranch
+          .takeRight(math.max(1, branchBlocks))
+          .foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
+        newBranch.lastOption.foreach(block =>
+          supervisor ! ProgressProtocol.ImportedBlock(block.number.value, internally)
+        )
     importWith(
       IO(doLog(importMessages.preImport()))
-        .flatMap(_ => timedImport(consensus.evaluateBranchBlock(block)))
+        .flatMap(_ => timedImport(evaluatedFromThePoolHead(consensus.evaluateBranchBlock(block))))
         .tap(importMessages.messageForImportResult.andThen(doLog))
         .tap {
-          case BlockImportedToTop(importedBlocksData) =>
-            val (blocks, weights) = importedBlocksData.map(data => (data.block, data.weight)).unzip
-            broadcastBlocks(blocks, weights)
-            updateTxPool(importedBlocksData.map(_.block), Seq.empty)
-            blocks.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
-            supervisor ! ProgressProtocol.ImportedBlock(block.number.value, internally)
-          case ChainReorganised(oldBranch, newBranch, weights) =>
-            updateTxPool(newBranch, oldBranch)
-            broadcastBlocks(newBranch, weights)
-            newBranch.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
-            newBranch.lastOption.foreach(block =>
-              supervisor ! ProgressProtocol.ImportedBlock(block.number.value, internally)
-            )
-          case BlockImportFailedDueToMissingNode(missingNodeException, adopted)
+          case move: BlockImportedToTop => headMoved(move)
+          case move: ChainReorganised   => headMoved(move)
+          // B-338: the queued branch this block topped moved the head part of the way, and a block of it failed: the
+          // move is told as above, and the failure as a failed import is (this block stands on the failing one)
+          // The failing block is the one on the head the move left (B-513, beacon W3): the peer that served it is the
+          // one blamed, not the one that served the announced block; following a consensus layer, no peer is.
+          case ImportedPartially(headMove, _, error) =>
+            headMoved(headMove)
+            if informFetcherOnFail then
+              val failingNumber = BlockImporter.failingBlockNumber(headMove).getOrElse(block.number.value)
+              if blamesTheServingPeer then
+                fetcher ! BlockFetcher.BlockImportFailed(failingNumber, BlacklistReason.BlockImportError(error))
+              else fetcher ! BlockFetcher.InvalidateBlocksFrom(failingNumber, error, shouldBlacklist = false)
+          case missing @ BlockImportFailedDueToMissingNode(missingNodeException, adopted)
               if syncConfig.redownloadMissingStateNodes =>
-            announceAdopted(adopted, internally)
+            announceAdopted(adopted, internally, missing)
             // state node re-download will be handled when downloading headers
             doLog(importMessages.missingStateNode(missingNodeException))
-          case BlockImportFailedDueToMissingNode(missingNodeException, adopted) =>
-            announceAdopted(adopted, internally)
-            IO.raiseError(missingNodeException)
+          // Without the re-download the block is dropped, and the prefix adopted before it announced. The import's
+          // log line above says it, at error level (`missingStateNode`: "Ignoring broadcast block" / "Ignoring mined
+          // block"). An `IO.raiseError` stood here from Mantis on, built inside `tap`, whose callback's value is
+          // discarded, so it never ran (B-512); raised, it would only have logged the same failure again in
+          // `importWith` and ended in the same `Running`.
+          case missing @ BlockImportFailedDueToMissingNode(_, adopted) =>
+            announceAdopted(adopted, internally, missing)
           case BlockImportFailed(error) if informFetcherOnFail && !Consensus.isLocalStateFault(error) =>
-            fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
+            // following a consensus layer the peer that served it is not blamed (B-513)
+            if blamesTheServingPeer then
+              fetcher ! BlockFetcher.BlockImportFailed(block.number.value, BlacklistReason.BlockImportError(error))
+            else fetcher ! BlockFetcher.InvalidateBlocksFrom(block.number.value, error, shouldBlacklist = false)
+          // a fault of this node's own state after a prefix became the head (B-336): nothing is said of the failing
+          // block, and the prefix is announced as any imported blocks are
+          case failed @ BlockImportFailed(error) if Consensus.isLocalStateFault(error) =>
+            announceAdopted(BlockImportFailedAt.importedBefore(failed), internally, failed)
           case UnknownParent => announcedBy.foreach(handleOrphanAnnounce(block, _))
           // Not judged, so nothing is said of it to the fetcher or of the peer that announced it; what was adopted
           // before the fault is announced as any imported blocks are.
-          case BlockImportStateFault(fault, adopted) =>
-            announceAdopted(adopted, internally)
+          case stateFault @ BlockImportStateFault(fault, adopted) =>
+            announceAdopted(adopted, internally, stateFault)
             wantAncestorBodiesOn(fault, block)
           case BlockEnqueued | DuplicateBlock | BlockImportFailed(_) => ()
         }
@@ -1664,7 +2144,7 @@ final private class BlockImporterLogic(
         // nothing: after an orphan rewind the next expected block is our own best, so a peer could re-announce that to
         // reset its count for free (forge, B-007). A queued block needed a header that passed validation, PoW included.
         .tap {
-          case BlockImportedToTop(_) | ChainReorganised(_, _, _) | BlockEnqueued =>
+          case BlockImportedToTop(_) | ChainReorganised(_, _, _, _) | BlockEnqueued =>
             announcedBy.foreach(orphanAnnounces.clear)
           case _ => ()
         }
@@ -1685,8 +2165,47 @@ final private class BlockImporterLogic(
     * unknown, and nobody is blamed. Protection stays, bounded: a peer that announces [[OrphanAnnounceStrikeThreshold]]
     * such blocks in a row, with none of its blocks imported in between, is blacklisted as a peer that does not deliver
     * the parent.
+    *
+    * On a proof-of-work chain the header is first checked by what it says of itself, the Ethash seal with it (B-140). A
+    * header that fails is invalid on any chain, whatever its parent: the peer that announced it is blamed at once, as
+    * core-geth's fetcher drops a peer whose propagated header fails verification (`importBlocks`, "Propagated block
+    * verification failed"). A seal that holds is no excuse: it proves the difficulty the header claims, which without
+    * the parent may be the chain's minimum, so the announce is counted as a strike as before. Not checked on a chain
+    * that follows a consensus layer (no seal), nor far from the best block ([[OrphanSealCheckDistance]]).
+    *
+    * Either blame goes to the peer itself, through the fetcher to the peers client, whose peer list exempts maintained
+    * peers as for every other blacklisting (B-143): from the strikes, not from a header that failed validation.
     */
   private def handleOrphanAnnounce(block: Block, peer: PeerId): Unit =
+    announcedSealError(block) match
+      case Some(error) =>
+        orphanAnnounces.clear(peer)
+        log.warning(
+          "Orphan announce: block {} from peer {} has a header that is invalid by itself ({}): blacklisting the peer",
+          block.idTag,
+          peer,
+          error
+        )
+        RegularSyncMetrics.incrementOrphanBlocks("announce", "invalid-header")
+        fetcher ! BlockFetcher.BlamePeer(peer, BlacklistReason.BlockHeaderValidationFailed)
+        // The fetcher counted the block as its last: back to before it, with no one blamed by the fetcher
+        fetcher ! BlockFetcher.InvalidateBlocksFrom(
+          block.number.value,
+          "announced block has an invalid header",
+          shouldBlacklist = false
+        )
+      case None => countOrphanStrike(block, peer)
+
+  /** Why the header of `block`, an orphan announce, is invalid by itself (B-140), where it is checked: proof of work
+    * only, and near the best block.
+    */
+  private def announcedSealError(block: Block): Option[String] =
+    val header = block.header
+    val checked = !branchResolution.followsConsensusLayer && header.difficulty.value > 0 &&
+      (header.number.value - blockchainReader.getBestBlockNumber).abs <= OrphanSealCheckDistance
+    if checked then consensus.announcedHeaderError(header) else None
+
+  private def countOrphanStrike(block: Block, peer: PeerId): Unit =
     val strikes = orphanAnnounces.strike(peer)
     if strikes >= OrphanAnnounceStrikeThreshold then
       orphanAnnounces.clear(peer)
@@ -1697,16 +2216,9 @@ final private class BlockImporterLogic(
         block.number
       )
       RegularSyncMetrics.incrementOrphanBlocks("announce", "blacklisted")
-      // The peer whose strikes were counted, directly (forge, B-007). The fetcher's BlockImportFailed blames whoever it
-      // recorded for the block's number, and another peer's announce of the same number can have replaced the one counted
-      // here. (PeerListHelper's exemption of maintained peers does not apply on this path.)
-      blacklist.add(
-        peer,
-        syncConfig.blacklistDuration,
-        BlacklistReason.BlockImportError(
-          s"announced $strikes blocks in a row whose parent never arrived, the last ${block.header.hashAsHexString}"
-        )
-      )
+      // The peer whose strikes were counted (forge, B-007). The fetcher's BlockImportFailed blames whoever it recorded
+      // for the block's number, and another peer's announce of the same number can have replaced the one counted here.
+      fetcher ! BlockFetcher.BlamePeer(peer, orphanStrikesReason(strikes, block.header.hashAsHexString))
       // And back to the parent, as below, with no one blamed by the fetcher: the blame is above.
       fetcher ! BlockFetcher.InvalidateBlocksFrom(
         block.number.value,
@@ -1729,15 +2241,31 @@ final private class BlockImporterLogic(
       )
 
   /** The validated prefix of a branch whose later block hit a missing node is adopted exactly as if the shorter branch
-    * had imported: announced to peers, taken out of the tx pool, published, and reported as progress.
+    * had imported: announced to peers, taken out of the tx pool, published, and reported as progress. The blocks
+    * `result` says the head left ([[MovedOff]]) go back to the pool in the same reset (B-460), and the side blocks it
+    * says the head was left on leave the pool with the prefix (B-514), told to no one else.
     */
-  private def announceAdopted(adopted: List[BlockData], internally: Boolean): Unit =
+  private def announceAdopted(adopted: List[BlockData], internally: Boolean, result: BlockImportResult): Unit =
+    val (blocks, weights) = adopted.map(data => (data.block, data.weight)).unzip
+    updateTxPool(MovedOff.onto(result) ++ blocks, MovedOff.by(result))
+    offerMovedOffAsOmmer(MovedOff.by(result))
     if adopted.nonEmpty then
-      val (blocks, weights) = adopted.map(data => (data.block, data.weight)).unzip
       broadcastBlocks(blocks, weights)
-      updateTxPool(blocks, Seq.empty)
       blocks.foreach(b => blockTopic ! Topic.Publish(NewBlockImported(b)))
       supervisor ! ProgressProtocol.ImportedBlock(blocks.last.number.value, internally)
+
+  /** The blocks a move of the head left, as the import says it left them (`movedOff`: [[ChainReorganised]], a partial
+    * one, or [[MovedOff]]), offered to the ommer pool once the move is made (B-501). core-geth's `reorg` sends a
+    * `ChainSideEvent` for every block of the old chain after the new one is written, and its miner keeps each as an
+    * uncle candidate (`worker.go`, `chainSideCh`); `commitUncle` then takes only one whose parent is among the new
+    * head's ancestors. Of the blocks left, only the lowest stands on a block of the chain the head is on: its parent is
+    * the fork block. The others stand on blocks that left with them, so the pool's ancestry filter ([[OmmersPool]]'s
+    * `GetOmmers`) never hands them out, and offered they would only take slots of a bounded pool. So the lowest is
+    * offered alone. Before B-501 the branch resolution offered the first block of its prediction ahead of the import,
+    * whether or not the import then moved the head off it.
+    */
+  private def offerMovedOffAsOmmer(movedOff: Seq[Block]): Unit =
+    movedOff.minByOption(_.header.number.value).foreach(block => ommersPool ! AddOmmers(block.header))
 
   private def broadcastBlocks(blocks: List[Block], weights: List[ChainWeight]): Unit =
     // each block with its own weight: `mapN` on two lists is every pairing of the two, which sent a NewBlock with another
@@ -1746,9 +2274,108 @@ final private class BlockImporterLogic(
     val newBlocks = blocks.zip(weights).map((block, weight) => BlockToBroadcast(block, weight))
     broadcaster ! BroadcastBlocks(newBlocks)
 
+  // go-ethereum's pool reset (B-253): the blocks moved onto leave the pool, and the transactions of those moved off
+  // that the new chain does not include go back, unless the heads are more than 64 blocks apart (TxPoolReset).
+  //
+  // From the head the pool was last reset to (B-515), the node's one record of it, which the fork choice resets from
+  // and records too, and under its lock, where the reset is computed, told and recorded. When no other writer reset the
+  // pool since this import's evaluation began (`poolResetsAtImport`), the pool stands where the move started, and the
+  // reset is the move's own two branches, read from the import's result (`TxPoolReset.ofBranches`, no store read). When
+  // one did (a fork choice between this import's commit and this tell), the reset is from the head it left onto the
+  // head the store holds now, read from the chain as the fork choice reads it (`TxPoolReset.between`): the two resets
+  // agree, and the pool and its recorded head end on the final head.
+  //
+  // The blocks moved onto are completed with the side blocks the branch stands on that the result does not list
+  // (B-512, `sideBlocksUnder`): canonical with the move, their transactions leave the pool too. On every chain, as
+  // go-ethereum's `LegacyPool.reset` walks the new chain whatever the consensus.
   private def updateTxPool(blocksAdded: Seq[Block], blocksRemoved: Seq[Block]): Unit =
-    blocksRemoved.foreach(block => pendingTransactionsManager ! AddUncheckedTransactions(block.body.transactionList))
-    blocksAdded.foreach(block => pendingTransactionsManager ! RemoveTransactions(block.body.transactionList))
+    txPoolHead.resetFrom(pendingTransactionsManager) { (poolHead, resets) =>
+      val moveHead = headTheMoveLeft(blocksAdded, blocksRemoved)
+      val inStep = poolResetsAtImport.get.forall(_ == resets)
+      // the next tell of this import follows this one
+      poolResetsAtImport.set(Some(resets + 1))
+      if inStep then
+        val under = sideBlocksUnder(blocksAdded, blocksRemoved, poolHead)
+        (moveHead, TxPoolReset.ofBranches(under ++ blocksAdded, blocksRemoved))
+      else
+        Try(blockchainReader.getBestBlockHeader).toOption.flatten.orElse(moveHead) match
+          case Some(now) => (Some(now), TxPoolReset.between(poolHead, now, blockchainReader))
+          case None      => (None, TxPoolReset.Reset.empty)
+    }
+
+  /** The side blocks a move made canonical below the lowest block `added`, down to the block the move left the old
+    * chain at, that the import's result does not list, oldest first (B-512). go-ethereum's pool reset walks the new
+    * chain from the new head down to the common ancestor (`LegacyPool.reset`), so every block made canonical leaves the
+    * pool, the side blocks the branch stands on among them. The results list them only on some paths: a reorganisation
+    * on the unified layout lists them (B-297, B-344), and a move back that failed and left the head on them (B-461,
+    * B-514); the hash layout's reorganisation lists the branch alone, and so does a fault that stopped the head on the
+    * branch above them. Their transactions stayed in the pool, though the chain now includes them.
+    *
+    * The fork is the parent of the lowest block `removed` (the old chain above the fork, ascending), or with nothing
+    * removed the head the pool stood on (`poolHead`): the move started there, and it is an ancestor of the new head.
+    * Read from the store by parent hash, not by the index (`ancestry-not-index.md`), from the parent of the lowest
+    * block added down to the fork's height. Nothing when the walk does not meet the fork there (the old chain listed
+    * only in part), when a block on the way is not stored, or when more than [[TxPoolReset.MaxReorgDepth]] blocks lie
+    * between: a pool reset reads no more than go-ethereum's would, and that last is warned of, as go-ethereum warns of
+    * a reorganisation too deep for its pool ("Skipping deep transaction reorg"). One walk for proof of work and for a
+    * chain that follows a consensus layer: go-ethereum's reset is the same for both. It runs under the lock of the
+    * node's one record of the pool's head ([[TxPoolHead]], B-515), from that head, and the reset it completes is told
+    * before the importer answers, so before any build that follows asks the pool (#2066).
+    */
+  private def sideBlocksUnder(
+      added: Seq[Block],
+      removed: Seq[Block],
+      poolHead: Option[BlockHeader]
+  ): List[Block] =
+    val fork: Option[(BigInt, BlockHash)] =
+      removed
+        .minByOption(_.number.value)
+        .map(lowest => (lowest.number.value - 1, lowest.header.parentHash))
+        .orElse(poolHead.map(head => (head.number.value, head.hash)))
+    (added.minByOption(_.number.value), fork) match
+      case (Some(lowest), Some((forkNumber, forkHash)))
+          if lowest.number.value - 1 > forkNumber && lowest.number.value - 1 - forkNumber <= TxPoolReset.MaxReorgDepth =>
+        @tailrec
+        def down(hash: BlockHash, acc: List[Block]): List[Block] =
+          blockchainReader.getBlockByHash(hash) match
+            case Some(block) if block.number.value > forkNumber + 1 => down(block.header.parentHash, block :: acc)
+            case Some(block) if block.number.value == forkNumber + 1 && block.header.parentHash == forkHash =>
+              block :: acc
+            case _ => Nil
+        down(lowest.header.parentHash, Nil)
+      case (Some(lowest), Some((forkNumber, _))) if lowest.number.value - 1 - forkNumber > TxPoolReset.MaxReorgDepth =>
+        log.warning(
+          "Skipping deep transaction reorg: {} side block(s) between block {} and the fork at block {}, more than {}: " +
+            "their transactions are not taken out of the pool",
+          lowest.number.value - 1 - forkNumber,
+          lowest.number.value,
+          forkNumber,
+          TxPoolReset.MaxReorgDepth
+        )
+        Nil
+      case _ => Nil
+
+  /** The count of the pool's resets ([[TxPoolHead.resets]]) as this import's evaluation began, read again after each of
+    * its own tells: a count that moved meanwhile is another writer's reset (B-515). None before the first import.
+    */
+  private val poolResetsAtImport = new java.util.concurrent.atomic.AtomicReference[Option[Long]](None)
+
+  /** The consensus call of an import, with the pool's reset count taken as it begins ([[poolResetsAtImport]]). */
+  private def evaluatedFromThePoolHead(evaluate: => IO[BlockImportResult]): IO[BlockImportResult] =
+    IO(poolResetsAtImport.set(Some(txPoolHead.resets))) >> evaluate
+
+  /** The head a move onto `added` off `removed` left, as [[TxPoolReset.ofBranches]] reads it: the highest block added,
+    * or with none added the parent of the lowest removed. None for no move, or a parent that is not stored.
+    */
+  private def headTheMoveLeft(added: Seq[Block], removed: Seq[Block]): Option[BlockHeader] =
+    added
+      .maxByOption(_.header.number.value)
+      .map(_.header)
+      .orElse(
+        removed
+          .minByOption(_.header.number.value)
+          .flatMap(lowest => blockchainReader.getBlockHeaderByHash(lowest.header.parentHash))
+      )
 
   private def importWith(importTask: IO[NewBehavior], blockImportType: BlockImportType)(
       state: ImporterState
@@ -1820,10 +2447,11 @@ final private class BlockImporterLogic(
           )
           RegularSyncMetrics.incrementReorgTotal()
           RegularSyncMetrics.setLastReorgDepth(depth)
-        val transactionsToAdd = oldBranch.flatMap(_.body.transactionList)
-        pendingTransactionsManager ! PendingTransactionsManager.AddUncheckedTransactions(transactionsToAdd)
-        // Add first block from branch as an ommer
-        oldBranch.headOption.map(_.header).foreach(ommersPool ! AddOmmers(_))
+        // Nothing goes to the pool here (B-460), nor to the ommer pool (B-501): this is a prediction, made against the
+        // head before the import, and the import may fail or keep the head. Both are told by what the import did, as
+        // go-ethereum's are on the new head: a reorganisation, whole or partial, or a fault after its prefix replaced
+        // the head, tells the blocks moved off (ChainReorganised, ImportedPartially, MovedOff), and the lowest of them
+        // is offered as an ommer (`offerMovedOffAsOmmer`); a failure that kept the head tells nothing.
         Right(toImport)
       case ExtendsCanonicalHead(alreadyCanonical) =>
         // Post-merge only (BranchResolution.followsConsensusLayer). The first `alreadyCanonical` blocks ARE our
@@ -1843,13 +2471,25 @@ final private class BlockImporterLogic(
         )
         Right(extension)
       case NoChainSwitch =>
-        // Add first block from branch as an ommer
-        ommersPool ! AddOmmers(blocks.head.header)
+        // The branch's first block not on this node's chain is offered as an ommer: a sibling of one of its blocks. A
+        // block of this node's own chain is none (B-299): after a fetcher reset from the common block the batch opens
+        // with them, and core-geth offers only side blocks as uncles. A batch that is this node's chain whole offers
+        // nothing.
+        blocks.toList.drop(canonicalPrefixLength(blocks)).headOption.foreach(b => ommersPool ! AddOmmers(b.header))
         // On the unified layout the blocks of a branch that is not taken are not stored, so the batch that follows
         // hangs from a block this node does not know: remembered here, it is weighed with what follows (B-300 f). The
         // one guard of the memo: elsewhere nothing is remembered, so nothing is found.
         if blockchainWriter.holdsStateInPlace && !branchResolution.followsConsensusLayer then
-          branchResolution.notTaken(blocks.map(_.header)).foreach(branchesNotTaken.remember)
+          val headers = blocks.map(_.header)
+          branchResolution.notTaken(headers).foreach(branchesNotTaken.remember)
+          // No fork choice was made where a block of this node's chain above the SNAP pivot is not stored (B-395, B-407),
+          // or where the weight of the block the branch stands on is not stored (B-385), and nothing else ends the wait
+          // for it: told to the escalation's feed as a fault of this node. The gap first: the weight compareBranch did
+          // not read is not what kept the branch. Under the import lock
+          branchResolution.acrossAGap(headers) match
+            case Some(gap) => consensus.chainGapNotStored(gap)
+            case None =>
+              branchResolution.withoutForkWeight(headers).foreach(side => consensus.forkWeightNotStored(side.toList))
         Right(Nil)
       // a batch that hangs from the consensus layer's branch refused while the head is where it is: refused with it, and
       // not fetched from below (B-297)
@@ -2063,7 +2703,8 @@ final private class BlockImporterLogic(
         blacklist = blacklist,
         syncConfig = syncConfig,
         // on the unified state layout no block is taken off the chain here: the resolver only finds the common block
-        discardDiverged = !blockchainWriter.holdsStateInPlace
+        discardGuard =
+          Option.unless(blockchainWriter.holdsStateInPlace)(hashLayoutDiscardGuard(capturedBest, snapPivot))
       )
     )
     // Watched: one that stopped without an answer left this importer in `resolvingFork` for good, where nothing else
@@ -2071,6 +2712,101 @@ final private class BlockImporterLogic(
     ctx.watchWith(resolverRef, BranchResolverStopped(resolverRef))
     resolverRef ! FastSyncBranchResolverActor.StartBranchResolver
     resolvingFork(failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, state, resolverRef)
+
+  /** What the resolver checks on the hash layout before it takes this node's blocks off the chain (B-298):
+    *   - the common block lies no deeper than the floor the blind rewind goes to, `MaxForkAncestryDepth` below the head
+    *     and never below the SNAP pivot, where this node has no state to execute a branch on. One bound for both ways a
+    *     fork recovery rewinds on this layout; core-geth refuses an ancestor below its own floor in the same way;
+    *   - the peer's branch is the one the import would take by the fork choice's rule:
+    *     `BranchResolution.resolveBranchByTheRule`, weight and MESS. A tie only a coin would decide discards nothing
+    *     (forge B1): a coin is worth a head move, not this node's blocks. Not on a chain that follows a consensus
+    *     layer, whose branches all weigh the same: there the branch is not weighed here, as before.
+    */
+  private def hashLayoutDiscardGuard(
+      capturedBest: BigInt,
+      snapPivot: BigInt
+  ): FastSyncBranchResolverActor.DiscardGuard =
+    val weighsByWork = !branchResolution.followsConsensusLayer
+    FastSyncBranchResolverActor.DiscardGuard(
+      deepestCommonBlock = (capturedBest - MaxForkAncestryDepth).max(snapPivot),
+      // by the rule alone: a tie a coin would decide takes none of this node's blocks off the chain, and no coin is
+      // tossed for headers the resolver has not validated (forge B1, W1)
+      heavier = Option.when(weighsByWork)(branchResolution.discardsFor),
+      // the discard is made under the import lock, as the rewind that follows it is (B-012)
+      importLock = importLock,
+      // below the floor (B-346; the user's decision of 2026-11-18): weighed from the common block, and escalated to a
+      // SNAP re-sync if it is the heavier. Proof of work only, as the weighing above
+      beyondReach = Option.when(weighsByWork)(
+        FastSyncBranchResolverActor.BeyondReach(
+          maxHeaders = MaxBranchHeadersFetched,
+          verdict = deepForkWeight.verdict,
+          escalatedAt = escalatedBeyondReachAt
+        )
+      )
+    )
+
+  /** The weighing of a branch below the floor (B-346): the fork choice's rules over stored weights, MESS where the
+    * chain has it, and the header validation of an import.
+    */
+  private lazy val deepForkWeight: DeepForkWeight =
+    val mess = blockchainConfig.messConfig
+    new DeepForkWeight(
+      weightOf = blockchainReader.getChainWeightByHash,
+      headerOf = blockchainReader.getBlockHeaderByHash,
+      onTheChain = header => blockchainReader.getCanonicalHashByNumber(header.number.value).contains(header.hash),
+      // exact only: a head weighed from an estimate is outweighed by any block below it (forge)
+      head = () =>
+        blockchainReader.getBestBlockHeader.flatMap { header =>
+          HeadChainWeight.classify(blockchainReader, header) match
+            case HeadChainWeight.Status.Exact(weight) => Some(header -> weight)
+            case _                                    => None
+        },
+      messActiveAt = Option.when(mess.enabled)(mess.isActiveAtBlock),
+      messRefuses = ArtificialFinality.shouldRejectReorg,
+      firstInvalidHeader = headers => consensus.firstInvalidHeaderOf(headers),
+      // the import's own fork choice: a tie is weighed as the import weighs it, a coin's once (B-284)
+      forkChoice = consensus.powForkChoice
+    )
+
+  /** The common block a heavier branch below the floor was escalated for (B-346), by hash: the escalation is asked for
+    * once per fork, and the sync controller owns it after that (it re-SNAPs, or schedules one under its back-off). Read
+    * and written on the actor's thread only.
+    */
+  private var escalatedBeyondReachAt: Option[ByteString] = None
+
+  /** A heavier branch leaves this chain below the floor (B-346): nothing is rewound, and this node's state is given up
+    * for a SNAP re-sync through the hash layout's escape, `RegularSyncStuck` (the route a fork recovery with no header
+    * at its floor takes). Once per fork; the fetcher goes on from the head until the controller stops regular sync.
+    */
+  private def escalateHeavierBeyondReach(heavier: FastSyncBranchResolverActor.BranchHeavierBeyondReach): Unit =
+    val best = bestKnownBlockNumber
+    unknownParentStrikes = Map.empty
+    if escalatedBeyondReachAt.contains(heavier.commonHash) then
+      log.warning(
+        "[SYNC-FORK] The heavier chain that leaves this node's at block {} was handed to the sync controller for a " +
+          "SNAP re-sync already: not asked again. Nothing is rewound; the fetcher goes on from the head {}",
+        heavier.commonBlock,
+        best
+      )
+    else
+      escalatedBeyondReachAt = Some(heavier.commonHash)
+      log.error(
+        s"[SYNC-FORK] Peer ${heavier.masterPeer.id}'s chain leaves this node's at block ${heavier.commonBlock} " +
+          s"(${ByteStringUtils.hash2string(heavier.commonHash)}), ${best - heavier.commonBlock} block(s) below the " +
+          s"head $best, deeper than a fork recovery rewinds ($MaxForkAncestryDepth), and it is the heavier " +
+          s"(${heavier.weighed} header(s) weighed). Nothing is rewound: this node's state is given up for a SNAP re-sync"
+      )
+      supervisor ! SyncProtocol.RegularSyncStuck(
+        heavier.commonBlock,
+        s"a heavier chain leaves this one at block ${heavier.commonBlock}, below the fork recovery floor",
+        // the re-SNAP is held to the branch, and the index above the common block is taken from it (B-351)
+        branch = heavier.firstOfBranch.map(first => GivenUpBranch(first.number.value, first.hash.value))
+      )
+    fetcher ! BlockFetcher.InvalidateBlocksFrom(
+      best + 1,
+      "SYNC-FORK: a heavier chain below the floor is escalated",
+      shouldBlacklist = false
+    )
 
   private def resolvingFork(
       failedBlockNumber: BigInt,
@@ -2093,8 +2829,7 @@ final private class BlockImporterLogic(
       case Some((lca, masterPeer)) =>
         fetchFromTheCommonBlock(lca, masterPeer, failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, state)
       case None =>
-        blindRewind(capturedBest, snapPivot)
-        running(state.withoutDeferredBatches())
+        blindRewind(capturedBest, snapPivot, state.withoutDeferredBatches())
     Behaviors.receiveMessage {
       // an answer is held already: the resolver's stop after it says nothing more
       case BranchResolverStopped(stopped) if stopped == resolver && held.isDefined => Behaviors.same
@@ -2119,7 +2854,7 @@ final private class BlockImporterLogic(
       case BranchResolverStopped(stopped) if stopped == resolver && holds && state.importing =>
         resolvingFork(failedBlockNumber, beyondTheFetch, capturedBest, snapPivot, state, resolver, Some(None))
 
-      case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, _)) =>
+      case BranchResolverMsg(resolved @ FastSyncBranchResolverActor.BranchResolvedSuccessful(lca, _)) =>
         blockchainReader.getBlockHeaderByNumber(lca) match
           case Some(lcaHeader) =>
             log.info(
@@ -2127,29 +2862,64 @@ final private class BlockImporterLogic(
               lca,
               capturedBest
             )
-            rewindCanonicalChain(lca, lcaHeader.hash, capturedBest)
-            unknownParentStrikes = Map.empty
-            fetcher ! BlockFetcher.InvalidateBlocksFrom(
-              lca + 1,
+            // Every exit rewinds the fetcher (or escalates to SNAP), so a batch deferred before recovery is stale.
+            rewindUnderTheImportLock(
+              lca,
+              lcaHeader.hash,
+              capturedBest,
+              resolved.discarded,
               "SYNC-FORK branch-resolver rollback",
-              shouldBlacklist = false
+              state.withoutDeferredBatches()
+            )
+          // the resolver took this node's blocks above the common block off the chain for a branch it weighed: the
+          // head is there already, and nothing below it is taken for a branch no one weighed (B-347)
+          case None if rewindsOnlyWeighed =>
+            goOnFromTheHead(
+              s"the common block $lca the resolver discarded down to has no header here: nothing is rewound",
+              state.withoutDeferredBatches()
             )
           case None =>
             log.warning("SYNC-FORK: no header at resolver LCA {} — falling back to blind rewind", lca)
-            blindRewind(capturedBest, snapPivot)
-        // Every exit rewinds the fetcher (or escalates to SNAP), so a batch deferred before recovery is stale.
+            blindRewind(capturedBest, snapPivot, state.withoutDeferredBatches())
+
+      // the hash layout (B-346): a heavier chain leaves this one below the floor. Nothing was taken off this chain and
+      // nothing is rewound: the state is given up for a SNAP re-sync, once per fork
+      case BranchResolverMsg(heavier: FastSyncBranchResolverActor.BranchHeavierBeyondReach) =>
+        escalateHeavierBeyondReach(heavier)
         running(state.withoutDeferredBatches())
+
+      // the hash layout's refusals (B-298): the master peer's chain leaves this one too deep, or its branch is not the
+      // heavier. Nothing was taken off this chain and nothing is rewound now: the fetcher goes on from the head, and
+      // the peer, blacklisted by the resolver, is not asked again for the same branch
+      case BranchResolverMsg(
+            FastSyncBranchResolverActor.BranchResolutionFailed(
+              notFollowed: FastSyncBranchResolverActor.BranchResolutionFailed.BranchNotFollowed
+            )
+          ) if !holds =>
+        goOnFromTheHead(s"the master peer's chain is not followed ($notFollowed)", state.withoutDeferredBatches())
+
+      // B-347: on the hash layout of a chain that chooses by work, a resolution that ends with no branch weighed takes
+      // nothing off this chain, as core-geth's downloader sets no head back when its search for the common block
+      // fails (`findAncestor` is read-only). The resolver itself refuses, and blames the peer, where it does
+      case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(failure)) if rewindsOnlyWeighed =>
+        goOnFromTheHead(s"the branch resolver failed ($failure): nothing is rewound", state.withoutDeferredBatches())
 
       case BranchResolverMsg(FastSyncBranchResolverActor.BranchResolutionFailed(_)) =>
         log.warning("SYNC-FORK: branch resolver failed — falling back to 128-block blind rewind")
-        blindRewind(capturedBest, snapPivot)
-        running(state.withoutDeferredBatches())
+        blindRewind(capturedBest, snapPivot, state.withoutDeferredBatches())
+
+      // a resolver that stopped without an answer (a failure inside it, its discard's among them) weighed nothing this
+      // importer can act on: as a failed resolution, B-347 included
+      case BranchResolverStopped(stopped) if stopped == resolver && rewindsOnlyWeighed =>
+        goOnFromTheHead(
+          "the branch resolver stopped without an answer: nothing is rewound",
+          state.withoutDeferredBatches()
+        )
 
       case BranchResolverStopped(stopped) if stopped == resolver =>
         // Stopped without an answer (a failure inside it): what a failed resolution does.
         log.warning("SYNC-FORK: branch resolver stopped without an answer — falling back to 128-block blind rewind")
-        blindRewind(capturedBest, snapPivot)
-        running(state.withoutDeferredBatches())
+        blindRewind(capturedBest, snapPivot, state.withoutDeferredBatches())
 
       case ImportDone(_, _) =>
         // The import that raised StartForkRecovery sent it from inside its own IO (tryImportBlocks, FORK-DETECT), so
@@ -2162,6 +2932,9 @@ final private class BlockImporterLogic(
         // while this one still runs. If it does answer first, this ImportDone arrives in `running` and is handled
         // there as usual.
         exhaustedDuringImport = false
+        // Recovery supersedes the import's wait too: a node that arrived during it is saved as a late arrival (B-408).
+        nodesDuringImport.foreach(saveLateNode)
+        nodesDuringImport = Vector.empty
         val ended = state.notImportingBlocks().branchResolved().withoutDeferredBatches()
         held match
           case Some(answer) => actOn(answer, ended)
@@ -2297,7 +3070,33 @@ final private class BlockImporterLogic(
         BranchHeadersFetchName
       ): Unit
 
-  private def blindRewind(capturedBest: BigInt, snapPivot: BigInt): Unit =
+  /** Whether a SYNC-FORK on this importer takes this node's blocks off the chain only for a branch weighed the heavier
+    * (B-347): the hash layout of a chain that chooses by work, where the resolver weighs the branch (B-298) or refuses
+    * it. A resolution that ends with nothing weighed rewinds nothing there, as core-geth's downloader sets no head back
+    * when `findAncestor` fails: `findAncestor` is read-only, `syncWithPeer` returns its error with no rollback, and
+    * `LegacySync` drops the peer for it (`errInvalidAncestor`, `errBadPeer`, `errTimeout` among others).
+    *
+    * Not on the unified layout, whose fork recovery moves no state (spec 018 C4e part 6), nor on a chain that follows a
+    * consensus layer, whose branches the resolver does not weigh: the blind rewind stays there, as before (beacon's).
+    */
+  private def rewindsOnlyWeighed: Boolean =
+    !blockchainWriter.holdsStateInPlace && !branchResolution.followsConsensusLayer
+
+  /** A fork recovery that moves nothing: the fetcher goes on from the head, no peer is blamed here (the resolver blames
+    * the one its refusal is for), and the strikes start over, so that the next recovery comes only from blocks fetched
+    * after this one.
+    */
+  private def goOnFromTheHead(why: String, state: ImporterState): Behavior[Command] =
+    val best = bestKnownBlockNumber
+    log.warning("[SYNC-FORK] {}: the fetcher goes on from the head {}", why, best)
+    unknownParentStrikes = Map.empty
+    fetcher ! BlockFetcher.InvalidateBlocksFrom(best + 1, s"SYNC-FORK: $why", shouldBlacklist = false)
+    running(state)
+
+  /** The fork recovery's rewind when no common block was found, then `state`: in `running`, or in [[rewinding]] until
+    * the hash layout's rewind, made under the import lock, has landed.
+    */
+  private def blindRewind(capturedBest: BigInt, snapPivot: BigInt, state: ImporterState): Behavior[Command] =
     val floor = (capturedBest - MaxForkAncestryDepth).max(snapPivot)
     if blockchainWriter.holdsStateInPlace then
       // No common block was found: the fetcher goes back as far as the rewind would have, and nothing is written
@@ -2322,9 +3121,15 @@ final private class BlockImporterLogic(
             "and nothing moved",
           floor
         )
-    else blindRewindOnTheHashLayout(capturedBest, snapPivot, floor)
+      running(state)
+    else blindRewindOnTheHashLayout(capturedBest, snapPivot, floor, state)
 
-  private def blindRewindOnTheHashLayout(capturedBest: BigInt, snapPivot: BigInt, floor: BigInt): Unit =
+  private def blindRewindOnTheHashLayout(
+      capturedBest: BigInt,
+      snapPivot: BigInt,
+      floor: BigInt,
+      state: ImporterState
+  ): Behavior[Command] =
     blockchainReader.getBlockHeaderByNumber(floor) match
       case Some(floorHeader) =>
         log.warning(
@@ -2333,18 +3138,111 @@ final private class BlockImporterLogic(
           floor,
           snapPivot
         )
-        rewindCanonicalChain(floor, floorHeader.hash, capturedBest)
-        unknownParentStrikes = Map.empty
-        fetcher ! BlockFetcher.InvalidateBlocksFrom(floor + 1, "SYNC-FORK rollback", shouldBlacklist = false)
+        rewindUnderTheImportLock(floor, floorHeader.hash, capturedBest, Nil, "SYNC-FORK rollback", state)
       case None =>
         log.warning(
           "SYNC-FORK: no header at fork recovery floor bno={} — escalating to SNAP re-sync",
           floor
         )
         supervisor ! SyncProtocol.RegularSyncStuck(floor, s"no header at fork recovery floor $floor")
+        running(state)
 
-  private def rewindCanonicalChain(target: BigInt, targetHash: BlockHash, currentBest: BigInt): Unit =
-    BlockImporter.rewindCanonicalChain(blockchainReader, blockchainWriter, reorgState, target, targetHash, currentBest)
+  /** The hash layout's SYNC-FORK rewind to `target`, made under the import lock (B-012), then `state` once it has
+    * landed ([[rewinding]]).
+    *
+    * The rewind moves the best block and the index down. Under [[CanonicalHeadLock]] alone (B-511) it was serialised
+    * with the fork choice and with each commit of an import, but not with the import as a whole: an import weighs its
+    * batch against the head under the import lock and commits after, so a rewind between the two took the head from
+    * under a batch weighed against it. Every import holds the import lock, and so does the branch resolver's discard
+    * that comes before this rewind; so does this. It is taken off the actor's thread, as an import takes it: the import
+    * that started the recovery may still hold it, and its end is told to this actor.
+    *
+    * Lock order: the import lock, then the head's lock (in [[BlockImporter.rewindCanonicalChain]]), as every import
+    * takes them. Nothing that holds the head's lock asks for the import lock: the Engine API never takes it.
+    *
+    * The fetcher is sent back once the rewind has landed, from where the rewind left the head; until then no import
+    * starts and no batch is picked, so nothing the fetcher served before the rewind is imported over it.
+    */
+  private def rewindUnderTheImportLock(
+      target: BigInt,
+      targetHash: BlockHash,
+      currentBest: BigInt,
+      discarded: Seq[(BigInt, ByteString)],
+      reason: String,
+      state: ImporterState
+  ): Behavior[Command] =
+    ctx.pipeToSelf(
+      importLock
+        .guardAs(s"the SYNC-FORK rewind to block $target")(
+          IO.blocking(fetchFromAfterTheRewind(rewindCanonicalChain(target, targetHash, currentBest, discarded), target))
+        )
+        .unsafeToFuture()
+    ) {
+      case Success(from)  => Rewound(from, reason)
+      case Failure(error) => RewindFailed(error)
+    }
+    rewinding(state)
+
+  /** Waiting for a SYNC-FORK rewind made under the import lock (B-012). Acts as [[resolvingFork]] does on everything
+    * but the rewind's end: no import starts, and no batch is picked.
+    */
+  private def rewinding(state: ImporterState): Behavior[Command] =
+    Behaviors.receiveMessage {
+      case Rewound(from, reason) =>
+        unknownParentStrikes = Map.empty
+        fetcher ! BlockFetcher.InvalidateBlocksFrom(from, reason, shouldBlacklist = false)
+        running(state)
+
+      case RewindFailed(error) =>
+        // Fail loudly, as a rewind that failed on this actor's thread did: RegularSync replaces the pipeline.
+        log.error(error, "SYNC-FORK: the rewind failed: {}", error.getMessage)
+        throw error
+
+      case ImportDone(_, _) =>
+        // The import that started the recovery ended before the rewind took the lock: as in `resolvingFork`, its
+        // NewBehavior is moot (the fetcher is rewound once the rewind lands), and only its state change is made.
+        exhaustedDuringImport = false
+        nodesDuringImport.foreach(saveLateNode)
+        nodesDuringImport = Vector.empty
+        rewinding(state.notImportingBlocks().branchResolved().withoutDeferredBatches())
+
+      case wanted: AncestorBodiesWanted =>
+        fetchAncestorBodies(wanted)
+        Behaviors.same
+
+      case FetcherResponse(BlockFetcher.FetchedAncestorBodies(requested, bodies)) =>
+        ancestorBodiesFetched(requested, bodies)
+        Behaviors.same
+
+      case stored: AncestorBodiesStored =>
+        ancestorBodiesWritten(stored).foreach(blockHash => ancestorBodiesStoredFor = Some(blockHash))
+        Behaviors.same
+
+      case _ => Behaviors.same
+    }
+
+  /** Where the fetcher goes on from after a rewind to `target`: above it when the index was rewound there, and above
+    * the head as it is when it was not (B-511): a fork choice moved the head to another chain meanwhile, and the blocks
+    * above `target` are no longer the ones this node stands on.
+    */
+  private def fetchFromAfterTheRewind(rewound: Boolean, target: BigInt): BigInt =
+    if rewound then target + 1 else bestKnownBlockNumber + 1
+
+  private def rewindCanonicalChain(
+      target: BigInt,
+      targetHash: BlockHash,
+      currentBest: BigInt,
+      discarded: Seq[(BigInt, ByteString)]
+  ): Boolean =
+    BlockImporter.rewindCanonicalChain(
+      blockchainReader,
+      blockchainWriter,
+      reorgState,
+      target,
+      targetHash,
+      currentBest,
+      discarded
+    )
 
   private def bestKnownBlockNumber: BigInt = blockchainReader.getBestBlockNumber
 

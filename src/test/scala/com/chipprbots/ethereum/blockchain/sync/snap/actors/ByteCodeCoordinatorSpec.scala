@@ -1272,3 +1272,49 @@ class ByteCodeCoordinatorSpec extends ScalaTestWithActorTestKit() with AnyFlatSp
     coordinator ! ByteCodeCoordinator.ByteCodeCheckCompletion
     snapSyncController.expectNoMessage(500.millis)
   }
+
+  // B-543: the presence lookup of a replayed batch must not hold the coordinator's thread.
+  it should "answer other commands while a replayed batch's presence lookup is running (B-543)" taggedAs UnitTest in {
+    val entered = new java.util.concurrent.CountDownLatch(1)
+    val release = new java.util.concurrent.CountDownLatch(1)
+    val evmCodeStorage = new TestEvmCodeStorage():
+      override def multiGetNoFill(
+          hashes: Seq[com.chipprbots.ethereum.db.storage.EvmCodeStorage.CodeHash]
+      ): Seq[Option[ByteString]] =
+        entered.countDown()
+        release.await(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+        super.multiGetNoFill(hashes)
+    val requestTracker = new SNAPRequestTracker()(using classicSystem.scheduler)
+    val networkPeerManager = testKit.createTestProbe[NetworkPeerManagerActor.Command]()
+    val snapSyncController = testKit.createTestProbe[SNAPSyncController.Command]()
+    val coordinator = bccProps(
+      evmCodeStorage = evmCodeStorage,
+      networkPeerManager = networkPeerManager.ref,
+      requestTracker = requestTracker,
+      batchSize = 1,
+      snapSyncController = snapSyncController.ref,
+      cooldownConfig = testCooldownConfig,
+      backpressureHighWatermark = 2,
+      backpressureLowWatermark = 1
+    )
+    val present = ByteString("code-present")
+    val presentHash = kec256(present)
+    evmCodeStorage.put(presentHash, present).commit()
+    val absentHash = kec256(ByteString("code-absent"))
+    val laterHash = kec256(ByteString("code-later"))
+
+    coordinator ! ByteCodeCoordinator.AddByteCodeTasks(Seq(presentHash, absentHash), skipPresent = true)
+    entered.await(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+
+    // The lookup is parked on its barrier; the coordinator still dispatches commands.
+    coordinator ! ByteCodeCoordinator.ByteCodeGetProgress(statusProbe.ref)
+    statusProbe.receiveMessage(5.seconds) // answered while the lookup is parked: nothing is queued yet
+    // A later batch queues behind the replay, so arrival order holds.
+    coordinator ! ByteCodeCoordinator.AddByteCodeTasks(Seq(laterHash))
+    snapSyncController.expectNoMessage(200.millis)
+
+    release.countDown()
+    // The present hash is counted done; absent and later are queued: 2 tasks reach the high-water mark.
+    snapSyncController.expectMessage(5.seconds, SNAPSyncController.ProgressBytecodesDownloaded(1L))
+    snapSyncController.expectMessage(5.seconds, SNAPSyncController.ByteCodeBackpressureChanged(paused = true))
+  }

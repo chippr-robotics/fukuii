@@ -32,7 +32,7 @@ Target release 0.9.0; status and schedule in `docs/specifications/GLAMSTERDAM.md
 |---------|-------------|-------------|
 | `sbt compile-all` | Compiles all modules + test sources | After every file change (exception: core domain sweeps — use `sbt compile` instead, then `compile-all` once at end; see `testing-protocol.md`) |
 | `sbt compile` | Root main sources only — no test/IT/Benchmark | **Core domain type sweeps only** (BlockHeader, Account, Block, Transaction → 50+ dependents) — avoids cascade on every file; `compile-all` once at end |
-| `sbt scalafmtAll` | scalafmt on the **root project only**, its main, `Test` and `IntegrationTest` sources; not bytes, crypto, rlp, scalanet or scalanetDiscovery (root has no `aggregate`), and not `src/evmTest`, `src/rpcTest` or `src/benchmark` | After editing root sources; after a submodule edit use `formatAll` or `<module> / scalafmtAll` |
+| `sbt scalafmtAll` | scalafmt on the **root project only**: its main, `Test`, `IntegrationTest`, `Evm` (`src/evmTest`), `RpcTest` and `Benchmark` sources; not bytes, crypto, rlp, scalanet or scalanetDiscovery (root has no `aggregate`) | After editing root sources; after a submodule edit use `formatAll` or `<module> / scalafmtAll` |
 | `sbt scalafmt` | scalafmt on ROOT module only | **Do not use** — misses submodules (bytes, crypto, rlp, scalanet, etc.) |
 | `sbt formatAll` | compile-all, then scalafixAll + scalafmtAll on bytes, crypto, rlp and root, and scalafmtAll on scalanet and scalanetDiscovery | After editing any module, and before a PR. The four scalafixed modules (root, bytes, crypto, rlp) have been scalafix-clean since spec 020 PR 6b, so it no longer aborts on old findings; it rewrites files, so read `git diff` after |
 | `sbt formatCheck` | The read-only form of `formatAll`: compile-all, `scalafixAll --check` (bytes, crypto, rlp, root), `scalafmtCheckAll` (all six modules) | Runs in CI, in the required "Test and Build" job (since #1721); run it locally before pushing |
@@ -55,7 +55,7 @@ Target release 0.9.0; status and schedule in `docs/specifications/GLAMSTERDAM.md
 
 **The format commands that look similar but are not:**
 - `scalafmt` → root module only → **wrong for this codebase**
-- `scalafmtAll` / `scalafmtCheckAll` → the root project only (main, `Test` and `IntegrationTest` sources) → fine for a root-only edit, **blind to bytes, crypto, rlp, scalanet, scalanetDiscovery**. `formatAll` and `formatCheck` run the same root commands, so the root's `src/evmTest`, `src/rpcTest` and `src/benchmark` sources are formatted by no alias
+- `scalafmtAll` / `scalafmtCheckAll` → the root project only (main, `Test`, `IntegrationTest`, and since B-082 the `Evm`, `RpcTest` and `Benchmark` sources) → fine for a root-only edit, **blind to bytes, crypto, rlp, scalanet, scalanetDiscovery**. `src/evmTest` is formatted but does not compile (`Evm / compile` compiles nothing, B-581)
 - `formatAll` / `formatCheck` → every module (scalafmt on all six; scalafix on bytes, crypto, rlp and root) → **use these after editing a submodule**. They no longer abort on old scalafix findings, so a finding they report is new: fix it, do not suppress it
 
 **scalafix parser gotcha (scalafix 0.14.9 bundles scalameta 4.17.4):** a fewer-braces template opened on a continuation
@@ -78,9 +78,9 @@ Tracked protocols that all agents reference live in `.claude/agent-protocols/`:
 | `consensus-change-protocol.md` | Hard stop + routing table before touching consensus paths |
 | `inline-cleanup.md` | "Hunt and seek" — what to fix opportunistically, what to log in CHASE-QUEUE |
 | `logging-standards.md` | Preferred logging API, levels, message format, SLF4J patterns |
-| `scala3-style.md` | S1–S12 Scala 3 standards with grep-verifiable ratchets (S11: opaque type full-layer propagation; S12: `boundary`/`break` safety), and the `-source:3.9` mapping |
+| `scala3-style.md` | S1–S13 Scala 3 standards with grep-verifiable ratchets (S11: opaque type full-layer propagation; S12: `boundary`/`break` safety; S13: a case object compared with `==` stays a case object), and the `-source:3.9` mapping |
 | `scala3-given-migration.md` | G1–G3 operational pitfalls for `given/using` migration (P3a findings; P3b is done) |
-| `pekko-typed-api.md` | P1–P25 Pekko Typed API preferences + TL1/TL2 Cats Effect integration rules |
+| `pekko-typed-api.md` | P1–P25 Pekko Typed API preferences + TL1–TL3 Cats Effect integration rules (TL3: no metrics-object initialiser on an IO path) |
 | `pre-migration-checklist.md` | LOOM pre-flight: grep each actor for sender(), returns, timers, workers before migrating |
 | `migration-handoff.md` | Continuation file protocol when a thread ends mid-migration |
 | `storage-rocksdb.md` | DataSource contract, column families, iterator lifecycle, WriteBatch, EphemDataSource, RocksDB config |
@@ -232,6 +232,7 @@ For comprehensive changes, cycle through:
 ## Conventions
 
 - Add files to git individually; know what you're committing (avoid `git add .`).
+- Changelog: add a fragment, `changelog.d/<id>.<section>.md` (see `changelog.d/README.md`); never edit `CHANGELOG.md`, which `scripts/changelog/assemble.py` writes at release prep.
 - Run `sbt formatAll` before committing (`scalafmtAll` alone only covers the root project). Run `sbt pp` and `sbt formatCheck` before a PR.
 - Refer to the human as **user**; be authentic, surface disagreement rather than
   burying it.
@@ -255,7 +256,7 @@ Read it before planning or implementing. Highlights:
 
 - Consensus-critical code (EVM/gas, state roots, hashes, RLP, Ethash, rewards,
   hard forks) MUST be byte-for-byte deterministic and ETC-spec compliant — design
-  before implementing; follow the `forge` protocol in `.github/agents/forge.md`.
+  before implementing; follow the `forge` protocol in `.claude/agents/forge.md`.
 - Scala 3.x LTS only; code MUST pass `scalafmt` + `scalafix`.
 - Tests MUST be deterministic (no `Thread.sleep`); keep statement coverage ≥ 70%.
 - Run `sbt pp` before opening a PR; CI gates and review must be green to merge.

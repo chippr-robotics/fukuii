@@ -7,9 +7,18 @@ import org.apache.pekko.actor.typed.Signal
 import org.apache.pekko.actor.typed.scaladsl.AbstractBehavior
 import org.apache.pekko.actor.typed.scaladsl.ActorContext
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
+import org.apache.pekko.actor.typed.scaladsl.TimerScheduler
+import org.apache.pekko.util.Timeout
 
 import cats.effect.unsafe.IORuntime
 
+import scala.concurrent.duration.*
+import scala.util.Failure
+import scala.util.Success
+import scala.util.Try
+
+import com.chipprbots.ethereum.blockchain.sync.SyncController
+import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.consensus.pow.PoWMiningCoordinator.CoordinatorProtocol
 import com.chipprbots.ethereum.consensus.pow.miners.EthashDAGManager
 import com.chipprbots.ethereum.consensus.pow.miners.EthashMiner
@@ -26,6 +35,17 @@ object PoWMiningCoordinator:
   /** How long the miner waits for a move of the head to end before a turn is given up (spec 018 B-293). */
   val HeadSettleWaitMillis: Long = 2000L
 
+  /** How long the miner waits before it asks again whether it can mine, while it cannot (B-424): the node is syncing,
+    * or holds no best block, or not the state of it. A turn is asked for again after this, never at once: at once, a
+    * node that cannot mine spun on the actor and logged an ERROR per turn (19 k a second during a SNAP sync).
+    */
+  val NotReadyRetryDelay: FiniteDuration = 2.seconds
+
+  /** How long the miner waits for the sync controller to say whether it is syncing. No answer counts as syncing: the
+    * controller answers nothing while it imports a checkpoint, which it does inside its start.
+    */
+  val SyncStatusTimeout: FiniteDuration = 5.seconds
+
   final case class SetMiningMode(mode: MiningMode) extends CoordinatorProtocol
 
   case object MineNext extends CoordinatorProtocol
@@ -35,6 +55,18 @@ object PoWMiningCoordinator:
   case object MiningSuccessful extends CoordinatorProtocol
 
   case object MiningUnsuccessful extends CoordinatorProtocol
+
+  /** The sync controller's answer to the miner's GetStatus, or the ask's failure (B-424). */
+  final private case class SyncStatusReply(status: Try[SyncProtocol.Status]) extends CoordinatorProtocol
+
+  /** A mining round (a block built and a nonce searched, off the actor, EthashMiner.processMining) has ended. Only a
+    * round's own end starts the next: one round at most is in flight, whatever starts and stops arrive meanwhile
+    * (B-279, forge: a round that ended after a stop and a start ran beside the resumed one, two loops for good).
+    */
+  private case object RoundDone extends CoordinatorProtocol
+
+  /** The key of the timer that asks for a turn again while the miner cannot mine: one at a time. */
+  private case object NotReadyRetryKey
 
   // MiningMode will allow to remove MockerMiner
   enum MiningMode:
@@ -51,29 +83,39 @@ object PoWMiningCoordinator:
       blockCreator: PoWBlockCreator,
       blockchainReader: BlockchainReader,
       configBuilder: BlockchainConfigBuilder,
-      minerOpt: Option[Miner] = None
+      minerOpt: Option[Miner] = None,
+      notReadyRetryDelay: FiniteDuration = NotReadyRetryDelay,
+      syncStatusTimeout: FiniteDuration = SyncStatusTimeout
   ): Behavior[CoordinatorProtocol] =
     Behaviors
       .setup[CoordinatorProtocol](context =>
-        new PoWMiningCoordinator(
-          context,
-          syncController,
-          ethMiningService,
-          blockCreator,
-          blockchainReader,
-          configBuilder,
-          minerOpt
+        Behaviors.withTimers[CoordinatorProtocol](timers =>
+          new PoWMiningCoordinator(
+            context,
+            timers,
+            syncController,
+            ethMiningService,
+            blockCreator,
+            blockchainReader,
+            configBuilder,
+            minerOpt,
+            notReadyRetryDelay,
+            syncStatusTimeout
+          )
         )
       )
 
 class PoWMiningCoordinator private (
     context: ActorContext[CoordinatorProtocol],
-    syncController: TypedActorRef[com.chipprbots.ethereum.blockchain.sync.SyncController.Command],
+    timers: TimerScheduler[CoordinatorProtocol],
+    syncController: TypedActorRef[SyncController.Command],
     ethMiningService: EthMiningService,
     blockCreator: PoWBlockCreator,
     blockchainReader: BlockchainReader,
     configBuilder: BlockchainConfigBuilder,
-    minerOpt: Option[Miner]
+    minerOpt: Option[Miner],
+    notReadyRetryDelay: FiniteDuration,
+    syncStatusTimeout: FiniteDuration
 ) extends AbstractBehavior[CoordinatorProtocol](context):
 
   import configBuilder.*
@@ -84,6 +126,17 @@ class PoWMiningCoordinator private (
   implicit private val scheduler: IORuntime = IORuntime.global
   private val log = context.log
   private val dagManager = new EthashDAGManager(blockCreator)
+
+  // B-424, core-geth's miner.update: mining waits while the node syncs, until the sync has once reached the head peers
+  // announced. From then on a sync event does not pause it, or a peer that announces a block it never sends would stop
+  // this node's mining for good (go-ethereum stops listening to the downloader after its first DoneEvent).
+  private var syncedOnce: Boolean = false
+
+  // Why the miner is waiting, if it is: said once when the wait begins or its reason changes, not on every retry.
+  private var waitingFor: Option[String] = None
+
+  // A round is running off the actor (B-279): nothing starts another until it ends (RoundDone).
+  private var roundInFlight: Boolean = false
 
   override def onMessage(msg: CoordinatorProtocol): Behavior[CoordinatorProtocol] = msg match
     case SetMiningMode(mode) =>
@@ -114,19 +167,56 @@ class PoWMiningCoordinator private (
 
       case MineNext =>
         log.debug("Received message MineNext")
-        blockchainReader.getBestBlock
-          .fold {
-            log.error("Unable to get block for mining: blockchainReader.getBestBlock returned None")
-            context.self ! MineNext
-          } { block =>
-            mineWithEthash(block)
-          }
+        if roundInFlight then () // the running round's end asks for the next turn
+        else if syncedOnce then mineOnBestBlock()
+        else askSyncStatus()
+        Behaviors.same
+
+      case RoundDone =>
+        roundInFlight = false
+        context.self ! MineNext
+        Behaviors.same
+
+      case SyncStatusReply(reply) =>
+        reply match
+          case Success(SyncProtocol.Status.SyncDone) =>
+            if !syncedOnce then
+              log.info("Sync has reached the head peers announced: sync events no longer pause mining")
+              syncedOnce = true
+            mineOnBestBlock()
+          // nothing to catch up to: a lone miner, or peers no higher than this node (go-ethereum mines then too)
+          case Success(SyncProtocol.Status.NotSyncing) => mineOnBestBlock()
+          case Success(_: SyncProtocol.Status.Syncing) => waitForTurn("the node is syncing")
+          case Success(SyncProtocol.Status.Stopped(why)) =>
+            waitForTurn(s"the sync has stopped ($why); restart the node")
+          case Failure(_) =>
+            waitForTurn("the sync controller did not say whether it is syncing (starting, or importing a checkpoint)")
         Behaviors.same
 
       case StopMining =>
-        log.info("Stopping PoWMiningCoordinator...")
+        // B-279: paused, not stopped. PoWMining keeps this actor's ref for the node's life and spawns it only once, at
+        // start, so a stopped coordinator left every later miner_start messaging a dead actor while answering success.
+        // Paused, it mines nothing and waits for SetMiningMode (miner_start) to resume.
+        log.info("Mining stopped; the coordinator waits for a start")
+        timers.cancel(NotReadyRetryKey)
+        waitingFor = None
         PoWMiningMetrics.recordMinerRunning(false)
-        Behaviors.stopped
+        paused()
+    })
+
+  /** Mining stopped (miner_stop): nothing is mined; a start resumes it. A reply to work asked for before the stop, a
+    * turn or a sync status, is dropped.
+    */
+  private def paused(): Behavior[CoordinatorProtocol] =
+    recordStoppedOnPostStop(Behaviors.receiveMessage[CoordinatorProtocol] {
+      case SetMiningMode(mode) =>
+        log.info("Received message {}", SetMiningMode(mode))
+        switchMiningMode(mode)
+      case RoundDone =>
+        // the round that ran across the stop has ended; a start from here begins one at once
+        roundInFlight = false
+        Behaviors.same
+      case _ => Behaviors.same
     })
 
   private def handleMiningOnDemand(): Behavior[CoordinatorProtocol] =
@@ -143,7 +233,33 @@ class PoWMiningCoordinator private (
     case OnDemandMining =>
       // On-demand mining (tests only) mines nothing by itself: not "running", also after a switch from recurrent.
       PoWMiningMetrics.recordMinerRunning(false)
+      timers.cancel(NotReadyRetryKey)
       handleMiningOnDemand()
+
+  private def askSyncStatus(): Unit =
+    given Timeout = Timeout(syncStatusTimeout)
+    context.ask[SyncController.Command, SyncProtocol.Status](
+      syncController,
+      replyTo => SyncController.WrappedSyncProtocol(SyncProtocol.GetStatus(replyTo))
+    )(SyncStatusReply(_))
+
+  /** Mines on the best block if the node holds it and its state (B-424); otherwise asks for a turn again later. */
+  private def mineOnBestBlock(): Unit =
+    blockchainReader.getBestBlock match
+      case None => waitForTurn("the best block is not stored (its header only, during a SNAP sync)")
+      case Some(block) if !blockchainReader.holdsStateOf(block.header) =>
+        waitForTurn("the state of the best block is not held")
+      case Some(_) if roundInFlight => () // a status reply or a start that came while a round runs
+      case Some(block) =>
+        waitingFor.foreach(_ => log.info("Mining resumes on block {}", block.number))
+        waitingFor = None
+        mineWithEthash(block)
+
+  private def waitForTurn(why: String): Unit =
+    if !waitingFor.contains(why) then
+      log.info("Mining waits: {}. Asked again every {}", why, notReadyRetryDelay)
+      waitingFor = Some(why)
+    timers.startSingleTimer(NotReadyRetryKey, MineNext, notReadyRetryDelay)
 
   private def mineWithEthash(bestBlock: Block): Unit =
     log.debug("Mining with Ethash")
@@ -159,4 +275,5 @@ class PoWMiningCoordinator private (
     mine(miner, bestBlock)
 
   private def mine(miner: Miner, bestBlock: Block): Unit =
-    miner.processMining(bestBlock).foreach(_ => context.self ! MineNext)(using context.executionContext)
+    roundInFlight = true
+    miner.processMining(bestBlock).onComplete(_ => context.self ! RoundDone)(using context.executionContext)

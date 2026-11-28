@@ -91,7 +91,7 @@ private[snap] trait SnapResumePlanner
     with AccountResumeSelectionApi:
   self: SnapResumePlannerState & SnapSharedState & SnapControllerEnv & CoordinatorHandles & PhaseFlags &
     PivotSelectionApi & BootstrappingApi & SyncingApi & HeapWatchdogApi & DownloadRecoveryApi & ByteCodeRequestApi &
-    StagnationResetApi & StagnationScheduleApi & ChainDownloadStartApi & SnapServerPeersApi =>
+    StagnationResetApi & StagnationScheduleApi & ChainDownloadStartApi & SnapServerPeersApi & OffBranchPeersApi =>
 
   private lazy val MaxPreservedPivotDistance: BigInt = 50_000
 
@@ -266,6 +266,49 @@ private[snap] trait SnapResumePlanner
         timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, 30.seconds)
         break(bootstrapping())
 
+  /** `recoverAccountsComplete`'s B-326 branch, the proof-of-work counterpart of [[healAtNewerPivot]] (every download
+    * phase complete, the saved pivot failed finalization here, e.g. a hand-off held for accounts left out): heal at a
+    * pivot newer than `excluded` instead of resuming on the saved one. ETC has no CL head, so the target is the snap
+    * peers' best minus `pivotBlockOffset` ([[PivotPolicy.powHealPivotAfterExcluded]]), never under the branch's first
+    * block while a sync is bound to one, and its header is fetched by the normal pivot bootstrap; `bootstrapping`'s
+    * `BootstrapComplete` checks it against the peers' best, commits it and goes straight to `StateHealing`, as the
+    * drift branch's "all phases complete" case does. With no newer target yet (no peer height known right after a
+    * restart, or no peer ahead), retry the start in 30 s; every retry re-enters this branch, because the saved pivot is
+    * still the excluded one.
+    */
+  private def healAtNewerPowPivot(excluded: BigInt, reason: String)(using
+      scala.util.boundary.Label[Behavior[Command]]
+  ): Unit =
+    import scala.util.boundary.break
+    accountsComplete = true
+    storagePhaseComplete = true
+    bytecodePhaseComplete = true
+    val now = System.currentTimeMillis()
+    val peerBest = currentNetworkBestFromSnapPeers()
+    // B-310: a best under the branch's first block leaves no peer that can serve a pivot on it; the wait for one begins
+    val onBranchBest = peerBest.filterNot(best => offBranchPeers.belowTheBranch(best, now))
+    val floor = offBranchPeers.refreshFloor
+    PivotPolicy.powHealPivotAfterExcluded(excluded, onBranchBest, snapSyncConfig.pivotBlockOffset, floor) match
+      case Some(target) =>
+        ctx.log.warn(
+          s"Recovery: not resuming healing on pivot $excluded ($reason). All data phases are complete; healing at " +
+            s"pivot $target instead (snap peer best ${peerBest.getOrElse("none")} - pivot offset " +
+            s"${snapSyncConfig.pivotBlockOffset}${floor.fold("")(f => s", the branch begins at block $f")})."
+        )
+        syncController ! StartRegularSyncBootstrap(target)
+        break(bootstrapping())
+      case None =>
+        // As the refresh with no target does: nothing else would end the wait for a peer on the branch.
+        offBranchPeers.waitExpired(now).foreach(why => ctx.log.error(PivotAnchor.requirementDroppedText(why)))
+        ctx.log.warn(
+          s"Recovery: not resuming healing on pivot $excluded ($reason), and no newer pivot is available yet " +
+            s"(snap peer best=${peerBest.getOrElse("none")}${floor.fold("")(f => s", branch begins at block $f")}). " +
+            "Retrying in 30s."
+        )
+        timers.cancel(BootstrapCheckKey)
+        timers.startSingleTimer(BootstrapCheckKey, RetrySnapSyncStart, 30.seconds)
+        break(bootstrapping())
+
   /** `startSnapSync`, step 1 (spec 016 restructure, CQ-SNAP-016-17): the accounts-complete recovery branch. When a
     * previous run completed the account phase, either resume bytecodes + storage on the saved pivot (and break out of
     * `startSnapSync`'s boundary with `syncing()`), or clear the flags and fall through to the next step. Extracted
@@ -354,12 +397,12 @@ private[snap] trait SnapResumePlanner
           // polled, so the peer-based drift check below sees networkBest = 0; the CL head SyncController primes before
           // Start is the authoritative tip on PoS. Only this heal-only case uses it: with downloads incomplete, a
           // CL-based drift must not trigger the wipe below (that would discard complete accounts that an in-place
-          // pivot refresh keeps). ETC/pre-merge (isPoSChain = false): unchanged.
+          // pivot refresh keeps). ETC/pre-merge (isPoSChain = false): B-326 below.
           val clHeadForRecovery: Option[BigInt] =
             if isPoSChain then clPivotHint.flatMap(_.knownHeader).map(_.number.value) else None
-          if isPoSChain && !belowEscalationHint && !taskFilesUnusable &&
+          val healOnly = !belowEscalationHint && !taskFilesUnusable &&
             stateIngest.appState.isSnapSyncStorageComplete() && stateIngest.appState.isSnapSyncBytecodeComplete()
-          then
+          if isPoSChain && healOnly then
             val failedHere = failedFinalizationPivot.exists(pivot <= _)
             val clDrift = clHeadForRecovery.map(_ - pivot)
             if failedHere then
@@ -373,11 +416,19 @@ private[snap] trait SnapResumePlanner
                 s"the CL head ${clHeadForRecovery.getOrElse("?")} is ${clDrift.getOrElse("?")} blocks ahead " +
                   s"(> maxPivotStalenessBlocks=${snapSyncConfig.maxPivotStalenessBlocks})"
               )
+          // B-326 (PoW): the same heal-only recovery after a failed finalization (a hand-off held for accounts left out,
+          // say) must not resume healing on that pivot either. Without a CL head the peer-based drift check below waits
+          // for maxPivotStalenessBlocks of drift, and right after a restart sees no peer height at all, so it resumed on
+          // the stale pivot. The target comes from the snap peers' best instead.
+          else if healOnly && failedFinalizationPivot.exists(pivot <= _) then
+            healAtNewerPowPivot(
+              failedFinalizationPivot.fold(pivot)(_.max(pivot)),
+              s"finalization failed at pivot ${failedFinalizationPivot.getOrElse(pivot)}"
+            )
           else if failedFinalizationPivot.exists(pivot <= _) then
             ctx.log.warn(
-              s"Recovery: pivot $pivot failed finalization, but it is resumed: " +
-                (if !isPoSChain then "not a PoS chain (ETC keeps resuming on the saved pivot)"
-                 else "a download phase is incomplete or the saved state is being discarded") + "."
+              s"Recovery: pivot $pivot failed finalization, but it is resumed: a download phase is incomplete or the " +
+                "saved state is being discarded."
             )
 
           // Check if pivot is still fresh enough (skipped when belowEscalationHint forced clear)
@@ -432,6 +483,13 @@ private[snap] trait SnapResumePlanner
                 "drift unknown: no snap peer polled yet" +
                   clHeadForRecovery.fold("")(h => s"; CL head $h is ${h - pivot} blocks ahead")
             ctx.log.info(s"Recovery: resuming bytecodes + storage sync from pivot $pivot ($driftText)")
+            // B-547: the drift check above could not run without a peer height; run it when the first one arrives.
+            if networkBest <= 0 && !(storageAlreadyDone && bytecodeAlreadyDone) then
+              timers.startSingleTimer(
+                RecoveredPivotDriftKey,
+                RecoveredPivotDriftRecheck(pivot),
+                RecoveredPivotDriftPollInterval
+              )
 
             val storage = getOrCreateMptStorage(pivot)
             coordinatorGeneration += 1

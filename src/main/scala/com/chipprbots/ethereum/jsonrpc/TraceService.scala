@@ -9,12 +9,11 @@ import org.json4s.JsonAST.*
 import org.json4s.JsonDSL.*
 import org.json4s.jvalue2monadic
 
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
 import com.chipprbots.ethereum.consensus.mining.Mining
 import com.chipprbots.ethereum.db.storage.TransactionMappingStorage
-import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.domain.Address
 import com.chipprbots.ethereum.domain.Block
-import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
@@ -110,8 +109,12 @@ class TraceService(
     // go-ethereum --rpc.gascap, as for eth_call (TraceCall runs CallDefaults with the backend's RPCGasCap)
     gasCap: BigInt = CallTxBuilder.DefaultGasCap,
     // the rules of the chain the blocks are replayed under: the node's, unless a caller serves another chain
-    chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig
+    chainConfig: BlockchainConfig = Config.blockchains.blockchainConfig,
+    private val _forkChoiceManagerOpt: Option[ForkChoiceManager] = None
 ) extends ResolveBlock:
+
+  // "safe" and "finalized" are the consensus client's, as in EthBlocksService (B-489)
+  final override def forkChoiceManagerOpt: Option[ForkChoiceManager] = _forkChoiceManagerOpt
 
   import TraceService.*
 
@@ -130,13 +133,9 @@ class TraceService(
     StateRead
       .reading {
         for
-          location <- transactionMappingStorage
-            .get(req.txHash)
+          found <- CanonicalTxLookup(transactionMappingStorage, blockchainReader, req.txHash)
             .toRight(JsonRpcError.InvalidParams("Transaction not found"))
-          TransactionLocation(blockHash, txIndex) = location
-          block <- blockchainReader
-            .getBlockByHash(BlockHash(blockHash))
-            .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${blockHash.toHex}"))
+          CanonicalTxLookup.Found(block, txIndex) = found
           parentHeader <- blockchainReader
             .getBlockHeaderByHash(block.header.parentHash)
             .toRight(JsonRpcError.InvalidParams("Parent block not found"))
@@ -197,13 +196,9 @@ class TraceService(
     StateRead
       .reading {
         for
-          location <- transactionMappingStorage
-            .get(req.txHash)
+          found <- CanonicalTxLookup(transactionMappingStorage, blockchainReader, req.txHash)
             .toRight(JsonRpcError.InvalidParams("Transaction not found"))
-          TransactionLocation(blockHash, txIndex) = location
-          block <- blockchainReader
-            .getBlockByHash(BlockHash(blockHash))
-            .toRight(JsonRpcError.InvalidParams(s"Block not found for hash ${blockHash.toHex}"))
+          CanonicalTxLookup.Found(block, txIndex) = found
           parentHeader <- blockchainReader
             .getBlockHeaderByHash(block.header.parentHash)
             .toRight(JsonRpcError.InvalidParams("Parent block not found"))
@@ -450,20 +445,8 @@ class TraceService(
           (),
           JsonRpcError.InvalidParams(s"Requested range exceeds max of $MaxTraceFilterRange blocks")
         )
-        allTraces = (fromNum to toNum).flatMap { blockNum =>
-          if blockNum == 0 then Nil // skip genesis — no parent state
-          else
-            val branch = blockchainReader.getBestBranch
-            blockchainReader
-              .getBlockByNumber(branch, blockNum)
-              .flatMap { block =>
-                blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
-                  // one scope of reads for each block of the range, held for this block and no longer
-                  val flat = StateRead.scoped(traceAllTxsFlat(block, parentHeader))
-                  applyAddressFilter(flat, req.fromAddress, req.toAddress)
-                }
-              }
-              .getOrElse(Nil)
+        allTraces <- (fromNum to toNum).foldLeft[Either[JsonRpcError, Vector[JValue]]](Right(Vector.empty)) {
+          case (acc, blockNum) => acc.flatMap(done => traceFilterBlock(blockNum, req).map(done ++ _))
         }
         paginatedTraces =
           val afterN = req.after.getOrElse(0)
@@ -473,6 +456,26 @@ class TraceService(
     }.recover { case _: MissingNodeException =>
       Left(JsonRpcError.NodeNotFound)
     }
+
+  /** One block of trace_filter's range: its flat traces after the address filters. A read of the parent's state that
+    * the disk moved under is run again on a fresh view, the whole block of it ([[StateRead.attempting]]), so one stale
+    * read does not fail the range; a state that stays unreadable ends the range with the error
+    * [[StateRead.unavailable]] says.
+    */
+  private def traceFilterBlock(blockNum: Long, req: TraceFilterRequest): Either[JsonRpcError, Seq[JValue]] =
+    if blockNum == 0 then Right(Nil) // skip genesis — no parent state
+    else
+      val branch = blockchainReader.getBestBranch
+      blockchainReader
+        .getBlockByNumber(branch, blockNum)
+        .flatMap { block =>
+          blockchainReader.getBlockHeaderByHash(block.header.parentHash).map { parentHeader =>
+            StateRead
+              .attempting(traceAllTxsFlat(block, parentHeader))
+              .map(flat => applyAddressFilter(flat, req.fromAddress, req.toAddress))
+          }
+        }
+        .getOrElse(Right(Nil))
 
   /** Applies fromAddress/toAddress filters to a flat trace sequence.
     *

@@ -131,15 +131,16 @@ object InvalidChainReporter:
     *     which proves the header contradicts the receipts it commits to, or
     *     `StdValidators.HeaderGasContradictsEmptyTxListMarker`, which proves the header claims gas while committing to
     *     no transactions (see each marker's comment). Without them a gas-used mismatch found mid-batch was reported by
-    *     NOBODY: `ConsensusAdapter` maps a partial batch failure to `BlockImportedToTop` and drops the error, so
-    *     `BlockImporter`'s gas-used arm never ran — hive `engine` 501368ec9, `Invalid Missing Ancestor Syncing ReOrg,
-    *     GasUsed … Invalid P8`, 2/2 failing; and `… Incomplete Transactions … CanonicalReOrg=False, Invalid P9`, 2/2
-    *     failing on 436d724dd. `InMemoryWorldStateProxy.getCode` returns `ByteString.empty` instead of throwing when
-    *     the bytecode is absent from `EvmCodeStorage`, so a partially-synced node executes a contract call as if it
-    *     were a transfer to an EOA, under-counts gas, and reports a gas mismatch for a perfectly honest block. The
-    *     disambiguation (`findMissingContractCode`: `Some` => fetch over SNAP and retry, `None` => genuinely invalid)
-    *     already exists in `BlockImporter`, and that is where the gas-used case is reported from. It is never reported
-    *     from here.
+    *     NOBODY: `ConsensusAdapter` mapped a partial batch failure to `BlockImportedToTop` and dropped the error, so
+    *     `BlockImporter`'s gas-used arm never ran (since B-338 the partial batch is answered `ImportedPartially`, with
+    *     the error and the failing block, and the arm runs on it) — hive `engine` 501368ec9, `Invalid Missing Ancestor
+    *     Syncing ReOrg, GasUsed … Invalid P8`, 2/2 failing; and `… Incomplete Transactions … CanonicalReOrg=False,
+    *     Invalid P9`, 2/2 failing on 436d724dd. `InMemoryWorldStateProxy.getCode` returns `ByteString.empty` instead of
+    *     throwing when the bytecode is absent from `EvmCodeStorage`, so a partially-synced node executes a contract
+    *     call as if it were a transfer to an EOA, under-counts gas, and reports a gas mismatch for a perfectly honest
+    *     block. The disambiguation (`findMissingContractCode`: `Some` => fetch over SNAP and retry, `None` => genuinely
+    *     invalid) already exists in `BlockImporter`, and that is where the gas-used case is reported from. It is never
+    *     reported from here.
     *   - `HeaderParentNotFoundError`: says only that the parent is not in storage yet. Same failure mode as the
     *     reverted attempt, one layer up.
     *   - `HeaderUnexpectedError`: a string-carrying catch-all (`SyncBlocksValidator` wraps arbitrary messages in it).

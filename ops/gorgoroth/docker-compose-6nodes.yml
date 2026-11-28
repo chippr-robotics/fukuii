@@ -12,6 +12,9 @@ networks:
 services:
   fukuii-node1:
     image: ${FUKUII_IMAGE:-fukuii-etc:local}
+    # B-444: room for the bounded stop steps (up to ~119 s) and the RocksDB close after them; Docker's
+    # default 10 s SIGKILLs the node mid-close.
+    stop_grace_period: 180s
     container_name: gorgoroth-fukuii-node1
     hostname: fukuii-node1
     restart: unless-stopped
@@ -35,7 +38,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node1
       - FUKUII_ENV=gorgoroth
-      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=true -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=true -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.allow-insecure-bind=true -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
@@ -46,6 +49,9 @@ services:
 
   fukuii-node2:
     image: ${FUKUII_IMAGE:-fukuii-etc:local}
+    # B-444: room for the bounded stop steps (up to ~119 s) and the RocksDB close after them; Docker's
+    # default 10 s SIGKILLs the node mid-close.
+    stop_grace_period: 180s
     container_name: gorgoroth-fukuii-node2
     hostname: fukuii-node2
     restart: unless-stopped
@@ -68,7 +74,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node2
       - FUKUII_ENV=gorgoroth
-      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.allow-insecure-bind=true -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
@@ -79,6 +85,9 @@ services:
 
   fukuii-node3:
     image: ${FUKUII_IMAGE:-fukuii-etc:local}
+    # B-444: room for the bounded stop steps (up to ~119 s) and the RocksDB close after them; Docker's
+    # default 10 s SIGKILLs the node mid-close.
+    stop_grace_period: 180s
     container_name: gorgoroth-fukuii-node3
     hostname: fukuii-node3
     restart: unless-stopped
@@ -101,7 +110,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node3
       - FUKUII_ENV=gorgoroth
-      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.allow-insecure-bind=true -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
@@ -112,6 +121,9 @@ services:
 
   fukuii-node4:
     image: ${FUKUII_IMAGE:-fukuii-etc:local}
+    # B-444: room for the bounded stop steps (up to ~119 s) and the RocksDB close after them; Docker's
+    # default 10 s SIGKILLs the node mid-close.
+    stop_grace_period: 180s
     container_name: gorgoroth-fukuii-node4
     hostname: fukuii-node4
     restart: unless-stopped
@@ -134,7 +146,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node4
       - FUKUII_ENV=gorgoroth
-      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.allow-insecure-bind=true -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
@@ -145,6 +157,9 @@ services:
 
   fukuii-node5:
     image: ${FUKUII_IMAGE:-fukuii-etc:local}
+    # B-444: room for the bounded stop steps (up to ~119 s) and the RocksDB close after them; Docker's
+    # default 10 s SIGKILLs the node mid-close.
+    stop_grace_period: 180s
     container_name: gorgoroth-fukuii-node5
     hostname: fukuii-node5
     restart: unless-stopped
@@ -167,7 +182,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node5
       - FUKUII_ENV=gorgoroth
-      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.allow-insecure-bind=true -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8545/health"]
@@ -178,6 +193,9 @@ services:
 
   fukuii-node6:
     image: ${FUKUII_IMAGE:-fukuii-etc:local}
+    # B-444: room for the bounded stop steps (up to ~119 s) and the RocksDB close after them; Docker's
+    # default 10 s SIGKILLs the node mid-close.
+    stop_grace_period: 180s
     container_name: gorgoroth-fukuii-node6
     hostname: fukuii-node6
     restart: unless-stopped
@@ -200,7 +218,7 @@ services:
     environment:
       - FUKUII_NODE_ID=node6
       - FUKUII_ENV=gorgoroth
-      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
+      - "JAVA_OPTS=-Dfukuii.datadir=/app/data -Dfukuii.mining.mining-enabled=false -Dlogging.logs-level=DEBUG -Dpekko.loglevel=DEBUG -Dpekko.log-dead-letters=off -Dpekko.log-dead-letters-during-shutdown=off -Dfukuii.network.peer.p2p-version=5 -Dfukuii.network.rpc.http.interface=0.0.0.0 -Dfukuii.network.rpc.http.allow-insecure-bind=true -Dfukuii.network.rpc.http.port=8545 -Dfukuii.network.rpc.http.enabled=true"
     command: ["fukuii", "enterprise", "gorgoroth"]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8545/health"]

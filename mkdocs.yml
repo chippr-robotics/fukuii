@@ -151,6 +151,7 @@ nav:
     - Disk Management: runbooks/disk-management.md
     - Backup & Restore: runbooks/backup-restore.md
     - TLS Operations: runbooks/tls-operations.md
+    - Olympia EIP-2935 Deployment: runbooks/olympia-eip2935-deployment.md
     - Troubleshooting: runbooks/known-issues.md
   
   - For Operators/SRE:
@@ -178,6 +179,7 @@ nav:
       - Branch Protection: development/branch-protection.md
       - Codespaces: development/codespaces.md
       - Spec Lifecycle: development/spec-lifecycle.md
+      - fukuii-project relationship: development/fukuii-project.md
       - Tracker: development/tracker/index.md
     - Testing:
       - testing/README.md
@@ -239,6 +241,7 @@ nav:
         - Console UI: adr/operations/OPS-001-console-ui.md
         - Logging Levels: adr/operations/OPS-002-logging-level-categorization.md
         - TUI Operator Actions: adr/operations/OPS-004-tui-operator-actions.md
+        - Zero-Trust Listeners: adr/operations/OPS-005-zero-trust-listeners.md
       - Protocols:
         - SNAP Protocol Infra: adr/protocols/ADR-SNAP-001-protocol-infrastructure.md
         - SNAP Integration: adr/protocols/ADR-SNAP-002-integration-architecture.md

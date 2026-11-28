@@ -686,8 +686,7 @@ object SignedTransactionWithSender:
       val ft = blockchainConfig.forkTimestamps
       val latestTimestamp: Long =
         ft.osakaTimestamp
-          .orElse(ft.bpo2Timestamp)
-          .orElse(ft.bpo1Timestamp)
+          .orElse(ft.bpoTimestamps.reverse.flatten.headOption)
           .orElse(ft.pragueTimestamp)
           .orElse(ft.cancunTimestamp)
           .orElse(ft.shanghaiTimestamp)

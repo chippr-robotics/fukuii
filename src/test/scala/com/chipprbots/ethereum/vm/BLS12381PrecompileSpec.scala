@@ -17,13 +17,12 @@ import com.chipprbots.ethereum.vm.PrecompiledContracts.*
   * [[BlsMapG2]] via their `exec` methods using canonical EIP-2537 test vectors. Gas constant tests verify the four
   * constant-gas precompiles.
   *
-  * All execution tests call `assume(LibEthPairings.ENABLED)` and are cancelled (not failed) when the native
-  * `libeth_pairings` shared library is absent from the JVM.
+  * The precompiles run on the selected library ([[NativeBackends.blsBackend]]): eth_pairings where it loads, blst on
+  * Windows, or whichever `FUKUII_BLS12381_BACKEND` forces, which is how the Windows CI job runs these on blst (B-151).
+  * Execution tests are cancelled (not failed) when that library is absent from the JVM.
   */
 // scalastyle:off line.size.limit
 class BLS12381PrecompileSpec extends AnyFlatSpec with Matchers:
-
-  import org.hyperledger.besu.nativelib.bls12_381.LibEthPairings
 
   private def h(s: String): ByteString = ByteString(Hex.decode(s))
 
@@ -54,7 +53,7 @@ class BLS12381PrecompileSpec extends AnyFlatSpec with Matchers:
   // ── Tests ────────────────────────────────────────────────────────────────
 
   "BlsG1Add" should "add two valid G1 points and return the correct sum" taggedAs (OlympiaTest, VMTest) in {
-    assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
+    assume(NativeBackends.blsBackend.enabled, s"BLS12-381 library not loaded: ${NativeBackends.blsBackend.name}")
     val input = h(g1Gen + g1P1)
     val expected = h(
       "000000000000000000000000000000000a40300ce2dec9888b60690e9a41d3004fda4886854573974fab73b046d3147ba5b7a5bde85279ffede1b45b3918d82d" +
@@ -64,51 +63,51 @@ class BLS12381PrecompileSpec extends AnyFlatSpec with Matchers:
   }
 
   it should "return the point unchanged when adding the identity (G1 + 0 = G1)" taggedAs (OlympiaTest, VMTest) in {
-    assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
+    assume(NativeBackends.blsBackend.enabled, s"BLS12-381 library not loaded: ${NativeBackends.blsBackend.name}")
     BlsG1Add.exec(h(g1Gen + g1Zero)) shouldBe Some(h(g1Gen))
   }
 
   it should "return None for empty input" taggedAs (OlympiaTest, VMTest) in {
-    assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
+    assume(NativeBackends.blsBackend.enabled, s"BLS12-381 library not loaded: ${NativeBackends.blsBackend.name}")
     BlsG1Add.exec(ByteString.empty) shouldBe None
   }
 
   "BlsG2Add" should "add G2Gen to itself and return 2·G2Gen" taggedAs (OlympiaTest, VMTest) in {
-    assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
+    assume(NativeBackends.blsBackend.enabled, s"BLS12-381 library not loaded: ${NativeBackends.blsBackend.name}")
     BlsG2Add.exec(h(g2Gen + g2Gen)) shouldBe Some(h(g2Double))
   }
 
   it should "return None for empty input" taggedAs (OlympiaTest, VMTest) in {
-    assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
+    assume(NativeBackends.blsBackend.enabled, s"BLS12-381 library not loaded: ${NativeBackends.blsBackend.name}")
     BlsG2Add.exec(ByteString.empty) shouldBe None
   }
 
   "BlsG1MultiExp" should "compute scalar multiplication 1*G1 = G1" taggedAs (OlympiaTest, VMTest) in {
-    assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
+    assume(NativeBackends.blsBackend.enabled, s"BLS12-381 library not loaded: ${NativeBackends.blsBackend.name}")
     val scalar1 = "0000000000000000000000000000000000000000000000000000000000000001"
     BlsG1MultiExp.exec(h(g1Gen + scalar1)) shouldBe Some(h(g1Gen))
   }
 
   "BlsG2MultiExp" should "compute scalar multiplication 1*G2 = G2" taggedAs (OlympiaTest, VMTest) in {
-    assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
+    assume(NativeBackends.blsBackend.enabled, s"BLS12-381 library not loaded: ${NativeBackends.blsBackend.name}")
     val scalar1 = "0000000000000000000000000000000000000000000000000000000000000001"
     BlsG2MultiExp.exec(h(g2Gen + scalar1)) shouldBe Some(h(g2Gen))
   }
 
   "BlsPairing" should "return 0x01 for a pair of identity points (vacuous truth)" taggedAs (OlympiaTest, VMTest) in {
-    assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
+    assume(NativeBackends.blsBackend.enabled, s"BLS12-381 library not loaded: ${NativeBackends.blsBackend.name}")
     val expected = h("0000000000000000000000000000000000000000000000000000000000000001")
     BlsPairing.exec(ByteString(new Array[Byte](384))) shouldBe Some(expected)
   }
 
   it should "return 0x00 for (G1, G2) — pairing ≠ 1 in GT" taggedAs (OlympiaTest, VMTest) in {
-    assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
+    assume(NativeBackends.blsBackend.enabled, s"BLS12-381 library not loaded: ${NativeBackends.blsBackend.name}")
     val expected = h("0000000000000000000000000000000000000000000000000000000000000000")
     BlsPairing.exec(h(g1Gen + g2Gen)) shouldBe Some(expected)
   }
 
   "BlsMapG1" should "map a valid Fp field element to a G1 point" taggedAs (OlympiaTest, VMTest) in {
-    assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
+    assume(NativeBackends.blsBackend.enabled, s"BLS12-381 library not loaded: ${NativeBackends.blsBackend.name}")
     val input = h(
       "00000000000000000000000000000000156c8a6a2c184569d69a76be144b5cdc5141d2d2ca4fe341f011e25e3969c55ad9e9b9ce2eb833c81a908e5fa4ac5f03"
     )
@@ -120,7 +119,7 @@ class BLS12381PrecompileSpec extends AnyFlatSpec with Matchers:
   }
 
   "BlsMapG2" should "map a valid Fp2 field element to a G2 point" taggedAs (OlympiaTest, VMTest) in {
-    assume(LibEthPairings.ENABLED, "BLS12-381 native library not loaded")
+    assume(NativeBackends.blsBackend.enabled, s"BLS12-381 library not loaded: ${NativeBackends.blsBackend.name}")
     val input = h(
       "0000000000000000000000000000000007355d25caf6e7f2f0cb2812ca0e513bd026ed09dda65b177500fa31714e09ea0ded3a078b526bed3307f804d4b93b04" +
         "0000000000000000000000000000000002829ce3c021339ccb5caf3e187f6370e1e2a311dec9b75363117063ab2015603ff52c3d3b98f19c2f65575e99e8b78c"

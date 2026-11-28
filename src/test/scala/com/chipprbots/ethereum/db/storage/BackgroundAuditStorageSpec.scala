@@ -106,6 +106,40 @@ class BackgroundAuditStorageSpec extends AnyFlatSpec with Matchers with Eventual
     reads(1) shouldBe RawNodeRead.Absent
   }
 
+  "holdsNode" should "say present for a node, absent for none, an entry that does not unwrap and bytes that fail keccak (B-034)" taggedAs UnitTest in {
+    val b = new Basic
+    val good = nodeBytes(1)
+    val notAWrapper = hashOf(nodeBytes(2))
+    val missing = hashOf(nodeBytes(3))
+    b.put(hashOf(good), good, 3)
+    b.nodes.put(notAWrapper, Array[Byte](1, 2, 3))
+    val wrongBytes = hashOf(nodeBytes(4))
+    b.put(wrongBytes, nodeBytes(5), 1) // a wrapper that unwraps, to bytes that do not hash to its key
+    val store = b.state.getReadOnlyStorage
+
+    store.holdsNode(hashOf(good)) shouldBe true
+    store.holdsNode(missing) shouldBe false
+    store.holdsNode(notAWrapper) shouldBe false
+    store.holdsNode(wrongBytes) shouldBe false
+  }
+
+  it should "hold bytes that pass keccak whether or not they decode, and answer on archive pruning as on basic" taggedAs UnitTest in {
+    val source = EphemDataSource()
+    val nodes = new NodeStorage(source)
+    val state = new ArchiveStateStorage(nodes)
+    val good = nodeBytes(1)
+    val garbage = Array[Byte](0x01, 0x02, 0x03, 0x04) // not a node, and stored under its own hash
+    nodes.put(hashOf(good), good)
+    nodes.put(hashOf(garbage), garbage)
+    nodes.put(hashOf(nodeBytes(2)), nodeBytes(3)) // fails keccak
+
+    val store = state.getReadOnlyStorage
+    store.holdsNode(hashOf(good)) shouldBe true
+    store.holdsNode(hashOf(garbage)) shouldBe true
+    store.holdsNode(hashOf(nodeBytes(2))) shouldBe false
+    store.holdsNode(hashOf(nodeBytes(9))) shouldBe false
+  }
+
   "repairNode on basic pruning" should "write an absent node with its references pinned, and evict nothing else" taggedAs UnitTest in {
     val b = new Basic
     val good = nodeBytes(1)

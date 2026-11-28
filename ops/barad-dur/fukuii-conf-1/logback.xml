@@ -21,43 +21,50 @@
         <defaultValue>fukuii</defaultValue>
     </define>
 
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>${stdoutEncoderPattern}</pattern>
-        </encoder>
-    </appender>
+    <!-- prometheus-metrics 1.x ships no logback appender (deps bump 6e73fcfcb), so there is no METRICS appender. -->
 
-    <appender name="STASH" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder class="net.logstash.logback.encoder.LogstashEncoder">
-            <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
-            <fieldNames>
-                <timestamp>timestamp</timestamp>
-                <version>[ignore]</version>
-                <logger>logger</logger>
-                <thread>thread</thread>
-                <level>level</level>
-                <levelValue>level_value</levelValue>
-                <message>message</message>
-                <stackTrace>stack_trace</stackTrace>
-            </fieldNames>
-            <includeCallerData>false</includeCallerData>
-            <includeContext>true</includeContext>
-        </encoder>
-    </appender>
-
-    <appender name="METRICS" class="io.prometheus.client.logback.InstrumentedAppender" />
-
-    <root level="${LOGSLEVEL}">
-        <if condition='p("ASJSON").contains("true")'>
-            <then>
+    <!-- Console: JSON (STASH) when ASJSON is true, plain text (STDOUT) otherwise. Each branch defines its appender and the
+         root logger, so no appender is left unreferenced. The <if> is at the top level: logback 1.5 drops a <root>
+         holding a nested <if>, and the root logger got no appender at all. Its test is a <condition> element just
+         before it, not the deprecated condition attribute (see src/main/resources/logback.xml). -->
+    <condition class="ch.qos.logback.core.boolex.PropertyEqualityCondition">
+        <key>ASJSON</key>
+        <value>true</value>
+    </condition>
+    <if>
+        <then>
+            <appender name="STASH" class="ch.qos.logback.core.ConsoleAppender">
+                <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                    <customFields>{"service":"fukuii","node":"${FUKUII_NODE_ID:-${HOSTNAME}}","environment":"${FUKUII_ENV:-production}"}</customFields>
+                    <fieldNames>
+                        <timestamp>timestamp</timestamp>
+                        <version>[ignore]</version>
+                        <logger>logger</logger>
+                        <thread>thread</thread>
+                        <level>level</level>
+                        <levelValue>level_value</levelValue>
+                        <message>message</message>
+                        <stackTrace>stack_trace</stackTrace>
+                    </fieldNames>
+                    <includeCallerData>false</includeCallerData>
+                    <includeContext>true</includeContext>
+                </encoder>
+            </appender>
+            <root level="${LOGSLEVEL}">
                 <appender-ref ref="STASH" />
-            </then>
-            <else>
+            </root>
+        </then>
+        <else>
+            <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+                <encoder>
+                    <pattern>${stdoutEncoderPattern}</pattern>
+                </encoder>
+            </appender>
+            <root level="${LOGSLEVEL}">
                 <appender-ref ref="STDOUT" />
-            </else>
-        </if>
-        <appender-ref ref="METRICS" />
-    </root>
+            </root>
+        </else>
+    </if>
 
     <!-- =================================================================== -->
     <!-- EXTERNAL LIBRARIES (WARN — only problems)                           -->

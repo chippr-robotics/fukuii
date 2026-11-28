@@ -67,7 +67,9 @@ case class JsonRpcController(
     // share it, so the node logs the warning once, however many transports and calls there are.
     etherbaseAliasWarned: AtomicBoolean = new AtomicBoolean(false),
     // The transport this instance serves, for the dashboard's per-transport totals (see `onTransport`).
-    transport: String = RpcCallStats.OtherTransport
+    transport: String = RpcCallStats.OtherTransport,
+    // The client-certificate identity this instance serves (see `forCaller`); None: not an identity's controller.
+    callerIdentity: Option[String] = None
 ) extends ApisBuilder
     with Logger
     with JsonRpcBaseController:
@@ -127,6 +129,14 @@ case class JsonRpcController(
   def onTransport(name: String): JsonRpcController = copy(transport = name)
 
   override def transportName: String = transport
+
+  override def identityRule: Option[String] = callerIdentity
+
+  /** A copy of this controller that serves the client-certificate identity `label` (a rule's name, `anonymous` or
+    * `unmatched`, spec 030 FR-024): it answers exactly as this one does, and counts the calls it refuses for want of a
+    * namespace under that label.
+    */
+  def forCaller(label: String): JsonRpcController = copy(callerIdentity = Some(label))
 
   /** One controller per transport, each answering the namespaces of that transport's key (`network.rpc.http.apis`,
     * `ws.apis`, `ipc.apis`, each falling back to `network.rpc.apis`). The node gives each server its own.
@@ -668,7 +678,23 @@ case class JsonRpcController(
       )
     case req @ JsonRpcRequest(_, "admin_maxPeers", _, _) =>
       handle[AdminMaxPeersRequest, AdminMaxPeersResponse](adminService.maxPeers, req)
+    // ── Spec 030 FR-056: the node allowlist's runtime edits (contracts/admin-allowlist.md) ─────────
+    case req @ JsonRpcRequest(_, "admin_addNodesToAllowlist", _, _) =>
+      handle[AdminAllowlistEditRequest, AdminAllowlistEditResponse](
+        r => adminService.editAllowlist(com.chipprbots.ethereum.network.AllowlistEdit.Add, r, caller),
+        req
+      )
+    case req @ JsonRpcRequest(_, "admin_removeNodesFromAllowlist", _, _) =>
+      handle[AdminAllowlistEditRequest, AdminAllowlistEditResponse](
+        r => adminService.editAllowlist(com.chipprbots.ethereum.network.AllowlistEdit.Remove, r, caller),
+        req
+      )
+    case req @ JsonRpcRequest(_, "admin_getNodesAllowlist", _, _) =>
+      handle[AdminGetNodesAllowlistRequest, AdminGetNodesAllowlistResponse](adminService.getNodesAllowlist, req)
   }
+
+  /** Who is calling, for the allowlist's INFO lines (FR-059): the identity rule's name, else the transport. */
+  private def caller: String = callerIdentity.getOrElse(transport)
 
   private def handleTxPoolRequest: PartialFunction[JsonRpcRequest, IO[JsonRpcResponse]] = {
     case req @ JsonRpcRequest(_, "txpool_besuTransactions", _, _) =>

@@ -360,6 +360,34 @@ The SNAP `boundary` bodies build actor behaviours, so the supervision clause abo
 
 ---
 
+### S13 — A case object compared with `==` stays a case object
+
+**Status:** Rule (B-138, from a forge review). Not machine-checked: the build does not enable `strictEquality`, and the
+grep below finds every comparison with a capitalised name (477 hits on 2026-11-27, most of them constants), so it is a
+review aid, not a ratchet.
+
+**Mechanism.** Without `-language:strictEquality`, Scala 3 lets any two values be compared with `==`. Turn
+`case object Stop extends Cmd` into `case class Stop(reason: String) extends Cmd` and every `x == Stop` still compiles:
+`Stop` in an expression is now the case class's companion object, so the comparison is between a `Cmd` and
+`Stop.type`, and it is always false. `xs.contains(Stop)` and `x != Stop` fail the same way. A pattern `case Stop =>`
+only warns (E030 "Unreachable case"), and `-Xfatal-warnings` is off under `fukuiiDev`. Checked on Scala 3.9.0 with
+`-source:3.9` (2026-11-27): the `==` and `contains` forms compile with no diagnostic and return `false`.
+
+**Rule:** do not give a case object that code compares with `==`, `!=`, `contains`, `indexOf` or a stable-identifier
+pattern fields by turning it into a case class. If it needs data, add a new case class beside it, or first rewrite every
+comparison as a type pattern (`case _: Stop =>`, `x.isInstanceOf` is banned by S8), and grep the whole tree, tests
+included, before the change. The same applies to an `enum` case that gains parameters. Reviewers: a diff that changes
+`case object X` to `case class X(...)` must show the comparisons were found and rewritten.
+
+```bash
+# Comparisons against a bare capitalised name: read the ones whose name is a case object you are changing
+grep -rnE "[!=]= *([A-Z][A-Za-z0-9]*\.)*[A-Z][A-Za-z0-9_]*( *($|\)|,|&&|\|\||then\b|\}))" src/main --include="*.scala"
+# The one that matters for a change to object X: every use of the bare name
+grep -rnwE "X" src bytes rlp crypto scalanet --include="*.scala" | grep -vE "X\(|case class X|: X\b"
+```
+
+---
+
 ## `-source:3.9`: what the build enforces, and where
 
 The build compiles with `-source:3.9` (`scala3Options` in `build.sbt`). It replaced `-source:future`. INF-009
@@ -397,3 +425,4 @@ that passes an implicit argument explicitly; `import x.*` or `import x.{given, *
 Standards S3–S11 do NOT apply to `consensus/`, `vm/`, `crypto/`, `domain/` without
 specialist review. Those paths require FORGE (ETC) or BEACON (ETH) before any
 idiom modernization. See `consensus-change-protocol.md`. S12 is a safety rule and applies wherever `boundary` is used.
+S13 is a safety rule too, and applies everywhere, consensus paths included.

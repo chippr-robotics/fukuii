@@ -28,6 +28,7 @@ single RLP list. There is no trailing data.
 envelope := [ type, chainKey, chainId, blockNumber, blockHash, parentHash, body ]
 
 type        := uint   -- 0 block | 1 retraction | 2 finality | 3 witness (reserved)
+                      -- 4 poolAdd | 5 poolRemove | 6 safe | 7 chainStart (amendment 2026-11-24)
 chainKey    := bytes  -- UTF-8, the 024 chainKey ("etc", "mordor", "sepolia", "plataberget", ...)
 chainId     := uint   -- may exceed 2^32 (Platåberget 7091047534)
 blockNumber := uint
@@ -37,7 +38,9 @@ body        := []     -- per type, §3–§6
 ```
 
 Identity of a record is `(chainKey, type, blockNumber, blockHash)`. Two records with the same identity carry the same
-`body`; a consumer treats the second as a no-op (DC-3).
+`body`; a consumer treats the second as a no-op (DC-3). Pool records (§6a) are the exception: their identity is
+`(chainKey, nodeId, session, seq)`, and their `blockNumber`/`blockHash`/`parentHash` name the node's canonical head
+when the pool event happened (context only).
 
 ## 3. Block record (`type = 0`)
 
@@ -133,6 +136,30 @@ body := []
 never advances (D-6). ETH family: one record each time the applied `engine_forkchoiceUpdated`'s `finalizedBlockHash`
 changes. A consumer MUST treat every block at or below the watermark as irrevocable.
 
+### 5.1 Safe record (`type = 6`, amendment 2026-11-24)
+
+```
+body := []
+```
+
+`blockNumber`/`blockHash` are the applied `engine_forkchoiceUpdated`'s `safeBlockHash`; `parentHash` its parent.
+ETH family only: one record each time the safe hash changes; the ETC family never emits one. Advisory (spec DC-5): a
+consumer MAY treat blocks at or below it as unlikely to be retracted and MUST NOT treat them as irrevocable; only §5
+makes a block irrevocable. A safe record never names a block below the current finality watermark.
+
+### 5.2 Chain-start record (`type = 7`, amendment 2026-11-24)
+
+```
+body      := [ iteration ]
+iteration := uint   -- the chain's iteration number where it has them (Ephemery: N of release ephemery-N,
+                    -- chainId = 39438000 + N); 0 for a chain without iterations
+```
+
+`blockNumber` is 0, `blockHash` the genesis hash, `parentHash` 32 zero bytes, `chainId` the instance's chain ID.
+Emitted once per datadir, as the first record the exporter ever publishes from it (spec DC-11, FR-017). A consumer
+that sees a `chainStart` whose `chainId` or `blockHash` differs from the previous one on the topic closes the earlier
+chain instance; one that repeats the previous one (a restart that re-sends from its position) is a no-op (DC-3).
+
 ## 6. Witness record (`type = 3`, reserved)
 
 ```
@@ -143,6 +170,45 @@ witnessBytes  := bytes
 
 Produced only when enabled by the operator (FR-012). Consumers MUST tolerate its absence and MAY ignore it.
 
+## 6a. Pool records (`type = 4, 5`, amendment 2026-11-24; pool topic only)
+
+Published on `fukuii.<chainKey>.txpool.v1` (`topic.md` §8), never on the record topic. Best-effort (spec DC-10).
+
+```
+poolAdd body    := [ nodeId, session, seq, observedAt, txHash, sender, tx, source ]
+poolRemove body := [ nodeId, session, seq, observedAt, txHash, sender, nonce, reason, replacedBy ]
+
+nodeId     := bytes   -- the publishing node (default: first 8 bytes of its node ID; spec OQ-9, resolved)
+session    := uint    -- the node process's start time, milliseconds since the Unix epoch
+seq        := uint    -- 0, 1, 2, ... per (nodeId, session), across both pool types; contiguous unless records were
+                      -- dropped (spec FR-016)
+observedAt := uint    -- node wall clock at the pool event, milliseconds since the Unix epoch
+txHash     := b32
+sender     := bytes(20)   -- recovered sender
+tx         := the transaction item exactly as in §3 `transactions` (legacy RLP list, or typed txType ++ RLP(payload)
+                      -- as one byte string); a blob transaction in its block-body form, without sidecar
+source     := uint    -- 0 peer (gossip or a requested pooled transaction) | 1 local (RPC submission)
+                      -- | 2 reorg (back from a retracted block)
+nonce      := uint
+reason     := uint    -- 0 included | 1 replaced | 2 evicted | 3 expired | 4 dropped
+replacedBy := b32 | ""    -- the replacing transaction's hash when reason = 1; "" otherwise
+```
+
+Rules:
+
+1. **Full fields.** `tx` decodes to every field of the transaction (type, chain ID where the type has one, nonce, gas
+   limit, gas price or fee caps, recipient, value, input, access list, blob versioned hashes, authorization list,
+   signature). `keccak(tx)` (for a typed transaction, of the byte string; for legacy, of its RLP) equals `txHash`.
+2. **Reasons are the pool's.** `included`: removed because a canonical block includes it. `replaced`: another
+   transaction from the same sender at the same nonce took its place. `evicted`: pushed out by the pool's size limit
+   or the blob-sidecar byte budget. `expired`: older than the pool's transaction timeout. `dropped`: any other
+   removal (an explicit remove, a pool clear, a removal the pool did not ask for).
+3. **Order.** Within one `(nodeId, session)`, `seq` increases by one per record in the order the pool acted. Records
+   are keyed by `sender` on the topic, so one sender's records stay in order on any partition count. There is no
+   order against the record topic.
+4. **Gaps.** A `seq` jump means records were dropped (counted in `fukuii_export_pool_dropped_total`). A new `session`
+   for a `nodeId` means that node restarted with an empty pool; no `poolRemove` is sent for what it held.
+
 ## 7. Ordering across records on one topic
 
 Per `chainKey` the sequence is totally ordered. Within it:
@@ -152,8 +218,11 @@ Per `chainKey` the sequence is totally ordered. Within it:
 - a run of retractions is strictly decreasing in `blockNumber` and its lowest member's `parentHash` names the block
   the replacement chain builds on (the fork point is canonical and unretracted);
 - finality records may appear anywhere and never decrease in `blockNumber`;
-- the first record after the position on a fresh start is a finality record (ETC: genesis) or the first block record
-  (ETH: finality follows with the first applied FCU).
+- safe records (§5.1) may appear anywhere, never name a block below the finality watermark, and MAY decrease;
+- the first record a datadir ever publishes is a `chainStart` (§5.2); on a fresh start it is followed by a finality
+  record (ETC: genesis) or the first block record (ETH: finality follows with the first applied FCU);
+- `blockNumber` may restart only immediately after a `chainStart` with a new `chainId` or genesis hash (a chain reset,
+  spec DC-11); the rules above then apply to the new instance from its genesis.
 
 A gap in `blockNumber` that is not explained by retractions is a fault (DC-4); the consumer stops.
 
@@ -161,5 +230,6 @@ A gap in `blockNumber` that is not explained by retractions is a fault (DC-4); t
 
 `0x01` is frozen by GT-1 together with the golden vectors. Any change to item order, a type's body or the netting rules
 is a new version byte. Adding a record type reuses `0x01` only if the new type's envelope is unchanged and consumers
-can skip unknown `type` values — they MUST NOT; so a new type is also a new version. 018 F2's local trie-node undo
+can skip unknown `type` values — they MUST NOT; so a new type is also a new version. *(Amendment 2026-11-24: types 4
+to 7 were added before GT-1 froze `0x01`, with their vectors, so they are part of v1, not a new version.)* 018 F2's local trie-node undo
 records are outside this contract and carry no version byte of this scheme.

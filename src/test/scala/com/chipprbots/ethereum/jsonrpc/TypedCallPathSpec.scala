@@ -147,7 +147,7 @@ class TypedCallPathSpec
         (AddressEcho, AddressEchoCode),
         (Collector, CollectorCode)
       ).foldLeft(funded) { case (w, (a, c)) => withContract(w, a, c) }
-      InMemoryWorldStateProxy.persistState(
+      InMemoryWorldStateProxy.persistStateAndWriteCode(
         extraState(withContract(contracts, SlotReader, SlotReaderCode, Map(1 -> 42)))
       )
 
@@ -217,7 +217,7 @@ class TypedCallPathSpec
         val outcome = ledger.simulateCall(m.stx, m.header, ledger.callWorld(head, m.header), m.options, None).value
         outcome.codeDepositShortfall shouldBe false
         val viaCall = outcome.txResult
-        val viaTx = ledger.simulateTransaction(m.stx, m.header, None)
+        val viaTx = ledger.simulateTransaction(m.stx, m.header, ledger.callWorld(head, m.header))
         (viaCall.gasUsed, viaCall.vmReturnData, viaCall.vmError, viaCall.logs) shouldBe
           (viaTx.gasUsed, viaTx.vmReturnData, viaTx.vmError, viaTx.logs)
         viaCall.worldState.stateRootHash shouldBe viaTx.worldState.stateRootHash
@@ -225,7 +225,7 @@ class TypedCallPathSpec
         val t1 = new CallTracer()
         val t2 = new CallTracer()
         ledger.simulateCall(m.stx, m.header, ledger.callWorld(head, m.header), m.options, Some(t1))
-        ledger.simulateTransactionWithTracer(m.stx, m.header, None, t2)
+        ledger.simulateTransactionWithTracer(m.stx, m.header, ledger.callWorld(head, m.header), t2)
         t1.getResult shouldBe t2.getResult
     )
 
@@ -235,7 +235,7 @@ class TypedCallPathSpec
   ) in new Node:
     val m: CallMessage = message(args(SlotReader, _.copy(gas = Some(GasAmount(1_000_000)))))
     ledger.estimateCallGas(m.stx, m.header, ledger.callWorld(head, m.header), m.options).value shouldBe
-      ledger.binarySearchGasEstimation(m.stx, m.header, None)
+      ledger.binarySearchGasEstimation(m.stx, m.header, ledger.callWorld(head, m.header))
 
   // ── Fees (geth ToMessage) ──────────────────────────────────────────────────────────────────────────────────────
 
@@ -484,14 +484,18 @@ class TypedCallPathSpec
     CallErrors.vmErrorMessage(com.chipprbots.ethereum.vm.InvalidOpCode(0xfe.toByte)) shouldBe "invalid opcode: INVALID"
     est(spin).left.value shouldBe StxLedger.CallEstimateFailure.PreCheck("gas required exceeds allowance (100000)")
 
-  it should "keep go-ethereum's floor-data-gas message, and map only intrinsic gas to the allowance message" taggedAs (
+  it should "wrap the floor-data-gas refusal as go-ethereum's run does, and map only intrinsic gas to the allowance message" taggedAs (
     UnitTest,
     RPCTest
   ) in new Node:
     // Osaka, 1,000 non-zero bytes: intrinsic 37,000, EIP-7623 floor 61,000
     val heavy: TxArgs = args(Probe, _.copy(data = Some(ByteString(Array.fill[Byte](1000)(1)))))
+    // go-ethereum v1.17.9 eth/gasestimator `run`: fmt.Errorf("failed with %d gas: %w", call.GasLimit, err); `execute`
+    // special-cases ErrIntrinsicGas and ErrGasLimitTooHigh only.
     estimate(heavy, gas = 50000).left.value shouldBe
-      StxLedger.CallEstimateFailure.PreCheck("insufficient gas for floor data gas cost: have 50000, want 61000")
+      StxLedger.CallEstimateFailure.PreCheck(
+        "failed with 50000 gas: insufficient gas for floor data gas cost: have 50000, want 61000"
+      )
     estimate(heavy, gas = 30000).left.value shouldBe
       StxLedger.CallEstimateFailure.PreCheck("gas required exceeds allowance (30000)")
 
@@ -609,6 +613,26 @@ class TypedCallPathSpec
     rpc(invalid) shouldBe Left(JsonRpcError(-32000, "invalid opcode: INVALID", None))
     rpc(undefined) shouldBe Left(JsonRpcError(-32000, "invalid opcode: opcode 0xc not defined", None))
     rpc(reverter).left.value.code shouldBe 3
+
+  // B-176: a precompile that rejects its input is a VM error like any other, worded as go-ethereum's `Run` returns it
+  // (PrecompiledContract.failureReason): eth_call and eth_estimateGas answer -32000 with it, eth_createAccessList puts it
+  // in `error`. BN254 ADD (0x06) on the point (1, 1), which is not on the curve.
+  "A failing precompile" should "be go-ethereum's reason on eth_call, eth_estimateGas and eth_createAccessList" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new Node:
+    val notOnCurve: TxArgs =
+      args(Address(0x06), _.copy(gas = Some(GasAmount(100_000)), data = Some(word(1) ++ word(1) ++ word(0) ++ word(0))))
+    val before: Double = com.chipprbots.ethereum.vm.PrecompileDivergence.UnexplainedCounter.count()
+    service.call(CallRequest(notOnCurve, BlockParam.Latest)).unsafeRunSync() shouldBe
+      Left(JsonRpcError(-32000, "point is not on curve", None))
+    service.estimateGas(CallRequest(notOnCurve.copy(gas = None), BlockParam.Latest)).unsafeRunSync() shouldBe
+      Left(JsonRpcError(-32000, "point is not on curve", None))
+    val listed: CreateAccessListResponse =
+      service.createAccessList(CreateAccessListRequest(notOnCurve, BlockParam.Latest)).unsafeRunSync().value
+    listed.error shouldBe Some("point is not on curve")
+    // a reason go-ethereum gives is no divergence
+    com.chipprbots.ethereum.vm.PrecompileDivergence.UnexplainedCounter.count() shouldBe before
 
   "CallErrors.opCodeName" should "name an opcode as go-ethereum's OpCode.String() does, enabled by the fork or not" taggedAs (
     UnitTest,

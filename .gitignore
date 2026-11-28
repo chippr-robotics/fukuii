@@ -74,6 +74,8 @@ ops/*/captured-logs/
 !.claude/agents/
 !.claude/skills/
 !.claude/agent-protocols/
+!.claude/evals/
+.claude/evals/runs/
 .claude/agent-protocols/working-docs/
 .claude/agent-protocols/completed/
 !.claude/looping/
@@ -119,6 +121,7 @@ etc-node.key
 run-*.conf
 run-*.sh
 !.claude/looping/bin/run-loop.sh
+!scripts/etc-mainnet-sync/run-eg12.sh
 
 # Release cards: card.json and card.svg are committed; the PNG for Discord is rendered from them (render_card.py --png)
 marketing/**/card.png

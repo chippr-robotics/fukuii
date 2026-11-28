@@ -139,7 +139,10 @@ object Dependencies {
     "org.bouncycastle" % "bcprov-jdk18on" % "1.84",
     "org.bouncycastle" % "bcpkix-jdk18on" % "1.84",
     "io.consensys.protocols" % "jc-kzg-4844" % "2.0.0", // EIP-4844/7594 KZG ops (c-kzg-4844 JNI bindings, PeerDAS cell proofs)
-    "org.hyperledger.besu" % "bls12-381" % "1.0.0" // EIP-2537 BLS12-381 precompiles (Matter Labs eth_pairings via JNA)
+    "org.hyperledger.besu" % "bls12-381" % "1.0.0", // EIP-2537 BLS12-381 precompiles (Matter Labs eth_pairings via JNA)
+    // EIP-2537 where eth_pairings has no build, Windows above all (B-151, ADR VM-008): supranational blst, with natives
+    // for Windows x86_64, Linux and macOS. Its runtime Guava 18 is evicted by the build's Guava.
+    "tech.pegasys" % "jblst" % "0.3.18"
   )
 
   // TEST scope only (B-153): the EIP-2537 oracle Eip2537DifferentialSpec runs the production precompiles against.

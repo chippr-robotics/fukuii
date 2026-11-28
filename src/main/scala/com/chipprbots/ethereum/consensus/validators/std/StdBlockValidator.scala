@@ -18,6 +18,7 @@ import com.chipprbots.ethereum.domain.Withdrawal.WithdrawalEnc
 import com.chipprbots.ethereum.domain.Withdrawal.toWithdrawal
 import com.chipprbots.ethereum.mpt.ByteArraySerializable
 import com.chipprbots.ethereum.rlp.encode as rlpEncode
+import com.chipprbots.ethereum.utils.BlockchainConfig
 import com.chipprbots.ethereum.utils.ByteUtils.or
 
 object StdBlockValidator extends BlockValidator:
@@ -30,18 +31,14 @@ object StdBlockValidator extends BlockValidator:
     * that reading is wrong and would mislead anyone tempted to raise it to 10 MiB for ETH. Both chains want exactly
     * this number.
     *
-    * Applied unconditionally, which matches the EIP: its specification says only "Any RLP-encoded block exceeding
-    * MAX_RLP_BLOCK_SIZE must be considered invalid", at both block creation and validation, with no activation keyed to
-    * a named fork or timestamp. go-ethereum gates the equivalent check on Osaka, but that is a deployment choice for
-    * mainnet activation rather than something the spec requires.
+    * Enforced by [[validateBlockRLPSize]] only from ETH's Osaka fork on, at the block's own timestamp. EIP-7934 is
+    * scheduled into Osaka by EIP-7607, execution-specs applies it only in `osaka/fork.py` (`state_transition`) and
+    * later forks, and go-ethereum's `BlockValidator.ValidateBody` opens with `IsOsaka(number, time) && block.Size() >
+    * params.MaxBlockSize`. A pre-Osaka block larger than the cap is valid: EEST tests@v21.0.0
+    * `fork_transition_block_rlp_limit` (PragueToOsakaAtTime15k) carries one of 8,388,609 bytes at timestamp 14,999.
     *
-    * Reachability, which is why unconditional is safe rather than merely spec-permitted: the binding constraint is
-    * calldata. Pre-Prague, at 4 gas per zero byte, a 30M-gas block tops out near 7.15 MiB; from Prague, EIP-7623's
-    * floor of 10 gas per token puts a 45M-gas block near 4.3 MiB. Real blocks run 2-3 MiB. No chain fukuii syncs
-    * produces a block that reaches this cap on either side of any fork.
-    *
-    * Note this now runs on the p2p import path for ETH as well as ETC: validateBlockBefore Execution reaches it there
-    * since BlockExecution stopped passing alreadyValidated = true.
+    * ETC has no such rule. No ECIP adopts EIP-7934 and core-geth has no block-size cap, so no ETC block is ever
+    * rejected for its size, and no ETC chain config declares an Osaka timestamp (ChainConfigMatrixSpec pins that).
     */
   val BlockRLPSizeCap: Long = 8L * 1024 * 1024 // 8,388,608
 
@@ -107,23 +104,29 @@ object StdBlockValidator extends BlockValidator:
     if logsBloomOr == blockHeader.logsBloom then Right(BlockValid)
     else Left(BlockLogBloomError)
 
-  /** EIP-7934: Validates that the RLP-encoded block size does not exceed the cap.
+  /** EIP-7934, the one place the rule lives: from ETH Osaka on (at the block's own timestamp), a block whose RLP
+    * encoding exceeds [[BlockRLPSizeCap]] is invalid. Before Osaka, and on every ETC chain, no size is checked. See
+    * [[BlockRLPSizeCap]] for the sources.
     *
-    * @param block
-    *   Block to validate
-    * @return
-    *   Block if valid, BlockRLPSizeError otherwise
+    * A consensus rule of the block, so it is not part of [[validateHeaderAndBody]]: that check also answers "does this
+    * body belong to this header" for sync and export callers, which must not apply fork rules. Block import reaches it
+    * through `validateBlockBeforeExecution` (StdValidators, ValidatorsExecutor), the Engine API through
+    * `EngineApiService.newPayload`.
+    *
+    * `Block.size` is go-ethereum's `block.Size()`: the RLP of [header, transactions, uncles, withdrawals],
+    * execution-specs osaka `len(rlp.encode(block))`.
     */
-  private def validateBlockRLPSize(block: Block): Either[BlockError, BlockValid] =
-    val size = Block.size(block)
-    if size <= BlockRLPSizeCap then Right(BlockValid)
-    else Left(BlockRLPSizeError(size, BlockRLPSizeCap))
+  def validateBlockRLPSize(block: Block)(using blockchainConfig: BlockchainConfig): Either[BlockError, BlockValid] =
+    if !blockchainConfig.isOsakaTimestamp(block.header.unixTimestamp) then Right(BlockValid)
+    else
+      val size = Block.size(block)
+      if size <= BlockRLPSizeCap then Right(BlockValid)
+      else Left(BlockRLPSizeError(size, BlockRLPSizeCap))
 
   /** This method allows validate a Block. It only performs the following validations (stated on section 4.4.2 of
     * http://paper.gavwood.com/):
     *   - BlockValidator.validateTransactionRoot
     *   - BlockValidator.validateOmmersHash
-    *   - BlockValidator.validateBlockRLPSize (EIP-7934)
     *   - BlockValidator.validateReceipts
     *   - BlockValidator.validateLogBloom
     *
@@ -154,7 +157,6 @@ object StdBlockValidator extends BlockValidator:
     for
       _ <- validateTransactionRoot(block)
       _ <- validateOmmersHash(block)
-      _ <- validateBlockRLPSize(block)
       _ <- validateWithdrawalsPresence(block)
       _ <- validateWithdrawalsRoot(block)
       _ <- validateBlobGasUsed(block)

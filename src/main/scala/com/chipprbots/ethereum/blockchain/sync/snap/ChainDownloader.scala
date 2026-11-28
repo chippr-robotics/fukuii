@@ -1124,10 +1124,10 @@ class ChainDownloader private (
     if n - 1 > current then appStateStorage.putBackfillBestBody(n - 1).commit()
 
   /** Store received bodies whose transactions/ommers hash to their header (and pass validateHeaderAndBody's other
-    * consensus checks — RLP size, withdrawals presence/root, blob gas), then advance the body cursor over the
-    * contiguous run now on disk (#18, #33). Reuses the SAME check block import makes
-    * (StdBlockValidator.validateHeaderAndBody) rather than re-implementing it — the same call regular sync's
-    * BlockFetcherState.validateBodies makes via blockValidator.validateHeaderAndBody (BlockFetcherState.scala:226).
+    * consensus checks — withdrawals presence/root, blob gas), then advance the body cursor over the contiguous run now
+    * on disk (#18, #33). Reuses the SAME check block import makes (StdBlockValidator.validateHeaderAndBody) rather than
+    * re-implementing it — the same call regular sync's BlockFetcherState.validateBodies makes via
+    * blockValidator.validateHeaderAndBody (BlockFetcherState.scala:226).
     *
     * Matches `bodies` against `requestedHashes` as an ordered subsequence (matchOrderedSubsequence) rather than a
     * strict positional zip, so a peer that honestly skips a block it doesn't have shifts nothing — every match is
@@ -1643,10 +1643,10 @@ object ChainDownloader:
 
   /** Fetch the bodies of these blocks now, ahead of everything queued, while bodies are deferred too (spec 018 C5a,
     * B-301). For the window below a pivot: a sync on the unified state layout hands off only once the bodies of the
-    * pivot and the five below it are stored, since the ommers of the first blocks above it are checked against them,
-    * and the backfill that would fetch them runs up from the genesis, after the hand-off. The headers must be stored: a
-    * body is checked against its header before it is kept. Sent as often as wanted: what is stored, queued or on its
-    * way is passed over.
+    * pivot and the four below it that have ommers are stored, since the ommers of the first blocks above it are checked
+    * against them, and the backfill that would fetch them runs up from the genesis, after the hand-off. The headers
+    * must be stored: a body is checked against its header before it is kept. Sent as often as wanted: what is stored,
+    * queued or on its way is passed over.
     */
   final case class FetchBodies(hashes: Seq[ByteString]) extends Command
   case class GetProgress(replyTo: TypedActorRef[Progress]) extends Command

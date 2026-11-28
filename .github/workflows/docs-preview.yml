@@ -27,6 +27,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write
 
 # Ensure only one preview deployment per PR at a time
 concurrency: 
@@ -90,4 +91,13 @@ jobs:
           source-dir: ./site/
           preview-branch: gh-pages
           umbrella-dir: pr-preview
+          pages-base-url: docs.fukuii.com
           action: auto
+
+      # Pages serves gh-pages.yml's artifact, not the gh-pages branch, so a preview is live only once that
+      # workflow republishes the site with it (or without it, after a close). Dispatch it on main.
+      - name: Republish the site with this preview
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run gh-pages.yml --repo "$GITHUB_REPOSITORY" --ref main

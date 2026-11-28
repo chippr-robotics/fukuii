@@ -2,14 +2,12 @@ package com.chipprbots.ethereum.consensus
 package pow
 
 import java.lang.Integer.remainderUnsigned
-import java.math.BigInteger
 import java.util
 
 import org.apache.pekko.util.ByteString
 
 import scala.annotation.tailrec
 
-import org.bouncycastle.util.BigIntegers
 import org.bouncycastle.util.encoders.Hex
 
 import com.chipprbots.ethereum.crypto.kec256
@@ -229,19 +227,19 @@ object EthashUtils:
   private def fnv(v1: Int, v2: Int): Int =
     (v1 * FNV_PRIME) ^ v2
 
-  private[pow] def checkDifficulty(blockDifficulty: Long, proofOfWork: EthashProofOfWork): Boolean =
-    @tailrec
-    def compare(a1: Array[Byte], a2: Array[Byte]): Int =
-      if a1.length > a2.length then 1
-      else if a1.length < a2.length then -1
-      else if a1.length == 0 && a2.length == 0 then 0
-      else if (a1.head & 0xff) > (a2.head & 0xff) then 1
-      else if (a1.head & 0xff) < (a2.head & 0xff) then -1
-      else compare(a1.tail, a2.tail)
+  /** 2^256: the Ethash target is `2^256 / difficulty`. */
+  private val Two256: BigInt = BigInt(1) << 256
 
-    val headerDifficultyAsByteArray: Array[Byte] =
-      BigIntegers.asUnsignedByteArray(32, BigInteger.ONE.shiftLeft(256).divide(BigInteger.valueOf(blockDifficulty)))
-
-    compare(headerDifficultyAsByteArray, proofOfWork.difficultyBoundary.toArray[Byte]) >= 0
+  /** Whether a seal's result meets the header's difficulty: the result, read as a 256-bit unsigned big-endian integer,
+    * is at most `2^256 / difficulty` (core-geth `consensus/ethash/consensus.go` `verifySeal`: `target := new(big.Int).
+    * Div(two256, header.Difficulty)`, rejected if `new(big.Int).SetBytes(result).Cmp(target) > 0`).
+    *
+    * The arithmetic is unbounded (B-164): a difficulty of 1 has the target 2^256, which no 32-byte field holds, and
+    * every result meets it; a difficulty above 2^63 is not cut to a Long. A difficulty of 0 or below is invalid
+    * (core-geth `errInvalidDifficulty`, "non-positive difficulty") rather than a division by zero.
+    */
+  private[pow] def checkDifficulty(blockDifficulty: BigInt, proofOfWork: EthashProofOfWork): Boolean =
+    blockDifficulty.signum > 0 &&
+      BigInt(1, proofOfWork.difficultyBoundary.toArray[Byte]) <= Two256 / blockDifficulty
 
   case class EthashProofOfWork(mixHash: ByteString, difficultyBoundary: ByteString)

@@ -64,8 +64,10 @@ object JsonRpcError extends JsonMethodsImplicits:
   def SimulateClientLimitExceeded(msg: String): JsonRpcError = JsonRpcError(-38026, msg, None)
 
   def executionError(reasons: List[EthCustomError]): JsonRpcError = JsonRpcError(3, "Execution error", reasons)
-  val NodeNotFound: JsonRpcError = executionError(List(EthCustomError.DoesntExist("State node")))
-  val BlockNotFound: JsonRpcError = executionError(List(EthCustomError.DoesntExist("Block")))
+  // Not execution errors: code 3 is what a client reads as a revert. go-ethereum answers a state it does not hold with
+  // -32000 "missing trie node ..." and a block it does not know with -32000 "header not found" (B-197).
+  val NodeNotFound: JsonRpcError = JsonRpcError(-32000, "missing trie node", None)
+  val BlockNotFound: JsonRpcError = JsonRpcError(-32000, "header not found", None)
 
   // What a client is told on the unified state layout when a block's state cannot be read (spec 018 Track C). None of
   // them is an execution error (code 3), which clients take for a revert.
@@ -79,6 +81,12 @@ object JsonRpcError extends JsonMethodsImplicits:
   /** The state is held and is not handed out right now: as many reads behind the head as may be are in flight. */
   val StateBusy: JsonRpcError =
     JsonRpcError(-32005, "too many reads of states behind the head are in flight, ask again", None)
+
+  /** A write of the head, or a read on it, was refused with nothing written: another thread's adoption is moving the
+    * head to another branch (B-294, B-462). Asking again once it ends finds the head settled.
+    */
+  val HeadBusy: JsonRpcError =
+    JsonRpcError(-32005, "the head is being moved to another branch; nothing was written, ask again", None)
 
   /** The chain moved on under the read each time it was made. */
   val StateMoved: JsonRpcError = JsonRpcError(-32005, "the state moved while it was read, ask again", None)

@@ -112,6 +112,12 @@ object PeerManagerActor:
 
   /** Self-scheduled: (re-)dial the remembered good snap peers that are not connected. */
   private case object RedialSnapGoodPeers extends Command
+
+  /** The node allowlist changed (a reload; spec 030 FR-058): drop peers no longer listed, dial the added entries. */
+  final private case class AllowlistChangedCmd(generation: Long) extends Command
+
+  /** Self-scheduled: dial the allowlist's entries that carry an address and are not connected (FR-058). */
+  private case object RedialAllowlist extends Command
   final case class PeerClosedConnectionCmd(peerHostAddress: String, reason: Long) extends Command
 
   /** Sent by NetworkPeerManagerActor for a handshaked peer whose head is still genesis after the grace period while our
@@ -173,7 +179,8 @@ object PeerManagerActor:
       blacklist: Blacklist,
       externalSchedulerOpt: Option[Scheduler] = None,
       snapGoodPeers: Option[SnapGoodPeers] = None,
-      peerScoringManager: Option[PeerScoringManager] = None
+      peerScoringManager: Option[PeerScoringManager] = None,
+      allowlist: NodeAllowlist = NodeAllowlist.Disabled
   ): Behavior[Command] =
     Behaviors.setup { context =>
       new Impl(
@@ -188,6 +195,7 @@ object PeerManagerActor:
         externalSchedulerOpt,
         snapGoodPeers,
         peerScoringManager,
+        allowlist,
         context
       ).waitingForStart()
     }
@@ -206,6 +214,7 @@ object PeerManagerActor:
       externalSchedulerOpt: Option[Scheduler],
       snapGoodPeers: Option[SnapGoodPeers],
       peerScoringManager: Option[PeerScoringManager],
+      allowlist: NodeAllowlist,
       context: TypedActorContext[Command]
   ):
 
@@ -213,6 +222,11 @@ object PeerManagerActor:
     implicit private val ec: scala.concurrent.ExecutionContext = context.executionContext
     // CE3: Using global IORuntime for actor operations
     implicit private val ioRuntime: IORuntime = IORuntime.global
+
+    // Spec 030 FR-058: a reload that changes the list arrives as a message, handled on the actor thread.
+    if allowlist.enabled then
+      val self = context.self
+      allowlist.onChange(snap => self ! AllowlistChangedCmd(snap.generation))
 
     private def scheduler: Scheduler = externalSchedulerOpt.getOrElse(context.system.classicSystem.scheduler)
 
@@ -374,8 +388,10 @@ object PeerManagerActor:
           connectedPeers.isConnectionHandled(socketAddress) ||
             connectedPeers.hasHandshakedWith(node.id)
 
-        !alreadyConnected && !blacklist.isBlacklisted(PeerAddress(socketAddress.getHostString)) &&
-        !isExcludedWrongNetwork(node.id)
+        // A node with no TCP port (an enode written `...:0?discport=N`, a discovery-only record) cannot be dialled: it
+        // takes no connection slot (B-237; DnsDiscovery and StaticNodesLoader already skip it).
+        node.tcpPort > 0 && !alreadyConnected && !blacklist.isBlacklisted(PeerAddress(socketAddress.getHostString)) &&
+        !isExcludedWrongNetwork(node.id) && allowlist.permits(node.id)
 
     // -----------------------------------------------------------------------
     // State 1: waitingForStart (stash everything until StartConnecting)
@@ -399,6 +415,7 @@ object PeerManagerActor:
               log.info("SNAP_GOOD_PEERS: loaded {} remembered snap peers from {}", store.size, store.config.file)
             }
             context.self ! RedialSnapGoodPeers
+            if allowlist.enabled then context.self ! RedialAllowlist
             stash.unstashAll(listening(ConnectedPeers.empty))
           case other =>
             stash.stash(other)
@@ -452,6 +469,18 @@ object PeerManagerActor:
 
         case RequestDiscoveredNodes =>
           requestDiscoveredNodes()
+          // Discovery is off in allowlist mode, so the listed addresses are re-dialled on the same tick.
+          if allowlist.enabled then context.self ! RedialAllowlist
+          Some(Behaviors.same)
+
+        case RedialAllowlist =>
+          redialAllowlist(connectedPeers)
+          Some(Behaviors.same)
+
+        case AllowlistChangedCmd(generation) =>
+          log.info("Node allowlist changed (generation {}): {} node(s)", generation, allowlist.snapshot.size)
+          dropUnlistedPeers(connectedPeers)
+          context.self ! RedialAllowlist
           Some(Behaviors.same)
 
         case RedialSnapGoodPeers =>
@@ -467,6 +496,25 @@ object PeerManagerActor:
           Some(Behaviors.same)
 
         case _ => None
+
+    /** Disconnects every connected or dialling peer whose node id is no longer listed (FR-058). It is the generic
+      * policy drop, `UselessPeer`, as for a peer excluded by node id; the next connection from it is refused at the
+      * handshake.
+      */
+    private def dropUnlistedPeers(connectedPeers: ConnectedPeers): Unit =
+      connectedPeers.peers.values.foreach { peer =>
+        if peer.nodeId.exists(!allowlist.permits(_)) then
+          log.info("ALLOWLIST_REMOVED: disconnecting {}: it is no longer on the node allowlist", peer.id.value.take(16))
+          peer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer)
+      }
+
+    /** Dials the allowlist's entries with an address, as a static node is dialled; `connectWith` applies the limits. */
+    private def redialAllowlist(connectedPeers: ConnectedPeers): Unit =
+      allowlist.snapshot.dialable.foreach { uri =>
+        val nodeId = ByteString(Hex.decode(uri.getUserInfo))
+        if !connectedPeers.hasHandshakedWith(nodeId) && !blacklist.isBlacklisted(PeerAddress(bareHost(uri))) then
+          context.self ! ConnectToPeerCmd(uri)
+      }
 
     /** Dial remembered good snap peers that are not connected, best first. An attempt without a later handshake counts
       * against the entry (it is dropped past `maxFailedDials`); wrong-network exclusions and IP blacklists are
@@ -574,6 +622,13 @@ object PeerManagerActor:
       msg match
         case PeerClosedConnectionCmd(peerAddress, reason) =>
           val isMaintainedPeer = maintainedPeersByNodeId.values.exists(_.getHost == peerAddress)
+          // A peer the operator configured is not a stranger: its refusal (fork id, network, protocol) is worth a line.
+          if isMaintainedPeer then
+            log.warn(
+              "Maintained peer {} closed the connection: reason={}",
+              peerAddress,
+              Disconnect.reasonToString(reason)
+            )
           if !isMaintainedPeer then
             blacklist.add(
               PeerAddress(peerAddress),
@@ -721,6 +776,14 @@ object PeerManagerActor:
           Behaviors.same
 
     private def connectWith(uri: URI, connectedPeers: ConnectedPeers, explicit: Boolean = false): Behavior[Command] =
+      if uri.getPort <= 0 then
+        // Every dial comes here (bootstrap, discovered, random, maintained, admin_addPeer): one with no TCP port would
+        // open a connection to port 0 (B-237).
+        log.debug("Not dialling {}: it has no TCP port", uri)
+        Behaviors.same
+      else connectWithPort(uri, connectedPeers, explicit)
+
+    private def connectWithPort(uri: URI, connectedPeers: ConnectedPeers, explicit: Boolean): Behavior[Command] =
       val nodeIdHex = uri.getUserInfo.toLowerCase
       val nodeId = ByteString(Hex.decode(nodeIdHex))
       val host = bareHost(uri)
@@ -768,8 +831,15 @@ object PeerManagerActor:
           .exists(h => blacklist.isBlacklisted(OperatorBlock(h)))
 
       validConnection match
+        case _ if allowlist.refusalFor(uri).isDefined =>
+          // FR-052: no dial reaches a node that is not listed, whatever its source (discovery, bootnode, known nodes,
+          // admin_addPeer, admin_addTrustedPeer, net_connectToPeer).
+          allowlist.recordRejection(inbound = false)
+          log.debug("Not dialling {}: {}", uri, allowlist.refusalFor(uri).getOrElse(""))
+          Behaviors.same
+
         case _ if operatorBlocked =>
-          log.info("Not dialling {}: its address is blocked by the operator (admin_blockIP)", uri)
+          log.debug("Not dialling {}: its address is blocked by the operator (admin_blockIP)", uri)
           Behaviors.same
 
         case Right(_) if excludedWrongNetwork && !operatorRequested =>
@@ -839,7 +909,7 @@ object PeerManagerActor:
             else
               val duration = peerConfiguration.genesisHeadExclusionDuration
               nodeIdOpt.foreach(n => wrongNetworkNodes.add(n, System.currentTimeMillis() + duration.toMillis))
-              log.info(
+              log.debug(
                 "GENESIS_HEAD_EVICT: disconnecting node={} host={} client={}; head still genesis after {}; " +
                   "excluded from dialling for {}",
                 nodeIdHex.take(16),
@@ -918,9 +988,10 @@ object PeerManagerActor:
           else
             val duration = peerConfiguration.wrongNetworkExclusionDuration
             val isNew = wrongNetworkNodes.add(nodeId, System.currentTimeMillis() + duration.toMillis)
-            // INFO once per newly excluded node; a still-excluded node can only reappear by dialling us, so DEBUG.
+            // DEBUG: a public node meets many wrong-network crawlers; each is a useless-peer close in the
+            // `Network [60s]` summary. (A maintained/trusted peer on another network is a WARN above.)
             if isNew then
-              log.info(
+              log.debug(
                 "WRONG_NETWORK: excluding node={} host={} from dialling for {} (excluded={})",
                 nodeIdHex.take(16),
                 remoteHost,
@@ -971,7 +1042,7 @@ object PeerManagerActor:
             val backoff: FiniteDuration =
               if snapCapableHosts.contains(ip) then PeerManagerActor.SnapPeerSoftBlacklistDuration
               else math.min(30, 5 * (1 << (count - 5))).minutes
-            log.info("TCP failure #{} for {} — blacklisting for {}", count, ip, backoff)
+            log.debug("TCP failure #{} for {} — blacklisting for {}", count, ip, backoff)
             blacklist.add(PeerAddress(ip), backoff, Blacklist.BlacklistReason.TcpSubsystemError)
             consecutiveTcpFailures.remove(ip)
       }
@@ -998,7 +1069,7 @@ object PeerManagerActor:
           .map(newConnectedPeers.hasHandshakedWith)
           .getOrElse(false)
         if stillConnected then
-          log.info(
+          log.debug(
             "DUPLICATE_TERMINATED: suppressing PeerDisconnected for {} — winner still connected, loser ref={} dropped",
             peerId,
             ref
@@ -1046,7 +1117,7 @@ object PeerManagerActor:
         // handshaked entry whose actor is gone and whose termination will never arrive again: it held a slot, blocked
         // re-dials of the node ID, and was "evicted" every ~70 s by the genesis-head check with DisconnectPeer going to
         // dead letters (Sepolia v0.9.6).
-        log.info(
+        log.debug(
           "STALE_HANDSHAKE: ignoring handshake of {} from {}: its peer actor has already terminated",
           handshakedPeer.id.value.take(16),
           handshakedPeer.remoteAddress
@@ -1067,14 +1138,22 @@ object PeerManagerActor:
         host: String,
         connectedPeers: ConnectedPeers
     ): Behavior[Command] =
-      if handshakedPeer.incomingConnection && !isMaintained && !isTrusted &&
+      if handshakedPeer.nodeId.exists(!allowlist.permits(_)) then
+        // Listed when the RLPx handshake checked it, removed since (a reload between the two): drop it now.
+        log.info(
+          "ALLOWLIST_REMOVED: handshaked node={} is no longer on the node allowlist",
+          handshakedPeer.id.value.take(16)
+        )
+        handshakedPeer.ref ! PeerActor.DisconnectPeer(Disconnect.Reasons.UselessPeer)
+        listening(connectedPeers)
+      else if handshakedPeer.incomingConnection && !isMaintained && !isTrusted &&
         handshakedPeer.nodeId.exists(isExcludedWrongNetwork)
       then
         // Dial exclusion only stops OUR dials. A node excluded by node ID (wrong network #88, or a genesis-head crawler
         // evicted under spec 011) must not take an inbound slot back for the rest of its exclusion either: reject it
         // as soon as the handshake names it, with no new grace period. Outbound handshakes are already gated in
         // connectWith, where an explicit operator dial may bypass the exclusion.
-        log.info(
+        log.debug(
           "EXCLUDED_PEER_REJECTED: inbound node={} host={} is excluded; disconnecting",
           handshakedPeer.id.value.take(16),
           host
@@ -1307,7 +1386,8 @@ object PeerManagerActor:
       handshaker: Handshaker[R],
       authHandshaker: AuthHandshaker,
       capabilities: List[Capability],
-      peerScoringManager: Option[PeerScoringManager] = None
+      peerScoringManager: Option[PeerScoringManager] = None,
+      allowlist: NodeAllowlist = NodeAllowlist.Disabled
   ): (TypedActorContext[Command], InetSocketAddress, Boolean) => typed.ActorRef[PeerActor.Command] =
     (ctx, address, incomingConnection) =>
       val id: String = sanitizeActorPathElement(address.toString)
@@ -1318,7 +1398,7 @@ object PeerManagerActor:
           .supervise(
             PeerActor.apply(
               address,
-              PeerActor.rlpxConnectionFactory(authHandshaker, config.rlpxConfiguration, capabilities),
+              PeerActor.rlpxConnectionFactory(authHandshaker, config.rlpxConfiguration, capabilities, allowlist),
               config,
               eventBus,
               knownNodesManager,

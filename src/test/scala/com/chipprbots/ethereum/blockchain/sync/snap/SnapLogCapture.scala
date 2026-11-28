@@ -1,6 +1,7 @@
 package com.chipprbots.ethereum.blockchain.sync.snap
 
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -9,42 +10,55 @@ import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
 import ch.qos.logback.classic.Logger as LogbackLogger
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.AppenderBase
+import ch.qos.logback.classic.LoggerContext
+import ch.qos.logback.classic.turbo.TurboFilter
+import ch.qos.logback.core.spi.FilterReply
 import org.slf4j.LoggerFactory
+import org.slf4j.Marker
+import org.slf4j.helpers.MessageFormatter
 
 /** Captures every log line (DEBUG and up) of the `snap` package while open, without printing it (spec 016 S0d).
   *
   * `logback-test.xml` keeps the root at ERROR, so `LoggingTestKit` sees nothing below ERROR. Some characterization
   * tests need lines below that: the `syncing` catch-all ("Unhandled message in syncing state") is DEBUG, and the
-  * recovery replay's pause is an INFO from a Future. This appender is attached to the package logger (the controller's
-  * `ctx.log` and `asyncLog` both log under it), with additivity off so nothing reaches the console, and `close()`
-  * restores the logger. Logging is synchronous, so a line logged while handling a message is captured before the
-  * controller handles its next message.
+  * recovery replay's pause is an INFO from a Future.
+  *
+  * The lines are taken by a logback turbo filter, which every logging call consults on the logging thread before the
+  * level check, so a line logged while handling a message is captured before the controller handles its next message.
+  * The capture does not attach an appender (B-256): an appender added to a logger while another thread logs through it
+  * can be lost, because logback's appender list (`COWArrayList`) caches an array, and a logging thread that rebuilds
+  * the cache from the old list as the appender is added marks that stale copy fresh. The characterization specs open a
+  * capture just after sending the controller a message, so its thread is logging in the package at that moment; in CI a
+  * capture so opened saw nothing at all. The turbo filter list is a plain `CopyOnWriteArrayList`, with no cache.
+  *
+  * The filter accepts the package's DEBUG-and-up lines whatever the loggers' levels (an explicitly levelled logger
+  * under the package, such as the TrieNodeHealingCoordinator's INFO in `logback-test.xml`, is captured at DEBUG too),
+  * and the package logger's additivity is off while a capture is open, so nothing reaches the console. One filter
+  * serves every open capture, so captures nest; `close()` restores the additivity.
+  *
+  * @param scope
+  *   the logger, or the package, whose lines are captured: the `snap` package unless another is named (B-496: the
+  *   consensus adapter's lines)
   */
-final class SnapLogCapture extends AutoCloseable:
-  private val logger =
-    LoggerFactory.getLogger("com.chipprbots.ethereum.blockchain.sync.snap").asInstanceOf[LogbackLogger]
-  private val previousLevel: Level = logger.getLevel // null: inherited
+final class SnapLogCapture(val scope: String = SnapLogCapture.Package) extends AutoCloseable:
+  private val logger = LoggerFactory.getLogger(scope).asInstanceOf[LogbackLogger]
   private val previousAdditive: Boolean = logger.isAdditive
 
-  private val captured = new ConcurrentLinkedQueue[String]()
-  private val arrivals = new LinkedBlockingQueue[String]()
+  private val captured = new ConcurrentLinkedQueue[(Level, String)]()
+  private val arrivals = new LinkedBlockingQueue[(Level, String)]()
 
-  private val appender = new AppenderBase[ILoggingEvent]:
-    override def append(event: ILoggingEvent): Unit =
-      val line = event.getFormattedMessage
-      captured.add(line)
-      arrivals.put(line)
+  private def record(level: Level, line: String): Unit =
+    captured.add((level, line))
+    arrivals.put((level, line))
 
-  appender.setContext(logger.getLoggerContext)
-  appender.start()
-  logger.addAppender(appender)
-  logger.setLevel(Level.DEBUG)
+  SnapLogCapture.register(this)
   logger.setAdditive(false)
 
   /** Every line captured so far, oldest first. */
-  def lines: List[String] = captured.asScala.toList
+  def lines: List[String] = events.map(_._2)
+
+  /** Every line captured so far with its level, oldest first. */
+  def events: List[(Level, String)] = captured.asScala.toList
 
   def count(substring: String): Int = lines.count(_.contains(substring))
 
@@ -55,15 +69,18 @@ final class SnapLogCapture extends AutoCloseable:
     arrivals.clear()
 
   /** Wait (up to `max`) for a line containing `substring` that arrived since the last `clear`/`awaitLine` match. */
-  def awaitLine(substring: String, max: FiniteDuration = 10.seconds): String =
+  def awaitLine(substring: String, max: FiniteDuration = 10.seconds): String = awaitEvent(substring, max)._2
+
+  /** [[awaitLine]], with the line's level. */
+  def awaitEvent(substring: String, max: FiniteDuration = 10.seconds): (Level, String) =
     val deadline = System.nanoTime() + max.toNanos
     @annotation.tailrec
-    def loop(): String =
+    def loop(): (Level, String) =
       val remaining = deadline - System.nanoTime()
       if remaining <= 0 then throw missing(substring, s"within $max")
-      val line = arrivals.poll(remaining, TimeUnit.NANOSECONDS)
-      if line == null then throw missing(substring, s"within $max")
-      else if line.contains(substring) then line
+      val event = arrivals.poll(remaining, TimeUnit.NANOSECONDS)
+      if event == null then throw missing(substring, s"within $max")
+      else if event._2.contains(substring) then event
       else loop()
     loop()
 
@@ -81,7 +98,53 @@ final class SnapLogCapture extends AutoCloseable:
     )
 
   override def close(): Unit =
-    logger.detachAppender(appender)
-    appender.stop()
-    logger.setLevel(previousLevel)
+    SnapLogCapture.unregister(this)
     logger.setAdditive(previousAdditive)
+
+object SnapLogCapture:
+  private val Package = "com.chipprbots.ethereum.blockchain.sync.snap"
+
+  private val open = new CopyOnWriteArraySet[SnapLogCapture]()
+
+  private def inScope(scope: String, name: String): Boolean =
+    name == scope || (name.startsWith(scope) && name.charAt(scope.length) == '.')
+
+  /** Records a scope's DEBUG-and-up lines in every open capture of it. A call without a message is a level check
+    * (`isDebugEnabled`, or Pekko's `Slf4jLoggingFilter` before it publishes): it is accepted, so that the line follows.
+    */
+  private object Tap extends TurboFilter:
+    override def decide(
+        marker: Marker,
+        logger: LogbackLogger,
+        level: Level,
+        format: String,
+        params: Array[AnyRef],
+        t: Throwable
+    ): FilterReply =
+      if open.isEmpty || level == null || !level.isGreaterOrEqual(Level.DEBUG) then FilterReply.NEUTRAL
+      else
+        val name = logger.getName
+        val capturing = open.asScala.filter(capture => inScope(capture.scope, name))
+        if capturing.isEmpty then FilterReply.NEUTRAL
+        else
+          if format != null then
+            val line = MessageFormatter.arrayFormat(format, params).getMessage
+            capturing.foreach(_.record(level, line))
+          FilterReply.ACCEPT
+
+  private def context: LoggerContext = LoggerFactory.getILoggerFactory.asInstanceOf[LoggerContext]
+
+  // Installed while a capture is open (and again if a `LoggerContext.reset()` dropped it), removed after the last.
+  private def register(capture: SnapLogCapture): Unit = synchronized {
+    open.add(capture)
+    val ctx = context
+    if !ctx.getTurboFilterList.contains(Tap) then
+      Tap.setContext(ctx)
+      Tap.start()
+      ctx.addTurboFilter(Tap)
+  }
+
+  private def unregister(capture: SnapLogCapture): Unit = synchronized {
+    open.remove(capture)
+    if open.isEmpty then context.getTurboFilterList.remove(Tap)
+  }

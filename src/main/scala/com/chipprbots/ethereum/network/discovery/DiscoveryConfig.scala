@@ -35,17 +35,26 @@ case class DiscoveryConfig(
 object DiscoveryConfig extends Logger:
   val DefaultComputeThreads: Int = 1
 
-  // Whether bootstrap nodes (and DNS seeding) are used at all; controlled by modifiers like 'enterprise'.
-  // Default to true if not specified to maintain backward compatibility.
+  /** The config key that says whether bootstrap nodes (and DNS seeding) are used at all. */
+  val UseBootstrapNodesPath: String = "fukuii.network.discovery.use-bootstrap-nodes"
+
+  // Whether bootstrap nodes (and DNS seeding) are used at all: the operator's config (a config file, or a -D property,
+  // which overrides it) and else true. The `enterprise` modifier sets it false only when the operator has not (B-401);
+  // this used to read the system property alone, so a config file could not set it.
   private def bootstrapNodesEnabled: Boolean =
-    try System.getProperty("fukuii.network.discovery.use-bootstrap-nodes", "true").toBoolean
+    try
+      val config = com.typesafe.config.ConfigFactory.load()
+      if config.hasPath(UseBootstrapNodesPath) then config.getBoolean(UseBootstrapNodesPath) else true
     catch case _: Exception => true
 
   def apply(
       etcClientConfig: com.typesafe.config.Config,
       bootstrapNodes: Set[String],
       dnsDiscoveryDomains: Seq[String] = Seq.empty,
-      useBootstrapNodes: Boolean = bootstrapNodesEnabled
+      useBootstrapNodes: Boolean = bootstrapNodesEnabled,
+      // Spec 030 FR-055: with the node allowlist on, discv4, discv5 and the DNS tree walk do not run, and no UDP port is
+      // bound, whatever `discovery-enabled` says.
+      allowlistEnabled: Boolean = false
   ): DiscoveryConfig =
     val discoveryConfig = etcClientConfig.getConfig("network.discovery")
 
@@ -57,10 +66,17 @@ object DiscoveryConfig extends Logger:
     val staticNodes: Set[String] =
       com.chipprbots.ethereum.network.StaticNodesLoader.load(datadir).map(_.toString).toSet
 
+    val configuredDiscovery = discoveryConfig.getBoolean("discovery-enabled")
+    if allowlistEnabled && configuredDiscovery then
+      log.warn(
+        "Discovery is off because the node allowlist is on (network.discovery.discovery-enabled = true is ignored)"
+      )
+
     // An entry of `dns-discovery-domains` is an `enrtree://<key>@<domain>` URL or one of the shipped domains; any other
     // has no key to verify its tree with, so it is not walked (EIP-1459: a tree is trusted through its root signature).
     val dnsTrees: Seq[Eip1459.DnsTree] =
-      if useBootstrapNodes then
+      if allowlistEnabled then Seq.empty
+      else if useBootstrapNodes then
         dnsDiscoveryDomains.flatMap { entry =>
           DnsTrustAnchors.resolve(entry) match
             case Right(tree) => Some(tree)
@@ -96,7 +112,7 @@ object DiscoveryConfig extends Logger:
     val defaultWalk = DnsDiscovery.WalkSettings.Default
 
     DiscoveryConfig(
-      discoveryEnabled = discoveryConfig.getBoolean("discovery-enabled"),
+      discoveryEnabled = configuredDiscovery && !allowlistEnabled,
       host = ConfigUtils.getOptionalValue(discoveryConfig, _.getString, "host"),
       interface = discoveryConfig.getString("interface"),
       port = discoveryConfig.getInt("port"),
@@ -123,6 +139,10 @@ object DiscoveryConfig extends Logger:
           else defaultWalk.treeDeadline,
         concurrency =
           if discoveryConfig.hasPath("dns-concurrency") then discoveryConfig.getInt("dns-concurrency")
-          else defaultWalk.concurrency
+          else defaultWalk.concurrency,
+        recheckInterval =
+          if discoveryConfig.hasPath("dns-recheck-interval") then
+            discoveryConfig.getDuration("dns-recheck-interval").toMillis.millis
+          else defaultWalk.recheckInterval
       )
     )

@@ -5,13 +5,16 @@ import org.apache.pekko.util.ByteString
 import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
+import com.chipprbots.ethereum.crypto.kec256
 import com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate
-import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
+import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.domain.Account
 import com.chipprbots.ethereum.domain.appstate.BlockInfo
 import com.chipprbots.ethereum.ledger.InMemoryWorldStateProxy
+import com.chipprbots.ethereum.ledger.RecordingDataSource
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Spec 018 Track C, C3b (T093): the staged state of one block on the unified layout, as block execution holds it. */
@@ -19,7 +22,7 @@ class PathStagedBlockSpec extends AnyFlatSpec with Matchers:
   import PathStateTestKit.*
 
   final private class Fixture:
-    val source: EphemDataSource = EphemDataSource()
+    val source: RecordingDataSource = new RecordingDataSource
     val hashed = new HashedState
     val parent: BlockRef = block(1, hashed.root)
     seed(source, hashed, parent)
@@ -31,8 +34,13 @@ class PathStagedBlockSpec extends AnyFlatSpec with Matchers:
     private val changed: World => World = _.saveAccount(dave, Account(nonce = 9, balance = 9))
     val root: ByteString = hashed.change(hashed.root)(changed)
     val next: BlockRef = block(2, root)
-    def staged(parentOf: () => Option[BlockRef] = () => Some(parent), of: BlockRef = next) =
-      new PathStagedBlock(state, of, parentOf)
+    def staged(parentOf: () => Option[BlockRef] = () => Some(parent), of: BlockRef = next, apart: Boolean = false) =
+      new PathStagedBlock(state, of, parentOf, apart)
+    val code: ByteString = ByteString(0x60, 0x01, 0x60, 0x00, 0x55)
+    val codeHash: ByteString = kec256(code)
+    val codes = new EvmCodeStorage(source)
+    def stageCode(staged: PathStagedBlock): Unit = staged.stageCode(codes.update(Nil, Seq(codeHash -> code)))
+    def codeBatches: Seq[Set[IndexedSeq[Byte]]] = source.batches.filter(_.contains(Namespaces.CodeNamespace)).toSeq
     def execute(staged: PathStagedBlock): Unit =
       InMemoryWorldStateProxy.persistState(changed(worldOver(staged.storage, hashed.root, hashed.codes)))
     def pointer(ref: BlockRef): Some[DataSourceBatchUpdate] = Some(
@@ -119,3 +127,48 @@ class PathStagedBlockSpec extends AnyFlatSpec with Matchers:
       val elsewhere = block(1, EmptyRoot).copy(hash = ByteString(Array.fill[Byte](32)(7)))
       f.staged(parentOf = () => Some(elsewhere)).prefetchReader(1 << 20, _ => ()) shouldBe None
     }
+
+  // B-454: the code a block deployed lands with the state that refers to it.
+  it should "write the block's code in the batch that commits it in place, and none of it when that batch is lost" taggedAs
+    UnitTest in {
+      val f = new Fixture
+      val staged = f.staged()
+      f.execute(staged)
+      f.stageCode(staged)
+      staged.commitWith(f.next.number, f.next.hash, f.pointer(f.next))
+      f.codeBatches should have size 1
+      (f.codeBatches.head should contain).allOf(Namespaces.AppStateNamespace, Namespaces.StateTriePathNamespace)
+      f.codes.get(f.codeHash) shouldBe Some(f.code)
+
+      val lost = new Fixture
+      val refused = lost.staged()
+      lost.execute(refused)
+      lost.stageCode(refused)
+      lost.source.refuse = _.contains(Namespaces.AppStateNamespace)
+      a[RecordingDataSource.Refused] should be thrownBy
+        refused.commitWith(lost.next.number, lost.next.hash, lost.pointer(lost.next))
+      lost.codes.get(lost.codeHash) shouldBe None
+    }
+
+  // A forward layer is held in memory: there is no batch for the code to join, so it is written first, alone.
+  it should "write the block's code on its own, first, when it is committed apart as a forward layer" taggedAs
+    UnitTest in {
+      val f = new Fixture
+      val staged = f.staged(apart = true)
+      f.execute(staged)
+      f.stageCode(staged)
+      staged.commitApart(f.next.number, f.next.hash)
+      f.codeBatches shouldBe Seq(Set(Namespaces.CodeNamespace))
+      f.codes.get(f.codeHash) shouldBe Some(f.code)
+      f.state.anchor shouldBe Some(f.parent)
+    }
+
+  it should "write no code for a block that is discarded" taggedAs UnitTest in {
+    val f = new Fixture
+    val staged = f.staged()
+    f.execute(staged)
+    f.stageCode(staged)
+    staged.discard()
+    f.codeBatches shouldBe empty
+    f.codes.get(f.codeHash) shouldBe None
+  }

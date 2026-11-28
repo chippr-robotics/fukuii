@@ -71,6 +71,26 @@ class PoWBlockGeneratorImpl(
         .map(_.pendingBlock)
     }
 
+  /** The ommers of `offered` a block on `parentHash` carries: each one in turn, kept where the ommers check import
+    * makes passes with it and the ones kept before it, and left out where it fails (B-500). One invalid ommer cost the
+    * block every other one before, a set with one already included two slots. core-geth's worker commits the uncles one
+    * by one in the same way (`commitUncle`, miner/worker.go): one it refuses is skipped, and the next is tried.
+    *
+    * That is this node's own choice and no rule of the chain: where it does not hold the ancestors the ommers are
+    * checked against (B-283), it takes none.
+    */
+  protected def validOmmers(parentHash: ByteString, blockNumber: BigInt, offered: Ommers)(implicit
+      blockchainConfig: BlockchainConfig
+  ): Ommers =
+    try
+      offered.foldLeft(emptyX) { (kept, ommer) =>
+        val withIt = kept :+ ommer
+        validators.ommersValidator.validate(parentHash, blockNumber, withIt, blockchainReader) match
+          case Left(_)  => kept
+          case Right(_) => withIt
+      }
+    catch case _: com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored => emptyX
+
   def generateBlock(
       parent: Block,
       transactions: Seq[SignedTransaction],
@@ -83,15 +103,7 @@ class PoWBlockGeneratorImpl(
       val blockNumber = pHeader.number + 1
       val parentHash = pHeader.hash
 
-      // A block this node builds has the ommers it can show to be valid, and none otherwise. That is its own choice
-      // and no rule of the chain: where it does not hold the ancestors they are checked against (B-283), it builds
-      // with none, as it does when they are invalid.
-      val ommers =
-        try
-          validators.ommersValidator.validate(parentHash.value, blockNumber.value, x, blockchainReader) match
-            case Left(_)  => emptyX
-            case Right(_) => x
-        catch case _: com.chipprbots.ethereum.db.storage.pathstate.AncestorNotStored => emptyX
+      val ommers = validOmmers(parentHash.value, blockNumber.value, x)
 
       val prepared = prepareBlock(
         evmCodeStorage,

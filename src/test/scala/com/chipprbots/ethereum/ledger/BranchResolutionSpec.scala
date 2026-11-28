@@ -4,6 +4,11 @@ import org.apache.pekko.util.ByteString
 
 import cats.data.NonEmptyList
 
+import scala.concurrent.duration.*
+import scala.jdk.CollectionConverters.*
+
+import ch.qos.logback.classic.Level
+import ch.qos.logback.classic.Logger as LogbackLogger
 import org.scalamock.handlers.CallHandler0
 import org.scalamock.handlers.CallHandler1
 import org.scalamock.handlers.CallHandler2
@@ -12,12 +17,16 @@ import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 import org.scalatestplus.scalacheck.ScalaCheckPropertyChecks
+import org.slf4j.LoggerFactory
 
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.ObjectGenerators
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.consensus.PowForkChoice
+import com.chipprbots.ethereum.consensus.PowForkChoiceSpec
 import com.chipprbots.ethereum.consensus.engine.DesignatedHead
 import com.chipprbots.ethereum.consensus.mess.MESSConfig
+import com.chipprbots.ethereum.domain.BackfillCursors
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHash
@@ -85,8 +94,9 @@ class BranchResolutionSpec
         branchResolution.resolveBranch(headers) shouldEqual NewBetterBranch(oldBlocks)
       )
 
-    "report no need for a chain switch the headers do not have chain weight greater than currently known branch" in
-      (new BranchResolutionTestSetupImpl:
+    // Of the same weight and height as the known branch: core-geth's tie rule (B-284) leaves it to the coin
+    "report no need for a chain switch when the headers tie the known branch's weight and height and the coin keeps it" in
+      (new BranchResolutionTestSetupImpl(coin = () => 0.5):
         val headers: NonEmptyList[BlockHeader] = getChainHeadersNel(1, 10)
 
         setBestBlockNumber(10)
@@ -97,6 +107,74 @@ class BranchResolutionSpec
         oldBlocks.map(b => setBlockByNumber(b.header.number.value, Some(b)))
 
         branchResolution.resolveBranch(headers) shouldEqual NoChainSwitch
+      )
+
+    "report new better branch found when the headers tie the known branch's weight and height and the coin takes it" in
+      (new BranchResolutionTestSetupImpl(coin = () => 0.0):
+        val headers: NonEmptyList[BlockHeader] = getChainHeadersNel(1, 10)
+
+        setBestBlockNumber(10)
+        setHeaderInChain(headers.head.parentHash.value)
+        setChainWeightByHash(headers.head.parentHash.value, ChainWeight.zero)
+
+        val oldBlocks: List[Block] = getChain(1, 10, headers.head.parentHash.value, headers.head.difficulty.value)
+        oldBlocks.map(b => setBlockByNumber(b.header.number.value, Some(b)))
+
+        branchResolution.resolveBranch(headers) shouldEqual NewBetterBranch(oldBlocks)
+      )
+
+    // forge B1: what discards this node's blocks asks the rule alone. A tie only a coin decides is no better branch
+    // there, whatever the coin would say, and the coin is not tossed; the rule's own reorg (this node's miner's block)
+    // is
+    "by the rule alone, report no chain switch for a tie a coin would decide, and toss no coin" in
+      (new BranchResolutionTestSetupImpl(coin = PowForkChoiceSpec.NoCoin):
+        val headers: NonEmptyList[BlockHeader] = getChainHeadersNel(1, 10)
+        val oldBlocks: List[Block] = getChain(1, 10, headers.head.parentHash.value, headers.head.difficulty.value)
+        setChainWeightByHash(headers.head.parentHash.value, ChainWeight.zero)
+        tieExpected(headers, oldBlocks, resolutions = 2)
+
+        branchResolution.resolveBranchByTheRule(headers) shouldEqual NoChainSwitch
+        branchResolution.discardsFor(headers) shouldBe false
+      )
+
+    "by the rule alone, report new better branch found for a tie the rule gives it: its tip is this node's miner's" in
+      (new BranchResolutionTestSetupImpl(coin = PowForkChoiceSpec.NoCoin):
+        val headers: NonEmptyList[BlockHeader] = getChainHeadersNel(1, 10)
+        val oldBlocks: List[Block] = getChain(1, 10, headers.head.parentHash.value, headers.head.difficulty.value)
+        setChainWeightByHash(headers.head.parentHash.value, ChainWeight.zero)
+        tieExpected(headers, oldBlocks, resolutions = 2)
+        // only the peer's tip is the miner's: this node's own head at 10 is another block
+        val own = oldBlocks.last.header.hash
+        val preserved = new BranchResolution(
+          blockchainReader,
+          powForkChoice = new PowForkChoice(h => h.number.value == 10 && h.hash != own, PowForkChoiceSpec.NoCoin)
+        )
+
+        preserved.resolveBranchByTheRule(headers) shouldEqual NewBetterBranch(oldBlocks)
+        preserved.discardsFor(headers) shouldBe true
+      )
+
+    // forge W4: a chain that declares a terminal total difficulty breaks no tie here, whatever fork choice is given, as
+    // `ConsensusImpl` breaks none on it; and a resolution given no fork choice breaks none either
+    "report no chain switch for a tie on a chain that declares a terminal total difficulty, and by default" in
+      (new BranchResolutionTestSetupImpl(coin = PowForkChoiceSpec.NoCoin):
+        val headers: NonEmptyList[BlockHeader] = getChainHeadersNel(1, 10)
+        val oldBlocks: List[Block] = getChain(1, 10, headers.head.parentHash.value, headers.head.difficulty.value)
+        setChainWeightByHash(headers.head.parentHash.value, ChainWeight.zero)
+        tieExpected(headers, oldBlocks, resolutions = 3)
+
+        val taking = new PowForkChoiceSpec.Coins(0.0)
+        new BranchResolution(
+          blockchainReader,
+          powForkChoice = new PowForkChoice(_ => false, taking),
+          terminalTotalDifficulty = Some(BigInt(10).pow(30))
+        ).resolveBranch(headers) shouldEqual NoChainSwitch
+        taking.tossed shouldBe 0
+        new BranchResolution(blockchainReader).resolveBranch(headers) shouldEqual NoChainSwitch
+        // the same tie, with the coin and no terminal total difficulty: the coin's
+        new BranchResolution(blockchainReader, powForkChoice = new PowForkChoice(_ => false, taking))
+          .resolveBranch(headers) shouldEqual NewBetterBranch(oldBlocks)
+        taking.tossed shouldBe 1
       )
 
     "correctly handle a branch that goes up to the genesis block" in new BranchResolutionTestSetupImpl:
@@ -312,6 +390,103 @@ class BranchResolutionSpec
       branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NewBetterBranch(List(oldBlock))
   }
 
+  // Spec 018 C6 (forge): the header of the common block not stored. MESS weighs the seconds from it to the head; read
+  // as time zero it took the age as decades, refused a heavier branch at the maximum antigravity (31 times its weight),
+  // and the branch was remembered as not taken: the node stopped following the chain for a hole in its own datadir. The
+  // hole is a fault, not a verdict: MESS does not refuse, the branch is judged by weight and handed to consensus, whose
+  // reorganisation meets the hole as a state fault (StateUnavailable).
+  "BranchResolution with MESS enabled, where the common block's header is not stored" should {
+
+    "not refuse a heavier branch, even one MESS refuses when the header is there" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new MessTestSetup:
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      branchResolution.messConfig = Some(ETCMessConfig)
+      Seq(200, 300, 500).foreach { difficulty =>
+        setBestBlockNumber(10)
+        setBlockByNumber(10, Some(oldBlock))
+        expectAncestorHeaderMissing()
+        withClue(s"proposed difficulty $difficulty: ") {
+          val newHeader: BlockHeader =
+            getBlock(number = 10, difficulty = difficulty, parent = commonParentHash).header
+          branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NewBetterBranch(List(oldBlock))
+        }
+      }
+
+    "leave a lighter branch refused by weight: MESS is not asked" taggedAs (UnitTest, StateTest) in new MessTestSetup:
+      setBestBlockNumber(10)
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      setBlockByNumber(10, Some(oldBlock))
+      // no header is read: the weight refuses it first
+      blockchainReader.getBlockHeaderByHash.expects(*).never()
+      branchResolution.messConfig = Some(ETCMessConfig)
+      val newHeader: BlockHeader = getBlock(number = 10, difficulty = 99, parent = commonParentHash).header
+      branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NoChainSwitch
+
+    "take a branch not taken once it is the heavier, the header not being there to weigh" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new MessTestSetup:
+      (1 to 2).foreach { _ =>
+        setBestBlockNumber(10)
+        setBlockByNumber(10, Some(oldBlock))
+      }
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      setChainWeightByHash(oldBlock.header.hash.value, ChainWeight.zero.increase(oldBlock.header))
+      branchResolution.messConfig = Some(ETCMessConfig)
+      val side10: BlockHeader = getBlock(number = 10, difficulty = 50, parent = commonParentHash).header
+      val branch: BranchNotTaken = branchResolution.notTaken(NonEmptyList.one(side10)).get
+      blockchainReader.getCanonicalHashByNumber
+        .expects(BigInt(9))
+        .anyNumberOfTimes()
+        .returning(Some(BlockHash(commonParentHash)))
+      // 200 against 100: MESS refuses it with the header there (25600 < 34100); without it the weight decides
+      expectAncestorHeaderMissing()
+      val side11: BlockHeader = getBlock(number = 11, difficulty = 150, parent = side10.hash.value).header
+      branchResolution.extended(branch, NonEmptyList.one(side11)).map(_._2) shouldBe Some(true)
+
+    "not read the header, nor refuse, where MESS is not active" taggedAs (UnitTest, StateTest) in new MessTestSetup:
+      setBestBlockNumber(10)
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      setBlockByNumber(10, Some(oldBlock))
+      blockchainReader.getBlockHeaderByHash.expects(*).never()
+      branchResolution.messConfig = Some(ETCMessConfig.copy(activationBlock = Some(BigInt(11))))
+      val newHeader: BlockHeader = getBlock(number = 10, difficulty = 200, parent = commonParentHash).header
+      branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual NewBetterBranch(List(oldBlock))
+  }
+
+  // With the header stored the verdicts are those MESS gave before the fault was split off: the threshold at an age of
+  // 3600 s and a local weight of 100 is want = 341 * 100 = 34100, so 266 (34048) is refused and 267 (34176) taken.
+  "BranchResolution with MESS enabled, the common block's header stored" should {
+    "give the verdicts it gave before, either side of the threshold" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new MessTestSetup:
+      setChainWeightByHash(commonParentHash, ChainWeight.zero)
+      branchResolution.messConfig = Some(ETCMessConfig)
+      val verdicts: Seq[(Int, NoChainSwitch.type | NewBetterBranch)] = Seq(
+        200 -> NoChainSwitch,
+        266 -> NoChainSwitch,
+        267 -> NewBetterBranch(List(oldBlock)),
+        300 -> NewBetterBranch(List(oldBlock)),
+        500 -> NewBetterBranch(List(oldBlock))
+      )
+      verdicts.foreach { case (difficulty, verdict) =>
+        setBestBlockNumber(10)
+        setBlockByNumber(10, Some(oldBlock))
+        expectAncestorHeader()
+        withClue(s"proposed difficulty $difficulty: ") {
+          val newHeader: BlockHeader =
+            getBlock(number = 10, difficulty = difficulty, parent = commonParentHash).header
+          branchResolution.compareBranch(NonEmptyList.one(newHeader)) shouldEqual verdict
+        }
+      }
+  }
+
   // ─────────────────────────────────────────────────────────────────────────
   // PoS / zero-difficulty tests (ETH post-merge — Sepolia, Holesky, mainnet)
   //
@@ -379,6 +554,39 @@ class BranchResolutionSpec
 
   // B-300 (f) (forge): on the unified layout the blocks of a branch that is not taken are not stored, so what follows it
   // hangs from a block this node does not know. The branch is remembered by its tip and weighed with what follows.
+  // B-385: compareBranch answers NoChainSwitch, with an error, where the weight of the block a branch stands on is not
+  // stored. The importer is to tell the escalation's feed of those headers, so they are named here; the verdict is the
+  // one it was
+  "A branch whose fork block's chain weight is not stored" should {
+
+    "be named by its headers above this node's, with the verdict unchanged" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new MessTestSetup:
+      blockchainReader.getChainWeightByHash.expects(BlockHash(commonParentHash)).anyNumberOfTimes().returning(None)
+      branchResolution.messConfig = Some(ETCMessConfig)
+      val side10: BlockHeader = getBlock(number = 10, difficulty = 500, parent = commonParentHash).header
+      (1 to 2).foreach { _ =>
+        setBestBlockNumber(10)
+        setBlockByNumber(10, Some(oldBlock))
+      }
+      branchResolution.compareBranch(NonEmptyList.one(side10)) shouldEqual NoChainSwitch
+      branchResolution.withoutForkWeight(NonEmptyList.one(side10)) shouldBe Some(NonEmptyList.one(side10))
+
+    "not be named where the weight is stored, nor for this node's own blocks" taggedAs (UnitTest, StateTest) in
+      (new MessTestSetup:
+        setChainWeightByHash(commonParentHash, ChainWeight.zero)
+        (1 to 2).foreach { _ =>
+          setBestBlockNumber(10)
+          setBlockByNumber(10, Some(oldBlock))
+        }
+        val side10: BlockHeader = getBlock(number = 10, difficulty = 500, parent = commonParentHash).header
+        branchResolution.withoutForkWeight(NonEmptyList.one(side10)) shouldBe None
+        branchResolution.withoutForkWeight(NonEmptyList.one(oldBlock.header)) shouldBe None
+      )
+  }
+
   "A branch that was weighed and not taken" should {
 
     "be remembered by its tip, its common block, its weight and its difficulty, and weighed again with what follows" taggedAs (
@@ -492,6 +700,446 @@ class BranchResolutionSpec
       branchResolution.extended(branch, NonEmptyList.one(side11)) shouldBe None
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // B-395: a block of this node's chain not stored inside the compared range. Skipped, it moved every block above it
+  // down one place against the headers: the shared prefix, the block weighed from and the blocks replaced were one
+  // block out. Now the comparison stops at it: no verdict is given that it would make misaligned.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "BranchResolution over a gap in this node's chain" should {
+
+    "give the verdict on the batch where no block is missing (the control)" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None)
+      weightsStored()
+      // own 1..10; the batch is own 1..6 and a heavier branch 7..12 from own 6
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NewBetterBranch(own.drop(6))
+      branchResolution.notTaken(extendsFromSix).map(b => (b.commonBlock, b.commonHash)) shouldBe
+        Some((BigInt(6), own(5).hash.value))
+
+    "make no fork choice where the gap is below the block the branch leaves this chain at" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5))
+      weightsStored()
+      // skipped, block 5 set own 6 against header 5: shared 4, and own 6..10 'replaced' by the batch from 5
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      // nor is a branch remembered as leaving this chain at block 4
+      branchResolution.notTaken(extendsFromSix) shouldBe None
+
+    "name no branch whose fork weight is missing where the gap leaves the block weighed from unknown" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5))
+      weightsNotStored()
+      // skipped, the block weighed from was block 5 itself (the parent of own 6), and headers 5..12 were named
+      branchResolution.withoutForkWeight(extendsFromSix) shouldBe None
+
+    "make no fork choice where the gap is above the block the branch leaves this chain at" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(8))
+      weightsStored()
+      // own 3..10 weigh 800 and the branch 720; skipped, block 8 left this node's 700 and the lighter branch was taken
+      branchResolution.compareBranch(lighterFromTwo) shouldEqual NoChainSwitch
+      // the block it leaves this chain at is below the gap, so it is known: remembered as it was
+      branchResolution.notTaken(lighterFromTwo) shouldBe Some(
+        BranchNotTaken(
+          lighterFromTwo.last,
+          BigInt(2),
+          own(1).hash.value,
+          lighterFromTwo.tail.tail.foldLeft(ChainWeight.zero)(_.increase(_)),
+          BigInt(720)
+        )
+      )
+
+    "still name the branch whose fork weight is missing where the block weighed from is below the gap" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new GapSetup:
+      ownChain(missing = Some(8))
+      weightsNotStored()
+      branchResolution.withoutForkWeight(lighterFromTwo) shouldBe NonEmptyList.fromList(lighterFromTwo.toList.drop(2))
+
+    "not take a branch not taken, weighed again, past a gap above the block it leaves this chain at" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new MessTestSetup:
+      (() => blockchainReader.getBestBlockNumber).expects().anyNumberOfTimes().returning(BigInt(11))
+      blockchainReader.getBlockByNumber.expects(*, BigInt(10)).anyNumberOfTimes().returning(Some(oldBlock))
+      blockchainReader.getBlockByNumber.expects(*, BigInt(11)).anyNumberOfTimes().returning(None)
+      blockchainReader.getHashByBlockNumber.expects(*, BigInt(11)).anyNumberOfTimes().returning(None)
+      (() => blockchainReader.getSnapSyncPivotBlock).expects().anyNumberOfTimes().returning(None)
+      blockchainReader.getCanonicalHashByNumber
+        .expects(BigInt(9))
+        .anyNumberOfTimes()
+        .returning(Some(BlockHash(commonParentHash)))
+      setChainWeightByHash(oldBlock.header.hash.value, ChainWeight.zero.increase(oldBlock.header))
+      val side10: BlockHeader = getBlock(number = 10, difficulty = 50, parent = commonParentHash).header
+      val branch: BranchNotTaken =
+        BranchNotTaken(side10, BigInt(9), commonParentHash, ChainWeight.zero.increase(side10), BigInt(50))
+      // 150 against block 10's 100; skipped, block 11 left block 10 read as the head, and the branch was taken
+      val side11: BlockHeader = getBlock(number = 11, difficulty = 100, parent = side10.hash.value).header
+      branchResolution.extended(branch, NonEmptyList.one(side11)).map { case (longer, taken) =>
+        (longer.tip, longer.difficultyAboveTheCommonBlock, taken)
+      } shouldBe Some((side11, BigInt(150), false))
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // B-395 (beacon): the shared prefix is matched by header, and a body is needed only of a block the branch would
+  // displace. After a SNAP hand-off the pivot's header, index entry and weight are written and its body is left to the
+  // backfill, which on PoS fetches it last. The UnknownBranch rewind goes back to the pivot, so the batch re-served
+  // starts there: with the body required, every such batch was a gap, NoChainSwitch and an ERROR, on a healthy node.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "BranchResolution where a body of this node's chain is not stored" should {
+
+    "extend the head from a batch re-served from the SNAP pivot, its body not yet stored (PoS)" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup(difficulty = 0):
+      ownChain(missing = None, withoutBody = Set(4), pivot = Some(4))
+      weightsStored()
+      setHeaderInChain(own(3).header.parentHash.value)
+      val pos = new BranchResolution(blockchainReader, Some(DesignatedHead(() => None)))
+      // own 4..10, then 11..12 on the head: the pivot 4 and 5..10 are this node's, nothing is displaced
+      val (verdict, logged) = capturingLogs(pos.resolveBranch(fromPivotExtendingHead))
+      verdict shouldEqual ExtendsCanonicalHead(7)
+      logged shouldBe empty
+
+    "extend the head from a batch re-served from the SNAP pivot, its body not yet stored (PoW)" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, withoutBody = Set(4), pivot = Some(4))
+      weightsStored()
+      setHeaderInChain(own(3).header.parentHash.value)
+      // the PoW verdict for an extension that re-presents canonical blocks, as with the body there: the importer drops
+      // the canonical prefix (#1592) and imports 11..12 on the head
+      val (verdict, logged) = capturingLogs(branchResolution.resolveBranch(fromPivotExtendingHead))
+      verdict shouldEqual NewBetterBranch(Nil)
+      logged shouldBe empty
+
+    "give the verdict it gives with the body there, where the block without one is shared with the batch" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      // block 5 is below the block the branch leaves this chain at (6): matched by its header, not displaced
+      ownChain(missing = None, withoutBody = Set(5))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NewBetterBranch(own.drop(6))
+      branchResolution.notTaken(extendsFromSix).map(b => (b.commonBlock, b.commonHash)) shouldBe
+        Some((BigInt(6), own(5).hash.value))
+
+    "make no fork choice where a block the branch would displace has no body" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, withoutBody = Set(8))
+      weightsStored()
+      // heavier, and own 7..10 would be handed back to the pool: block 8 cannot be
+      val (verdict, logged) = capturingLogs(branchResolution.compareBranch(extendsFromSix))
+      verdict shouldEqual NoChainSwitch
+      logged.map(_._1) shouldBe List(Level.ERROR)
+
+    "make no fork choice where a block the branch would displace has no body (PoS, the designated head)" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup(difficulty = 0):
+      ownChain(missing = None, withoutBody = Set(8))
+      weightsStored()
+      val side: List[BlockHeader] = getChain(7, 12, own(5).hash.value, difficulty = 0).map(_.header)
+      val batch: NonEmptyList[BlockHeader] = NonEmptyList.fromListUnsafe(own.take(6).map(_.header) ++ side)
+      // the consensus layer names the side's tip: with block 8 whole, this is NewBetterBranch(own 7..10)
+      val pos = new BranchResolution(blockchainReader, Some(DesignatedHead(() => Some(side.last.hash.value))))
+      pos.compareBranch(batch) shouldEqual NoChainSwitch
+
+    "still find a gap where the index entry is stored and the header is not" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, headerMissing = Set(5))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      branchResolution.notTaken(extendsFromSix) shouldBe None
+
+    "say a gap at or below the SNAP pivot at WARN, once a minute at most, and above it at ERROR" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5), pivot = Some(6))
+      weightsStored()
+      val (_, atThePivot) = capturingLogs {
+        branchResolution.compareBranch(extendsFromSix)
+        branchResolution.compareBranch(extendsFromSix)
+      }
+      atThePivot.map(_._1) shouldBe List(Level.WARN)
+      // the same gap with no pivot at or above it
+      val noPivot: GapSetup = new GapSetup:
+        ownChain(missing = Some(5), pivot = Some(4))
+        weightsStored()
+      val (_, abovePivot) = capturingLogs(noPivot.branchResolution.compareBranch(noPivot.extendsFromSix))
+      abovePivot.map(_._1) shouldBe List(Level.ERROR)
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // B-407: where compareBranch answers NoChainSwitch for a gap in this node's chain above the SNAP pivot, the headers
+  // that are not this node's are named, so the importer can tell the escalation's feed of them. Every verdict is
+  // compareBranch's, unchanged.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  "BranchResolution naming a branch a gap in this node's chain leaves unweighed" should {
+
+    "name nothing where there is no gap, the verdict unchanged (the control)" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None)
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NewBetterBranch(own.drop(6))
+      branchResolution.acrossAGap(extendsFromSix) shouldBe None
+      branchResolution.compareBranch(lighterFromTwo) shouldEqual NoChainSwitch
+      branchResolution.acrossAGap(lighterFromTwo) shouldBe None
+
+    "name the headers from the gap where its index entry is missing too" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      // whether header 5 is this node's is not known: named from it, on own 4
+      branchResolution.acrossAGap(extendsFromSix) shouldBe
+        Some(ChainGap(BigInt(5), bodyOnly = false, NonEmptyList.fromListUnsafe(extendsFromSix.toList.drop(4))))
+
+    "name the headers the index does not name as this node's, past a gap where only the header is missing" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, headerMissing = Set(6))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      // 6 is this node's by the index: the branch is named from 7, on this node's block 6 whose header is missing
+      branchResolution.acrossAGap(extendsFromSix) shouldBe
+        Some(ChainGap(BigInt(6), bodyOnly = false, NonEmptyList.fromListUnsafe(extendsFromSix.toList.drop(6))))
+
+    "name a branch that leaves this chain below the gap from where it leaves it" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(8))
+      weightsStored()
+      branchResolution.compareBranch(lighterFromTwo) shouldEqual NoChainSwitch
+      branchResolution.acrossAGap(lighterFromTwo) shouldBe
+        Some(ChainGap(BigInt(8), bodyOnly = false, NonEmptyList.fromListUnsafe(lighterFromTwo.toList.drop(2))))
+
+    "name the branch where a block it would displace has no body" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, withoutBody = Set(8))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      branchResolution.acrossAGap(extendsFromSix) shouldBe
+        Some(ChainGap(BigInt(8), bodyOnly = true, NonEmptyList.fromListUnsafe(extendsFromSix.toList.drop(6))))
+
+    "name nothing where the batch is this node's own chain across a gap of a header alone" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new GapSetup:
+      ownChain(missing = None, headerMissing = Set(5))
+      weightsStored()
+      val ownBatch: NonEmptyList[BlockHeader] = NonEmptyList.fromListUnsafe(own.map(_.header))
+      branchResolution.compareBranch(ownBatch) shouldEqual NoChainSwitch
+      branchResolution.acrossAGap(ownBatch) shouldBe None
+
+    "name nothing where the gap is at or below the SNAP pivot: the backfill brings it" taggedAs (
+      UnitTest,
+      StateTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5), pivot = Some(5))
+      weightsStored()
+      branchResolution.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+      branchResolution.acrossAGap(extendsFromSix) shouldBe None
+      // the same gap above the pivot is named
+      val abovePivot: GapSetup = new GapSetup:
+        ownChain(missing = Some(5), pivot = Some(4))
+        weightsStored()
+      abovePivot.branchResolution.acrossAGap(abovePivot.extendsFromSix).map(_.firstMissing) shouldBe Some(BigInt(5))
+
+    // B-410: a gap at or below the pivot is left to the backfill only while the backfill may still fill it
+
+    "leave a gap at or below the SNAP pivot to the backfill while its cursors move" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5), pivot = Some(5))
+      weightsStored()
+      backfillAt(BackfillCursors(header = 3, body = 2, receipt = 2))
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      advance(StallAfter - 1.second)
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      // the header cursor moves to 4, still below the gap: the clock starts again
+      backfillAt(BackfillCursors(header = 4, body = 2, receipt = 2))
+      advance(2.seconds)
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      // a receipt moving is a move too
+      advance(StallAfter - 1.second)
+      backfillAt(BackfillCursors(header = 4, body = 2, receipt = 3))
+      advance(2.seconds)
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      timed.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+
+    "name a gap at or below the SNAP pivot once the backfill's header cursor has passed it" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5), pivot = Some(5))
+      weightsStored()
+      backfillAt(BackfillCursors(header = 5, body = 5, receipt = 5))
+      timed.acrossAGap(extendsFromSix) shouldBe
+        Some(ChainGap(BigInt(5), bodyOnly = false, NonEmptyList.fromListUnsafe(extendsFromSix.toList.drop(4))))
+      // the verdict is compareBranch's, unchanged: only what the importer tells the feed moves
+      timed.compareBranch(extendsFromSix) shouldEqual NoChainSwitch
+
+    "name a body gap at or below the SNAP pivot once the backfill's body cursor, not its header cursor, has passed it" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = None, withoutBody = Set(8), pivot = Some(10))
+      weightsStored()
+      // every header is stored, the bodies to 7: the body of 8 is the backfill's still
+      backfillAt(BackfillCursors(header = 10, body = 7, receipt = 7))
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      backfillAt(BackfillCursors(header = 10, body = 8, receipt = 7))
+      timed.acrossAGap(extendsFromSix) shouldBe
+        Some(ChainGap(BigInt(8), bodyOnly = true, NonEmptyList.fromListUnsafe(extendsFromSix.toList.drop(6))))
+
+    "name a gap at or below the SNAP pivot once the backfill has stood still for the stall timeout" taggedAs (
+      UnitTest,
+      StateTest,
+      ConsensusTest
+    ) in new GapSetup:
+      ownChain(missing = Some(5), pivot = Some(5))
+      weightsStored()
+      backfillAt(BackfillCursors(header = 3, body = 2, receipt = 2))
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      advance(StallAfter - 1.nanosecond)
+      timed.acrossAGap(extendsFromSix) shouldBe None
+      advance(1.nanosecond)
+      timed.acrossAGap(extendsFromSix).map(_.firstMissing) shouldBe Some(BigInt(5))
+      timed.acrossAGap(extendsFromSix).map(_.firstMissing) shouldBe Some(BigInt(5))
+      // the backfill moves again: left to it again
+      backfillAt(BackfillCursors(header = 4, body = 2, receipt = 2))
+      timed.acrossAGap(extendsFromSix) shouldBe None
+  }
+
+  /** The events BranchResolution logs at WARN and above while `body` runs: the level and the message. */
+  private def capturingLogs[A](body: => A): (A, List[(Level, String)]) =
+    val logger = LoggerFactory.getLogger(classOf[BranchResolution]).asInstanceOf[LogbackLogger]
+    val level = logger.getLevel
+    logger.setLevel(Level.WARN)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
+    try
+      val result = body
+      (result, appender.list.asScala.toList.map(e => (e.getLevel, e.getFormattedMessage)))
+    finally
+      appender.close()
+      logger.setLevel(level)
+
+  /** This node's chain 1..10 (`difficulty` each) over `base`, the head at 10, and batches against it. */
+  class GapSetup(difficulty: BigInt = 100) extends BranchResolutionTestSetupImpl:
+    val base: ByteString = randomHash()
+    val own: List[Block] = getChain(1, 10, base, difficulty = difficulty)
+
+    /** Own 1..6, then a branch 7..12 from own 6 (difficulty 100 each): heavier than own 7..10. */
+    val extendsFromSix: NonEmptyList[BlockHeader] =
+      NonEmptyList.fromListUnsafe(own.take(6).map(_.header) ++ getChain(7, 12, own(5).hash.value).map(_.header))
+
+    /** Own 1..2, then a branch 3..10 from own 2 of difficulty 90 each: 720 against own 3..10's 800. */
+    val lighterFromTwo: NonEmptyList[BlockHeader] =
+      NonEmptyList.fromListUnsafe(
+        own.take(2).map(_.header) ++ getChain(3, 10, own(1).hash.value, difficulty = 90).map(_.header)
+      )
+
+    /** Own 4..10, then 11..12 on the head (`difficulty` each): a batch re-served from block 4. */
+    val fromPivotExtendingHead: NonEmptyList[BlockHeader] =
+      NonEmptyList.fromListUnsafe(
+        own.drop(3).map(_.header) ++ getChain(11, 12, own.last.hash.value, difficulty = difficulty).map(_.header)
+      )
+
+    /** `missing`: no index entry and no header; `headerMissing`: the index entry and no header; `withoutBody`: the
+      * header and its index entry, and no body. The SNAP pivot is `pivot`.
+      */
+    def ownChain(
+        missing: Option[BigInt],
+        withoutBody: Set[BigInt] = Set.empty,
+        headerMissing: Set[BigInt] = Set.empty,
+        pivot: Option[BigInt] = None
+    ): Unit =
+      (() => blockchainReader.getBestBlockNumber).expects().anyNumberOfTimes().returning(BigInt(10))
+      (() => blockchainReader.getSnapSyncPivotBlock).expects().anyNumberOfTimes().returning(pivot)
+      own.foreach { block =>
+        val number = block.number.value
+        val whole = !missing.contains(number) && !withoutBody(number) && !headerMissing(number)
+        blockchainReader.getBlockByNumber
+          .expects(*, number)
+          .anyNumberOfTimes()
+          .returning(Some(block).filter(_ => whole))
+        // read by compareBranch where the block is not whole, and by acrossAGap above the headers matched (B-407)
+        blockchainReader.getHashByBlockNumber
+          .expects(*, number)
+          .anyNumberOfTimes()
+          .returning(Some(block.hash).filterNot(_ => missing.contains(number)))
+        if !whole then
+          blockchainReader.getBlockHeaderByHash
+            .expects(block.hash)
+            .anyNumberOfTimes()
+            .returning(Some(block.header).filter(_ => withoutBody(number)))
+      }
+
+    def weightsStored(): Unit =
+      blockchainReader.getChainWeightByHash.expects(*).anyNumberOfTimes().returning(Some(ChainWeight.zero))
+
+    /** The backfill's cursors as read, and the clock its progress is timed by (B-410). */
+    private var cursors: BackfillCursors = BackfillCursors(0, 0, 0)
+    private var now: Long = 0L
+    (() => blockchainReader.getBackfillCursors).expects().anyNumberOfTimes().onCall(() => cursors)
+
+    def backfillAt(at: BackfillCursors): Unit = cursors = at
+    def advance(by: FiniteDuration): Unit = now += by.toNanos
+
+    val StallAfter: FiniteDuration = 10.minutes
+
+    /** Resolution with the stall timeout `StallAfter`, on the clock above. */
+    lazy val timed: BranchResolution = new BranchResolution(blockchainReader, None, StallAfter, () => now)
+
+    def weightsNotStored(): Unit =
+      blockchainReader.getChainWeightByHash.expects(*).anyNumberOfTimes().returning(None)
+
   "BranchResolution with MESS enabled AND a designated head (misconfigured PoW chain)" should {
 
     "ACCEPT a LOWER-TD branch the designated head points at — the PoS arm overrides the TD rule" taggedAs (
@@ -604,7 +1252,12 @@ class BranchResolutionSpec
     def wireHeaders(blocks: List[Block]): NonEmptyList[BlockHeader] =
       NonEmptyList.fromListUnsafe(blocks.map(_.header.toBytes.toBlockHeader))
 
-  class BranchResolutionTestSetupImpl extends TestSetupWithVmAndValidators with MockBlockchain:
+  /** @param coin
+    *   the coin of the fork choice's tie rule (B-284): by default one that fails the case if a tie is left to it
+    */
+  class BranchResolutionTestSetupImpl(coin: () => Double = PowForkChoiceSpec.NoCoin)
+      extends TestSetupWithVmAndValidators
+      with MockBlockchain:
     // Provide mock implementations - these are created in the test class context which has MockFactory
     override lazy val mockBlockchainReader: BlockchainReader = mock[BlockchainReader]
     override lazy val mockBlockchainWriter: BlockchainWriter = mock[BlockchainWriter]
@@ -614,7 +1267,16 @@ class BranchResolutionSpec
     // Setup default expectations
     (() => blockchainReader.getBestBranch).expects().anyNumberOfTimes().returning(EmptyBranch)
 
-    val branchResolution = new BranchResolution(blockchainReader)
+    val branchResolution = new BranchResolution(blockchainReader, powForkChoice = new PowForkChoice(_ => false, coin))
+
+    /** This node's chain `oldBlocks` above the parent of `headers`, for `resolutions` weighings of them: a tie of
+      * weight and height when the difficulties are the same.
+      */
+    def tieExpected(headers: NonEmptyList[BlockHeader], oldBlocks: List[Block], resolutions: Int): Unit =
+      for _ <- 1 to resolutions do
+        setBestBlockNumber(oldBlocks.last.header.number.value)
+        setHeaderInChain(headers.head.parentHash.value)
+        oldBlocks.foreach(b => setBlockByNumber(b.header.number.value, Some(b)))
 
     // Helper methods implementation (have MockFactory context here)
     override def setBlockExists(block: Block, inChain: Boolean, inQueue: Boolean): CallHandler1[BlockHash, Boolean] =
@@ -691,6 +1353,11 @@ class BranchResolutionSpec
       deactivationBlock = None,
       reactivationBlock = None
     )
+
+    /** Expect blockchainReader.getBlockHeaderByHash(commonParentHash) once, returning nothing: the header not stored.
+      */
+    def expectAncestorHeaderMissing(): Unit =
+      blockchainReader.getBlockHeaderByHash.expects(BlockHash(commonParentHash)).returning(None)
 
     /** Expect blockchainReader.getBlockHeaderByHash(commonParentHash) once, returning a header with `ts`. */
     def expectAncestorHeader(ts: Long = ancestorTs): Unit =

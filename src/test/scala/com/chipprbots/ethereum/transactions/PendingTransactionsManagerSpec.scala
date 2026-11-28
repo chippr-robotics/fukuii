@@ -2,8 +2,11 @@ package com.chipprbots.ethereum.transactions
 
 import java.net.InetSocketAddress
 
+import org.apache.pekko.actor.testkit.typed.scaladsl.BehaviorTestKit
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
+import org.apache.pekko.actor.testkit.typed.scaladsl.TestInbox
 import org.apache.pekko.actor.typed.ActorRef
+import org.apache.pekko.actor.typed.pubsub.Topic
 import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
 import org.apache.pekko.actor.typed.scaladsl.adapter.*
 import org.apache.pekko.testkit.TestProbe
@@ -36,9 +39,11 @@ import com.chipprbots.ethereum.domain.SignedTransactionWithSender
 import com.chipprbots.ethereum.domain.Transaction
 import com.chipprbots.ethereum.domain.TransactionWithAccessList
 import com.chipprbots.ethereum.domain.TransactionWithDynamicFee
+import com.chipprbots.ethereum.jsonrpc.NewPendingTransaction
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.SendMessageCmd
 import com.chipprbots.ethereum.network.Peer
+import com.chipprbots.ethereum.network.PeerEventBusActor
 import com.chipprbots.ethereum.network.PeerEventBusActor.PeerEvent
 import com.chipprbots.ethereum.network.PeerId
 import com.chipprbots.ethereum.network.PeerManagerActor
@@ -296,38 +301,51 @@ class PendingTransactionsManagerSpec
     val overrideTx: SignedTransactionWithSender = newStx(1, tx.copy(value = 2 * tx.value), keyPair1)
 
     pendingTransactionsManager ! WrappedPeerEvent(PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {}))
-
     pendingTransactionsManager ! AddOrOverrideTransaction(firstTx.tx)
     pendingTransactionsManager ! AddOrOverrideTransaction(otherTx.tx)
+
+    // Each add announces its tx through a NotifyPeers the actor sends itself, which announces only what is still pooled
+    // when it is processed. Nothing takes either tx out before the override, and the override is sent only once both
+    // announcements are out: both reach peer1 (B-497: this test used to send the override straight after, and assert
+    // that firstTx was never announced, which held only if the override reached the mailbox before firstTx's NotifyPeers
+    // did, a matter of thread scheduling; the next test pins that case with the order set by hand).
+    announcedTo(this, peer1, count = 2) shouldBe Set(firstTx, otherTx).map(_.tx.hash.value)
+
     pendingTransactionsManager ! AddOrOverrideTransaction(overrideTx.tx)
+    pool(this, pendingTransactionsManager).pendingTransactions.map(_.stx).toSet shouldEqual Set(overrideTx, otherTx)
+    announcedTo(this, peer1, count = 1) shouldBe Set(overrideTx.tx.hash.value)
 
-    eventually {
-      val pendingTxs: Seq[PendingTransaction] = pendingTransactionsManager
-        .ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
-        .futureValue
-        .pendingTransactions
-
-      pendingTxs.map(_.stx).toSet shouldEqual Set(overrideTx, otherTx)
-    }
-
-    // AddOrOverride queues a NotifyPeers self-message whose broadcast list is
-    // filtered to txs still in the pool when processed. Because AddOrOverride
-    // processes in-order but NotifyPeers is deferred, firstTx gets invalidated
-    // (by overrideTx) before its announce fires, so only otherTx and
-    // overrideTx reach peer1. Both land as NewPooledTransactionHashes (ETH/67).
-    val announces: Seq[SendMessageCmd] = etcPeerManager.receiveWhile(Timeouts.normalTimeout, messages = 3) {
-      case m: NetworkPeerManagerActor.SendMessageCmd => m
-    }
-    announces.foreach(_.peerId shouldBe peer1.id)
-    val announcedHashes: Set[ByteString] = announces
-      .flatMap(_.message.underlyingMsg match
-        case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes
-        case SignedTransactions(txs)                             => txs.map(_.hash.value)
-        case _                                                   => Nil
+  // The order the test above cannot arrange from outside the actor: a replacement processed before the NotifyPeers of
+  // the tx it replaces. Run synchronously, the actor's messages to itself held in its self inbox until the test runs
+  // them, so the order is the one written here, whatever the threads do.
+  it should "not announce a transaction replaced before its announcement went out" taggedAs (UnitTest) in new TestSetup:
+    val networkPeers: TestInbox[NetworkPeerManagerActor.Command] = TestInbox()
+    val kit: BehaviorTestKit[Command] = BehaviorTestKit(
+      PendingTransactionsManager(
+        txPoolConfig,
+        TestInbox[PeerManagerActor.Command]().ref,
+        networkPeers.ref,
+        TestInbox[PeerEventBusActor.Command]().ref,
+        TestInbox[Topic.Command[NewPendingTransaction]]().ref
       )
-      .toSet
-    (announcedHashes should contain).allOf(otherTx.tx.hash.value, overrideTx.tx.hash.value)
-    announcedHashes shouldNot contain(firstTx.tx.hash.value)
+    )
+    val firstTx: SignedTransactionWithSender = newStx(1, tx, keyPair1)
+    val overrideTx: SignedTransactionWithSender = newStx(1, tx.copy(value = 2 * tx.value), keyPair1)
+
+    kit.run(WrappedPeerEvent(PeerEvent.PeerHandshakeSuccessful(peer1, new HandshakeResult {})))
+    kit.run(AddOrOverrideTransaction(firstTx.tx))
+    kit.run(AddOrOverrideTransaction(overrideTx.tx))
+    networkPeers.hasMessages shouldBe false // every announcement is still a NotifyPeers in the self inbox
+    kit.selfInbox().receiveAll().foreach(kit.run)
+
+    val announced: Seq[(PeerId, Seq[ByteString])] = networkPeers.receiveAll().map {
+      case NetworkPeerManagerActor.SendMessageCmd(enc, peerId) =>
+        enc.underlyingMsg match
+          case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => (peerId, hashes)
+          case other                                               => fail(s"Unexpected: $other")
+      case other => fail(s"Unexpected: $other")
+    }
+    announced shouldBe Seq((peer1.id, Seq(overrideTx.tx.hash.value)))
 
   it should "broadcast pending transactions to newly connected peers" taggedAs (UnitTest) in new TestSetup:
     // When a peer handshakes after the pool already holds transactions, the
@@ -445,6 +463,147 @@ class PendingTransactionsManagerSpec
 
     etcPeerManager.expectNoMessage(200.millis)
 
+  // ---- a move of the head (B-253) ---------------------------------------------------------------------------
+  //
+  // These pools have no blockchain reader and no state storage: the state check (nonce and balance at the head) is not
+  // exercised, only the pool's own nonce gate and its pool-state rules.
+
+  /** A pool on ETC's rules, or on ETH's (the pool-state rules, the replacement price bump among them, apply). */
+  class TestSetupOn(eth: Boolean) extends TestSetup:
+    val chainConfig: BlockchainConfig =
+      if eth then
+        com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+          .copy(networkType = com.chipprbots.ethereum.utils.NetworkType.ETH, minTip = BigInt(1))
+      else com.chipprbots.ethereum.utils.Config.blockchains.blockchainConfig
+    override val pendingTransactionsManager: org.apache.pekko.actor.typed.ActorRef[Command] = testKit.spawn(
+      PendingTransactionsManager(
+        txPoolConfig,
+        peerManager.ref,
+        etcPeerManager.ref,
+        peerMessageBus.ref,
+        pendingTxTopic,
+        chainConfig = chainConfig
+      ),
+      s"ptm-test-on-${if eth then "eth" else "etc"}-${java.util.UUID.randomUUID()}"
+    )
+    def at(nonce: BigInt, gasPrice: BigInt, value: BigInt): SignedTransactionWithSender =
+      SignedTransactionWithSender(
+        SignedTransaction.sign(
+          tx.copy(nonce = nonce, gasPrice = GasPrice(gasPrice), value = value, gasLimit = GasAmount(21000)),
+          keyPair1,
+          Some(0x3d)
+        ),
+        Address(keyPair1)
+      )
+    def pooled(): Set[SignedTransactionWithSender] =
+      pendingTransactionsManager
+        .ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
+        .futureValue
+        .pendingTransactions
+        .map(_.stx)
+        .toSet
+
+  // go-ethereum list.Add: a reinjected tx at a pooled tx's sender and nonce replaces it only past the price bump (ETH);
+  // on ETC, with no such rule, the pooled one is kept. Exactly one tx at that nonce either way.
+  for (eth, bumped, kept) <- Seq(
+      (true, true, "reinjected"),
+      (true, false, "pooled"),
+      (false, true, "pooled"),
+      (false, false, "pooled")
+    )
+  do
+    it should s"keep one tx at a nonce it holds when a reset takes back another there: the $kept one (${
+        if eth then "ETH" else "ETC"
+      }, ${if bumped then "" else "no "}price bump)" taggedAs (UnitTest) in new TestSetupOn(eth):
+      val held: SignedTransactionWithSender = at(1, gasPrice = 10, value = 10)
+      val back: SignedTransactionWithSender = at(1, gasPrice = if bumped then 20 else 10, value = 11)
+      pendingTransactionsManager ! AddTransactions(held)
+      pooled() shouldBe Set(held)
+      pendingTransactionsManager ! HeadReset(Nil, Seq(back.tx))
+      pooled() shouldBe Set(if kept == "reinjected" then back else held)
+
+  it should "take back a tx it held once a reorganisation moves its block off the chain, behind a later nonce it holds" taggedAs (UnitTest) in new TestSetup:
+    // an intrinsic gas the stateless admission takes: a reinjected tx is admitted as an unchecked add is
+    val transfer: LegacyTransaction = tx.copy(gasLimit = GasAmount(21000))
+    def signed(nonce: BigInt): SignedTransactionWithSender =
+      SignedTransactionWithSender(
+        SignedTransaction.sign(transfer.copy(nonce = nonce), keyPair1, Some(0x3d)),
+        Address(keyPair1)
+      )
+    def pooled(): Set[SignedTransactionWithSender] =
+      pendingTransactionsManager
+        .ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
+        .futureValue
+        .pendingTransactions
+        .map(_.stx)
+        .toSet
+    val (first, second) = (signed(1), signed(2))
+    pendingTransactionsManager ! AddTransactions(first, second)
+    pooled() shouldBe Set(first, second)
+    // a block with the first becomes the head: the pool drops it, and asked next, says so
+    pendingTransactionsManager ! HeadReset(Seq(Seq(first.tx)), Nil)
+    pooled() shouldBe Set(second)
+    // a reorganisation moves that block off: the first is taken back, below the nonce the pool took last, and a
+    // build that asks right after the reset sees it
+    pendingTransactionsManager ! HeadReset(Nil, Seq(first.tx))
+    pooled() shouldBe Set(first, second)
+    // the gate is the next nonce after the highest held again: a peer's tx below it is still refused
+    pendingTransactionsManager ! HeadReset(Seq(Seq(first.tx)), Nil)
+    pooled() shouldBe Set(second)
+    val replay: SignedTransactionWithSender =
+      SignedTransactionWithSender(
+        SignedTransaction.sign(transfer.copy(nonce = 1, value = 11), keyPair1, Some(0x3d)),
+        Address(keyPair1)
+      )
+    pendingTransactionsManager ! ProperSignedTransactions(Set(replay), PeerId("1"))
+    pooled() shouldBe Set(second)
+
+  it should "take back a tx it held once a reorganisation moves its block off the chain, the sender holding nothing else" taggedAs (UnitTest) in new TestSetup:
+    val only: SignedTransactionWithSender =
+      SignedTransactionWithSender(
+        SignedTransaction.sign(tx.copy(gasLimit = GasAmount(21000)), keyPair2, Some(0x3d)),
+        Address(keyPair2)
+      )
+    def pooled(): Set[SignedTransactionWithSender] =
+      pendingTransactionsManager
+        .ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
+        .futureValue
+        .pendingTransactions
+        .map(_.stx)
+        .toSet
+    pendingTransactionsManager ! AddTransactions(only)
+    pooled() shouldBe Set(only)
+    pendingTransactionsManager ! HeadReset(Seq(Seq(only.tx)), Nil)
+    pooled() shouldBe empty
+    pendingTransactionsManager ! HeadReset(Nil, Seq(only.tx))
+    pooled() shouldBe Set(only)
+
+  it should "rebuild the nonce gate of the senders whose txs a reset removes from what it still holds of them" taggedAs (UnitTest) in new TestSetup:
+    def signed(nonce: BigInt, value: BigInt = 10): SignedTransactionWithSender =
+      SignedTransactionWithSender(
+        SignedTransaction
+          .sign(tx.copy(nonce = nonce, value = value, gasLimit = GasAmount(21000)), keyPair2, Some(0x3d)),
+        Address(keyPair2)
+      )
+    def pooled(): Set[SignedTransactionWithSender] =
+      pendingTransactionsManager
+        .ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref))
+        .futureValue
+        .pendingTransactions
+        .map(_.stx)
+        .toSet
+    val (first, second) = (signed(1), signed(2))
+    pendingTransactionsManager ! AddTransactions(first, second)
+    // the gate is 3: another tx at nonce 2 is refused
+    pendingTransactionsManager ! ProperSignedTransactions(Set(signed(2, value = 11)), PeerId("1"))
+    pooled() shouldBe Set(first, second)
+    // the second leaves on a reset: the gate is the next nonce after the first, the highest held, as go-ethereum's
+    // noncer is rebuilt on a reset; another tx at nonce 2 is taken
+    pendingTransactionsManager ! HeadReset(Seq(Seq(second.tx)), Nil)
+    val other: SignedTransactionWithSender = signed(2, value = 12)
+    pendingTransactionsManager ! ProperSignedTransactions(Set(other), PeerId("1"))
+    pooled() shouldBe Set(first, other)
+
   // ---- delivered PooledTransactions vs. the announcement --------------------------------------------------
   //
   // go-ethereum drops a peer over an announced/delivered size gap only above 8 bytes, and the size it announces can
@@ -515,11 +674,81 @@ class PendingTransactionsManagerSpec
         peer1.id
       )
     )
-    val requests: Seq[(PeerId, Seq[ByteString])] = Seq.fill(3)(requestedFrom(this))
+    // One request in flight per peer (B-028): the next goes out once the peer answers. These hashes name no real tx,
+    // so each answer is empty, and gives up what it was asked for.
+    val requests: Seq[(PeerId, Seq[ByteString])] = Seq.fill(3) {
+      val request = requestedFrom(this)
+      etcPeerManager.expectNoMessage(100.millis) // nothing more until it answers
+      answerEmpty(pendingTransactionsManager, peer1)
+      request
+    }
     requests.map(_._1).distinct shouldBe Seq(peer1.id)
     requests.map(_._2.size) shouldBe Seq(256, 256, 88)
     requests.flatMap(_._2) shouldBe hashes
     etcPeerManager.expectNoMessage(200.millis)
+
+  // B-028: go-ethereum's maxTxRetrievalSize, 128 KiB of announced txs per request.
+  it should "ask for at most 128 KiB of announced txs per GetPooledTransactions" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val hashes: Seq[ByteString] =
+      (1 to 10).map(i => ByteString(java.nio.ByteBuffer.allocate(32).putInt(28, i).array()))
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets
+          .NewPooledTransactionHashes(hashes.map(_ => Transaction.Type02), hashes.map(_ => BigInt(40000)), hashes),
+        peer1.id
+      )
+    )
+    requestedFrom(this) shouldBe ((peer1.id, hashes.take(4))) // 160,000 bytes once the fourth is in
+    etcPeerManager.expectNoMessage(200.millis)
+    answerEmpty(pendingTransactionsManager, peer1)
+    requestedFrom(this) shouldBe ((peer1.id, hashes.slice(4, 8)))
+
+  // Copilot, #2086: a tx admitted by another path (here AddTransactions) while its announcement is still tracked used to
+  // be fetched again: its announcer's empty answer gave it up to the next announcer, which was then asked for it.
+  it should "not fetch again a tx the pool took from elsewhere while it was being fetched" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val stx: SignedTransactionWithSender = newStx()
+    val hash: ByteString = stx.tx.hash.value
+    def announce(peer: Peer): Unit =
+      pendingTransactionsManager ! WrappedPeerEvent(
+        PeerEvent.MessageFromPeer(
+          ETHPackets.NewPooledTransactionHashes(Seq(0.toByte), Seq(BigInt(100)), Seq(hash)),
+          peer.id
+        )
+      )
+    announce(peer1)
+    requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
+    announce(peer2) // an alternate
+    pendingTransactionsManager ! AddTransactions(Set(stx))
+    answerEmpty(pendingTransactionsManager, peer1)
+    etcPeerManager.receiveWhile(500.millis) { case cmd: NetworkPeerManagerActor.SendMessageCmd => cmd }.collect {
+      case cmd if cmd.message.underlyingMsg.isInstanceOf[ETHPackets.GetPooledTransactions] => cmd
+    } shouldBe empty
+
+  // Copilot, #2086: a reply that names another request id (a duplicate, or a reply to nothing asked) does not end the
+  // request in flight, so it neither gives up its hashes nor lets a second request out.
+  it should "take only the reply to its request in flight as the end of that request" taggedAs (
+    UnitTest
+  ) in new TestSetup:
+    val hashes: Seq[ByteString] =
+      (1 to 300).map(i => ByteString(java.nio.ByteBuffer.allocate(32).putInt(28, i).array()))
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(
+        ETHPackets
+          .NewPooledTransactionHashes(hashes.map(_ => Transaction.Type02), hashes.map(_ => BigInt(100)), hashes),
+        peer1.id
+      )
+    )
+    requestedFrom(this) shouldBe ((peer1.id, hashes.take(256)))
+    pendingTransactionsManager ! WrappedPeerEvent(
+      PeerEvent.MessageFromPeer(ETHPackets.PooledTransactions(lastRequestId + 1000, Seq.empty), peer1.id)
+    )
+    etcPeerManager.expectNoMessage(200.millis) // still one request in flight
+    answerEmpty(pendingTransactionsManager, peer1)
+    requestedFrom(this) shouldBe ((peer1.id, hashes.drop(256)))
 
   // go-ethereum eth/fetcher/tx_fetcher.go (c6e3a0d7): `maxTxAnnounces = 4096`, the most hashes tracked for one peer at
   // once; the excess of an announcement is dropped. Without it an announcement is bounded only by the 16 MiB message
@@ -548,16 +777,20 @@ class PendingTransactionsManagerSpec
 
     val hashes: Seq[ByteString] = hashesFrom(1, 5000)
     announce(peer1, hashes)
-    val requests: Seq[(PeerId, Seq[ByteString])] = Seq.fill(16)(requestedFrom(this))
-    requests.map(_._1).distinct shouldBe Seq(peer1.id)
-    requests.map(_._2.size) shouldBe Seq.fill(16)(256)
-    requests.flatMap(_._2) shouldBe hashes.take(4096) // the first 4096, in announcement order
-    etcPeerManager.expectNoMessage(200.millis) // the other 904 are dropped, not requested
-
     // peer1 is at the cap: its next announcement is dropped whole.
     val more: Seq[ByteString] = hashesFrom(10001, 10)
     announce(peer1, more)
-    etcPeerManager.expectNoMessage(200.millis)
+    // One request in flight per peer (B-028): each answer (empty: these hashes name no real tx) lets the next go out.
+    val requests: Seq[(PeerId, Seq[ByteString])] = Seq.fill(16) {
+      val request = requestedFrom(this)
+      answerEmpty(ptm, peer1)
+      request
+    }
+    requests.map(_._1).distinct shouldBe Seq(peer1.id)
+    requests.map(_._2.size) shouldBe Seq.fill(16)(256)
+    requests.flatMap(_._2) shouldBe hashes.take(4096) // the first 4096, in announcement order
+    etcPeerManager.expectNoMessage(200.millis) // the other 904, and `more`, were dropped, not requested
+
     // The cap is per peer: another peer announcing the same hashes is asked for them.
     announce(peer2, more)
     requestedFrom(this) shouldBe ((peer2.id, more))
@@ -571,11 +804,33 @@ class PendingTransactionsManagerSpec
   // arrives after the 15 s disconnect-poison-pill-timeout. go-ethereum's tx fetcher asks one announcer at a time and
   // moves on after txFetchTimeout.
 
+  /** The hashes in the next `count` announcements the pool sends, each of which must go to `peer`. */
+  private def announcedTo(setup: TestSetup, peer: Peer, count: Int): Set[ByteString] =
+    setup.etcPeerManager
+      .receiveN(count, Timeouts.normalTimeout)
+      .flatMap {
+        case NetworkPeerManagerActor.SendMessageCmd(enc, peerId) if peerId == peer.id =>
+          enc.underlyingMsg match
+            case ETHPackets.NewPooledTransactionHashes(_, _, hashes) => hashes
+            case other                                               => fail(s"Expected an announcement, got $other")
+        case other => fail(s"Expected an announcement to ${peer.id}, got $other")
+      }
+      .toSet
+
   private def requestedFrom(setup: TestSetup): (PeerId, Seq[ByteString]) =
     val cmd = setup.etcPeerManager.expectMsgType[NetworkPeerManagerActor.SendMessageCmd]
     cmd.message.underlyingMsg match
-      case ETHPackets.GetPooledTransactions(_, hashes) => (cmd.peerId, hashes)
-      case other                                       => fail(s"Expected GetPooledTransactions, got $other")
+      case ETHPackets.GetPooledTransactions(id, hashes) =>
+        lastRequestId = id
+        (cmd.peerId, hashes)
+      case other => fail(s"Expected GetPooledTransactions, got $other")
+
+  /** The request id of the last GetPooledTransactions [[requestedFrom]] read. */
+  private var lastRequestId: BigInt = BigInt(-1)
+
+  /** `peer` answers its last request with no txs: it has none of them. */
+  private def answerEmpty(ptm: org.apache.pekko.actor.typed.ActorRef[Command], peer: Peer): Unit =
+    ptm ! WrappedPeerEvent(PeerEvent.MessageFromPeer(ETHPackets.PooledTransactions(lastRequestId, Seq.empty), peer.id))
 
   private def announceFrom(
       ptm: org.apache.pekko.actor.typed.ActorRef[Command],
@@ -599,20 +854,33 @@ class PendingTransactionsManagerSpec
   it should "request an announced hash from one announcer only, and from the next once that request times out" taggedAs (
     UnitTest
   ) in new TestSetup:
+    // The tracker's clock moves only when the test moves it: a request times out once the test says so, never while
+    // the test is still checking that nobody else was asked. It used to run on the wall clock with a 500 ms timeout,
+    // and a test thread that read the first request more than 300 ms late saw peer2's inside its 200 ms window (B-497).
+    val fetchTimeout: FiniteDuration = 500.millis
+    val now: java.util.concurrent.atomic.AtomicLong = new java.util.concurrent.atomic.AtomicLong(0L)
+    def timeOut(): Unit = now.addAndGet(fetchTimeout.toMillis + 1)
     val shortFetchTimeout: TxPoolConfig = new TxPoolConfig:
       override val txPoolSize: Int = 300
       override val pendingTxManagerQueryTimeout: FiniteDuration = Timeouts.veryLongTimeout
       override val transactionTimeout: FiniteDuration = Timeouts.veryLongTimeout
       override val getTransactionFromPoolTimeout: FiniteDuration = Timeouts.veryLongTimeout
-      override val announcementFetchTimeout: FiniteDuration = 500.millis
-    val ptm: ActorRef[Command] = spawnPtm(config = shortFetchTimeout)
+      override val announcementTimeout: FiniteDuration = Timeouts.veryLongTimeout
+      override val announcementFetchTimeout: FiniteDuration = fetchTimeout
+    val ptm: ActorRef[Command] = spawnPtm(config = shortFetchTimeout, clock = () => now.get())
     val hash: ByteString = ByteString(Array.fill[Byte](32)(7))
     Seq(peer1, peer2, peer3).foreach(announceFrom(ptm, _, hash))
 
     requestedFrom(this) shouldBe ((peer1.id, Seq(hash)))
-    etcPeerManager.expectNoMessage(200.millis) // not also from peer2 and peer3
+    // Not also from peer2 and peer3: every announcement is processed once the pool answers, and the timeout ticks that
+    // run meanwhile find nothing timed out, the clock not having moved.
+    pool(this, ptm)
+    etcPeerManager.expectNoMessage(200.millis)
+    timeOut()
     requestedFrom(this) shouldBe ((peer2.id, Seq(hash))) // peer1 never answered
+    timeOut()
     requestedFrom(this) shouldBe ((peer3.id, Seq(hash))) // nor did peer2
+    timeOut()
     etcPeerManager.expectNoMessage(1.second) // nobody left to ask
 
   it should "request a hash from the next announcer as soon as its requester disconnects" taggedAs (
@@ -947,15 +1215,17 @@ class PendingTransactionsManagerSpec
     }
 
   // WI-14 (#1430): the stateless filter admits under the fork active at the chain head, read from the best block header.
-  // A 12,000-gas self-transfer is valid from Amsterdam (EIP-2780) and invalid before it (21,000).
+  // A 12,000-gas self-transfer is valid from Amsterdam (EIP-2780) and invalid before it (21,000). Driven through a
+  // head reset's reinjection, which recovers senders and filters as a peer's transactions are (B-512: the unchecked add
+  // these cases used had no sender left in the node, and was deleted).
 
-  it should "filter a peer's transactions under the fork active at the head: Osaka's rules before Amsterdam" taggedAs (
+  it should "filter the transactions it takes back under the fork active at the head: Osaka's rules before Amsterdam" taggedAs (
     UnitTest
   ) in new TestSetupWithHead(headTimestamp = 300L):
     val amsterdamOnly: SignedTransaction = selfTransfer(12000)
     val valid: SignedTransaction = selfTransfer(21000)
     // One message, one filter pass: once `valid` is pooled, `amsterdamOnly` has been judged too.
-    pendingTransactionsManager ! AddUncheckedTransactions(Seq(amsterdamOnly, valid))
+    pendingTransactionsManager ! HeadReset(Nil, Seq(amsterdamOnly, valid))
     eventually {
       val resp =
         pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
@@ -965,7 +1235,7 @@ class PendingTransactionsManagerSpec
   it should "admit a transaction valid only from Amsterdam once the head is at Amsterdam" taggedAs (UnitTest) in
     new TestSetupWithHead(headTimestamp = 460L):
       val amsterdamOnly: SignedTransaction = selfTransfer(12000)
-      pendingTransactionsManager ! AddUncheckedTransactions(Seq(amsterdamOnly))
+      pendingTransactionsManager ! HeadReset(Nil, Seq(amsterdamOnly))
       eventually {
         val resp =
           pendingTransactionsManager.ask[PendingTransactionsResponse](ref => GetPendingTransactionsReq(ref)).futureValue
@@ -1495,7 +1765,8 @@ class PendingTransactionsManagerSpec
     def spawnPtm(
         config: TxPoolConfig = txPoolConfig,
         gate: TxGossipGate = TxGossipGate.alwaysOpen,
-        metrics: TxPoolMetrics = new TxPoolMetrics
+        metrics: TxPoolMetrics = new TxPoolMetrics,
+        clock: () => Long = () => System.currentTimeMillis()
     ): org.apache.pekko.actor.typed.ActorRef[Command] = testKit.spawn(
       PendingTransactionsManager(
         config,
@@ -1504,7 +1775,8 @@ class PendingTransactionsManagerSpec
         peerMessageBus.ref,
         pendingTxTopic,
         txGossipGate = gate,
-        metrics = metrics
+        metrics = metrics,
+        clock = clock
       ),
       s"ptm-test-custom-${java.util.UUID.randomUUID()}"
     )

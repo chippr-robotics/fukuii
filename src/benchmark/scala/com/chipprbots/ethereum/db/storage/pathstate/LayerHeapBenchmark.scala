@@ -54,7 +54,9 @@ class LayerHeapBenchmark extends AnyFlatSpec with Matchers with LayerChains:
       ratio <- Seq(
         measure("one account", 2000, byHash)(n => Seq(account(dave, n % 100 + 1, n))),
         measure("50 slots of a trie of 40", 400, byHash)(n => Seq(slots(bob, (1 to 50).map(i => (n * 100 + i) -> i)*))),
-        measure("1000 slots of a new trie", 40, byHash)(n => Seq(slots(eve, (1 to 1000).map(i => (n * 2000 + i) -> i)*))),
+        measure("1000 slots of a new trie", 40, byHash)(n =>
+          Seq(slots(eve, (1 to 1000).map(i => (n * 2000 + i) -> i)*))
+        ),
         measure("a trie of 40 replaced, 5 slots", 400, byHash)(n =>
           Seq(delete(bob), slots(bob, (1 to 5).map(i => (n * 10 + i) -> i)*))
         )

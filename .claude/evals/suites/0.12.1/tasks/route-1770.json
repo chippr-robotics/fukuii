@@ -1,0 +1,38 @@
+{
+ "id": "route-1770",
+ "chain": "n/a",
+ "source_prs": [
+  1770
+ ],
+ "base_sha": "75aa51d5631f4339beef79345675967c8e21a681",
+ "prompt": "eth_simulateV1 parses block/state overrides with its own decoder that's looser than go-ethereum's (hex quantities, key casing, non-object overrides). Make it decode exactly as geth does. Who owns this?",
+ "expected": {
+  "route": [
+   "conduit"
+  ],
+  "gold_summary": "Pure JSON-RPC param decoding shared with eth_call/estimateGas; no consensus rule changes.",
+  "files": [],
+  "must_not": []
+ },
+ "rubric": [
+  "conduit alone owns it",
+  "Explains why forge/beacon are not needed (decoding, not execution)",
+  "Mentions error-code parity or a decoder shared with eth_call"
+ ],
+ "leak_markers": [
+  "#1770",
+  "#1727",
+  "CallOverridesJson",
+  "B-128"
+ ],
+ "sprint": "0.12.1",
+ "type": "route",
+ "agent": "router",
+ "read_only": true,
+ "budget_usd": 2,
+ "timeout_s": 900,
+ "protocol": [
+  "read-only: no edits",
+  "CLAUDE.md routing rules and the Consensus-Critical Change Protocol"
+ ]
+}

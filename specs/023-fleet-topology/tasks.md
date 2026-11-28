@@ -231,8 +231,9 @@ and `./scripts/fukuii-test only "*ConfigValidatorSpec*"`.
       `command: ["<network>"]`; reword `ops/barad-dur/sepolia/docker-compose.yml:19` ("the runtime image" → "the
       fukuii image").
 - [ ] T036 [US1] Verify the banner at the top of `docs/architecture/pluggable-consensus-vision.md` (lines 7-14) is
-      present (it is on this tree) and add a CHANGELOG entry under Unreleased: "Removed: `fukuii runtime`,
-      `conf/multi-instance.conf`, the in-process multi-instance runtime (spec 023 FR-006, D-1)".
+      present (it is on this tree) and add a changelog.d fragment (`changelog.d/<id>.removed.md`; see
+      `changelog.d/README.md`): "Removed: `fukuii runtime`, `conf/multi-instance.conf`, the in-process multi-instance
+      runtime (spec 023 FR-006, D-1)".
 - [ ] T037 [P] [US1] Create `src/test/scala/com/chipprbots/ethereum/utils/ProfileLoadSpec.scala`: for every
       `src/main/resources/conf/*.conf` except `faucet.conf`, `testmode.conf`, `enterprise-template.conf`:
       `ConfigFactory.parseResources("conf/<name>.conf").withFallback(ConfigFactory.load()).resolve()`
@@ -558,9 +559,10 @@ peers for roles without them (FR-004, SC-005), plus metric twins.
       D-1 (retire the runtime), D-4 (Orbita is the control plane), DC-1/DC-4/DC-9 and the admin-surface decision
       (research D-1); link it from `specs/023-fleet-topology/plan.md` §Constitution Check row VII and from
       `docs/adr/README.md`.
-- [ ] T082 [P] CHANGELOG under Unreleased: `--chain`/`--role`, admin port 8560, default datadir
-      `~/.fukuii/<chainKey>/<role>` (**breaking**, migration note link), new error codes -32020/-32021/-32022, fence
-      runbook; flag breaking changes per constitution VII.
+- [ ] T082 [P] Add changelog.d fragments (`changelog.d/README.md`; never edit `CHANGELOG.md`'s `[Unreleased]`):
+      `--chain`/`--role`, admin port 8560, default datadir `~/.fukuii/<chainKey>/<role>` (**breaking**, migration note
+      link), new error codes -32020/-32021/-32022, fence runbook; flag breaking changes per constitution VII (the
+      `breaking` section).
 - [ ] T083 Close-out: `sbt scalafmtAll`, `sbt formatCheck`, `sbt pp` on the clean tree, `./scripts/fukuii-test
       essential` compared with T002; run every quickstart.md section and record `VERIFY:` lines in the PR description;
       set `specs/023-fleet-topology/spec.md` `**Status**` to the lifecycle word `docs/development/spec-lifecycle.md`

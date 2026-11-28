@@ -16,13 +16,14 @@ import com.chipprbots.ethereum.vm.BlockchainConfigForEvm.EtcForks
 
 /** The native libraries behind some precompiles, and the rule that a missing one never becomes a precompile result.
   *
-  * The BLS12-381 precompiles (EIP-2537, 0x0b-0x11) run on Besu's `libeth_pairings` through JNA. KZG point evaluation
-  * (EIP-4844, 0x0a) runs on c-kzg-4844 through JNI, with the trusted setup loaded into a native global. Either can be
-  * missing on a running node. `LibEthPairings` catches its own load failure and reports it only as `ENABLED = false`,
-  * and Besu ships no Windows build of the library. c-kzg throws `RuntimeException: Trusted Setup is not loaded.` until
-  * the setup is loaded. The precompiles read both as an ordinary failure: the call consumed all its gas and returned
-  * nothing where every other client returns the result, so the node computed a different state root and forked itself
-  * off the network without logging anything (B-135).
+  * The BLS12-381 precompiles (EIP-2537, 0x0b-0x11) run on Besu's `libeth_pairings` through JNA, or on supranational
+  * blst through jblst where `libeth_pairings` does not load, as on Windows ([[blsBackend]], ADR VM-008). KZG point
+  * evaluation (EIP-4844, 0x0a) runs on c-kzg-4844 through JNI, with the trusted setup loaded into a native global.
+  * Either can be missing on a running node. `LibEthPairings` catches its own load failure and reports it only as
+  * `ENABLED = false`, and Besu ships no Windows build of the library. c-kzg throws `RuntimeException: Trusted Setup is
+  * not loaded.` until the setup is loaded. The precompiles read both as an ordinary failure: the call consumed all its
+  * gas and returned nothing where every other client returns the result, so the node computed a different state root
+  * and forked itself off the network without logging anything (B-135).
   *
   * Two guards close that:
   *   - at startup, [[selfCheck]] probes every backend a configured fork needs ([[required]]), and `Fukuii.main` exits
@@ -39,7 +40,8 @@ object NativeBackends:
   enum Backend(val library: String, val precompiles: String):
     case Bls12381
         extends Backend(
-          "bls12-381 (org.hyperledger.besu:bls12-381, native library libeth_pairings)",
+          "bls12-381 (libeth_pairings from org.hyperledger.besu:bls12-381, or blst from tech.pegasys:jblst, as " +
+            "fukuii.vm.bls12-381-backend selects)",
           "EIP-2537 BLS12-381 precompiles 0x0b-0x11"
         )
     case Kzg
@@ -88,19 +90,23 @@ object NativeBackends:
   /** The backends some configured fork's precompile set needs, decided the way [[PrecompiledContracts.getContracts]]
     * decides that set:
     *   - ETH Prague and Osaka (timestamps): BLS12-381 and KZG;
-    *   - ETC Olympia (ECIP-1121), once the block dispatch reaches it at a scheduled block: the Osaka set, so both;
+    *   - ETC Olympia (ECIP-1121), once the block dispatch reaches it at a scheduled block, on an ETC chain only (an ETH
+    *     chain's olympia-block-number is London): BLS12-381 only. Olympia has no KZG point evaluation, since ECIP-1121
+    *     defers EIP-4844 (B-548);
     *   - ETH Cancun (timestamp): KZG.
     *
-    * Each fork's set contains the previous fork's, so a backend that some fork needs is needed from that fork on.
+    * On each chain family a fork's set contains the previous fork's, so a backend that some fork needs is needed from
+    * that fork on.
     */
   def required(config: BlockchainConfig): Set[Backend] =
     val timestamps = config.forkTimestamps
     val evm = BlockchainConfigForEvm(config)
-    val olympia = config.forkBlockNumbers.all.exists(block =>
+    val olympia = !evm.isEthereum && config.forkBlockNumbers.all.exists(block =>
       block < NotScheduled && evm.etcForkForBlockNumber(block) >= EtcForks.Olympia
     )
-    val bls = olympia || timestamps.pragueTimestamp.isDefined || timestamps.osakaTimestamp.isDefined
-    val kzg = bls || timestamps.cancunTimestamp.isDefined
+    val pragueOrOsaka = timestamps.pragueTimestamp.isDefined || timestamps.osakaTimestamp.isDefined
+    val bls = olympia || pragueOrOsaka
+    val kzg = pragueOrOsaka || timestamps.cancunTimestamp.isDefined
     Backend.values.toSet.filter {
       case Backend.Bls12381 => bls
       case Backend.Kzg      => kzg
@@ -124,7 +130,7 @@ object NativeBackends:
           // G1ADD of the point at infinity to itself: the point at infinity, encoded as 128 zero bytes.
           val output =
             blsOperation(
-              LibEthPairingsNative,
+              blsBackend,
               LibEthPairings.BLS12_G1ADD_OPERATION_RAW_VALUE,
               ByteString(new Array[Byte](256))
             )
@@ -145,16 +151,29 @@ object NativeBackends:
 
   // ── BLS12-381 ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  /** Besu's `libeth_pairings` entry point, behind a trait so a test can stand in a missing or failing library. */
+  /** An EIP-2537 library, behind a trait so a test can stand in a missing or failing library. Operations are numbered
+    * as `libeth_pairings` numbers them (`LibEthPairings.BLS12_*_OPERATION_RAW_VALUE`).
+    */
   private[vm] trait BlsNative:
-    /** False when the library did not load: `LibEthPairings` catches the load error and reports it only here. */
+    /** The library, for log lines. */
+    def name: String
+
+    /** False when the library did not load. */
     def enabled: Boolean
+
+    /** Why the library is not usable; read only when [[enabled]] is false. */
+    def unavailableDetail: String
 
     /** `Some(output)` when the library computed the operation, `None` when it rejected the input. */
     def perform(operation: Byte, input: Array[Byte]): Option[Array[Byte]]
 
   private[vm] object LibEthPairingsNative extends BlsNative:
+    val name: String = "eth_pairings (org.hyperledger.besu:bls12-381 1.0.0)"
+
+    /** `LibEthPairings` catches its load error and reports it only here. */
     def enabled: Boolean = LibEthPairings.ENABLED
+
+    def unavailableDetail: String = "the native library did not load (LibEthPairings.ENABLED is false)"
 
     def perform(operation: Byte, input: Array[Byte]): Option[Array[Byte]] =
       val result = new Array[Byte](LibEthPairings.EIP2537_PREALLOCATE_FOR_RESULT_BYTES)
@@ -173,16 +192,61 @@ object NativeBackends:
         )
       if ret == 0 then Some(result.take(resultLength.getValue)) else None
 
+  /** Which BLS12-381 library runs the precompiles: `fukuii.vm.bls12-381-backend`, or `FUKUII_BLS12381_BACKEND`. */
+  enum BlsChoice(val key: String):
+    /** eth_pairings where it loads (Linux, macOS), else blst (Windows). */
+    case Auto extends BlsChoice("auto")
+    case EthPairings extends BlsChoice("eth-pairings")
+    case Blst extends BlsChoice("blst")
+
+  object BlsChoice:
+    def parse(value: String): Either[String, BlsChoice] =
+      BlsChoice.values
+        .find(_.key == value.trim)
+        .toRight(
+          s"fukuii.vm.bls12-381-backend is '$value'; expected one of ${BlsChoice.values.map(_.key).mkString(", ")}"
+        )
+
+  /** The environment variable the config key falls back to (vm.conf), read directly where no config is applied. */
+  val BlsChoiceEnvironmentVariable = "FUKUII_BLS12381_BACKEND"
+
+  private val configuredBlsChoice = new AtomicReference[Option[BlsChoice]](None)
+
+  private lazy val environmentBlsChoice: Either[String, BlsChoice] =
+    sys.env.get(BlsChoiceEnvironmentVariable).fold(Right(BlsChoice.Auto))(BlsChoice.parse)
+
+  /** Applies `fukuii.vm.bls12-381-backend`. `Fukuii.main` calls it before the self-check. Until then, as in tests and
+    * tools, the choice is `FUKUII_BLS12381_BACKEND`, or `auto` when that is unset.
+    */
+  def selectBls(choice: BlsChoice): Unit = configuredBlsChoice.set(Some(choice))
+
+  /** The library the BLS12-381 precompiles run on. An invalid choice is a library that is not usable, so it fails the
+    * self-check and, at call time, raises [[NativeBackendUnavailable]], as a missing library does.
+    */
+  private[vm] def blsBackend: BlsNative =
+    resolveBls(configuredBlsChoice.get.fold(environmentBlsChoice)(Right(_)), LibEthPairingsNative.enabled)
+
+  private[vm] def resolveBls(choice: Either[String, BlsChoice], ethPairingsLoads: => Boolean): BlsNative =
+    choice match
+      case Right(BlsChoice.Auto)        => if ethPairingsLoads then LibEthPairingsNative else BlstNative
+      case Right(BlsChoice.EthPairings) => LibEthPairingsNative
+      case Right(BlsChoice.Blst)        => BlstNative
+      case Left(error)                  => InvalidBlsChoice(error)
+
+  final private case class InvalidBlsChoice(error: String) extends BlsNative:
+    def name: String = "none"
+    def enabled: Boolean = false
+    def unavailableDetail: String = error
+    def perform(operation: Byte, input: Array[Byte]): Option[Array[Byte]] = None
+
+  /** The library the BLS12-381 precompiles run on, for the startup log. */
+  def blsBackendName: String = blsBackend.name
+
   /** Runs an EIP-2537 operation. `None` when the library rejects the input: an ordinary precompile failure, as before.
     * A library that did not load, or a native call that throws, raises [[NativeBackendUnavailable]].
     */
   private[vm] def blsOperation(native: BlsNative, operation: Byte, input: ByteString): Option[ByteString] =
-    if !native.enabled then
-      throw unavailable(
-        Backend.Bls12381,
-        "the native library did not load (LibEthPairings.ENABLED is false)",
-        None
-      )
+    if !native.enabled then throw unavailable(Backend.Bls12381, native.unavailableDetail, None)
     val output =
       try native.perform(operation, input.toArray)
       catch

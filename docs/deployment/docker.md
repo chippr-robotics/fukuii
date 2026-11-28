@@ -34,9 +34,11 @@ Fukuii maintains images in multiple container registries:
 **Quick Start:**
 ```bash
 docker pull chipprbots/fukuii:latest
-docker run -d --name fukuii -p 127.0.0.1:8546:8546 -p 30303:30303/tcp -p 30303:30303/udp \
+docker run -d --name fukuii -p 30303:30303/tcp -p 30303:30303/udp \
   -v fukuii-data:/app/data chipprbots/fukuii:latest
 ```
+
+JSON-RPC stays on the container's loopback; see [Exposing JSON-RPC](#exposing-json-rpc) to publish it.
 
 ### GitHub Container Registry - Official Release (Recommended for Production)
 - **Registry:** `ghcr.io/chippr-robotics/fukuii`
@@ -135,8 +137,10 @@ The main production-ready image for running Fukuii.
 - Runs as non-root user (`fukuii:fukuii`, UID/GID 1000)
 - Includes built-in healthcheck script
 - Exposes 8546 (JSON-RPC HTTP), 8552 (JSON-RPC WebSocket) and 30303 (P2P TCP, discovery UDP)
-- Sets `FUKUII_DATADIR=/app/data` and `FUKUII_RPC_INTERFACE=0.0.0.0`, so data lands on the `/app/data` volume and a
-  published RPC port is reachable; a `datadir` or `interface` in a conf mounted at `/app/conf` takes precedence
+- Sets `FUKUII_DATADIR=/app/data`, so data lands on the `/app/data` volume; a `datadir` in a conf mounted at
+  `/app/conf` takes precedence
+- Keeps JSON-RPC on the container's loopback; publishing it is a deliberate step (see
+  [Exposing JSON-RPC](#exposing-json-rpc))
 - Minimal attack surface with only required dependencies
 
 **Build:**
@@ -155,7 +159,6 @@ docker build -f docker/Dockerfile -t fukuii:latest .
 # Start with default configuration (ETC network)
 docker run -d \
   --name fukuii \
-  -p 127.0.0.1:8546:8546 \
   -p 30303:30303/tcp \
   -p 30303:30303/udp \
   -v fukuii-data:/app/data \
@@ -165,7 +168,6 @@ docker run -d \
 # Start with custom configuration
 docker run -d \
   --name fukuii \
-  -p 127.0.0.1:8546:8546 \
   -v fukuii-data:/app/data \
   -v /path/to/your/conf:/app/conf \
   fukuii:latest etc
@@ -262,7 +264,6 @@ Pre-configured for Ethereum Classic mainnet synchronization.
 # From Docker Hub
 docker run -d \
   --name fukuii-mainnet \
-  -p 127.0.0.1:8546:8546 \
   -p 30303:30303/tcp \
   -p 30303:30303/udp \
   -v fukuii-mainnet-data:/app/data \
@@ -271,7 +272,6 @@ docker run -d \
 # From GitHub Container Registry
 docker run -d \
   --name fukuii-mainnet \
-  -p 127.0.0.1:8546:8546 \
   -p 30303:30303/tcp \
   -p 30303:30303/udp \
   -v fukuii-mainnet-data:/app/data \
@@ -300,7 +300,6 @@ Pre-configured for Ethereum Classic Mordor testnet synchronization.
 # From Docker Hub
 docker run -d \
   --name fukuii-mordor \
-  -p 127.0.0.1:8546:8546 \
   -p 30303:30303/tcp \
   -p 30303:30303/udp \
   -v fukuii-mordor-data:/app/data \
@@ -309,7 +308,6 @@ docker run -d \
 # From GitHub Container Registry
 docker run -d \
   --name fukuii-mordor \
-  -p 127.0.0.1:8546:8546 \
   -p 30303:30303/tcp \
   -p 30303:30303/udp \
   -v fukuii-mordor-data:/app/data \
@@ -463,7 +461,6 @@ While we recommend running bootnodes to improve network health, you can also ena
 ```bash
 docker run -d \
   --name fukuii-mordor-miner \
-  -p 127.0.0.1:8546:8546 \
   -p 30303:30303/tcp \
   -p 30303:30303/udp \
   -v fukuii-mordor-data:/app/data \
@@ -482,7 +479,7 @@ docker run -d \
 Every runtime image sets
 
 ```dockerfile
-ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges"
+ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:DisableIntrinsic=_base64_decodeBlock --sun-misc-unsafe-memory-access=allow"
 ```
 
 to disable a HotSpot C2 optimisation that can silently miscompile field reads on JDK 23+
@@ -492,7 +489,10 @@ for your own tuning. Two things to know:
 
 - `java` prints `NOTE: Picked up JDK_JAVA_OPTIONS: ...` on stderr at startup. That is expected.
 - If you set `JDK_JAVA_OPTIONS` yourself (`-e` or compose `environment:`), you replace the image's value:
-  include both flags in yours.
+  include its flags in yours.
+- `--sun-misc-unsafe-memory-access=allow` only silences the JDK 24+ `sun.misc.Unsafe` warning that Scala 3 lazy
+  vals trigger, which would otherwise print four lines over the TUI's first frame (B-125). JDK 22 and older refuse
+  it, so leave it out if you run the jar on such a JDK.
 
 Details and other launch paths:
 [known-issues Issue 16](../runbooks/known-issues.md#issue-16-jdk-25-c2-reduceallocationmerges-workaround).
@@ -626,8 +626,9 @@ grype ghcr.io/chippr-robotics/fukuii:v1.0.0
 ## Environment Variables
 
 - `FUKUII_DATADIR` - The node's `datadir` (default: `/app/data`). A `datadir` in a mounted conf takes precedence.
-- `FUKUII_RPC_INTERFACE` - The JSON-RPC HTTP and WebSocket bind address (default: `0.0.0.0`). An `interface` in a
-  mounted conf takes precedence.
+- `FUKUII_RPC_INTERFACE` - The JSON-RPC HTTP and WebSocket bind address. Unset by default, so RPC binds the
+  container's loopback. `0.0.0.0` lets Docker forward a published port, and then needs TLS or the plaintext opt-out
+  (see [Exposing JSON-RPC](#exposing-json-rpc)). An `interface` in a mounted conf takes precedence.
 - `FUKUII_CONF_DIR` - Where the launcher looks for `<network>.conf` (default: `/app/conf`)
 - `FUKUII_DATA_DIR` - Set to `/app/data` but not read by fukuii; use `FUKUII_DATADIR`
 - `JAVA_OPTS` - Additional JVM options, read by the `bin/fukuii` launcher (every image but distroless)
@@ -643,9 +644,35 @@ grype ghcr.io/chippr-robotics/fukuii:v1.0.0
 - `8552` - WebSocket JSON-RPC API (off unless `fukuii.network.rpc.ws.enabled = true`)
 - `30303` - P2P networking (TCP) and discovery (UDP)
 
-Inside the container JSON-RPC binds `0.0.0.0` (`FUKUII_RPC_INTERFACE`) so Docker can forward it. Publish it as
-`127.0.0.1:8546:8546` to keep it on the host's loopback; reach it from elsewhere through an SSH tunnel or an
-authenticating TLS proxy.
+## Exposing JSON-RPC
+
+The images keep JSON-RPC on the container's loopback, so `docker exec fukuii curl -s localhost:8546/health` works and
+nothing outside the container reaches RPC. Docker can forward a published port only to a listener on the container's
+interface, and since 0.13.0 a plaintext listener on a non-loopback interface refuses the start unless it has TLS or a
+deliberate opt-out (spec 030). Publishing RPC therefore takes two settings:
+
+1. `-e FUKUII_RPC_INTERFACE=0.0.0.0`, which binds HTTP (and WebSocket, if enabled) on the container's interface.
+2. One of:
+   - **TLS** (preferred): `tls.enabled = true` on the listener, in a conf mounted at `/app/conf`, with a certificate
+     made by `tls/gen-cert.sh`. Add `client-auth` for mutual TLS. See the
+     [TLS runbook](../runbooks/tls-operations.md).
+   - **Plaintext opt-out**: `fukuii.network.rpc.http.allow-insecure-bind = true` (and `ws.allow-insecure-bind` if the
+     WebSocket is on). The node logs a WARN line at every start. Publish the port as `127.0.0.1:8546:8546` so it stays
+     on the host's loopback, and reach it from elsewhere through an SSH tunnel or an authenticating TLS proxy.
+
+```bash
+# Plaintext, published on the host's loopback only
+docker run -d --name fukuii \
+  -p 127.0.0.1:8546:8546 -p 30303:30303/tcp -p 30303:30303/udp \
+  -e FUKUII_RPC_INTERFACE=0.0.0.0 \
+  -e JAVA_OPTS=-Dfukuii.network.rpc.http.allow-insecure-bind=true \
+  -v fukuii-data:/app/data \
+  ghcr.io/chippr-robotics/fukuii:<version>
+```
+
+`JAVA_OPTS` is read by the `bin/fukuii` launcher in every image but distroless; on distroless, set the key in a
+mounted conf. Kubernetes `httpGet` probes connect to the pod IP, not loopback, so they need RPC exposed this way;
+otherwise use an `exec` probe that runs `curl` against `localhost`.
 
 ## Docker Compose Example
 
@@ -658,7 +685,8 @@ services:
     container_name: fukuii
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8546:8546"
+      # To publish RPC, add "127.0.0.1:8546:8546" here plus FUKUII_RPC_INTERFACE and TLS or the
+      # plaintext opt-out below (see Exposing JSON-RPC).
       - "30303:30303/tcp"
       - "30303:30303/udp"
     volumes:

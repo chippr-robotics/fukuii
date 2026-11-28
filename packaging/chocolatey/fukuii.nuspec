@@ -9,7 +9,7 @@
     <authors>Chippr Robotics</authors>
     <owners>chipprbots</owners>
     <projectUrl>https://github.com/chippr-robotics/fukuii</projectUrl>
-    <projectSourceUrl>https://github.com/chippr-robotics/fukuii</projectSourceUrl>
+    <projectSourceUrl>https://github.com/chippr-robotics/fukuii/tree/main/src</projectSourceUrl>
     <packageSourceUrl>https://github.com/chippr-robotics/fukuii/tree/main/packaging/chocolatey</packageSourceUrl>
     <docsUrl>https://docs.fukuii.com/</docsUrl>
     <bugTrackerUrl>https://github.com/chippr-robotics/fukuii/issues</bugTrackerUrl>

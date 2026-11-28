@@ -24,9 +24,9 @@ import com.chipprbots.ethereum.utils.Config
   *
   * WHY THIS EXISTS. `InvalidChainReporter.provesConsensusInvalid` refuses to report a bare gas-used mismatch, because a
   * node missing contract code executes a call as a plain transfer and under-counts gas on an honest block. That case
-  * was handed to `BlockImporter`, whose gas-used arm only runs when NOTHING in a batch executed. A mismatch found
-  * mid-batch was reported by nobody — `ConsensusAdapter` maps a partial failure to `BlockImportedToTop` and drops the
-  * error. Measured on hive `engine` 501368ec9: `Invalid Missing Ancestor Syncing ReOrg, GasUsed … Invalid P8`, 2/2
+  * was handed to `BlockImporter`, whose gas-used arm then ran only when NOTHING in a batch executed. A mismatch found
+  * mid-batch was reported by nobody — `ConsensusAdapter` mapped a partial failure to `BlockImportedToTop` and dropped
+  * the error. Measured on hive `engine` 501368ec9: `Invalid Missing Ancestor Syncing ReOrg, GasUsed … Invalid P8`, 2/2
   * failing, with no `import path reported` line in either client log.
   *
   * THE PROOF. Yellow Paper invariant, every fork before Amsterdam and every ETC fork: header gasUsed equals the final

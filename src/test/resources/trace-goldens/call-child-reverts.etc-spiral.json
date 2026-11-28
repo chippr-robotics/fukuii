@@ -82,6 +82,13 @@
       "depth":1,
       "stack":["0x20","0x40","0x20","0x0","0x0","0xc001"]
     },{
+      "pc":70,
+      "op":"CALL",
+      "gas":199967,
+      "gasCost":68141,
+      "depth":1,
+      "stack":["0x20","0x40","0x20","0x0","0x0","0xc001","0xffff"]
+    },{
       "pc":0,
       "op":"PUSH32",
       "gas":65535,
@@ -123,14 +130,7 @@
       "gasCost":0,
       "depth":2,
       "stack":["0x20","0x0"],
-      "error":"RevertOccurs"
-    },{
-      "pc":70,
-      "op":"CALL",
-      "gas":199967,
-      "gasCost":2624,
-      "depth":1,
-      "stack":["0x20","0x40","0x20","0x0","0x0","0xc001","0xffff"]
+      "error":"execution reverted"
     },{
       "pc":71,
       "op":"RETURNDATASIZE",
@@ -281,6 +281,14 @@
       "stack":["0x20","0x40","0x20","0x0","0x0","0xc001"],
       "memory":["0x8000000000000000000000000000000000000000000000000000000000000001"]
     },{
+      "pc":70,
+      "op":"CALL",
+      "gas":199967,
+      "gasCost":68141,
+      "depth":1,
+      "stack":["0x20","0x40","0x20","0x0","0x0","0xc001","0xffff"],
+      "memory":["0x8000000000000000000000000000000000000000000000000000000000000001"]
+    },{
       "pc":0,
       "op":"PUSH32",
       "gas":65535,
@@ -328,15 +336,7 @@
       "depth":2,
       "stack":["0x20","0x0"],
       "memory":["0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"],
-      "error":"RevertOccurs"
-    },{
-      "pc":70,
-      "op":"CALL",
-      "gas":199967,
-      "gasCost":2624,
-      "depth":1,
-      "stack":["0x20","0x40","0x20","0x0","0x0","0xc001","0xffff"],
-      "memory":["0x8000000000000000000000000000000000000000000000000000000000000001"]
+      "error":"execution reverted"
     },{
       "pc":71,
       "op":"RETURNDATASIZE",
@@ -429,7 +429,7 @@
       "value":"0x0",
       "input":"0x8000000000000000000000000000000000000000000000000000000000000001",
       "output":"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
-      "error":"RevertOccurs"
+      "error":"execution reverted"
     }]
   },
   "prestateTracer":{

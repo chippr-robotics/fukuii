@@ -38,24 +38,24 @@ class StorageConsistencyCheckerSpec extends AnyWordSpec with Matchers:
   "StorageConsistencyChecker.scan" should {
 
     "find nothing missing when every sampled point is present" taggedAs (UnitTest, DatabaseTest) in {
-      val s = new Store; s.fill(10)
+      val s = new Store; s.fill(11)
       val r = scan(BigInt(10), s.nums, s.heads, step = 1)
-      r.checked shouldBe 10L
-      r.total shouldBe 10L
+      r.checked shouldBe 11L
+      r.total shouldBe 11L
       r.missingCount shouldBe 0L
       r.firstMissing shouldBe empty
       r.cancelled shouldBe false
     }
 
     "report a number with no hash" taggedAs (UnitTest, DatabaseTest) in {
-      val s = new Store; s.fill(10, noHash = Set(4))
+      val s = new Store; s.fill(11, noHash = Set(4))
       val r = scan(BigInt(10), s.nums, s.heads, step = 1)
       r.missingCount shouldBe 1L
       r.firstMissing shouldBe Seq(Missing(BigInt(4), MissingKind.NoHashForNumber))
     }
 
     "report a hash with no header" taggedAs (UnitTest, DatabaseTest) in {
-      val s = new Store; s.fill(10, noHeader = Set(7))
+      val s = new Store; s.fill(11, noHeader = Set(7))
       val r = scan(BigInt(10), s.nums, s.heads, step = 1)
       r.missingCount shouldBe 1L
       r.firstMissing shouldBe Seq(Missing(BigInt(7), MissingKind.NoHeaderForHash))
@@ -64,14 +64,14 @@ class StorageConsistencyCheckerSpec extends AnyWordSpec with Matchers:
     "cap firstMissing while the count stays exact" taggedAs (UnitTest, DatabaseTest) in {
       val s = new Store // nothing stored: every point misses
       val n = FirstMissingCap + 50
-      val r = scan(BigInt(n), s.nums, s.heads, step = 1)
+      val r = scan(BigInt(n - 1), s.nums, s.heads, step = 1)
       r.missingCount shouldBe n.toLong
       r.firstMissing.size shouldBe FirstMissingCap
       r.firstMissing.map(_.number) shouldBe (0 until FirstMissingCap).map(BigInt(_))
     }
 
     "stop when cancelled and say how far it got" taggedAs (UnitTest, DatabaseTest) in {
-      val s = new Store; s.fill(20)
+      val s = new Store; s.fill(21)
       var asked = 0
       val r = scan(
         BigInt(20),
@@ -83,27 +83,42 @@ class StorageConsistencyCheckerSpec extends AnyWordSpec with Matchers:
       )
       r.cancelled shouldBe true
       r.checked shouldBe 5L
-      r.total shouldBe 20L
+      r.total shouldBe 21L
     }
 
-    "sample every step-th number from 0, excluding best" taggedAs (UnitTest, DatabaseTest) in {
+    "sample every step-th number from 0 and best itself" taggedAs (UnitTest, DatabaseTest) in {
       val s = new Store // empty: misses name exactly the sampled points
       val r = scan(BigInt(10), s.nums, s.heads, step = 3)
+      r.total shouldBe 5L
+      r.firstMissing.map(_.number) shouldBe Seq(BigInt(0), BigInt(3), BigInt(6), BigInt(9), BigInt(10))
+      val onMultiple = scan(BigInt(9), s.nums, s.heads, step = 3)
+      onMultiple.total shouldBe 4L
+      onMultiple.firstMissing.map(_.number) shouldBe Seq(BigInt(0), BigInt(3), BigInt(6), BigInt(9))
+      val genesisOnly = scan(BigInt(0), s.nums, s.heads, step = 3)
+      genesisOnly.total shouldBe 1L
+      genesisOnly.firstMissing.map(_.number) shouldBe Seq(BigInt(0))
+    }
+
+    "count and name points above Int.MaxValue without wrapping" taggedAs (UnitTest, DatabaseTest) in {
+      val s = new Store
+      val best = BigInt(Int.MaxValue) + 5
+      val step = 1000000000
+      val r = scan(best, s.nums, s.heads, step = step)
+      // 0, 1e9, 2e9, then 3e9 is above best: so 0, 1e9, 2e9, and best itself
       r.total shouldBe 4L
-      r.firstMissing.map(_.number) shouldBe Seq(BigInt(0), BigInt(3), BigInt(6), BigInt(9))
-      scan(BigInt(0), s.nums, s.heads, step = 3).total shouldBe 0L
+      r.firstMissing.map(_.number) shouldBe Seq(BigInt(0), BigInt(step), BigInt(2L * step), best)
     }
 
     "report progress monotonically, ending at the total" taggedAs (UnitTest, DatabaseTest) in {
-      val s = new Store; s.fill(1000)
+      val s = new Store; s.fill(1100)
       val seen = scala.collection.mutable.ArrayBuffer.empty[(Long, Long)]
       scan(BigInt(1000), s.nums, s.heads, step = 1, onProgress = (c, t) => seen += ((c, t)))
       seen should not be empty
       seen.map(_._1) shouldBe seen.map(_._1).sorted
       seen.map(_._1).distinct.size shouldBe seen.size
-      seen.map(_._2).distinct shouldBe Seq(1000L)
-      seen.last shouldBe ((1000L, 1000L))
-      seen.size should be <= (1000 / ProgressEvery + 1)
+      seen.map(_._2).distinct shouldBe Seq(1001L)
+      seen.last shouldBe ((1001L, 1001L))
+      seen.size should be <= (1001 / ProgressEvery + 1)
     }
   }
 
@@ -142,23 +157,23 @@ class StorageConsistencyCheckerSpec extends AnyWordSpec with Matchers:
   "StorageConsistencyChecker.checkStorageConsistency (start-up path)" should {
 
     "call shutdown once per miss and keep looping" taggedAs (UnitTest, DatabaseTest) in {
-      val s = new Store; s.fill(10, noHash = Set(2), noHeader = Set(5))
+      val s = new Store; s.fill(11, noHash = Set(2), noHeader = Set(5))
       var shutdowns = 0
       checkStorageConsistency(BigInt(10), s.nums, s.heads, () => shutdowns += 1, step = 1)
       shutdowns shouldBe 2
     }
 
     "not call shutdown when nothing is missing" taggedAs (UnitTest, DatabaseTest) in {
-      val s = new Store; s.fill(10)
+      val s = new Store; s.fill(11)
       var shutdowns = 0
       checkStorageConsistency(BigInt(10), s.nums, s.heads, () => shutdowns += 1, step = 1)
       shutdowns shouldBe 0
     }
 
-    "not check the best block itself, as before" taggedAs (UnitTest, DatabaseTest) in {
-      val s = new Store; s.fill(10, noHash = Set(9)) // 9 is the last checked below best=10
+    "check the best block itself" taggedAs (UnitTest, DatabaseTest) in {
+      val s = new Store; s.fill(10, noHash = Set(9))
       var shutdowns = 0
       checkStorageConsistency(BigInt(9), s.nums, s.heads, () => shutdowns += 1, step = 1)
-      shutdowns shouldBe 0 // best=9 is excluded: pins today's end point
+      shutdowns shouldBe 1
     }
   }

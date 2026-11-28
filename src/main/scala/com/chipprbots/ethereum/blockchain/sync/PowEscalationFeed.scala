@@ -2,9 +2,11 @@ package com.chipprbots.ethereum.blockchain.sync
 
 import org.apache.pekko.util.ByteString
 
+import com.chipprbots.ethereum.consensus.PowForkChoice
 import com.chipprbots.ethereum.db.storage.pathstate.GivenUpBranch
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgRefusal
 import com.chipprbots.ethereum.db.storage.pathstate.ReorgTooDeep
+import com.chipprbots.ethereum.db.storage.pathstate.StateBusy
 import com.chipprbots.ethereum.db.storage.pathstate.StateFault
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockHash
@@ -52,6 +54,19 @@ import com.chipprbots.ethereum.domain.ChainWeight
   *   chain has it
   * @param note
   *   told what was left out of the count, and why
+  * @param chainHashAt
+  *   the hash of the chain's block at a height, by the hash index: whether a block whose header is not stored is the
+  *   node's own (B-383)
+  * @param head
+  *   the head's header, of the head `headWeight` weighs: where the weight of the block a branch stands on is not
+  *   stored, it is that weight less the difficulty of the head's blocks above that block, found by their parent hashes
+  *   (B-385); and the head a branch of the same weight is set against by the tie rule (B-284)
+  * @param forkChoice
+  *   the import's fork choice by weight, core-geth's `ReorgNeeded` with its tie rule (B-284), asked without its coin
+  *   ([[PowForkChoice.verdict]]): a branch is counted as the chain to follow only where the rule itself takes it. A tie
+  *   a coin would decide is not counted: a coin is never a reason to give this node's state up, and none is tossed for
+  *   headers not yet validated (forge B1, W1). A node on a chain that declares no terminal total difficulty gives its
+  *   consensus's. The default keeps the head on a tie, as this did before
   */
 final class PowEscalationFeed(
     watch: EscalationWatch,
@@ -60,7 +75,10 @@ final class PowEscalationFeed(
     headerOf: ByteString => Option[BlockHeader] = _ => None,
     onTheChain: BlockHeader => Boolean = _ => true,
     mess: Option[PowEscalationFeed.Mess] = None,
-    note: String => Unit = _ => ()
+    note: String => Unit = _ => (),
+    chainHashAt: BigInt => Option[BlockHash] = _ => None,
+    head: () => Option[BlockHeader] = () => None,
+    forkChoice: PowForkChoice = PowForkChoice.HeavierOnly
 ):
   import PowEscalationFeed.*
 
@@ -92,22 +110,30 @@ final class PowEscalationFeed(
       firstInvalidHeader: List[BlockHeader] => Option[(BlockHeader, String)]
   ): Unit =
     // A post-merge branch (difficulty 0) is the Engine API's: this filter is also what keeps the consensus layer's
-    // refusals (`RefusedForThisHead`, `HandedToRecovery`, B-297) out of the proof-of-work count
+    // refusals (`RefusedForThisHead`, `HandedToRecovery`, B-297) out of the proof-of-work count, and keeps the feed
+    // silent on proof of stake, a `StateBusy` included (beacon)
     if headers.nonEmpty && headers.last.difficulty.value > 0 then
       val name = s"[${headers.head.number}-${headers.last.number}]"
-      (weighed(headers), headWeight()) match
-        case (None, _) | (_, None) => note(s"branch $name is not counted: its weight, or the head's, is not stored")
-        case (Some(of), Some(head)) if of <= head =>
-          note(s"branch $name is not counted: it does not outweigh the head")
-        case (Some(of), _) =>
-          firstInvalidHeader(headers) match
-            case Some((header, why)) =>
-              note(s"branch $name is not counted: the header of its block ${header.number} is not valid ($why)")
-            case None =>
-              val first = firstAboveFork(headers.head, headerOf, onTheChain)
-              if messWouldRefuse(first, of) then
-                note(s"branch $name is not counted: the reorganisation to it is one MESS refuses (ECBP-1100)")
-              else counted(headers, name, of, first, fault)
+      // A branch refused because another thread's adoption holds the head (`StateBusy`, B-462) is no fault of this
+      // node and no verdict on the branch: it is asked for again once the adoption ends. Never counted, and its weight
+      // is not taken as refused, so that it cannot hold off the end of a run when the head moves (forge, 2026-11-24).
+      // No bound: an adoption that never ends is said by the store, and by its gauge
+      if fault.isInstanceOf[StateBusy] then
+        note(s"branch $name is not counted: another adoption holds the head (${fault.getMessage})")
+      else
+        (weighed(headers, forkWeightOf), headWeight()) match
+          case (None, _) | (_, None) => note(s"branch $name is not counted: its weight, or the head's, is not stored")
+          case (Some(of), Some(headAt)) if !takesTheHead(headers.last, of, headAt) =>
+            note(s"branch $name is not counted: it does not outweigh the head")
+          case (Some(of), _) =>
+            firstInvalidHeader(headers) match
+              case Some((header, why)) =>
+                note(s"branch $name is not counted: the header of its block ${header.number} is not valid ($why)")
+              case None =>
+                val first = firstAboveFork(headers.head, headerOf, onTheChain)
+                messLeavesOut(first, of) match
+                  case Some(why) => note(s"branch $name is not counted: $why")
+                  case None      => counted(headers, name, of, first, fault)
 
   /** Whether the branch of `headers`, from the stored weight of the block it stands on, outweighs the head, by the
     * weights a branch is counted by. False where either weight is not stored. It reads and says only: nothing is
@@ -116,12 +142,45 @@ final class PowEscalationFeed(
   def outweighsTheHead(headers: List[BlockHeader]): Boolean =
     headers.nonEmpty && (for
       of <- weighed(headers)
-      head <- headWeight()
-    yield of > head).contains(true)
+      headAt <- headWeight()
+    yield takesTheHead(headers.last, of, headAt)).contains(true)
 
-  // the chain weight at the last of `headers`, from the stored weight of the block the first stands on
-  private def weighed(headers: List[BlockHeader]): Option[ChainWeight] =
-    headers.headOption.flatMap(first => weightOf(first.parentHash)).map(headers.foldLeft(_)(_.increase(_)))
+  // Whether a branch whose last header is `tip`, of weight `of`, takes the head, of weight `headAt`, by the import's
+  // fork choice's rule (B-284): heavier, or a tie the rule itself gives it (the lower block). Never a coin's: a tie a
+  // coin would decide is not taken, and nothing is tossed (forge B1, W1). Strictly heavier where the head's header is
+  // not given
+  private def takesTheHead(tip: BlockHeader, of: ChainWeight, headAt: ChainWeight): Boolean =
+    head().fold(of > headAt)(current => forkChoice.verdict(current, headAt, tip, of) == PowForkChoice.Verdict.Reorg)
+
+  // the chain weight at the last of `headers`, from the weight `of` gives the block the first stands on
+  private def weighed(
+      headers: List[BlockHeader],
+      of: BlockHash => Option[ChainWeight] = weightOf
+  ): Option[ChainWeight] =
+    headers.headOption.flatMap(first => of(first.parentHash)).map(headers.foldLeft(_)(_.increase(_)))
+
+  // The weight of the block of `hash`: as stored, or, where it is not stored and the block is of the head's ancestry,
+  // the head's weight less the difficulty of the head's blocks above it (B-385). The branch is then weighed against the
+  // head by the difficulty of each above the block they share, as `BranchResolution.compareBranch` weighs it: whatever
+  // the two weights rest on cancels. The blocks above it are found by their parent hashes from the head, not by the
+  // hash index (ancestry-not-index), up to `ForkWeightReach` of them; a header not stored on the way, or the head's
+  // weight not exact, and nothing is weighed.
+  private def forkWeightOf(hash: BlockHash): Option[ChainWeight] =
+    weightOf(hash).orElse {
+      val derived = for
+        top <- head()
+        weight <- headWeight()
+        above <- difficultyAbove(top, hash, headerOf)
+        if above <= weight.totalDifficulty.value
+      yield ChainWeight.totalDifficultyOnly(weight.totalDifficulty.value - above)
+      derived.foreach(of =>
+        note(
+          s"the weight of block ${hash.toHexString.take(10)} is not stored: it is " +
+            s"weighed from the head, ${of.totalDifficulty.value} (B-385)"
+        )
+      )
+      derived
+    }
 
   private def counted(
       headers: List[BlockHeader],
@@ -139,31 +198,57 @@ final class PowEscalationFeed(
       case Refusal.Unreachable => watch.branchUnreachable(refusedBranch, name, fault.getMessage)
       case Refusal.Fault       => watch.branchRefused(refusedBranch, headers.last.number.value, name, fault.getMessage)
 
-  // Whether the reorganisation to a branch of weight `of`, whose first block above the chain is `first`, is one MESS
-  // refuses (forge, B-306). The head's header and the head's weight are read apart: they are of the same head because
-  // the feed is told of one import at a time, after it is done (ConsensusAdapter). A batch that the fetcher resolves is never handed to consensus when it is; a block a peer
-  // announces is, and without this a deep branch spread that way would be counted as the chain to follow. Where the
-  // rule is in force and what it weighs is not stored, the branch is not counted either: nothing says it would pass.
-  private def messWouldRefuse(first: BlockHeader, of: ChainWeight): Boolean =
-    mess.exists { rule =>
-      rule.head().exists { head =>
-        rule.activeAt(head.number.value) && {
-          val weighed = for
-            fork <- headerOf(first.parentHash.value)
-            // the block the two chains share is of the node's chain. Where the walk down the branch ended on a side
-            // block (its reach), what would be weighed is not what the rule weighs: the branch is not counted (forge)
-            if onTheChain(fork)
-            forkWeight <- weightOf(first.parentHash)
-            headWeight <- headWeight()
-          yield rule.refuses(
-            math.max(0L, head.unixTimestamp - fork.unixTimestamp),
-            headWeight.totalDifficulty.value - forkWeight.totalDifficulty.value,
-            of.totalDifficulty.value - forkWeight.totalDifficulty.value
-          )
-          weighed.getOrElse(true)
-        }
-      }
-    }
+  // Why the reorganisation to a branch of weight `of`, whose first block above the chain is `first`, keeps it out of the
+  // count where MESS is in force (forge, B-306), if it does. The head's header and the head's weight are read apart:
+  // they are of the same head because the feed is told of one import at a time, after it is done (ConsensusAdapter). A
+  // batch that the fetcher resolves is never handed to consensus when MESS refuses it; a block a peer announces is, and
+  // without this a deep branch spread that way would be counted as the chain to follow.
+  //
+  // The header of the block the branch stands on not stored, where the hash index names that block as this node's at
+  // its height, is a hole in this node's datadir, and MESS does not refuse on it (B-383, spec 018 C6 PR-B,
+  // BranchResolution.messRejects): the branch is judged by weight and consensus refuses it as a fault of this node
+  // (`StateUnavailable`). It is counted as that fault, by how far it grows; read as a refusal by MESS it was never
+  // counted, and the node waited with no end. Its first header reaches here by its seal alone: the validation the feed
+  // is given checks it without its parent rules there, and only there (B-391,
+  // BlockValidation.firstInvalidHeaderOfNotJudged). Where the block is not known to be the node's, or the walk down
+  // the branch ended on a side block (its reach), what would be weighed is not what the rule weighs: not counted
+  // (forge).
+  private def messLeavesOut(first: BlockHeader, of: ChainWeight): Option[String] =
+    for
+      rule <- mess
+      head <- rule.head()
+      if rule.activeAt(head.number.value)
+      why <- messWeighs(rule, head, first, of)
+    yield why
+
+  private def messWeighs(rule: Mess, head: BlockHeader, first: BlockHeader, of: ChainWeight): Option[String] =
+    headerOf(first.parentHash.value) match
+      case Some(fork) if onTheChain(fork) =>
+        val weighed = for
+          forkWeight <- forkWeightOf(first.parentHash)
+          headWeight <- headWeight()
+        yield rule.refuses(
+          math.max(0L, head.unixTimestamp - fork.unixTimestamp),
+          headWeight.totalDifficulty.value - forkWeight.totalDifficulty.value,
+          of.totalDifficulty.value - forkWeight.totalDifficulty.value
+        )
+        weighed match
+          case Some(false) => None
+          case Some(true)  => Some("the reorganisation to it is one MESS refuses (ECBP-1100)")
+          case None        => Some("MESS is in force and the weight it weighs from the shared block is not stored")
+      case Some(_) =>
+        Some("MESS is in force and the walk down the branch ended on a side block: the shared block is not known")
+      case None if first.number.value > 0 && chainHashAt(first.number.value - 1).contains(first.parentHash) =>
+        note(
+          s"MESS cannot weigh the branch from block ${first.number}: the header of this node's block " +
+            s"${first.number.value - 1} is not stored; it is counted as a fault of this node (B-383)"
+        )
+        None
+      case None =>
+        Some(
+          s"MESS is in force and the header of the block under block ${first.number} is not stored, and it is " +
+            "not this node's block at its height: the shared block is not known"
+        )
 
   /** Proof-of-work blocks became the head: by extension, or by a reorganisation. */
   def headMoved(newHead: Block): Unit =
@@ -177,6 +262,31 @@ final class PowEscalationFeed(
         watch.headMoved()
 
 object PowEscalationFeed:
+
+  /** How many of the head's blocks are walked to weigh a block whose weight is not stored (B-385): as far as the walk
+    * down a branch reaches ([[firstAboveFork]]).
+    */
+  val ForkWeightReach: Int = 1024
+
+  /** The difficulty of the blocks of `top`'s ancestry above the block of `hash`, `top` with them, found by their parent
+    * hashes. None where the block is not met within `reach` blocks, or a header on the way is not stored. The header of
+    * the block of `hash` itself is not read.
+    */
+  def difficultyAbove(
+      top: BlockHeader,
+      hash: BlockHash,
+      headerOf: ByteString => Option[BlockHeader],
+      reach: Int = ForkWeightReach
+  ): Option[BigInt] =
+    @scala.annotation.tailrec
+    def down(at: BlockHeader, sum: BigInt, left: Int): Option[BigInt] =
+      if at.parentHash == hash then Some(sum + at.difficulty.value)
+      else if left <= 1 then None
+      else
+        headerOf(at.parentHash.value) match
+          case Some(parent) => down(parent, sum + at.difficulty.value, left - 1)
+          case None         => None
+    if top.hash == hash then Some(BigInt(0)) else down(top, BigInt(0), reach)
 
   /** The rule that refuses a reorganisation whose branch has not the weight its depth asks for (MESS, ECBP-1100).
     *
@@ -245,6 +355,7 @@ object PowEscalationFeed:
     * head moved under the branch) is gone at the next try, and the run with it.
     */
   def classify(fault: StateFault): Refusal = fault match
+    // never met: a `StateBusy` is left out before anything is counted ([[PowEscalationFeed.notJudgedHeaders]], B-462)
     // `Finalized` is Unreachable too, and never met on proof of work, which finalizes nothing. `BeyondTheFetch` is a
     // branch regular sync cannot fetch whole, which no wait mends either (B-300 g)
     case deep: ReorgTooDeep if deep.reason != ReorgRefusal.Corrupt => Refusal.Unreachable

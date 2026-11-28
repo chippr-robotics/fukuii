@@ -7,7 +7,7 @@
                   │ Mode    actions allowed · each is confirmed in its dialog                                           
        ETH        │ Running nothing                                                                                     
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
-                  │ Actions 25, by what they can break · Up and Down select · Enter or a types one at the prompt        
+                  │ Actions 26, by what they can break · Up and Down select · Enter or a types one at the prompt        
                   │   Observe  config        the effective configuration, secrets hidden                                
  sepolia          │   Observe  tunables      what changes without a restart, as it is now                               
  PoS              │   Observe  deps          each subsystem, what it needs, its health                                  
@@ -29,12 +29,12 @@
                   │   Disrupt  rpc stop      a JSON-RPC server stops; its connections drop                              
                   │   Disrupt  rpc start     a server that was stopped here listens again                               
                   │   Disrupt  dbcheck       the start's database check, run now; it reports                            
+                  │   Disrupt  compact       rewrites the database's files: heavy disk I/O                              
                   │   Disrupt  detect-ip     asks outside services for this node's address                              
                   │   Disrupt  bundle        writes a support bundle under the datadir                                  
                   │   Halt     mining stop                                                                              
                   │   Halt     quit          the node process ends                                                      
                   │─────────────────────────────────────────────────────────────────────────────────────────────────────
                   │ Last    no action has been attempted in this session                                                
-                  │─────────────────────────────────────────────────────────────────────────────────────────────────────
-                  │ Not offered, and why                                                                                
+                  │                                                                                                     
  1-9 view  Enter open  Esc back  : prompt  / filter  ? help  p pause  r redraw  d detach  q quit                        

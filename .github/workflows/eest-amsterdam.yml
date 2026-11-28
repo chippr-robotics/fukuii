@@ -19,17 +19,12 @@ name: EEST Amsterdam
 # release tag.
 
 on:
+  # A required check on main (gate `eest-amsterdam` in .github/gates.yml), so it starts on every PR
+  # and the `changes` job decides whether there is anything to test
+  # (.github/workflows/_hive-changes.yml). A `paths:` filter here would leave the check "Expected"
+  # on a docs-only PR and block its merge.
   pull_request:
     branches: [staging, main]
-    paths:
-      - 'src/main/**'
-      - 'src/test/scala/com/chipprbots/ethereum/ledger/Eest*'
-      - 'src/test/scala/com/chipprbots/ethereum/consensus/engine/EestBuilderReplay.scala'
-      - 'src/test/scala/com/chipprbots/ethereum/consensus/engine/EngineApiAmsterdamBuilderEestSpec.scala'
-      - 'scripts/eest/**'
-      - '.github/workflows/eest-amsterdam.yml'
-      - 'build.sbt'
-      - 'project/**'
   push:
     branches: [staging, main]
     paths:
@@ -51,8 +46,28 @@ env:
   EEST_MIN_TESTS: '26503'
 
 jobs:
+  changes:
+    permissions:
+      contents: read
+      pull-requests: read
+    uses: ./.github/workflows/_hive-changes.yml
+    with:
+      paths: |
+        src/main/
+        src/test/scala/com/chipprbots/ethereum/ledger/Eest*
+        src/test/scala/com/chipprbots/ethereum/consensus/engine/EestBuilderReplay.scala
+        src/test/scala/com/chipprbots/ethereum/consensus/engine/EngineApiAmsterdamBuilderEestSpec.scala
+        scripts/eest/
+        .github/workflows/eest-amsterdam.yml
+        build.sbt
+        project/
+
   eest-amsterdam:
     name: EEST Amsterdam
+    # Skipped (not absent) when the PR changes nothing it depends on: a job skipped by `if:` under a
+    # literal name still reports, and a skipped required check counts as passed.
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 90
 

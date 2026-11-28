@@ -35,14 +35,20 @@ object ChainConfRenderer:
       bpo1: Option[Long],
       bpo2: Option[Long],
       amsterdam: Option[Long],
+      bpo3: Option[Long],
+      bpo4: Option[Long],
+      bpo5: Option[Long],
       blobSchedule: Seq[(String, BigInt, BigInt, BigInt)],
       depositContract: String,
       bootnodes: Seq[String],
       publishedHash: String
   )
 
-  /** The blob forks, in the order their entries are written. */
-  val BlobForks: List[String] = List("cancun", "prague", "osaka", "bpo1", "bpo2", "amsterdam")
+  /** The blob forks, in the order their entries are written: go-ethereum's fork order, which puts BPO3..BPO5 after
+    * Amsterdam (`BlobSchedule.validate`).
+    */
+  val BlobForks: List[String] =
+    List("cancun", "prague", "osaka", "bpo1", "bpo2", "amsterdam", "bpo3", "bpo4", "bpo5")
 
   private def ts(value: Option[Long]): String = value.fold("null")(_.toString)
 
@@ -84,6 +90,9 @@ object ChainConfRenderer:
   bpo1-timestamp = ${ts(p.bpo1)}
   bpo2-timestamp = ${ts(p.bpo2)}
   amsterdam-timestamp = ${ts(p.amsterdam)}
+  bpo3-timestamp = ${ts(p.bpo3)}
+  bpo4-timestamp = ${ts(p.bpo4)}
+  bpo5-timestamp = ${ts(p.bpo5)}
 
   # EIP-7840 blob schedule, verbatim from genesis.json config.blobSchedule (target and max blobs per
   # block, blob base-fee update fraction), each entry in force from its fork's timestamp above.
@@ -144,7 +153,6 @@ ${blobSchedule(p)}  }
     reward-reduction-rate = 0
   }
 
-  gas-tie-breaker = false
   eth-compatible-storage = true
 
   bootstrap-nodes = [

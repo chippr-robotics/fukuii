@@ -68,8 +68,11 @@ object StdValidators:
     val header = block.header
     val body = block.body
 
+    // EIP-7934's size cap (ETH, Osaka on) sits where go-ethereum checks it: after the header, at the head of the body
+    // checks (`ValidateBody`).
     val result = for
       _ <- self.blockHeaderValidator.validate(header, getBlockHeaderByHash)
+      _ <- StdBlockValidator.validateBlockRLPSize(block)
       _ <- self.blockValidator.validateHeaderAndBody(header, body)
     yield BlockExecutionSuccess
 
@@ -99,9 +102,9 @@ object StdValidators:
     * CanonicalReOrg=False, Invalid P9" (Paris and Cancun). hive's `RemoveTransaction` empties the transaction list and
     * recomputes `transactionsRoot` but keeps the original `gasUsed`, `receiptsRoot` and `stateRoot`. Our receipts
     * (none) therefore do not hash to the kept `receiptsRoot`, so [[HeaderGasContradictsReceiptsMarker]] cannot apply.
-    * The block fails mid-batch, `ConsensusAdapter` maps the partial batch to `BlockImportedToTop` and drops the error,
-    * and nobody reported it. The node then imported up to the invalid block's parent and answered the CL's tip ACCEPTED
-    * until hive timed out.
+    * The block fails mid-batch, `ConsensusAdapter` mapped the partial batch to `BlockImportedToTop` and dropped the
+    * error (until B-338, which answers it `ImportedPartially`), and nobody reported it. The node then imported up to
+    * the invalid block's parent and answered the CL's tip ACCEPTED until hive timed out.
     *
     * Same substring constraints as [[HeaderGasContradictsReceiptsMarker]]: it must not contain any substring another
     * consumer matches on, and the message it is appended to keeps "Block has invalid gas used" as a contiguous prefix.

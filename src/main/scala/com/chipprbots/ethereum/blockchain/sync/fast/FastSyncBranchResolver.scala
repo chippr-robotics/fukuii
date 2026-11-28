@@ -1,10 +1,13 @@
 package com.chipprbots.ethereum.blockchain.sync.fast
 
+import org.apache.pekko.util.ByteString
+
 import cats.data.NonEmptyList
 
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.Blockchain
 import com.chipprbots.ethereum.domain.BlockchainReader
+import com.chipprbots.ethereum.domain.CanonicalHeadLock
 import com.chipprbots.ethereum.network.Peer
 import com.chipprbots.ethereum.utils.Logger
 
@@ -15,15 +18,24 @@ trait FastSyncBranchResolver:
   protected def blockchain: Blockchain
   protected def blockchainReader: BlockchainReader
 
-  def discardBlocksAfter(lastValidBlock: BigInt): Unit =
-    discardBlocks(lastValidBlock, blockchainReader.getBestBlockNumber)
+  /** Removes the blocks above `lastValidBlock`, from the best down. Returns each block it removed, by number and hash,
+    * read before its entry of the index by number is removed (B-248): the import's rewind undoes their reference
+    * counts, and could not find them in the index after this.
+    */
+  def discardBlocksAfter(lastValidBlock: BigInt): Seq[(BigInt, ByteString)] =
+    // under the head's lock, the whole discard (B-511): a fork choice between two removals would have the next one read
+    // the index of the chain the fork choice moved to, and remove a block of it
+    CanonicalHeadLock.held(s"the discard of the blocks above block $lastValidBlock")(
+      discardBlocks(lastValidBlock, blockchainReader.getBestBlockNumber)
+    )
 
-  private def discardBlocks(fromBlock: BigInt, toBlock: BigInt): Unit =
+  private def discardBlocks(fromBlock: BigInt, toBlock: BigInt): Seq[(BigInt, ByteString)] =
     val blocksToBeRemoved = childOf(fromBlock).to(toBlock).reverse.toList
-    blocksToBeRemoved.foreach { toBeRemoved =>
-      blockchainReader
-        .getBlockHeaderByNumber(toBeRemoved)
-        .foreach(header => blockchain.removeBlock(header.hash))
+    blocksToBeRemoved.flatMap { toBeRemoved =>
+      blockchainReader.getBlockHeaderByNumber(toBeRemoved).map { header =>
+        blockchain.removeBlock(header.hash)
+        (header.number.value, header.hash.value)
+      }
     }
 
 object FastSyncBranchResolver:
@@ -101,6 +113,15 @@ object BinarySearchSupport extends Logger:
         ContinueBinarySearch(searchState.copy(minBlockNumber = childNum.value))
       else ContinueBinarySearch(searchState.copy(minBlockNumber = parentNum.value))
     else // no parent/child -> chains have diverged before parent block
+      notCommon(parentNum.value, searchState)
+
+  /** The step of the search where this node's block at `parentNumber` is not common: the chains part below it. Also the
+    * step where this node holds no header at `parentNumber` (B-347), as core-geth's `findAncestorBinarySearch` takes a
+    * header it does not hold (`known` false) for one that is not common, and searches on below it.
+    */
+  def notCommon(parentNumber: BigInt, searchState: SearchState): BinarySearchResult =
+    val min = searchState.minBlockNumber
+    val max = searchState.maxBlockNumber
     if min == 1 && max <= 2 then NoCommonBlock
-    else if min == max then BinarySearchCompleted(parentOf(parentNum.value))
-    else ContinueBinarySearch(searchState.copy(maxBlockNumber = parentOf(parentNum.value).max(1)))
+    else if min == max then BinarySearchCompleted(parentOf(parentNumber))
+    else ContinueBinarySearch(searchState.copy(maxBlockNumber = parentOf(parentNumber).max(1)))

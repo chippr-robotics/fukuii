@@ -36,18 +36,19 @@ import com.chipprbots.ethereum.domain.BlockchainWriter
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 
-/** Unit tests for BytecodeRecoveryActor covering all recovery paths:
+/** Unit tests for BytecodeRecoveryActor covering all recovery paths. The actor downloads the gaps the combined scan
+  * found; it has no scan of its own since B-217 (what the scan finds is `CombinedRecoveryScan*Spec`'s and
+  * `RecoveryScansVerdictSpec`'s).
   *
   * T1: No missing bytecodes → immediate RecoveryComplete, flag committed. T2: Missing present → coordinator receives
-  * StartByteCodeSync, completes normally. T3: Scan Future throws (trie root missing) → RecoveryComplete still fires.
-  * T4: Coordinator crashes mid-download → Terminated handler commits flag and fires RecoveryComplete. T5: No
+  * StartByteCodeSync, completes normally, and nothing is settled before. T3: progress counts each message's count, once
+  * (B-494). T4: Coordinator crashes mid-download → Terminated handler commits flag and fires RecoveryComplete. T5: No
   * peer/progress arrives within timeout → abandon fires, RecoveryComplete emitted.
   */
 class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpecLike with Matchers with Eventually:
 
   implicit private val classicSystem: org.apache.pekko.actor.ActorSystem = system.classicSystem
 
-  private val fakeStateRoot: ByteString = ByteString(Array.fill[Byte](32)(0x11))
   private val fakeCodeHash: ByteString = ByteString(Array.fill[Byte](32)(0xaa.toByte))
   private val missingOne: Seq[ByteString] = Seq(fakeCodeHash)
 
@@ -106,13 +107,11 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
       val actor: TypedActorRef[BytecodeRecoveryActor.Command] = testKit
         .spawn(
           BytecodeRecoveryActor.testApply(
-            stateRoot = fakeStateRoot,
             stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref.toTyped[Any],
-            pivotBlockNumber = BigInt(100),
             snapSyncConfig = newConfig(),
-            preloaded = Some(Seq.empty)
+            missing = Seq.empty
           ),
           "bytecode-recovery-spec-t1"
         )
@@ -136,13 +135,11 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
       val actor: TypedActorRef[BytecodeRecoveryActor.Command] = testKit
         .spawn(
           BytecodeRecoveryActor.testApply(
-            stateRoot = fakeStateRoot,
             stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref.toTyped[Any],
-            pivotBlockNumber = BigInt(100),
             snapSyncConfig = newConfig(),
-            preloaded = Some(missingOne),
+            missing = missingOne,
             coordinatorForTesting = Some(coordinatorProbe.ref)
           ),
           "bytecode-recovery-spec-t2"
@@ -151,6 +148,9 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
       coordinatorProbe.expectMsgType[snap.actors.ByteCodeCoordinator.StartByteCodeSync](2.seconds)
       // The gap list is complete: the coordinator must be told, or it waits for more tasks and never announces completion.
       coordinatorProbe.expectMsg(2.seconds, snap.actors.ByteCodeCoordinator.NoMoreByteCodeTasks)
+      // nothing is settled while the code is not there
+      syncController.expectNoMessage(200.millis)
+      appStateStorage.isBytecodeRecoveryDone() shouldBe false
 
       actor ! BytecodeRecoveryActor.ByteCodeDownloadComplete
 
@@ -161,35 +161,53 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
     }
 
   it should
-    "tell the controller the scan did not run when it throws (trie root missing), and not mark recovery done" taggedAs (
+    "count downloaded bytecodes by each progress message's count, once (B-494)" taggedAs (
       UnitTest,
       SyncTest
     ) in {
       val syncController = TestProbe("syncController_t3")
       val networkPeerManager = TestProbe("networkPeerManager_t3")
-      // Empty storages: stateRoot not present in MPT → mptStorage.get throws → Future Failure
+      val coordinatorProbe = TestProbe("coordinator_t3")
       val (stateStorage, appStateStorage, evmCodeStorage) = newStorages()
+      val missingTen: Seq[ByteString] = (1 to 10).map(i => ByteString(Array.fill[Byte](32)(i.toByte)))
 
       val actor: TypedActorRef[BytecodeRecoveryActor.Command] = testKit
         .spawn(
           BytecodeRecoveryActor.testApply(
-            stateRoot = fakeStateRoot,
             stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref.toTyped[Any],
-            pivotBlockNumber = BigInt(100),
-            snapSyncConfig = newConfig()
-            // preloaded = None → real scan path → throws
+            snapSyncConfig = newConfig(),
+            missing = missingTen,
+            coordinatorForTesting = Some(coordinatorProbe.ref)
           ),
           "bytecode-recovery-spec-t3"
         )
 
-      // A scan that could not run still ends recovery for this run, so that regular sync starts. It settles nothing:
-      // it was taken as a scan that found no code missing, and the flag was written on a state nobody had read (spec
-      // 018 Track C, C2b; the combined scan already leaves both flags unwritten when it cannot run). The controller is
-      // told which it was: it does not count a scan that never ran against its cap on bulk recovery.
-      syncController.expectMsg(8.seconds, BytecodeRecoveryActor.RecoveryNotRun)
-      appStateStorage.isBytecodeRecoveryDone() shouldBe false
+      coordinatorProbe.expectMsgType[snap.actors.ByteCodeCoordinator.StartByteCodeSync](2.seconds)
+
+      // logback-test.xml keeps the root at ERROR, which drops the actor's INFO progress line before LoggingTestKit can
+      // see it; admit INFO for the actor's logger (its object's class) for this test only.
+      val actorLogger = org.slf4j.LoggerFactory
+        .getLogger(BytecodeRecoveryActor.getClass)
+        .asInstanceOf[ch.qos.logback.classic.Logger]
+      val previousLevel = actorLogger.getLevel
+      actorLogger.setLevel(ch.qos.logback.classic.Level.INFO)
+      try
+        // One response carrying 3 codes is 3 of 10, not 1 (the message) nor 2 (the message counted twice).
+        org.apache.pekko.actor.testkit.typed.scaladsl.LoggingTestKit
+          .info("BYTECODE-RECOVERY 30% — 3 / 10 bytecodes")
+          .expect {
+            actor ! BytecodeRecoveryActor.ByteCodeDownloadProgress(3L)
+          }
+        // The count accumulates: one more code is 4 of 10.
+        org.apache.pekko.actor.testkit.typed.scaladsl.LoggingTestKit
+          .info("BYTECODE-RECOVERY 40% — 4 / 10 bytecodes")
+          .expect {
+            actor ! BytecodeRecoveryActor.ByteCodeDownloadProgress(1L)
+          }
+        syncController.expectNoMessage(100.millis)
+      finally actorLogger.setLevel(previousLevel)
 
       testKit.stop(actor)
     }
@@ -207,13 +225,11 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
       val actor: TypedActorRef[BytecodeRecoveryActor.Command] = testKit
         .spawn(
           BytecodeRecoveryActor.testApply(
-            stateRoot = fakeStateRoot,
             stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref.toTyped[Any],
-            pivotBlockNumber = BigInt(100),
             snapSyncConfig = newConfig(),
-            preloaded = Some(missingOne),
+            missing = missingOne,
             coordinatorForTesting = Some(coordinatorProbe.ref)
           ),
           "bytecode-recovery-spec-t4"
@@ -245,13 +261,11 @@ class BytecodeRecoveryActorSpec extends ScalaTestWithActorTestKit() with AnyFlat
       val actor: TypedActorRef[BytecodeRecoveryActor.Command] = testKit
         .spawn(
           BytecodeRecoveryActor.testApply(
-            stateRoot = fakeStateRoot,
             stateIngest = recoveryIngest(stateStorage, appStateStorage, evmCodeStorage),
             networkPeerManager = networkPeerManager.ref,
             syncController = syncController.ref.toTyped[Any],
-            pivotBlockNumber = BigInt(100),
             snapSyncConfig = newConfig(abandonAfter),
-            preloaded = Some(missingOne),
+            missing = missingOne,
             coordinatorForTesting = Some(coordinatorProbe.ref)
           ),
           "bytecode-recovery-spec-t5"

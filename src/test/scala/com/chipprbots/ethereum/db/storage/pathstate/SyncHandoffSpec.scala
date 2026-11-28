@@ -6,6 +6,7 @@ import org.scalatest.flatspec.AnyFlatSpec
 import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.Fixtures
+import com.chipprbots.ethereum.db.dataSource.DataSourceUpdate
 import com.chipprbots.ethereum.db.dataSource.DataUpdate
 import com.chipprbots.ethereum.db.dataSource.EphemDataSource
 import com.chipprbots.ethereum.db.storage.AppStateStorage
@@ -14,8 +15,10 @@ import com.chipprbots.ethereum.db.storage.BlockHeadersStorage
 import com.chipprbots.ethereum.db.storage.BlockNumberMappingStorage
 import com.chipprbots.ethereum.db.storage.ChainWeightStorage
 import com.chipprbots.ethereum.db.storage.EvmCodeStorage
+import com.chipprbots.ethereum.db.storage.Namespaces
 import com.chipprbots.ethereum.db.storage.PathNodeStorage
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -33,8 +36,16 @@ class SyncHandoffSpec extends AnyFlatSpec with Matchers:
   final private class Counting extends EphemDataSource(Map.empty):
     @volatile var plain = 0
     @volatile var synced = 0
+
+    /** The heights each plain write deleted from the index of blocks by number, in the order written. */
+    @volatile var indexDeletes: Vector[Seq[BigInt]] = Vector.empty[Seq[BigInt]]
     override def update(dataSourceUpdates: Seq[DataUpdate]): Unit =
       plain += 1
+      dataSourceUpdates.foreach {
+        case DataSourceUpdate(ns, remove, _) if ns == Namespaces.HeightsNamespace && remove.nonEmpty =>
+          indexDeletes = indexDeletes :+ remove.map(k => BigInt(k.toArray))
+        case _ => ()
+      }
       super.update(dataSourceUpdates)
     override def updateSync(dataSourceUpdates: Seq[DataUpdate]): Unit =
       synced += 1
@@ -135,6 +146,117 @@ class SyncHandoffSpec extends AnyFlatSpec with Matchers:
     below.appState.getBackfillTargetHash() shouldBe None
   }
 
+  // B-329 (mutation pass): the range of the trim, to the key
+  it should "delete the index from the pivot's next height to the highest, in chunks of IndexTrimChunk, and no more" taggedAs UnitTest in {
+    val s = new Synced
+    val chunk = PathStateStorage.IndexTrimChunk
+    val other = ByteString(Array.fill[Byte](32)(0x42))
+    val highest = 5000 + 2 * chunk + 5
+    s.numbers
+      .put(BigInt(5001), other)
+      .and(s.numbers.put(BigInt(5000 + chunk), other))
+      .and(s.numbers.put(BigInt(5001 + chunk), other))
+      .and(s.numbers.put(BigInt(highest), other))
+      // the state does not say there is an entry here: it is not the trim's to delete
+      .and(s.numbers.put(BigInt(highest + 1), other))
+      .and(s.appState.putSnapSyncBootstrapTarget(highest))
+      .commit()
+    s.source.indexDeletes = Vector.empty
+
+    s.commit()
+
+    withClue("three chunks, each of the chunk's size but the last, none at the pivot's own height: ") {
+      s.source.indexDeletes.map(_.size) shouldBe Vector(chunk, chunk, 5)
+      s.source.indexDeletes.map(_.min) shouldBe Vector(BigInt(5001), BigInt(5001 + chunk), BigInt(5001 + 2 * chunk))
+      s.source.indexDeletes.map(_.max) shouldBe Vector(BigInt(5000 + chunk), BigInt(5000 + 2 * chunk), BigInt(highest))
+    }
+    (s.numbers.get(BigInt(5001)), s.numbers.get(BigInt(5000 + chunk)), s.numbers.get(BigInt(5001 + chunk))) shouldBe
+      (None, None, None)
+    s.numbers.get(BigInt(highest)) shouldBe None
+    withClue("above the highest the state names: ")(s.numbers.get(BigInt(highest + 1)) shouldBe Some(other))
+  }
+
+  it should "delete the entry at the height next to the pivot when that is the highest" taggedAs UnitTest in {
+    val s = new Synced
+    val other = ByteString(Array.fill[Byte](32)(0x42))
+    s.numbers.put(BigInt(5001), other).and(s.appState.putSnapSyncBootstrapTarget(5001)).commit()
+    s.commit()
+    s.numbers.get(BigInt(5001)) shouldBe None
+  }
+
+  it should "delete nothing when the pivot is the highest height there is" taggedAs UnitTest in {
+    val s = new Synced
+    s.appState.putSnapSyncBootstrapTarget(5000).commit()
+    s.source.indexDeletes = Vector.empty
+    s.commit()
+    s.source.indexDeletes shouldBe empty
+  }
+
+  // each source of "the highest height an entry may be at" is read, alone
+  it should "trim to the highest of the best block, the download's header, the download's target, the pivot, the bootstrap's target and the stored header a pivot hash names" taggedAs UnitTest in {
+    val other = ByteString(Array.fill[Byte](32)(0x42))
+    val sources: Seq[(String, Synced => com.chipprbots.ethereum.db.dataSource.DataSourceBatchUpdate)] = Seq(
+      "the best block" -> (s => s.appState.putBestBlockNumber(5003)),
+      "the download's header" -> (s => s.appState.putBackfillBestHeader(5003)),
+      "the download's target" -> (s => s.appState.putBackfillTarget(5003)),
+      "the sync's pivot" -> (s => s.appState.putSnapSyncPivotBlock(5003)),
+      "the bootstrap's target" -> (s => s.appState.putSnapSyncBootstrapTarget(5003)),
+      "the header the pivot hash names" -> { s =>
+        val named = s.pivot.copy(number = BlockNumber(5003), extraData = ByteString("named"))
+        s.headers.put(named.hash.value, named).and(s.appState.putSnapSyncPivotHash(named.hash.value))
+      }
+    )
+    sources.foreach { (name, set) =>
+      withClue(s"$name: ") {
+        val s = new Synced
+        s.numbers.put(BigInt(5003), other).and(set(s)).commit()
+        s.commit()
+        s.numbers.get(BigInt(5003)) shouldBe None
+      }
+    }
+  }
+
+  it should "leave the cursors alone that are at the pivot, and take the others of the download to it" taggedAs UnitTest in {
+    val atPivot = new Synced
+    atPivot.appState.putBackfillBestHeader(5000).commit()
+    atPivot.commit()
+    withClue("a header cursor at the pivot has no hash written for it: ")(
+      atPivot.appState.getBackfillBestHeaderHash() shouldBe None
+    )
+
+    val above = new Synced
+    above.appState
+      .putBackfillBestHeader(5200)
+      .and(above.appState.putBackfillBestBody(4000))
+      .and(above.appState.putBackfillBestReceipt(5100))
+      .and(above.appState.putBackfillTarget(5000))
+      .commit()
+    above.commit()
+    above.appState.getBackfillBestBody() shouldBe BigInt(4000) // below the pivot: stays
+    above.appState.getBackfillBestReceipt() shouldBe BigInt(5000) // above it: taken to it
+    (above.appState.getBackfillBestHeader(), above.appState.getBackfillBestHeaderHash()) shouldBe
+      (BigInt(5000), Some(above.pivot.hash.value))
+    withClue("a target at the pivot is as it is: ")(above.appState.getBackfillTargetHash() shouldBe None)
+  }
+
+  it should "trim the index above a checkpoint, and take the download's cursors to it, as for a pivot" taggedAs UnitTest in {
+    val s = new Synced
+    val other = ByteString(Array.fill[Byte](32)(0x42))
+    s.numbers
+      .put(BigInt(5001), other)
+      .and(s.numbers.put(BigInt(5100), other))
+      .and(s.appState.putSnapSyncBootstrapTarget(5100))
+      .and(s.appState.putBackfillTarget(5300))
+      .and(s.appState.putBackfillBestHeader(5200))
+      .commit()
+
+    s.handoff.commitCheckpoint(s.pivot, s.weights.put(s.pivot.hash.value, s.weight))
+
+    (5001 to 5100).flatMap(n => s.numbers.get(BigInt(n))) shouldBe empty
+    (s.appState.getBackfillTarget(), s.appState.getBackfillBestHeader()) shouldBe (BigInt(5000), BigInt(5000))
+    s.appState.getBackfillTargetHash() shouldBe Some(s.pivot.hash.value)
+  }
+
   it should "write a recovery that is owed as owed, over what an earlier sync left" taggedAs UnitTest in {
     val s = new Synced
     s.appState.storageRecoveryDone().and(s.appState.bytecodeRecoveryDone()).commit()
@@ -199,7 +321,8 @@ class SyncHandoffSpec extends AnyFlatSpec with Matchers:
   it should "say what is missing of the window below the pivot, by the stores it reads" taggedAs UnitTest in {
     val s = new Synced
     val parent = s.pivot.copy(number = BlockNumber(4999))
-    val child = s.pivot.copy(parentHash = parent.hash)
+    // a block that names ommers: the body of one that names none is not read (B-302)
+    val child = s.pivot.copy(parentHash = parent.hash, ommersHash = BlockHash(ByteString(Array.fill[Byte](32)(7))))
     s.headers.put(child.hash.value, child).commit()
 
     val noParent = s.handoff.windowMissing(child, proofOfWork = false)

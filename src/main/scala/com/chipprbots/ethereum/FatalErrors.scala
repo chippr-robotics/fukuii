@@ -1,6 +1,10 @@
 package com.chipprbots.ethereum
 
+import java.util.concurrent.atomic.AtomicReference
+
 import scala.annotation.tailrec
+import scala.concurrent.duration.*
+import scala.util.control.NonFatal
 
 import com.chipprbots.ethereum.utils.Logger
 import com.chipprbots.ethereum.vm.NativeBackends
@@ -22,8 +26,17 @@ import com.chipprbots.ethereum.vm.NativeBackends.NativeBackendUnavailable
   * NativeBackendUnavailable anywhere in its cause chain halts the JVM. A thread that dies of another
   * [[VirtualMachineError]] is logged at ERROR and is still reported to stderr as before.
   *
-  * Halt, not exit: shutdown hooks may wait on the stuck import. Skipping them loses nothing, because a block's state is
-  * committed in one batch after it executes, so a block halted mid-execution leaves nothing behind.
+  * Halt, not exit: shutdown hooks may wait on the stuck import. Skipping them is as safe as a `kill -9` at the same
+  * point, and a block halted mid-execution is not stored. `persistState` runs after every transaction and every system
+  * call, though, so writes can reach the database before the halt: on the modes that write a block's state straight
+  * through (archive, `StagedBlockState.direct`, `BlockExecution.executeBlockNoValidation`) its trie nodes and code are
+  * written as it runs. They are content-addressed and nothing refers to them until the block is stored. Under basic
+  * pruning the block's state and code are staged and committed with the block in one batch (B-454), and a halted block
+  * leaves none of them.
+  *
+  * Skipping the shutdown hooks also skips `TuiRestore`, which takes the terminal out of raw mode and the alternate
+  * screen under `--tui`. So a halt first runs the [[beforeHalt]] hook (`Fukuii.main` sets it to the TUI's teardown),
+  * bounded by [[BeforeHaltBound]], and then prints its message, on the restored screen.
   */
 object FatalErrors extends Logger:
 
@@ -65,14 +78,52 @@ object FatalErrors extends Logger:
       s"It runs the ${unavailable.backend.precompiles}; without it this node computes different results from the " +
       "network. Halting."
 
-  /** Applies [[decide]]. `halt` and `report` are parameters so that a test can run this without stopping its JVM. */
+  /** How long a halt waits for the [[beforeHalt]] hook. A terminal restore takes milliseconds; the bound keeps a hook
+    * that blocks (the TUI's lock held by a thread that never releases it) from keeping a node up that must stop.
+    */
+  val BeforeHaltBound: FiniteDuration = 2.seconds
+
+  private val beforeHaltHook = new AtomicReference[() => Unit](() => ())
+
+  /** Sets what a halt runs before it prints its message and halts: `Fukuii.main` restores the terminal under `--tui`,
+    * which the skipped `TuiRestore` shutdown hook would otherwise have done. The default does nothing.
+    */
+  def beforeHalt(hook: () => Unit): Unit = beforeHaltHook.set(hook)
+
+  /** Runs the [[beforeHalt]] hook on a daemon thread and waits for it at most `bound`. A hook that throws is logged;
+    * the halt goes ahead whatever the hook did.
+    */
+  private[ethereum] def runBeforeHalt(bound: FiniteDuration = BeforeHaltBound): Unit =
+    val hook = beforeHaltHook.get()
+    // A named Runnable: a lambda ending in try/catch followed by the thread name parses ambiguously, and scalafmt
+    // once joined the two into code that does not compile.
+    val run: Runnable = () =>
+      try hook()
+      catch case NonFatal(e) => log.error(s"The before-halt hook failed: $e", e)
+    val runner = new Thread(run, "FatalErrors-beforeHalt")
+    runner.setDaemon(true)
+    runner.start()
+    // An interrupt on the halting thread (an import or RPC thread) must not end the wait by throwing past the halt:
+    // keep the flag for whoever reads it, and go on to halt.
+    try runner.join(bound.toMillis)
+    catch case _: InterruptedException => Thread.currentThread().interrupt()
+    if runner.isAlive then log.error(s"The before-halt hook did not finish within $bound; halting without it")
+
+  /** Applies [[decide]]. `halt` and `report` are parameters so that a test can run this without stopping its JVM. A
+    * halt logs the error, runs the [[beforeHalt]] hook (the terminal restore), then prints the message and halts.
+    */
   def handle(thread: Thread, error: Throwable, halt: Int => Unit, report: (Thread, Throwable) => Unit): Unit =
     decide(thread.getName, error) match
       case Action.Halt(message) =>
         log.error(message, error)
-        System.err.println(message)
-        System.err.flush()
-        halt(1)
+        // The halt is unconditional, as before the hook existed: nothing the hook's thread does (it cannot start, the
+        // wait is interrupted, it throws) may skip it or replace the LinkageError with a NonFatal one (beacon W1).
+        try runBeforeHalt()
+        catch case e: Throwable => log.error(s"The before-halt hook could not run: $e", e)
+        finally
+          System.err.println(message)
+          System.err.flush()
+          halt(1)
       case Action.Report(message) =>
         log.error(message, error)
         report(thread, error)

@@ -1,0 +1,40 @@
+EG-12 run: mordor, out /home/dontpanic/work/s018-eg6-mordor/OUT
+jar: /home/dontpanic/work/s018-gates/target/scala-3.9.0/fukuii-assembly-0.12.73.jar
+jar sha256: 2c86abc29975196ce52f6a816a7962725fab3b6720300673f039180b4c161cbd
+java: openjdk version "25.0.5.1" 2026-11-17
+jvm: java -Xmx8g -XX:+IgnoreUnrecognizedVMOptions -XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:+ExitOnOutOfMemoryError -Dfukuii.mining.mining-enabled=true -Dfukuii.mining.coinbase=7be516f414bc7f8570e08eb2dfa750d98576e683 -Dfukuii.mining.gas-limit-target=8000000 -Dfukuii.pow.ethash-dir=/home/dontpanic/work/s018-eg6-mordor/ethash
+host: Linux 7.0.0-42-generic x86_64; cpus 4; memory 16293676 kB
+datadir filesystem: /dev/mapper/ubuntu--vg-ubuntu--lv  913G  755G  112G  88% /
+reference: http://127.0.0.1:8599 (CoreGeth/v1.12.23-stable-96b2afc2/linux-amd64/go1.21.13)
+
+utc                   criterion                                           status         detail
+2026-11-21T04:05:25Z  snap-capable ETC peers at start                     RECORDED       13 of 13 handshaked peer(s), 10 min after launch
+2026-11-21T04:05:26Z  snap-capable ETC peers at start (node log)          RECORDED       12 snap-capable (0 declared by the operator) of 12 connected; SNAP began at or over min-snap-peers = 2; 1 waiting line(s)
+2026-11-21T04:05:26Z  snap-peer count: node log vs RPC                    RECORDED       DISAGREE: node log 12 snap-capable of 12, RPC 13 of 13 (counted at different moments)
+2026-11-21T04:05:26Z  snap-peer precondition                              PASS           13 snap-capable peers
+2026-11-21T05:16:51Z  sync reaches the head                               PASS           pivot 17437483, head 17437941, 81 min after launch
+2026-11-21T05:18:27Z  no copy at the hand-off                             PASS           no [PATH-PUBLISH] line
+2026-11-21T05:18:28Z  root equals the head's stateRoot                    PASS           block 17437929: hash and stateRoot equal the reference's; state read at 17437941
+2026-11-21T05:18:29Z  ancestor window: BLOCKHASH below the pivot          PASS           8 probe(s) in pivot+1..+255 gave the reference's hash (0 not served)
+2026-11-21T05:18:42Z  ancestor window: blocks pivot+1..+256 canonical     PASS           256 compared
+2026-11-21T05:18:42Z  ancestor window: ommer with parent below the pivot  NOT-EXERCISED  no block in pivot+1..+6 carries an ommer at or below the pivot 17437483
+2026-11-22T05:18:51Z  follows the head for 24 h                           PASS           head 17444954, reference 17444954
+2026-11-22T05:24:26Z  node A: canonical chain equals the reference        PASS           7459 block(s) from the pivot up (stride 1)
+2026-11-22T05:25:23Z  node A: REORG-EXEC-FAIL                             PASS           0 lines
+2026-11-22T05:26:28Z  node A: rejected canonical blocks                   PASS           0 (blocks refused in all: 0; none canonical)
+2026-11-22T05:27:32Z  node A: fork moves followed                         RECORDED       depth 1-2: 62; other depths: 0; by depth (depth:count): 2:1 1:61 
+2026-11-22T05:28:29Z  node A: local state faults                          RECORDED       0 [LOCAL-STATE-FAULT] line(s)
+2026-11-22T05:41:01Z  v2 archive export                                   PASS           block 17445001 in 745 s; 861052322 bytes; sha256 f34439c09778b356120ecdd98c6a6f5813438e58a64c29b2ae327f622148da51
+2026-11-22T05:43:04Z  archive import: root equal                          FAIL           block 17445001 on node B: {"hash":null,"stateRoot":null}, exported 0x4de0d7393fc7a37e33d629cae0ea11245e52a3b39cf537d49e122e5e63d15748 / 0x9ccda03bb9c452107e9dff49262369a154050c525beac4cf7ad21215b13fb551
+2026-11-22T06:43:04Z  re-imported node follows 1 h                        PASS           head 17445362 (archive at 17445001), reference 17445362
+2026-11-22T06:43:20Z  node B: canonical chain equals the reference        PASS           349 block(s) above the archive
+2026-11-22T06:43:20Z  node B: REORG-EXEC-FAIL                             PASS           0 lines
+2026-11-22T06:43:21Z  node B: rejected canonical blocks                   PASS           0 (blocks refused in all: 0; none canonical)
+2026-11-22T06:43:21Z  node B: fork moves followed                         RECORDED       depth 1-2: 3; other depths: 0; by depth (depth:count): 2:1 1:2 
+2026-11-22T06:43:21Z  node B: local state faults                          RECORDED       0 [LOCAL-STATE-FAULT] line(s)
+
+resources: max RSS 13.1 GiB; max heap used 7.6 GiB; last datadir 0.9 GiB; wall 26.8 h
+  cpu seconds at the end of reimport: 4730.3
+  cpu seconds at the end of sync: 9144.6
+  cpu seconds at the end of start: 1263.2
+  cpu seconds at the end of follow: 121523.4

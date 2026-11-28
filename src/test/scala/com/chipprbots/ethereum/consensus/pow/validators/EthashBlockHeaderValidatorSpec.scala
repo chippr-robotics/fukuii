@@ -189,6 +189,19 @@ class EthashBlockHeaderValidatorSpec
     PoWBlockHeaderValidator.validate(blockHeaderWithInvalidNonceAndMixHash, parent.header) shouldBe Left(HeaderPoWError)
   }
 
+  it should "refuse a seal on a difficulty of 0 or below rather than throw (B-164, core-geth verifySeal errInvalidDifficulty)" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in {
+    // The seal check alone, with no parent: the path the SNAP header-only gate takes. It used to divide by zero.
+    EthashBlockHeaderValidator.validateHeader(validBlockHeader.copy(difficulty = Difficulty.Zero)) shouldBe
+      Left(HeaderDifficultyError)
+    EthashBlockHeaderValidator.validateHeader(validBlockHeader.copy(difficulty = Difficulty(BigInt(-1)))) shouldBe
+      Left(HeaderDifficultyError)
+    // A real ETC seal still verifies.
+    EthashBlockHeaderValidator.validateHeader(validBlockHeader) shouldBe Right(BlockHeaderValid)
+  }
+
   it should "validate correctly a block whose parent is taggedAs (UnitTest, ConsensusTest) in storage" in new EphemBlockchainTestSetup:
     blockchainWriter
       .storeBlockHeader(validParentBlockHeader)
@@ -475,7 +488,6 @@ class EthashBlockHeaderValidatorSpec
       customGenesisJsonOpt = None,
       accountStartNonce = UInt256.Zero,
       bootstrapNodes = Set(),
-      gasTieBreaker = false,
       ethCompatibleStorage = true
     )
 

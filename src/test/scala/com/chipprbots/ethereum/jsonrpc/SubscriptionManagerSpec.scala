@@ -49,11 +49,17 @@ class SubscriptionManagerSpec
 
   // ── helpers ────────────────────────────────────────────────────────────────
 
+  // Each test gets topics of its own name. Topics of one name find each other through the receptionist, and a topic
+  // that knows of other instances publishes only to those it knows: a new topic that has the earlier tests' instances
+  // in its listing but not yet itself sends the block to them alone, and this test's manager never sees it (CI, main
+  // 6ea4ffd). A name no other topic has leaves the topic publishing to its own subscribers.
+  private def uniqueName(topic: String): String = s"$topic-${java.util.UUID.randomUUID()}"
+
   def makePendingTxTopic(): ActorRef[org.apache.pekko.actor.typed.pubsub.Topic.Command[NewPendingTransaction]] =
-    testKit.spawn(org.apache.pekko.actor.typed.pubsub.Topic[NewPendingTransaction]("pending-tx-topic"))
+    testKit.spawn(org.apache.pekko.actor.typed.pubsub.Topic[NewPendingTransaction](uniqueName("pending-tx-topic")))
 
   def makeBlockTopic(): ActorRef[org.apache.pekko.actor.typed.pubsub.Topic.Command[NewBlockImported]] =
-    testKit.spawn(org.apache.pekko.actor.typed.pubsub.Topic[NewBlockImported]("block-imported-topic"))
+    testKit.spawn(org.apache.pekko.actor.typed.pubsub.Topic[NewBlockImported](uniqueName("block-imported-topic")))
 
   def makeManager(): ActorRef[SubscriptionManager.Command] =
     testKit.spawn(
@@ -224,6 +230,28 @@ class SubscriptionManagerSpec
     val hash = (params \ "result" \ "hash").values.toString
     number should startWith("0x")
     hash should startWith("0x")
+  }
+
+  // B-245: a fork choice that adopts several blocks publishes each (their logs are delivered), but newHeads announces
+  // the head only, as go-ethereum's SetCanonical sends one ChainEvent, for the head
+  it should "not push newHeads for a block published as adopted below the head" taggedAs UnitTest in {
+    val (mgr, blockTopic) = makeManagerWithBlockTopic()
+    val (queue, source) = makeQueue()
+    val connId = "conn-push-head-only"
+    val messages = collectN(source, 1)
+
+    mgr ! RegisterConnection(connId, queue)
+    subscribe(mgr, connId, "newHeads")
+
+    val below = fixtureBlock
+    val head = fixtureBlock.copy(header = fixtureBlock.header.copy(number = fixtureBlock.header.number + 1))
+    // one publisher: the topic keeps the order, so the first message pushed is the head's or the test fails
+    blockTopic ! org.apache.pekko.actor.typed.pubsub.Topic.Publish(NewBlockImported(below, head = false))
+    blockTopic ! org.apache.pekko.actor.typed.pubsub.Topic.Publish(NewBlockImported(head))
+
+    val received = Await.result(messages, 5.seconds)
+    val number = (parse(received.head) \ "params" \ "result" \ "number").values.toString
+    BigInt(number.drop(2), 16) shouldBe head.header.number.value
   }
 
   it should "not push newHeads to other connections" taggedAs UnitTest in {

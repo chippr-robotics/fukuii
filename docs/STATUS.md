@@ -31,7 +31,7 @@ its cases. See issues
 
 **Lineage.** Fukuii is a derivative work of IOHK's Mantis client, maintained by Chippr Robotics LLC under Apache-2.0. See NOTICE. Mantis is a trademark of IOHK, used here only to describe this fork's origin.
 
-**`fukuii-project/fukuii-cli`.** An independent, ground-up rewrite with no common ancestor and no shared source with this repository. It is NOT this release train and NOT a fork of this tree. See issue #1399 for the divergence assessment and the clean-room constraint.
+**`fukuii-project/fukuii-cli`.** An independent, ground-up rewrite with no common ancestor and no shared source with this repository. It is NOT this release train and NOT a fork of this tree. See docs/development/fukuii-project.md for the divergence assessment and the clean-room constraint (it replaces issue #1399).
 
 ## Required checks
 
@@ -43,6 +43,12 @@ nothing else.
 | `ci-test-build` | compile-all, formatCheck (scalafmt on every module; scalafix on root, bytes, crypto, rlp), Tier-1 testEssential, Tier-2 testStandard with coverage (develop + PRs into main), KPI baselines, ethereum/tests integration job, assembly build. | realcodywburns |
 | `docker-build` | Container images build and push for mainnet/mordor/bootnode variants. | realcodywburns |
 | `gate-integrity` | This matrix itself — undeclared checks, required-but-unfailable gates, expired/incomplete waivers, unmapped constitution principles, stale generated status doc, dead badges, and over-claiming documentation — plus committed keystores, private keys and `.env` files (C15). FR-029: the meta-check is itself required, or it guarantees nothing. | realcodywburns |
+| `hive-sync` | Cross-client sync interop. fukuii as sync CLIENT (fukuii syncs from go-ethereum/nethermind) and as sync SERVER (go-ethereum/nethermind sync from fukuii). Gated on the `fukuii` subset only, so upstream geth<->nethermind failures do not pollute this signal. | realcodywburns |
+| `hive-smoke-genesis` | Client starts from a hive-supplied genesis and reports a chain head. | realcodywburns |
+| `hive-smoke-network` | Client accepts peers and forms a network under hive's harness. | realcodywburns |
+| `hive-consume-rlp` | EELS consume-rlp — block import from RLP across the fork schedule, including the ETC forks. #1402's third required-slice item. | realcodywburns |
+| `hive-engine` | Engine API suite, including invalid-payload rejection — #1402's second required-slice item. ETH/Sepolia path only. | realcodywburns |
+| `eest-amsterdam` | execution-specs tests@v21.0.0 Amsterdam and BPO2->Amsterdam blockchain_tests (26,503) replayed from the release's own block RLP through the import path (EestFixtureCorpusSpec), and every block they accept (27,352) rebuilt by the Engine API payload builder from its parent, attributes and transactions, which must reproduce execution-specs' block hash (EngineApiAmsterdamBuilderEestSpec). Fails on any divergence in either, on fewer than EEST_MIN_TESTS tests in either, and on a missing corpus. The import replay then runs a second time with a position mirror on every fixture's storage (EEST_POSITIONS=1, spec 018 Track C T026) and fails on a read or an update a position-keyed trie store would have refused. | realcodywburns |
 
 ## Informational — runs, reports, does not block
 
@@ -51,26 +57,15 @@ must become required or be formally re-scoped in a reviewed PR.
 
 | Check | Covers | Promote by | Issue | Note |
 |---|---|---|---|---|
-| `hive-sync` | Cross-client sync interop. fukuii as sync CLIENT (fukuii syncs from go-ethereum/nethermind) and as sync SERVER (go-ethereum/nethermind sync from fukuii). Gated on the `fukuii` subset only, so upstream geth<->nethermind failures do not pollute this signal. | 2026-12-31 | #1402 | #1402's first required-slice item. Both waivers are retired (#1407). `sync go-ethereum from fukuii` passes since fukuii's ENR `eth` entry became [[fork-hash, fork-next]] and the hive adapter advertises the container address. `sync fukuii from nethermind` was an intermittent fukuii-sink failure; it passes after the fix for the dropped-reply race behind the same intermittent sink stall (3af08c103). Evidence: CI run 35997930212 on a78d2557d, 18/18; locally with all three clients, every fukuii test green. |
-| `hive-smoke-genesis` | Client starts from a hive-supplied genesis and reports a chain head. | 2026-11-30 | #1402 | Cheapest suite and the natural first promotion: if this cannot be made required, nothing can. Last green on main 2026-04-30; red since. |
-| `hive-smoke-network` | Client accepts peers and forms a network under hive's harness. | 2026-11-30 | #1402 |  |
-| `hive-consume-rlp` | EELS consume-rlp — block import from RLP across the fork schedule, including the ETC forks. #1402's third required-slice item. | 2026-12-31 | #1402 | ~67% failing at v0.8.0. Not claimed as verified anywhere until promoted. |
-| `hive-engine` | Engine API suite, including invalid-payload rejection — #1402's second required-slice item. ETH/Sepolia path only. | 2026-12-31 | #1402 |  |
+| `hive-upstream-definition` | The fukuii client definition hive itself builds (clients/fukuii/, from chipprbots/fukuii:latest), run unmodified against this checkout's build: smoke/genesis, nightly and on promotions to main. Its `upstream-definition-drift` job fails when hive/fukuii/ and hive's copy differ (B-569). | 2027-03-31 | #1402 | New 2026-11-27 (B-569). Points at the ethereum/hive#1677 branch until that pull request merges; then at ethereum/hive master. Promote to required for main promotions once it has a green run. |
 | `hive-consensus` | ethereum/consensus — state-transition conformance. | 2027-03-31 | #1402 |  |
 | `hive-consume-engine` | EELS consume-engine — payload import via Engine API. Runs the fixed shard consume-engine-13 of .github/hive-shards.json (874 tests, ~44 min) to completion; the whole suite runs in hive-full. | 2027-03-31 | #1402 |  |
 | `hive-full` | consume-engine, consume-rlp and consensus run TO COMPLETION, sharded per .github/hive-shards.json (an exact partition, proven by scripts/hive/gen-shards.py). The release-PR hive-consume-*/hive-consensus workflows only sample these suites. | 2027-03-31 | #1402 | Release gate: runs on a `hive-full`-labelled PR to main, or workflow_dispatch — ~33 jobs x ~3.5 h per pass, so never per push or nightly. Verdict comes from the aggregate job, never the workflow conclusion. |
 | `hive-rpc-compat` | JSON-RPC method compatibility against the reference corpus. | 2027-03-31 | #1402 |  |
 | `hive-graphql` | GraphQL endpoint conformance. | 2027-03-31 | #1402 |  |
 | `hive-devp2p` | devp2p discovery and RLPx wire conformance. | 2027-03-31 | #1402 | Two jobs since 2026-09-24. One runs discv4, discv5, snap and snap2 in full; the other runs eth without GetCells and BlobTxWithInvalidCells, which are skipped via sim_skip and waived until #1409 because they hang the suite. Local hive on 4dc5b77af: discv4 16/16, discv5 11/11, snap 6/6, snap2 4/4, eth 22/24. |
-| `ethereum-tests-nightly` | Nightly ethereum/tests across the full ETC and ETH fork schedules. | 2027-03-31 | #1402 | Runs with continue-on-error today. Promotion requires removing that and establishing a baseline pass count first. |
-| `eest-amsterdam` | execution-specs tests@v21.0.0 Amsterdam and BPO2->Amsterdam blockchain_tests (26,503) replayed from the release's own block RLP through the import path (EestFixtureCorpusSpec), and every block they accept (27,352) rebuilt by the Engine API payload builder from its parent, attributes and transactions, which must reproduce execution-specs' block hash (EngineApiAmsterdamBuilderEestSpec). Fails on any divergence in either, on fewer than EEST_MIN_TESTS tests in either, and on a missing corpus. The import replay then runs a second time with a position mirror on every fixture's storage (EEST_POSITIONS=1, spec 018 Track C T026) and fails on a read or an update a position-keyed trie store would have refused. | 2026-11-30 | #1419 | 26,503 / 26,503 on the import replay (run 36294294338, 2026-09-27), up from a baseline of 18,081 on 2026-09-26 before the Glamsterdam work items (#1415). The builder rebuild (#1427) reproduced all 27,352 blocks when run locally on 2026-09-27. Promote once 0.9.0 ships. |
-
-## Quarantined — excluded from all claims
-
-| Check | Why | Promote by | Issue |
-|---|---|---|---|
-| `hive-prague` | A parallel, unchecked code path with its own inline `exit 0`. Migrate to _hive-sim.yml (inheriting its gates) or delete. Excluded from public claims until then. | 2026-12-31 | #1402 |
-| `hive-osaka` | Same as hive-prague. Migrate to _hive-sim.yml or delete. | 2026-12-31 | #1402 |
+| `ethereum-tests-nightly` | Nightly ethereum/tests across the full ETC and ETH fork schedules, and (job legacy-blockchain-tests, B-429) LegacyPreByzantiumBlockchainTestsSpec over ethereum/legacytests pinned by commit: the Frontier..EIP158 slice (6,817 vectors, a state root per receipt) and Byzantium..Berlin (54,497). That job fails on any failing vector and on a missing or partial corpus. | 2027-03-31 | #1402 | The ethereum/tests job runs with continue-on-error today. Promotion requires removing that and establishing a baseline pass count first. The legacy job's baseline is all 61,314 vectors passing at legacytests 1f581b8 (spec 018 baselines/ethtests-2026-11-22.txt). |
+| `windows-bls` | The EIP-2537 BLS12-381 precompiles on Windows (B-151, ADR VM-008), where eth_pairings has no build and blst (tech.pegasys:jblst) runs them. On windows-latest with FUKUII_BLS12381_BACKEND=blst: BlstEip2537Spec (blst loads; its outcomes on the 3,636-input EIP-2537 corpus hash to the committed digests of eth_pairings' and gnark's outcomes; the precompiles run on blst), BLS12381PrecompileSpec, BlsMsmGasSpec and NativeBackendsSpec. Runs on workflow_dispatch and on PRs that touch the BLS files. | 2027-01-31 | #1767 | New with B-151. The case-by-case differential of blst against both oracles runs on Linux in Eip2537DifferentialSpec (ci-test-build). Promote after a green run on windows-latest and a green history on BLS-touching PRs. |
 
 ## First required slice
 

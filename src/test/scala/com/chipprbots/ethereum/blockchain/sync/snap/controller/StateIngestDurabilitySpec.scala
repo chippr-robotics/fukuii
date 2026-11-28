@@ -43,6 +43,7 @@ import com.chipprbots.ethereum.db.storage.pruning.InMemoryPruning
 import com.chipprbots.ethereum.db.storage.pruning.PruningMode
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
+import com.chipprbots.ethereum.domain.BlockHash
 import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.ChainWeight
@@ -227,12 +228,18 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
       * genesis is stored too. Nothing of it is the head. The pivot's header is in the index of blocks by number, as the
       * pivot's bootstrap leaves it (`indexThePivot`); the headers under it are stored by their hashes alone.
       */
+    /** The ommers hash of a body whose one ommer is the genesis header ([[storeChainBelowThePivot]]'s `withOmmers`). */
+    private val ommersHashOfTheOne: ByteString =
+      import com.chipprbots.ethereum.consensus.pow.blocks.OmmersSeqEnc
+      ByteString(com.chipprbots.ethereum.crypto.kec256(Seq(genesisHeader).toBytes))
+
     def storeChainBelowThePivot(
         below: Int,
         bodiesOfTheLast: Int,
         indexThePivot: Boolean = true,
         weighed: Boolean = true,
-        afterTheMerge: Boolean = false
+        afterTheMerge: Boolean = false,
+        withOmmers: Boolean = false
     ): BlockHeader =
       chain.blockchainWriter.save(
         Block(genesisHeader, BlockBody.empty),
@@ -245,7 +252,9 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
         val parent = chained.lastOption.fold(genesisHeader.hash)(_.hash)
         val stateRoot = if number == pivot then TrieRoot(root) else genesisHeader.stateRoot
         val header = genesisHeader.copy(number = BlockNumber(number), parentHash = parent, stateRoot = stateRoot)
-        chained :+ (if afterTheMerge then header.copy(difficulty = Difficulty.Zero) else header)
+        // a block that names ommers: the check of ommers reads its body (B-302); one that names none it does not
+        val named = if withOmmers then header.copy(ommersHash = BlockHash(ommersHashOfTheOne)) else header
+        chained :+ (if afterTheMerge then named.copy(difficulty = Difficulty.Zero) else named)
       }
       headers.foreach(header => chain.blockchainWriter.storeBlockHeaderByHashOnly(header).commit())
       if indexThePivot then chain.blockchainWriter.storeBlockHeader(headers.last).commit()
@@ -260,7 +269,8 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
           )
           .commit()
       headers.takeRight(bodiesOfTheLast).foreach { header =>
-        chain.blockchainWriter.storeCheckedBlockBody(header, BlockBody.empty).commit()
+        val body = if withOmmers then BlockBody(Nil, Seq(genesisHeader)) else BlockBody.empty
+        chain.blockchainWriter.storeCheckedBlockBody(header, body).commit()
       }
       headers.last
 
@@ -447,8 +457,8 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
 
   "SNAP finalization on the unified state layout" should "hold while the window below the pivot is not stored, and hand off when it is" taggedAs UnitTest in {
     val h = new Harness(pathScheme = true)
-    // the headers, and the bodies of all but the lowest of the six a block's ommers are checked against
-    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 5)
+    // the headers, and the bodies of all but the lowest of the five whose ommers a block's are checked against (B-302)
+    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 4, withOmmers = true)
     h.unifiedLayoutAtTheEndOfASync()
     val before = h.recording.writes.size
     // the sample has passed for this pivot: the hold comes after it, and its tick does not sample again
@@ -462,16 +472,16 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     h.parent.hasMessages shouldBe false
 
     // the body arrives; the hold's tick is finalisation again
-    val lowest = h.chain.blockchainReader.getBlockHeaderByNumber(pivot - 5)
-    val sixth = h.chain.blockchainReader
+    val lowest = h.chain.blockchainReader.getBlockHeaderByNumber(pivot - 4)
+    val fifth = h.chain.blockchainReader
       .getBlockHeaderByHash(
-        (1 to 5)
+        (1 to 4)
           .foldLeft(pivotHeader)((header, _) => h.chain.blockchainReader.getBlockHeaderByHash(header.parentHash).get)
           .hash
       )
       .get
     lowest shouldBe None // the window is found by hash, not by the index of blocks by number
-    h.chain.blockchainWriter.storeCheckedBlockBody(sixth, BlockBody.empty).commit()
+    h.chain.blockchainWriter.storeCheckedBlockBody(fifth, BlockBody(Nil, Seq(Fixtures.Blocks.Genesis.header))).commit()
 
     h.call(_.onHeaderHoldTick(pivot))
 
@@ -527,6 +537,47 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     h.module.currentPhase should not be SyncPhase.Completed
     h.chain.storagesInstance.storages.appStateStorage.isSnapSyncDone() shouldBe false
     withClue("nothing of the hand-off was written: ")(h.recording.writes.size shouldBe before)
+  }
+
+  // B-074: the set is read again at the commit, and an entry that came in after the sample holds the hand-off
+  it should "hold the hand-off when the re-read of the excluded set finds an account that came in after the sample" taggedAs UnitTest in {
+    val h = new Harness(pathScheme = true)
+    h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 6)
+    h.unifiedLayoutAtTheEndOfASync()
+    h.module.stateIngest.snapProgress.hasExcludedAccounts shouldBe false // what the sample's read saw
+    h.module.stateIngest.snapProgress.recordExcluded(
+      Seq(
+        com.chipprbots.ethereum.db.storage.ExcludedAccount(
+          ByteString(Array.fill[Byte](32)(0x52)),
+          com.chipprbots.ethereum.db.storage.ExcludedReason.StorageAbandoned
+        )
+      )
+    )
+    val before = h.recording.writes.size
+
+    h.handOffFromAPassedSample()
+
+    h.parent.receiveAll() shouldBe Seq(SyncProtocol.HandoffHeldForExcluded(pivot, readFailed = false))
+    h.module.currentPhase should not be SyncPhase.Completed
+    h.chain.storagesInstance.storages.appStateStorage.isSnapSyncDone() shouldBe false
+    h.syncedSince(before) shouldBe empty
+    withClue("nothing of the hand-off was written, the flags withheld included: ")(
+      h.recording.writes.size shouldBe before
+    )
+    h.anchorAfter(h.recording.writes.size) shouldBe None
+  }
+
+  it should "still commit when the re-read of the excluded set is empty" taggedAs UnitTest in {
+    val h = new Harness(pathScheme = true)
+    h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 6)
+    h.unifiedLayoutAtTheEndOfASync()
+
+    h.handOffFromAPassedSample()
+
+    h.parent.receiveAll() should not contain a[SyncProtocol.HandoffHeldForExcluded]
+    h.module.currentPhase shouldBe SyncPhase.Completed
+    h.flagSetAfter(h.recording.writes.size) shouldBe true
+    unifiedPrefixProperty(h)
   }
 
   it should "refuse to hand off, and say nothing is synced, when the pivot's header is not stored" taggedAs UnitTest in {
@@ -615,10 +666,113 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     h.module.currentPhase shouldBe SyncPhase.Completed
   }
 
+  // ---- spec 018 C6 (T243): the proof-of-work hand-off checks on the shipped ETC and Mordor configs ----
+  // The checks are SnapFinalization's (the window, AncestorWindow's P..P-4 bodies where the header names ommers, and
+  // the exact weight); these pin that the shipped ETC chains take the proof-of-work branch of each, with the era and
+  // fork config the pins name, so a config that grew a terminal total difficulty, or lost its eras, fails here.
+
+  /** A shipped chain config as the node parses it. */
+  private def shipped(name: String): com.chipprbots.ethereum.utils.BlockchainConfig =
+    com.chipprbots.ethereum.utils.BlockchainConfig.fromRawConfig(
+      com.typesafe.config.ConfigFactory.load().getConfig(s"fukuii.blockchains.$name")
+    )
+
+  /** chain id, network id, ECIP-1017 era length, and Atlantis, Agharta, Phoenix, ECIP-1099, Magneto, Mystique. */
+  private val etcChains: Seq[(String, BigInt, Long, Int, Seq[BigInt])] = Seq(
+    (
+      "etc",
+      61,
+      1L,
+      5_000_000,
+      Seq(8_772_000, 9_573_000, 10_500_839, 11_700_000, 13_189_133, 14_525_000).map(BigInt(_))
+    ),
+    ("mordor", 63, 7L, 2_000_000, Seq(0, 301_243, 999_983, 2_520_000, 3_985_893, 5_520_000).map(BigInt(_)))
+  )
+
+  etcChains.foreach { case (name, chainId, networkId, era, forks) =>
+    s"The proof-of-work hand-off on the shipped $name config" should "pin the chain, its eras and its forks" taggedAs UnitTest in {
+      val config = shipped(name)
+      config.chainId.value shouldBe chainId
+      config.networkId shouldBe networkId
+      withClue("no terminal total difficulty: fork choice is by weight, and blocks have ommers: ") {
+        config.terminalTotalDifficulty shouldBe None
+        com.chipprbots.ethereum.blockchain.sync.snap.HeaderChainCheck.isProofOfWork(config) shouldBe true
+      }
+      config.monetaryPolicyConfig.eraDuration shouldBe era
+      config.monetaryPolicyConfig.rewardReductionRate shouldBe 0.2
+      config.monetaryPolicyConfig.firstEraBlockReward shouldBe BigInt("5000000000000000000")
+      val f = config.forkBlockNumbers
+      Seq(
+        f.atlantisBlockNumber,
+        f.aghartaBlockNumber,
+        f.phoenixBlockNumber,
+        f.ecip1099BlockNumber,
+        f.magnetoBlockNumber,
+        f.mystiqueBlockNumber
+      ) shouldBe forks
+    }
+
+    it should "hold, writing nothing, while the bodies of the pivot and the four below it that name ommers are not stored" taggedAs UnitTest in {
+      val h = new Harness(pathScheme = true, terminalTotalDifficulty = shipped(name).terminalTotalDifficulty)
+      // every header of the 256, and the bodies of all but the lowest of the five
+      val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 4, withOmmers = true)
+      h.unifiedLayoutAtTheEndOfASync()
+      val before = h.recording.writes.size
+
+      h.handOffFromAPassedSample()
+
+      h.module.headerHold shouldBe Some(pivotHeader.hash.value)
+      h.module.currentPhase should not be SyncPhase.Completed
+      h.syncedSince(before) shouldBe empty
+      h.anchorAfter(h.recording.writes.size) shouldBe None
+      h.flagSetAfter(h.recording.writes.size) shouldBe false
+    }
+
+    it should "hold, writing nothing, while a header of the 256 below the pivot is not stored" taggedAs UnitTest in {
+      val h = new Harness(pathScheme = true, terminalTotalDifficulty = shipped(name).terminalTotalDifficulty)
+      h.storeChainBelowThePivot(below = 255, bodiesOfTheLast = 6, withOmmers = true)
+      h.unifiedLayoutAtTheEndOfASync()
+      val before = h.recording.writes.size
+
+      h.handOffFromAPassedSample()
+
+      h.module.headerHold shouldBe defined
+      h.syncedSince(before) shouldBe empty
+      h.anchorAfter(h.recording.writes.size) shouldBe None
+    }
+
+    it should "refuse an estimated weight of the pivot, write nothing, and ask for a SNAP restart" taggedAs UnitTest in {
+      val h = new Harness(pathScheme = true, terminalTotalDifficulty = shipped(name).terminalTotalDifficulty)
+      // the window is whole; the weight of the pivot's parent is not stored, so the pivot's is an estimate
+      h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 6, weighed = false, withOmmers = true)
+      h.unifiedLayoutAtTheEndOfASync()
+      val before = h.recording.writes.size
+
+      h.handOffFromAPassedSample()
+
+      h.module.currentPhase should not be SyncPhase.Completed
+      h.syncedSince(before) shouldBe empty
+      h.anchorAfter(h.recording.writes.size) shouldBe None
+      h.parent.receiveAll() shouldBe Seq(SyncProtocol.HealingImpossible)
+    }
+
+    it should "hand off once the window is whole and the weight exact" taggedAs UnitTest in {
+      val h = new Harness(pathScheme = true, terminalTotalDifficulty = shipped(name).terminalTotalDifficulty)
+      h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 6, withOmmers = true)
+      h.unifiedLayoutAtTheEndOfASync()
+
+      h.handOffFromAPassedSample()
+
+      h.module.currentPhase shouldBe SyncPhase.Completed
+      h.flagSetAfter(h.recording.writes.size) shouldBe true
+      unifiedPrefixProperty(h)
+    }
+  }
+
   // A chain with a terminal total difficulty whose pivot is still before the merge: blocks above it have ommers.
   it should "hold for the bodies below a pivot that has a difficulty, on a chain with a terminal total difficulty" taggedAs UnitTest in {
     val h = new Harness(pathScheme = true, terminalTotalDifficulty = Some(BigInt("58750000000000000000000")))
-    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 5)
+    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 4, withOmmers = true)
     pivotHeader.difficulty.value should be > BigInt(0)
     h.unifiedLayoutAtTheEndOfASync()
 
@@ -683,11 +837,12 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
     val config = SNAPSyncConfig(deferChainBackfillUntilStateComplete = true)
     SNAPSyncController.chainBackfillDeferredToFinalization(config) shouldBe true
     val h = new Harness(pathScheme = true, config = config)
-    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 5)
+    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 4, withOmmers = true)
     h.unifiedLayoutAtTheEndOfASync()
     h.chain.storagesInstance.storages.appStateStorage.putBackfillBestHeader(pivot).commit()
     h.module.pivotBlock = Some(pivot)
-    val sixth = (1 to 5).foldLeft(pivotHeader) { (header, _) =>
+    // the lowest of the five bodies the check of ommers reads (B-302)
+    val sixth = (1 to 4).foldLeft(pivotHeader) { (header, _) =>
       h.chain.blockchainReader.getBlockHeaderByHash(header.parentHash).get
     }
 
@@ -718,7 +873,7 @@ class StateIngestDurabilitySpec extends AnyFlatSpec with Matchers:
       pathScheme = true,
       config = SNAPSyncConfig(headerHoldStallTimeout = scala.concurrent.duration.Duration.Zero)
     )
-    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 5)
+    val pivotHeader = h.storeChainBelowThePivot(below = 256, bodiesOfTheLast = 4, withOmmers = true)
     h.unifiedLayoutAtTheEndOfASync()
     h.module.pivotBlock = Some(pivot)
     h.handOffFromAPassedSample()

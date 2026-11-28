@@ -1,0 +1,41 @@
+{
+ "id": "route-1806",
+ "chain": "both",
+ "source_prs": [
+  1806
+ ],
+ "base_sha": "9cd0b64abf25d69575838c1ecb2c5d304f4b1175",
+ "prompt": "For the unified state layout we need an executed block's state kept in memory beside the disk, readable by its descendants and written to disk only when adopted. Who designs and reviews it?",
+ "expected": {
+  "route": [
+   "vault",
+   "forge",
+   "beacon"
+  ],
+  "gold_summary": "Storage write order/atomicity -> vault; state semantics on both chains -> forge (ETC SELFDESTRUCT: full deletion before Olympia, EIP-6780 from Olympia) and beacon.",
+  "files": [],
+  "must_not": []
+ },
+ "rubric": [
+  "vault for the storage/commit/promotion write path",
+  "forge and beacon because state on both chains is affected",
+  "Flags ETC SELFDESTRUCT storage removal or kill-safety of promotion"
+ ],
+ "leak_markers": [
+  "#1806",
+  "ForwardLayer",
+  "StateOverlay",
+  "commitOverlay",
+  "B-060"
+ ],
+ "sprint": "0.12.1",
+ "type": "route",
+ "agent": "router",
+ "read_only": true,
+ "budget_usd": 2,
+ "timeout_s": 900,
+ "protocol": [
+  "read-only: no edits",
+  "CLAUDE.md routing rules and the Consensus-Critical Change Protocol"
+ ]
+}

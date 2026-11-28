@@ -177,7 +177,7 @@ object FilterManager:
     def resolveBlockNumber(blockParam: BlockParam, bestBlockNumber: BigInt): BigInt =
       blockParam match
         case BlockParam.WithNumber(blockNumber) => blockNumber
-        case BlockParam.WithHash(hash) =>
+        case BlockParam.WithHash(hash, _) =>
           blockchainReader.getBlockHeaderByHash(BlockHash(hash)).map(_.number.value).getOrElse(bestBlockNumber)
         case BlockParam.Earliest  => 0
         case BlockParam.Latest    => bestBlockNumber

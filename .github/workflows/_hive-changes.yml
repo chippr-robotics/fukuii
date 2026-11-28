@@ -2,13 +2,16 @@ name: _hive-changes (reusable)
 
 # Decides whether a Hive suite has anything to test on this event.
 #
-# Why this exists: four Hive suites are required checks on `main` (`run / engine`,
-# `run / consume-engine`, `Consume-engine Prague sweep`, `Consume-engine Osaka sweep`). They hold a
-# runner for 40-80 min, so they should not run on a PR that cannot affect them. A `paths:` filter on
-# the `pull_request` trigger did that, but a workflow that never starts never reports, so a required
-# check stayed "Expected" and blocked every docs or tooling PR. The callers now start on every PR
-# and ask this workflow first. When nothing relevant changed, they SKIP the suite's job by `if:`,
-# and GitHub counts a skipped required check as passed. The check therefore always reports.
+# Why this exists: Hive suites that are required checks on `main` (`required_contexts` in
+# .github/gates.yml) hold a runner for 5-80 min, so they should not run on a PR that cannot affect
+# them. A `paths:` filter on the `pull_request` trigger did that, but a workflow that never starts
+# never reports, so a required check stayed "Expected" and blocked every docs or tooling PR. The
+# callers now start on every PR and ask this workflow first. When nothing relevant changed, they
+# pass `skip: true` to the reusable simulator workflow, whose `skipped` job reports the check as
+# passed under the suite's own name. The check therefore always reports.
+# A caller whose job has a literal name (eest-amsterdam.yml, `EEST Amsterdam`) skips that job by
+# `if:` instead: GitHub reports a job skipped that way under its literal name, and counts a skipped
+# required check as passed.
 #
 # Every event other than `pull_request` (workflow_dispatch, schedule, push) answers `run=true`.
 
@@ -18,7 +21,8 @@ on:
       paths:
         description: |
           Newline-separated paths the suite depends on. An entry ending in `/` matches everything
-          under that directory; any other entry matches that file exactly.
+          under that directory, one ending in `*` every path that starts with what precedes the `*`,
+          and any other entry that file exactly.
         required: true
         type: string
     outputs:
@@ -66,7 +70,8 @@ jobs:
             while IFS= read -r p; do
               p="${p#"${p%%[![:space:]]*}"}"; p="${p%"${p##*[![:space:]]}"}"
               [[ -z "$p" ]] && continue
-              if [[ "$p" == */ && "$f" == "$p"* ]] || [[ "$f" == "$p" ]]; then
+              if [[ "$p" == */ && "$f" == "$p"* ]] || [[ "$p" == *'*' && "$f" == "${p%'*'}"* ]] \
+                || [[ "$f" == "$p" ]]; then
                 run=true; hit="$f (matches $p)"; break 2
               fi
             done <<< "$PATHS"

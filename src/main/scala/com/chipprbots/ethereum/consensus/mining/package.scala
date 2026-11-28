@@ -8,13 +8,35 @@ import com.chipprbots.ethereum.consensus.blocks.BlockGenerator
 import com.chipprbots.ethereum.consensus.pow.PoWMining
 import com.chipprbots.ethereum.consensus.validators.Validators
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
 
 /** Provides everything related to consensus. Different mining protocols are implemented in sub-packages.
   */
 package object mining:
   final type GetBlockHeaderByHash = ByteString => Option[BlockHeader]
-  final type GetNBlocksBack = (ByteString, Int) => Seq[Block]
+
+  /** The block with the given hash and the `n - 1` blocks below it, as the ommers rules read them ([[OmmerAncestor]]);
+    * fewer where they are not stored. In no promised order: the rules read them as a set.
+    */
+  final type GetNBlocksBack = (ByteString, Int) => Seq[OmmerAncestor]
+
+  /** An ancestor as the ommers rules read it (B-302): its header, and the ommers its body holds where they are known. A
+    * header whose ommers hash is the empty list's has none, and its body is not read: core-geth's `VerifyUncles` reads
+    * the block of an ancestor only where its uncle hash is not the empty one.
+    *
+    * @param ommers
+    *   the ommers of the ancestor's body; `None` where it names some and its body is not stored
+    */
+  final case class OmmerAncestor(header: BlockHeader, ommers: Option[Seq[BlockHeader]])
+
+  object OmmerAncestor:
+    def of(block: Block): OmmerAncestor = OmmerAncestor(block.header, Some(block.body.uncleNodesList))
+
+    /** The ancestor with this header; its body is looked for only where the header names ommers. */
+    def of(header: BlockHeader, body: => Option[BlockBody]): OmmerAncestor =
+      if header.ommersHash.value == BlockHeader.EmptyOmmers then OmmerAncestor(header, Some(Nil))
+      else OmmerAncestor(header, body.map(_.uncleNodesList))
 
   def wrongMiningArgument[T <: Mining: ClassTag](mining: Mining): Nothing =
     val requiredClass = implicitly[ClassTag[T]].runtimeClass

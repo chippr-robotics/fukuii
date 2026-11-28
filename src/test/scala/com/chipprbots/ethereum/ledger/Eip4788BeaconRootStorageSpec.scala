@@ -16,6 +16,7 @@ import com.chipprbots.ethereum.ledger.BlockExecution.BeaconRootsCode
 import com.chipprbots.ethereum.mpt.MerklePatriciaTrie
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.BlockchainConfig
+import com.chipprbots.ethereum.utils.ByteStringUtils
 import com.chipprbots.ethereum.utils.Config
 import com.chipprbots.ethereum.utils.Config.SyncConfig
 import com.chipprbots.ethereum.utils.ForkTimestamps
@@ -203,3 +204,75 @@ class Eip4788BeaconRootStorageSpec extends AnyFlatSpec with Matchers:
     world.getCode(BeaconRootContractAddress) shouldBe ByteString.empty
     world.getStorage(BeaconRootContractAddress).load(timestampIdx) shouldBe BigInt(0)
     world.getStorage(BeaconRootContractAddress).load(timestampIdx + Buf) shouldBe BigInt(0)
+
+  // ── B-517: the direct write is the canonical contract's effect; other code is run ─────────
+
+  // The direct write stands in for go-ethereum's ProcessBeaconBlockRoot (a SYSTEM_ADDRESS call, 30,000,000 gas) only
+  // because it is what the canonical contract does. Pinned here by running that contract as the call, through
+  // BlockExecution.uncheckedSystemCall, and comparing the whole state root with import's: a first slot, a wrapped
+  // index, the largest uint64 timestamp (TIMESTAMP must not sign-extend) and a zero root (a store of zero).
+  it should "give the state root that running the canonical contract as a SYSTEM_ADDRESS call gives" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup:
+    val cases: Seq[(Long, ByteString)] = Seq(
+      CancunTs -> ByteString(Array.fill(32)(0xab.toByte)),
+      (CancunTs + 3 * 8191L + 17) -> ByteString(Array.tabulate(32)(_.toByte)),
+      -1L -> ByteString(Array.fill(32)(0xee.toByte)), // uint64 max: 2^64 - 1
+      (CancunTs + 1) -> ByteString(new Array[Byte](32))
+    )
+    cases.foreach { (ts, root) =>
+      val block = makeBlock(root, ts)
+      val direct = InMemoryWorldStateProxy.persistState(runBlock(block))
+      val called = BlockExecution.uncheckedSystemCall(
+        block.header,
+        deployedWorld,
+        BeaconRootContractAddress,
+        root,
+        accessRecorder = None,
+        precompileRelocations = Map.empty
+      )
+      withClue(s"timestamp ${java.lang.Long.toUnsignedString(ts)}: ") {
+        called.stateRootHash shouldBe direct.stateRootHash
+        called.stateRootHash should not be InMemoryWorldStateProxy.persistState(deployedWorld).stateRootHash
+      }
+    }
+
+  /** Other code at the beacon roots address: called by SYSTEM_ADDRESS it stores the calldata (the root) at slot 0;
+    * called by anyone else it returns slot 0.
+    */
+  private val customCode: ByteString = ByteStringUtils.string2hash(
+    "33" + "73" + "ff" * 19 + "fe" + "14" + "6025" + "57" + "600054" + "600052" + "6020" + "6000" + "f3" +
+      "5b" + "600035" + "600055" + "00"
+  )
+
+  // go-ethereum runs the code at BEACON_ROOTS_ADDRESS, whatever it is; the direct write gave this account the
+  // canonical contract's two slots instead.
+  it should "run code other than the canonical contract, as go-ethereum's system call does" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new TestSetup:
+    val root: ByteString = ByteString(Array.fill(32)(0x5a.toByte))
+    val custom: InMemoryWorldStateProxy = emptyWorld
+      .saveAccount(
+        BeaconRootContractAddress,
+        Account.empty(blockchainConfig.accountStartNonce).copy(nonce = UInt256(1))
+      )
+      .saveCode(BeaconRootContractAddress, customCode)
+    val storage: InMemoryWorldStateProxyStorage =
+      runBlock(makeBlock(root), custom).getStorage(BeaconRootContractAddress)
+    storage.load(0) shouldBe UInt256(root).toBigInt
+    storage.load(BigInt(CancunTs) % Buf) shouldBe BigInt(0)
+    storage.load(BigInt(CancunTs) % Buf + Buf) shouldBe BigInt(0)
+
+  // EIP-4788: the call's failure is ignored and its changes are dropped (geth: `_, _, _ = evm.Call(...)`).
+  it should "leave the state as it was when that code reverts" taggedAs (UnitTest, ConsensusTest) in new TestSetup:
+    val reverting: InMemoryWorldStateProxy = emptyWorld
+      .saveAccount(
+        BeaconRootContractAddress,
+        Account.empty(blockchainConfig.accountStartNonce).copy(nonce = UInt256(1))
+      )
+      .saveCode(BeaconRootContractAddress, ByteString(0x5f, 0x5f, 0xfd)) // PUSH0 PUSH0 REVERT
+    InMemoryWorldStateProxy
+      .persistState(runBlock(makeBlock(ByteString(Array.fill(32)(0x01.toByte))), reverting))
+      .stateRootHash shouldBe InMemoryWorldStateProxy.persistState(reverting).stateRootHash

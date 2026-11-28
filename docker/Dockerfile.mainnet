@@ -78,33 +78,9 @@ COPY --from=builder --chown=fukuii:fukuii /fukuii-dist /app/fukuii
 # Users can mount their own config files at /app/conf to override defaults
 COPY --from=builder --chown=fukuii:fukuii /fukuii-dist/conf /app/conf
 
-# Create healthcheck script
-RUN echo '#!/bin/bash\n\
-# Health check script for Fukuii\n\
-# Checks if the process is running and optionally tests RPC endpoint\n\
-\n\
-# Check if process is running\n\
-if ! pgrep -f "com.chipprbots.ethereum.App" > /dev/null; then\n\
-  echo "Fukuii process is not running"\n\
-  exit 1\n\
-fi\n\
-\n\
-# If curl is available and RPC is enabled, check RPC endpoint\n\
-if command -v curl &> /dev/null; then\n\
-  # Try to connect to the default JSON-RPC HTTP port (8546)\n\
-  if curl -sf -X POST -H "Content-Type: application/json" \\\n\
-    --data '\''{"jsonrpc":"2.0","method":"web3_clientVersion","params":[],"id":1}'\'' \\\n\
-    http://localhost:8546 > /dev/null 2>&1; then\n\
-    echo "Fukuii is healthy - RPC responding"\n\
-    exit 0\n\
-  fi\n\
-fi\n\
-\n\
-# If we reach here, process is running but RPC may not be enabled or curl not available\n\
-echo "Fukuii process is running"\n\
-exit 0\n\
-' > /usr/local/bin/healthcheck.sh && \
-    chmod +x /usr/local/bin/healthcheck.sh
+# Healthcheck: the process, then JSON-RPC at FUKUII_HEALTH_URL, https and a client certificate included
+# (docker/scripts/healthcheck.sh; spec 030 S11, B-149)
+COPY --chmod=755 docker/scripts/healthcheck.sh /usr/local/bin/healthcheck.sh
 
 # Install curl for healthcheck (minimal overhead)
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -117,11 +93,11 @@ USER fukuii
 WORKDIR /app
 
 # Set up environment
-# Read by conf/base/fukuii.conf (datadir) and network.conf (JSON-RPC interface). A datadir or interface
-# set in a mounted conf still wins. RPC binds every container interface so Docker can forward a
-# published port; publish it as 127.0.0.1:8546:8546 to keep it on the host's loopback.
+# Read by conf/base/fukuii.conf (datadir). A datadir set in a mounted conf still wins.
+# JSON-RPC stays on the container's loopback: a plaintext listener on 0.0.0.0 refuses the start unless it
+# has tls.enabled or allow-insecure-bind (spec 030, docs/runbooks/tls-operations.md). To publish RPC, set
+# FUKUII_RPC_INTERFACE=0.0.0.0 (read by network.conf) together with one of those in the conf.
 ENV FUKUII_DATADIR=/app/data
-ENV FUKUII_RPC_INTERFACE=0.0.0.0
 # Not read by fukuii; kept for scripts that may reference it.
 ENV FUKUII_DATA_DIR=/app/data
 ENV FUKUII_CONF_DIR=/app/conf
@@ -134,7 +110,10 @@ ENV FUKUII_CONF_DIR=/app/conf
 # corruption by crafted input. The pinned base image carries the fix; disabling
 # the intrinsic also covers a host or image still on an affected JDK. Remove once
 # no supported JDK predates 25.0.5.1 / 21.0.13.1.
-ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:DisableIntrinsic=_base64_decodeBlock"
+# B-125: --sun-misc-unsafe-memory-access=allow stops JDK 24+ printing its
+# sun.misc.Unsafe warning (Scala 3 lazy vals) over the TUI's first frame. This
+# image's JDK is 25; JDK 22 and older would refuse the flag.
+ENV JDK_JAVA_OPTIONS="-XX:+UnlockDiagnosticVMOptions -XX:-ReduceAllocationMerges -XX:DisableIntrinsic=_base64_decodeBlock --sun-misc-unsafe-memory-access=allow"
 ENV FUKUII_NETWORK=etc
 
 # Expose default ports (conf/base/network.conf)

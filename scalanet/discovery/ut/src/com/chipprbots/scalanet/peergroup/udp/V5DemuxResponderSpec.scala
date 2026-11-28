@@ -60,7 +60,8 @@ class V5DemuxResponderSpec extends AnyFlatSpec with Matchers:
     val demux = V5DemuxResponder(replyResponder(reply), Some(q))
     val payload = BitVector.fromValidHex("01020304")
 
-    demux(sender, payload) shouldBe StaticUDPPeerGroup.SyncResult.Reply(reply)
+    // Reply is rewritten to ClaimedReply so the v5 bytes are not also fed to the v4 async decoder.
+    demux(sender, payload) shouldBe StaticUDPPeerGroup.SyncResult.ClaimedReply(reply)
     val received = runIO(q.next).get
     received._2 shouldBe payload.toByteVector
   }
@@ -77,11 +78,11 @@ class V5DemuxResponderSpec extends AnyFlatSpec with Matchers:
     raced shouldBe Right("timeout")
   }
 
-  it should "preserve all SyncResult shapes verbatim" in {
+  it should "rewrite Reply to ClaimedReply and keep the reply bytes verbatim" in {
     val q = runIO(CloseableQueue.unbounded[(InetSocketAddress, ByteVector)])
     val replyBits = BitVector.fromValidHex("11" * 16)
     val demux = V5DemuxResponder(replyResponder(replyBits), Some(q))
     demux(sender, BitVector.fromValidHex("aa")) match
-      case StaticUDPPeerGroup.SyncResult.Reply(b) => b shouldBe replyBits
-      case other                                  => fail(s"expected Reply, got $other")
+      case StaticUDPPeerGroup.SyncResult.ClaimedReply(b) => b shouldBe replyBits
+      case other                                         => fail(s"expected ClaimedReply, got $other")
   }

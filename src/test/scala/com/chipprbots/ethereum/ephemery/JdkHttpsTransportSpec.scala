@@ -33,8 +33,6 @@ import javax.net.ssl.TrustManagerFactory
 import scala.jdk.CollectionConverters.*
 
 import ch.qos.logback.classic.Level
-import ch.qos.logback.classic.spi.ILoggingEvent
-import ch.qos.logback.core.read.ListAppender
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpsConfigurator
 import com.sun.net.httpserver.HttpsServer
@@ -243,16 +241,14 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
 
   private def withLog[A](f: => A): (A, List[String]) =
     val logger = LoggerFactory.getLogger(classOf[JdkHttpsTransport]).asInstanceOf[ch.qos.logback.classic.Logger]
-    val appender = new ListAppender[ILoggingEvent]
     val previous = logger.getLevel
-    appender.start()
-    logger.addAppender(appender)
+    val appender = com.chipprbots.ethereum.testing.LogCapture.open(logger.getName)
     logger.setLevel(Level.TRACE)
     val result =
       try f
       finally
         logger.setLevel(previous)
-        logger.detachAppender(appender)
+        appender.close()
     (result, appender.list.asScala.toList.map(_.getFormattedMessage))
 
   "JdkHttpsTransport" should "fetch a body over https from an allow-listed host" taggedAs UnitTest in {
@@ -714,9 +710,17 @@ class JdkHttpsTransportSpec extends AnyFlatSpec with Matchers with BeforeAndAfte
     val onlyUser = ProxyEnv.selector(Map("https_proxy" -> "http://alice@proxy.example:3128"))
     onlyUser.isLeft shouldBe true
     (onlyUser.left.getOrElse("") should not).include("alice")
-    // the production factory refuses it too
+    // The production factory refuses it too. With no JDK proxy property: `default` prefers `https.proxyHost`, which a
+    // host may set for every JVM (cloud containers do, in JAVA_TOOL_OPTIONS), and then never reads HTTPS_PROXY (B-247).
     JdkHttpsTransport
-      .default(SourcePolicy.DefaultGithub, "1", Map("HTTPS_PROXY" -> "http://a:b@p:1"))
+      .create(
+        SourcePolicy.DefaultGithub,
+        "1",
+        Map("HTTPS_PROXY" -> "http://a:b@p:1"),
+        java.time.Clock.systemUTC(),
+        None,
+        _ => None
+      )
       .left
       .map(_.contains("credentials")) shouldBe Left(true)
   }

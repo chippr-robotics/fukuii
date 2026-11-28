@@ -33,6 +33,9 @@ services:
   # Fukuii Execution Layer — ETH mainnet
   fukuii-eth:
     image: chipprbots/fukuii:latest
+    # B-444: room for the bounded stop steps (up to ~119 s) and the RocksDB close after them; Docker's
+    # default 10 s SIGKILLs the node mid-close.
+    stop_grace_period: 180s
     container_name: fukuii-eth
     restart: unless-stopped
     # 3g heap + ~3 GB native (RocksDB 512MB block cache, memtables, G1,

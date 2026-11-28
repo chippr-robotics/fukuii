@@ -53,14 +53,41 @@ trait StagedBlockState:
     */
   def pendingWith(@unused blockNumber: BigInt, @unused blockHash: ByteString): Option[DataSourceBatchUpdate] = pending
 
-  /** Commit this block's state (with `extra`, the block's other writes, in the SAME atomic batch), state ONCE.
-    * Execution reads reference counts while it runs and commits ABSOLUTE values, so committing the same block twice
-    * (the Engine API `newPayload` path and the regular-sync importer each execute a block the other has not committed
-    * yet) applies its count changes twice. A mode that keeps counts overrides this to drop the state half of a second
-    * commit; the others write straight through (or have nothing buffered) and just commit.
+  private var stagedCode: Option[DataSourceBatchUpdate] = None
+
+  /** The write of the contract code this block deployed, held until its state is committed and written in the SAME
+    * atomic batch as that state (B-454): a block's code exists on disk if and only if its state does (with the one
+    * exception [[commitApart]] names on the unified layout). Execution hands it over once the block is valid, and an
+    * execution run again replaces it; a block that is discarded leaves it unwritten. A staged state that wraps another
+    * forwards this, as it forwards the commit.
+    */
+  def stageCode(write: DataSourceBatchUpdate): Unit = synchronized {
+    stagedCode = Some(write)
+  }
+
+  /** The staged code write, taken: it is written by the commit that takes it, once. */
+  final protected def takeStagedCode(): Option[DataSourceBatchUpdate] = synchronized {
+    val taken = stagedCode
+    stagedCode = None
+    taken
+  }
+
+  /** `extra` with the staged code write ([[stageCode]]) in front of it, in one batch: what a commit of this block's
+    * state writes beside the state.
+    */
+  final protected def withStagedCode(extra: Option[DataSourceBatchUpdate]): Option[DataSourceBatchUpdate] =
+    (takeStagedCode(), extra) match
+      case (Some(code), Some(other)) => Some(code.and(other))
+      case (code, other)             => code.orElse(other)
+
+  /** Commit this block's state (with `extra`, the block's other writes, and its code ([[stageCode]]) in the SAME atomic
+    * batch), state ONCE. Execution reads reference counts while it runs and commits ABSOLUTE values, so committing the
+    * same block twice (the Engine API `newPayload` path and the regular-sync importer each execute a block the other
+    * has not committed yet) applies its count changes twice. A mode that keeps counts overrides this to drop the state
+    * half of a second commit; the others write straight through (or have nothing buffered) and just commit.
     */
   def commitWith(blockNumber: BigInt, blockHash: ByteString, extra: Option[DataSourceBatchUpdate]): Unit =
-    (pendingWith(blockNumber, blockHash), extra) match
+    (pendingWith(blockNumber, blockHash), withStagedCode(extra)) match
       case (Some(state), Some(other)) => other.and(state).commit()
       case (Some(state), None)        => state.commit()
       case (None, Some(other))        => other.commit()
@@ -68,9 +95,9 @@ trait StagedBlockState:
 
   /** Commit this block's state apart from the block, for a block executed without being adopted (a payload ahead of the
     * head, a side branch): its state is kept beside the head, and the block itself is stored by its caller. On the
-    * modes that write a block's state with no head behind it, that is [[commitWith]] with nothing else in the batch. On
-    * the unified layout it is a forward layer beside the state the disk holds (spec 018 C4d part 2a), and the head does
-    * not move.
+    * modes that write a block's state with no head behind it, that is [[commitWith]] with nothing else in the batch but
+    * the block's code. On the unified layout it is a forward layer beside the state the disk holds (spec 018 C4d part
+    * 2a), and the head does not move.
     */
   def commitApart(blockNumber: BigInt, blockHash: ByteString): Unit = commitApart(blockNumber, blockHash, None)
 
@@ -117,6 +144,18 @@ enum RepairOutcome:
   /** The bytes offered do not hash to the key: nothing was written. */
   case Rejected
 
+  /** A position store only (spec 018 data-model 7.5): the anchor's root no longer reaches the node at that position, or
+    * there is no anchor, or the anchor is not the block the caller judged the position under. Nothing was written: it
+    * is not this state's repair, and the caller looks the position up again.
+    */
+  case NotReached
+
+  /** A position store only: the row at the position was a node that decodes and is not the one expected there, and the
+    * anchor's root names the expected node at that position, so the row was replaced (data-model 7.5, the user's
+    * decision of 2026-11-18). The old row is in the state move's log. Told at ERROR, and counted.
+    */
+  case Overwrote
+
 /** What a delete of a provably bad entry did. */
 enum BadEntryDelete:
   case Deleted
@@ -129,8 +168,15 @@ enum BadEntryDelete:
     */
   case PassesKeccakElsewhere
 
-  /** Still bad, and the current root no longer needs it there: it stays. */
+  /** Still bad, and the current root no longer needs it there: it stays. A position store says the same when the anchor
+    * moved or there is none: nothing is judged under a root that is not the anchor's.
+    */
   case NotReached
+
+  /** A position store only (spec 018 data-model 6.5, 7.5): the row is a node that decodes and is not the one expected
+    * at the position. That is another view's node, and it is never deleted on this path.
+    */
+  case DifferentNode
 
 // scalastyle:off
 trait StateStorage:
@@ -262,6 +308,9 @@ class ArchiveStateStorage(private val nodeStorage: NodeStorage) extends StateSto
 object ReferenceCountedStateStorage extends com.chipprbots.ethereum.utils.Logger:
   /** One block commit (and one prune) at a time: the duplicate check reads the record the previous commit writes. */
   private[storage] val commitLock = new Object
+
+  /** Whether this thread holds [[commitLock]]: the head's lock is taken before it, never inside it (B-511). */
+  private[ethereum] def commitLockHeldByCurrentThread: Boolean = Thread.holdsLock(commitLock)
   private[storage] def warnDuplicate(msg: String): Unit = log.warn(msg)
   private[storage] def warnTrustUnreadable(e: Throwable): Unit =
     log.error("Could not tell whether reference counts can be trusted; this prune keeps every trie node (#1692)", e)
@@ -404,10 +453,10 @@ class ReferenceCountedStateStorage(
               s"Block $blockNumber ${blockHash.take(4).toArray.map("%02x".format(_)).mkString} is already committed; " +
                 "dropping the duplicate state commit (it would apply its reference-count changes twice)"
             )
-            extra.foreach(_.commit())
+            withStagedCode(extra).foreach(_.commit())
             decodedNodes.foreach(_.evict(buffered.touchedKeys))
           else
-            (pendingWith(blockNumber, blockHash), extra) match
+            (pendingWith(blockNumber, blockHash), withStagedCode(extra)) match
               case (Some(state), Some(other)) => other.and(state).commit()
               case (Some(state), None)        => state.commit()
               case (None, Some(other))        => other.commit()

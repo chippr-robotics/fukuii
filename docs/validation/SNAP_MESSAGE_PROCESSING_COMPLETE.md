@@ -143,7 +143,7 @@ Fukuii ↔ besu SNAP: ✅ WORKS
 - **devp2p RLPx Spec**: https://github.com/ethereum/devp2p/blob/master/rlpx.md#capability-messaging
 - **SNAP Protocol Spec**: https://github.com/ethereum/devp2p/blob/master/caps/snap.md
 - **Core-Geth Implementation**: https://github.com/etclabscore/core-geth/blob/master/eth/protocols/snap/handler.go
-- **Besu Implementation**: https://github.com/hyperledger/besu/tree/main/ethereum/eth/src/main/java/org/hyperledger/besu/ethereum/eth/sync/snapsync
+- **Besu Implementation**: https://github.com/besu-eth/besu/tree/main/ethereum/eth/src/main/java/org/hyperledger/besu/ethereum/eth/sync/snapsync
 
 ## Conclusion
 

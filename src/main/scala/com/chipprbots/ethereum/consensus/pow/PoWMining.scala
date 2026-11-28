@@ -68,8 +68,9 @@ class PoWMining private (
     blockchainReader = blockchainReader
   )
 
-  private[pow] var minerCoordinatorRef: Option[ActorRef[CoordinatorProtocol]] = None
-  private[pow] var mockedMinerRef: Option[ActorRef[MockedMiner.Command]] = None
+  // Written under `mutex` at start, read by RPC threads (hasInternalMiner, sendMiner): volatile (forge, B-279).
+  @volatile private[pow] var minerCoordinatorRef: Option[ActorRef[CoordinatorProtocol]] = None
+  @volatile private[pow] var mockedMinerRef: Option[ActorRef[MockedMiner.Command]] = None
   // Captured at spawn time to provide the Typed Scheduler (ask) and ignoreRef (fire-and-forget).
   private var minerSystem: Option[org.apache.pekko.actor.typed.ActorSystem[Nothing]] = None
 
@@ -101,6 +102,14 @@ class PoWMining private (
       case _ => IO.pure(MinerNotExist)
 
   private val mutex = new Object
+
+  /** Whether this node runs a built-in miner: a coordinator (PoW, restricted PoW) or the mocked miner. None when mining
+    * is disabled in the configuration, or on an Engine API node (B-279: miner_start and miner_stop say so).
+    */
+  def hasInternalMiner: Boolean = minerCoordinatorRef.isDefined || mockedMinerRef.isDefined
+
+  /** Whether the configuration enables the built-in miner: with it, a node with no miner yet has not started it. */
+  def miningEnabled: Boolean = config.miningEnabled
 
   private def startMiningProcess(node: Node, blockCreator: PoWBlockCreator): Unit =
     mutex.synchronized {

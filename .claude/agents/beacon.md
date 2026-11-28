@@ -5,7 +5,10 @@ description: >-
   MUST BE USED proactively BEFORE implementing OR reviewing any ETH
   consensus-affecting change: EIP work, timestamp fork dispatch, opcode/gas
   costs, state-root calculation, withdrawals, blob transactions, execution
-  payload encoding, or fork configuration. Uses OsakaOpCodes / forTimestamp() —
+  payload encoding, fork configuration, new ETH-family chains (genesis, fork-id),
+  Engine API semantics including its JWT authentication (with conduit for the
+  HTTP/WebSocket transport), and how an ETH node follows the chain (CL-driven
+  import, SNAP pivot from the consensus layer). Uses OsakaOpCodes / forTimestamp() —
   never forBlock() or Ethash. Produces impact analysis first, implements with
   byte-perfect validation against go-ethereum. For ETC/Mordor consensus use
   `forge` instead.
@@ -49,8 +52,18 @@ analysis**, not a code edit:
 4. Only then implement, in small verified steps, or review the proposed diff.
 
 If you are reviewing a diff, report findings by severity: **Critical (breaks
-consensus / must fix)**, **Warning (risky / should fix)**, **Note**. Cite the
-exact file:line and the spec or reference-client behavior it must match.
+consensus, or stops the node following the chain / must fix)**, **Warning
+(risky / should fix)**, **Note**. Cite the exact file:line and the spec or
+reference-client behavior it must match. Follow changed entry points to their
+callers outside the diff. For start-up and operational changes:
+
+- A new refuse-to-start check must run before anything with side effects starts
+  (P2P, listeners, store writers): list what has started when it fires. A
+  half-started node is must-fix. A listener that fails to bind is fatal.
+- When a feature becomes default-on, re-rate the old weaknesses on its path —
+  "unchanged" or "matches geth" no longer settles them once the exposure changed.
+- For secret or key files: existing-file replacement, symlinks and permissions,
+  on every path (created, default, explicit).
 
 ## Reference clients
 
@@ -107,7 +120,8 @@ Never use `forBlock()` for post-merge ETH fork logic.
 | Dimension | ETH / Sepolia |
 |---|---|
 | Consensus | Proof-of-Stake (post-merge) |
-| Chain ID | 1 (mainnet) · 11155111 (Sepolia) |
+| Chain ID | 1 (mainnet) · 11155111 (Sepolia) · 560048 (Hoodi) · 7091047534 (Platåberget, wider than 32 bits) · Ephemery (changes each iteration; the node exits at the reset) |
+| Next fork | Amsterdam (Glamsterdam): status in `docs/specifications/GLAMSTERDAM.md` |
 | Fork dispatch | Timestamp (`forTimestamp()`, `OsakaOpCodes`) |
 | EIP-1559 | Basefee **burned** — NOT sent to any contract |
 | Block rewards | None (PoS validators earn attestation rewards) |

@@ -7,6 +7,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
+import com.chipprbots.ethereum.db.storage.TransactionMappingStorage.TransactionLocation
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** Spec 018 Track C, C4b part 2b: the batch that makes a block the canonical head is built apart from its commit
@@ -118,3 +119,35 @@ class BlockchainWriterHeadUpdateSpec extends AnyFlatSpec with Matchers:
       up.move.adopted.map(_._2) shouldBe Seq(next.header.hash)
       up.move.dropped shouldBe empty
     }
+
+  // B-506 (forge review W1): the entries cleared above a head can be of a chain that forked lower than the head's own
+  // chain. A transaction such an entry includes that a canonical block below the fork includes too keeps its lookup,
+  // which names that block; only the lookups that name a block taken off the index go (go-ethereum's deletedTxs never
+  // reach below the common block).
+  it should "delete only the lookups that name a block it takes off the index" taggedAs (UnitTest, StateTest) in {
+    val (chains, _) = twins()
+    import chains.*
+    val lookups = storagesInstance.storages.transactionMappingStorage
+    val shared = main(2).body.transactionList.head
+    val strayOwn = BlockHelpers.generateBlock(main.last).body.transactionList.head
+    // an entry above the head, left by a chain that forked below main(2), that includes main(2)'s transaction
+    val stray = BlockHelpers.withTransactions(BlockHelpers.generateBlock(main.last), List(shared, strayOwn))
+    byHashOnly(stray)
+    storagesInstance.storages.blockNumberMappingStorage.put(stray.number.value, stray.hash.value).commit()
+    lookups.put(strayOwn.hash.value, TransactionLocation(stray.hash.value, 1)).commit()
+    // main(2) was committed after the stray, so the shared transaction's lookup names main(2)
+    lookups.put(shared.hash.value, TransactionLocation(main(2).hash.value, 0)).commit()
+    val rewrite = blockchainWriter.rewriteCanonicalIndex(
+      Nil,
+      Nil,
+      None,
+      Nil,
+      Nil,
+      blockchainReader,
+      clearAbove = Some(main.last.number.value)
+    )
+    rewrite.map(_.removed) shouldBe Right(List(stray.number.value -> stray.hash))
+    blockchainReader.getCanonicalHashByNumber(stray.number.value) shouldBe None
+    lookups.get(strayOwn.hash.value) shouldBe None
+    lookups.get(shared.hash.value).map(_.blockHash) shouldBe Some(main(2).hash.value)
+  }

@@ -69,7 +69,14 @@ class FastSyncBranchResolverSpec extends AnyWordSpec with Matchers with MockFact
       val resolver = new FastSyncBranchResolver:
         override val blockchain: Blockchain = mockedBlockchain
         override val blockchainReader: BlockchainReader = mockedBlockchainReader
-      resolver.discardBlocksAfter(97)
+      // B-248: what it removed, read before each block's index entry went
+      assert(
+        resolver.discardBlocksAfter(97) == Seq(
+          BigInt(100) -> headers(100).hash.value,
+          BigInt(99) -> headers(99).hash.value,
+          BigInt(98) -> headers(98).hash.value
+        )
+      )
     }
   }
 

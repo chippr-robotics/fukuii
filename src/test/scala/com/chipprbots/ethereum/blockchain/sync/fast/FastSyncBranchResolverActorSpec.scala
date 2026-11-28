@@ -12,7 +12,6 @@ import org.apache.pekko.testkit.TestProbe
 import org.apache.pekko.util.ByteString
 import org.apache.pekko.util.Timeout
 
-import cats.effect.Deferred
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import cats.implicits.*
@@ -27,12 +26,23 @@ import org.scalatest.freespec.AnyFreeSpecLike
 import com.chipprbots.ethereum.BlockHelpers
 import com.chipprbots.ethereum.NormalPatience
 import com.chipprbots.ethereum.blockchain.sync.*
+import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchHeavierBeyondReach
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolutionFailed
+import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolutionFailed.BranchNotHeavier
+import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolutionFailed.CommonBlockBeyondReach
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolutionFailed.NoCommonBlockFound
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.BranchResolvedSuccessful
 import com.chipprbots.ethereum.blockchain.sync.fast.FastSyncBranchResolverActor.StartBranchResolver
+import com.chipprbots.ethereum.blockchain.sync.regular.DeepForkWeight
+import com.chipprbots.ethereum.blockchain.sync.regular.ImportLock
+import com.chipprbots.ethereum.consensus.PowForkChoice
+import com.chipprbots.ethereum.consensus.PowForkChoiceSpec
 import com.chipprbots.ethereum.domain.Block
+import com.chipprbots.ethereum.domain.BlockHash
+import com.chipprbots.ethereum.domain.BlockHeader
 import com.chipprbots.ethereum.domain.ChainWeight
+import com.chipprbots.ethereum.domain.Difficulty
+import com.chipprbots.ethereum.ledger.BranchResolution
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor.*
 import com.chipprbots.ethereum.network.Peer
@@ -98,12 +108,67 @@ class FastSyncBranchResolverActorSpec
           case r @ BranchResolvedSuccessful(num, _) if num == BigInt(5) => r
         }
 
-        val response: BranchResolvedSuccessful = (for
-          _ <- IO(fastSyncBranchResolver ! StartBranchResolver)
-          response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
-          _ <- IO(stopController(fastSyncBranchResolver))
-        yield response).unsafeRunSync()
+        // on the test's own thread: an `expectMsg` inside an `IO` parks a compute thread of the runtime (B-511)
+        fastSyncBranchResolver ! StartBranchResolver
+        val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout)(expectation)
+        stopController(fastSyncBranchResolver)
         assert(getBestPeers.contains(response.masterPeer))
+
+      // B-012: the discard moves the best block and the index down, so it is made under regular sync's import lock, as
+      // every import is. An import that holds the lock is waited for, off the resolver's thread, and nothing is
+      // discarded, nor answered, until it ends.
+      "this node's blocks above the common block are discarded under the import lock, after an import that holds it" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new TestSetup:
+        implicit override lazy val system: ActorSystem = self.system.classicSystem
+        implicit override lazy val ioRuntime: IORuntime = IORuntime.global
+
+        val sender: TestProbe = TestProbe("sender")
+        val commonBlocks: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis, block => block)
+        val blocksSaved: List[Block] = commonBlocks :++ BlockHelpers.generateChain(1, commonBlocks.last, block => block)
+        val blocksSavedInPeer: List[Block] =
+          commonBlocks :++ BlockHelpers.generateChain(2, commonBlocks.last, block => block)
+        val firstBatchBlockHeaders: List[Block] =
+          blocksSavedInPeer.slice(blocksSavedInPeer.size - syncConfig.blockHeadersPerRequest, blocksSavedInPeer.size)
+
+        saveBlocks(blocksSaved)
+        val importLock: ImportLock = ImportLock()
+        val networkPeerManager: ActorRef = createNetworkPeerManager(handshakedPeers, Map(1 -> firstBatchBlockHeaders))
+        val fastSyncBranchResolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          creatFastSyncBranchResolver(
+            sender.ref,
+            networkPeerManager,
+            CacheBasedBlacklist.empty(BlacklistMaxElements),
+            discardGuard =
+              Some(FastSyncBranchResolverActor.DiscardGuard(deepestCommonBlock = 0, heavier = None, importLock))
+          )
+
+        // an import that holds the lock until it is let go
+        val held = new java.util.concurrent.CountDownLatch(1)
+        val release = new java.util.concurrent.CountDownLatch(1)
+        importLock.guard(IO.blocking { held.countDown(); release.await() }).unsafeRunAndForget()
+        held.await(10, java.util.concurrent.TimeUnit.SECONDS) shouldBe true
+
+        try
+          fastSyncBranchResolver ! StartBranchResolver
+          val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(30)
+          while importLock.waiting == 0 && System.nanoTime() < deadline do Thread.onSpinWait()
+          withClue("the discard waits for the import lock: ")(importLock.waiting shouldBe 1)
+          // nothing discarded while the import holds the lock
+          blockchainReader.getBestBlockNumber shouldBe blocksSaved.last.number.value
+          blockchainReader.getBlockHeaderByNumber(blocksSaved.last.number.value).map(_.hash) shouldBe
+            Some(blocksSaved.last.hash)
+          sender.msgAvailable shouldBe false
+        finally release.countDown()
+
+        val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout) {
+          case r @ BranchResolvedSuccessful(num, _) if num == BigInt(5) => r
+        }
+        stopController(fastSyncBranchResolver)
+        response.discarded shouldBe List((blocksSaved.last.number.value, blocksSaved.last.hash.value))
+        blockchainReader.getBestBlockNumber shouldBe BigInt(5)
+        importLock.waiting shouldBe 0
 
       // Spec 018 C4e part 6: on the unified state layout the caller asks for the common block only. No block is taken
       // off this node's chain: its head stays, and the peer's branch is judged by weight when it arrives.
@@ -129,7 +194,7 @@ class FastSyncBranchResolverActorSpec
             sender.ref,
             networkPeerManager,
             CacheBasedBlacklist.empty(BlacklistMaxElements),
-            discardDiverged = false
+            discardGuard = None
           )
 
         fastSyncBranchResolver ! StartBranchResolver
@@ -174,11 +239,9 @@ class FastSyncBranchResolverActorSpec
             case r @ BranchResolvedSuccessful(num, _) if num == BigInt(5) => r
           }
 
-          val response: BranchResolvedSuccessful = (for
-            _ <- IO(fastSyncBranchResolver ! StartBranchResolver)
-            response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
-            _ <- IO(stopController(fastSyncBranchResolver))
-          yield response).unsafeRunSync()
+          fastSyncBranchResolver ! StartBranchResolver
+          val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout)(expectation)
+          stopController(fastSyncBranchResolver)
           assert(getBestPeers.contains(response.masterPeer))
         "highest common block is in the first half" taggedAs (UnitTest, SyncTest) in new TestSetup:
           implicit override lazy val system: ActorSystem = self.system.classicSystem
@@ -211,11 +274,9 @@ class FastSyncBranchResolverActorSpec
             case r @ BranchResolvedSuccessful(num, _) if num == BigInt(3) => r
           }
 
-          val response: BranchResolvedSuccessful = (for
-            _ <- IO(fastSyncBranchResolver ! StartBranchResolver)
-            response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
-            _ <- IO(stopController(fastSyncBranchResolver))
-          yield response).unsafeRunSync()
+          fastSyncBranchResolver ! StartBranchResolver
+          val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout)(expectation)
+          stopController(fastSyncBranchResolver)
           assert(getBestPeers.contains(response.masterPeer))
 
         "highest common block is in the second half" taggedAs (UnitTest, SyncTest) in new TestSetup:
@@ -248,11 +309,9 @@ class FastSyncBranchResolverActorSpec
             case r @ BranchResolvedSuccessful(num, _) if num == BigInt(6) => r
           }
 
-          val response: BranchResolvedSuccessful = (for
-            _ <- IO(fastSyncBranchResolver ! StartBranchResolver)
-            response <- IO(sender.expectMsgPF(branchResolutionTimeout)(expectation))
-            _ <- IO(stopController(fastSyncBranchResolver))
-          yield response).unsafeRunSync()
+          fastSyncBranchResolver ! StartBranchResolver
+          val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout)(expectation)
+          stopController(fastSyncBranchResolver)
           assert(getBestPeers.contains(response.masterPeer))
       }
 
@@ -282,17 +341,454 @@ class FastSyncBranchResolverActorSpec
           creatFastSyncBranchResolver(sender.ref, networkPeerManager, CacheBasedBlacklist.empty(BlacklistMaxElements))
 
         log.debug(s"*** peers: ${handshakedPeers.map(p => (p._1.id, p._2.maxBlockNumber))}")
-        (for
-          _ <- IO(fastSyncBranchResolver ! StartBranchResolver)
-          response <- IO(sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(NoCommonBlockFound)))
-          _ <- IO(stopController(fastSyncBranchResolver))
-        yield response).unsafeRunSync()
+        fastSyncBranchResolver ! StartBranchResolver
+        sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(NoCommonBlockFound)): Unit
+        stopController(fastSyncBranchResolver)
+    }
+    // B-298: on the hash layout the resolver takes this node's blocks off the chain only for a common block no deeper
+    // than the guard allows and a branch the import's fork choice would take, and it follows the heaviest peer
+    "on the hash layout (B-298)" - {
+      "a heavier branch: this node's blocks above the common block are discarded, as before" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(20, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(4, common.last)
+        // as heavy as ours up to its height, and two blocks more
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(6, common.last)
+        saveBlocks(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), guard(deepestCommonBlock = 10))
+        val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout) {
+          case r: BranchResolvedSuccessful => r
+        }
+        stopController(resolver)
+
+        response.highestCommonBlockNumber shouldBe BigInt(20)
+        response.discarded.map(_._1) shouldBe Seq(24, 23, 22, 21).map(BigInt(_))
+        blockchainReader.getBestBlockNumber shouldBe BigInt(20)
+        blacklist.isBlacklisted(onePeer.id) shouldBe false
+
+      // B-284: the guard asks the import's fork choice by its rule (`BranchResolution.discardsFor`). A branch of this
+      // node's weight and height is a tie only a coin decides: a coin moves a head, it takes no blocks of this node's
+      // off the chain, so nothing is discarded whatever it would say, and it is never tossed (forge B1, W1)
+      for landing <- Seq(0.0, 0.5) do
+        s"a branch of our weight and height: nothing is discarded, and no coin is tossed (the coin at $landing)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in new HashLayoutSetup:
+          val common: List[Block] = BlockHelpers.generateChain(20, BlockHelpers.genesis)
+          val ours: List[Block] = common :++ BlockHelpers.generateChain(4, common.last)
+          val theirs: List[Block] = common :++ BlockHelpers.generateChain(4, common.last)
+          theirs.last.hash should not be ours.last.hash
+          saveBlocks(ours)
+
+          val coin = new PowForkChoiceSpec.Coins(landing)
+          val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+            start(Map(onePeer -> theirs), guard(deepestCommonBlock = 10, coin = coin))
+          sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(BranchNotHeavier(20)))
+          stopController(resolver)
+          coin.tossed shouldBe 0
+          blockchainReader.getBestBlockNumber shouldBe BigInt(24)
+          blockchainReader.getBlockHeaderByNumber(24).map(_.hash) shouldBe Some(ours.last.hash)
+
+      // the same tie, the peer's block this node's miner's: the rule's own reorg, discarded as a heavier branch is
+      "a branch of our weight and height whose tip this node's miner sealed: discarded, with no coin" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(20, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(4, common.last)
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(4, common.last)
+        saveBlocks(ours)
+
+        val theirHashes: Set[BlockHash] = theirs.map(_.hash).toSet
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), guard(deepestCommonBlock = 10, preserve = h => theirHashes(h.hash)))
+        val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout) {
+          case r: BranchResolvedSuccessful => r
+        }
+        stopController(resolver)
+        response.highestCommonBlockNumber shouldBe BigInt(20)
+        response.discarded.map(_._1) shouldBe Seq(24, 23, 22, 21).map(BigInt(_))
+        blockchainReader.getBestBlockNumber shouldBe BigInt(20)
+
+      "a lighter branch, longer than ours: nothing is discarded and the peer is blacklisted" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(20, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(4, common.last)
+        // ten blocks of a tenth of the difficulty: longer than ours, and lighter
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(
+          10,
+          common.last,
+          block => BlockHelpers.updateHeader(block, _.copy(difficulty = Difficulty(100000)))
+        )
+        saveBlocks(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), guard(deepestCommonBlock = 10))
+        sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(BranchNotHeavier(20)))
+        stopController(resolver)
+
+        blockchainReader.getBestBlockNumber shouldBe BigInt(24)
+        blockchainReader.getBlockHeaderByNumber(24).map(_.hash) shouldBe Some(ours.last.hash)
+        blacklist.isBlacklisted(onePeer.id) shouldBe true
+
+      "a common block deeper than the guard allows: refused, nothing is discarded and the peer is blacklisted" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(25, common.last)
+        // heavier, but it leaves this chain at block 5, below the floor at 20
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(30, common.last)
+        saveBlocks(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), guard(deepestCommonBlock = 20))
+        sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(CommonBlockBeyondReach(20)))
+        stopController(resolver)
+
+        blockchainReader.getBestBlockNumber shouldBe BigInt(30)
+        blockchainReader.getBlockHeaderByNumber(30).map(_.hash) shouldBe Some(ours.last.hash)
+        blacklist.isBlacklisted(onePeer.id) shouldBe true
+
+      // B-346 (the user's decision of 2026-11-18): below the floor the common block is still searched for and the
+      // peer's branch weighed from it, with headers only. The heavier is handed on for an escalation, never rewound to
+      "below the floor, a heavier branch: answered for an escalation, nothing is discarded, the peer kept" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(25, common.last)
+        // the same difficulty, five blocks more: heavier, and it leaves this chain at block 5, below the floor at 20
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(30, common.last)
+        saveWeighted(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), deepGuard(deepestCommonBlock = 20))
+        val response: BranchHeavierBeyondReach = sender.expectMsgPF(branchResolutionTimeout) {
+          case r: BranchHeavierBeyondReach => r
+        }
+        stopController(resolver)
+
+        response.commonBlock shouldBe BigInt(5)
+        response.commonHash shouldBe common.last.hash.value
+        response.masterPeer shouldBe onePeer
+        // weighed until it outweighed ours: 26 of its blocks against our 25
+        response.weighed should be >= 26
+        // B-351: with the branch's first block, which the SNAP re-sync is held to
+        response.firstOfBranch.map(_.hash) shouldBe Some(theirs(5).hash)
+        response.firstOfBranch.map(_.number.value) shouldBe Some(BigInt(6))
+        blockchainReader.getBestBlockNumber shouldBe BigInt(30)
+        blockchainReader.getBlockHeaderByNumber(30).map(_.hash) shouldBe Some(ours.last.hash)
+        blockchainReader.getBlockHeaderByNumber(6).map(_.hash) shouldBe Some(ours(5).hash)
+        blacklist.isBlacklisted(onePeer.id) shouldBe false
+
+      "below the floor, a lighter branch: refused, nothing is discarded and the peer is blacklisted" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(25, common.last)
+        // longer than ours, and lighter: a tenth of the difficulty
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(
+          30,
+          common.last,
+          block => BlockHelpers.updateHeader(block, _.copy(difficulty = Difficulty(100000)))
+        )
+        saveWeighted(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), deepGuard(deepestCommonBlock = 20))
+        sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(CommonBlockBeyondReach(20)))
+        stopController(resolver)
+
+        blockchainReader.getBestBlockNumber shouldBe BigInt(30)
+        blockchainReader.getBlockHeaderByNumber(30).map(_.hash) shouldBe Some(ours.last.hash)
+        blacklist.isBlacklisted(onePeer.id) shouldBe true
+
+      "below the floor, a heavier branch with a header that is not valid: refused and the peer blacklisted" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(25, common.last)
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(30, common.last)
+        saveWeighted(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(
+            Map(onePeer -> theirs),
+            deepGuard(deepestCommonBlock = 20, firstInvalid = headers => headers.lastOption.map(_ -> "a bad seal"))
+          )
+        sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(CommonBlockBeyondReach(20)))
+        stopController(resolver)
+
+        blockchainReader.getBestBlockNumber shouldBe BigInt(30)
+        blacklist.isBlacklisted(onePeer.id) shouldBe true
+
+      "below the floor, a fork escalated already: answered at once, not weighed again" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(5, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(25, common.last)
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(30, common.last)
+        saveWeighted(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(
+            Map(onePeer -> theirs),
+            deepGuard(
+              deepestCommonBlock = 20,
+              // a weighing that would refuse it: it is not asked
+              firstInvalid = headers => headers.lastOption.map(_ -> "not to be asked"),
+              escalatedAt = Some(common.last.hash.value)
+            )
+          )
+        val response: BranchHeavierBeyondReach = sender.expectMsgPF(branchResolutionTimeout) {
+          case r: BranchHeavierBeyondReach => r
+        }
+        stopController(resolver)
+
+        response.commonBlock shouldBe BigInt(5)
+        response.weighed shouldBe 0
+        blockchainReader.getBestBlockNumber shouldBe BigInt(30)
+        blacklist.isBlacklisted(onePeer.id) shouldBe false
+
+      // B-347: where the branch is weighed, no failure of the resolution is left to the importer's fallback, which
+      // rewound 128 blocks for a branch no one weighed. A chain that shares no block above the genesis is weighed from
+      // the genesis, the common block the search, which never asks below block 1, cannot report
+      "a chain that shares only the genesis, and is the heavier: weighed from the genesis and discarded down to it (B-347)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val ours: List[Block] = BlockHelpers.generateChain(12, BlockHelpers.genesis)
+        val theirs: List[Block] = BlockHelpers.generateChain(16, BlockHelpers.genesis)
+        theirs.head.hash should not be ours.head.hash
+        saveWeighted(BlockHelpers.genesis :: ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), guard(deepestCommonBlock = 0))
+        val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout) {
+          case r: BranchResolvedSuccessful => r
+        }
+        stopController(resolver)
+
+        response.highestCommonBlockNumber shouldBe BigInt(0)
+        response.discarded.map(_._1) shouldBe (12 to 1 by -1).map(BigInt(_))
+        blockchainReader.getBestBlockNumber shouldBe BigInt(0)
+        blacklist.isBlacklisted(onePeer.id) shouldBe false
+
+      "a chain that shares only the genesis, and is the lighter: refused, nothing discarded, the peer blacklisted (B-347)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val ours: List[Block] = BlockHelpers.generateChain(12, BlockHelpers.genesis)
+        val theirs: List[Block] = BlockHelpers.generateChain(
+          16,
+          BlockHelpers.genesis,
+          block => BlockHelpers.updateHeader(block, _.copy(difficulty = Difficulty(100000)))
+        )
+        saveWeighted(BlockHelpers.genesis :: ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), guard(deepestCommonBlock = 0))
+        sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(BranchNotHeavier(0)))
+        stopController(resolver)
+
+        blockchainReader.getBestBlockNumber shouldBe BigInt(12)
+        blockchainReader.getBlockHeaderByNumber(12).map(_.hash) shouldBe Some(ours.last.hash)
+        blacklist.isBlacklisted(onePeer.id) shouldBe true
+
+      // B-347 (core-geth's `findAncestor`: a header it does not hold is not common, `if !known { end = check }`): a hole
+      // in this node's own index between the floor and the head does not stop the search. The heights in it are taken
+      // for not common, the search goes on below them, and the common block found is weighed as any other: a heavier
+      // branch is taken. It was refused (HeaderNotStored), so a heavier chain across such a hole was never followed. With
+      // the guard the importer builds: across a hole above the common block, the branch is weighed against the head's
+      // stored weight, the import's fork choice weighing no branch across a block of this node's it cannot read (B-395)
+      for (where, holes) <- Seq(
+          "between the floor and the head, above the common block" -> Seq(19, 20, 21),
+          "at the floor" -> Seq(10, 11)
+        )
+      do
+        s"a hole in this node's index $where: searched past, and the heavier branch below it taken (B-347)" taggedAs (
+          UnitTest,
+          SyncTest
+        ) in new HashLayoutSetup:
+          val common: List[Block] = BlockHelpers.generateChain(15, BlockHelpers.genesis)
+          val ours: List[Block] = common :++ BlockHelpers.generateChain(15, common.last)
+          // heavier: five blocks more of the same difficulty
+          val theirs: List[Block] = common :++ BlockHelpers.generateChain(20, common.last)
+          saveWeighted(ours)
+          holes.foreach(height => blockchainWriter.removeBlockNumberMapping(height).commit())
+
+          val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+            start(Map(onePeer -> theirs), deepGuard(deepestCommonBlock = 10))
+          val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout) {
+            case r: BranchResolvedSuccessful => r
+          }
+          stopController(resolver)
+
+          // the common block below the hole, found, weighed and taken: this node's blocks above it are discarded (the
+          // heights of the hole have no entry to discard) and the head is the common block, for the peer's branch
+          response.highestCommonBlockNumber shouldBe BigInt(15)
+          response.discarded.map(_._1) shouldBe (30 to 16 by -1).map(BigInt(_)).filterNot(n => holes.contains(n.toInt))
+          blockchainReader.getBestBlockNumber shouldBe BigInt(15)
+          blacklist.isBlacklisted(onePeer.id) shouldBe false
+
+      // the same hole, and a peer's branch that is the lighter: searched past as well, weighed, and refused
+      "a hole in this node's index and a lighter branch below it: searched past, weighed and refused (B-347)" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val common: List[Block] = BlockHelpers.generateChain(15, BlockHelpers.genesis)
+        val ours: List[Block] = common :++ BlockHelpers.generateChain(15, common.last)
+        val theirs: List[Block] = common :++ BlockHelpers.generateChain(
+          20,
+          common.last,
+          block => BlockHelpers.updateHeader(block, _.copy(difficulty = Difficulty(100000)))
+        )
+        saveWeighted(ours)
+        Seq(19, 20, 21).foreach(height => blockchainWriter.removeBlockNumberMapping(height).commit())
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(onePeer -> theirs), deepGuard(deepestCommonBlock = 10))
+        sender.expectMsg(branchResolutionTimeout, BranchResolutionFailed(BranchNotHeavier(15)))
+        stopController(resolver)
+
+        blockchainReader.getBestBlockNumber shouldBe BigInt(30)
+        blacklist.isBlacklisted(onePeer.id) shouldBe true
+
+      "the master peer is the one with the heaviest chain, not the highest block" taggedAs (
+        UnitTest,
+        SyncTest
+      ) in new HashLayoutSetup:
+        val ours: List[Block] = BlockHelpers.generateChain(6, BlockHelpers.genesis)
+        val theirs: List[Block] = ours :++ BlockHelpers.generateChain(2, ours.last)
+        saveBlocks(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(heavyPeer -> theirs, tallPeer -> theirs), guard(deepestCommonBlock = 0))
+        val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout) {
+          case r: BranchResolvedSuccessful => r
+        }
+        stopController(resolver)
+        response.masterPeer shouldBe heavyPeer
+
+      "the unified layout keeps the peer with the highest block" taggedAs (UnitTest, SyncTest) in new HashLayoutSetup:
+        val ours: List[Block] = BlockHelpers.generateChain(6, BlockHelpers.genesis)
+        val theirs: List[Block] = ours :++ BlockHelpers.generateChain(2, ours.last)
+        saveBlocks(ours)
+
+        val resolver: TypedActorRef[FastSyncBranchResolverActor.Command] =
+          start(Map(heavyPeer -> theirs, tallPeer -> theirs), discardGuard = None)
+        val response: BranchResolvedSuccessful = sender.expectMsgPF(branchResolutionTimeout) {
+          case r: BranchResolvedSuccessful => r
+        }
+        stopController(resolver)
+        response.masterPeer shouldBe tallPeer
     }
   }
 
+  /** Peers that serve the headers asked for from their own chain, by number, as a peer does. */
+  trait HashLayoutSetup extends TestSetup:
+    implicit override lazy val system: ActorSystem = self.system.classicSystem
+    implicit override lazy val ioRuntime: IORuntime = IORuntime.global
+
+    val sender: TestProbe = TestProbe("sender")
+    val blacklist: Blacklist = CacheBasedBlacklist.empty(BlacklistMaxElements)
+
+    def peerInfo(peer: Peer, weight: BigInt, maxBlock: BigInt): PeerInfo =
+      getPeerInfo(peer).copy(chainWeight = ChainWeight.totalDifficultyOnly(weight), maxBlockNumber = maxBlock)
+
+    val onePeer: Peer = getPeer(peerId(1))
+    val heavyPeer: Peer = getPeer(peerId(2))
+    val tallPeer: Peer = getPeer(peerId(3))
+    private val infos: Map[Peer, PeerInfo] = Map(
+      onePeer -> peerInfo(onePeer, weight = 10, maxBlock = 10),
+      heavyPeer -> peerInfo(heavyPeer, weight = 20, maxBlock = 5),
+      tallPeer -> peerInfo(tallPeer, weight = 10, maxBlock = 9)
+    )
+
+    /** The hash layout's guard as the importer builds it: `BranchResolution.discardsFor`.
+      *
+      * @param coin
+      *   the coin of the import's tie rule (B-284). The guard never tosses it: by default one that fails the case if it
+      *   is
+      * @param preserve
+      *   the blocks of this node's miner, which the tie rule keeps or takes without a coin
+      */
+    def guard(
+        deepestCommonBlock: BigInt,
+        coin: () => Double = PowForkChoiceSpec.NoCoin,
+        preserve: BlockHeader => Boolean = _ => false
+    ): Option[FastSyncBranchResolverActor.DiscardGuard] =
+      val resolution = new BranchResolution(blockchainReader, powForkChoice = new PowForkChoice(preserve, coin))
+      Some(
+        FastSyncBranchResolverActor.DiscardGuard(
+          deepestCommonBlock,
+          heavier = Some(resolution.discardsFor),
+          importLock = ImportLock()
+        )
+      )
+
+    /** Saved as the best chain with each block's weight the sum of the difficulties up to it, as an import stores it.
+      */
+    def saveWeighted(blocks: List[Block]): Unit =
+      blocks.foldLeft(ChainWeight.totalDifficultyOnly(0)) { (weight, block) =>
+        val next = weight.increase(block.header)
+        blockchainWriter.save(block, Nil, next, saveAsBestBlock = true)
+        next
+      }: Unit
+
+    /** [[guard]], and below the floor the weighing of the hash layout (B-346): stored weights, no MESS here, and the
+      * header validation given.
+      */
+    def deepGuard(
+        deepestCommonBlock: BigInt,
+        firstInvalid: List[BlockHeader] => Option[(BlockHeader, String)] = _ => None,
+        escalatedAt: Option[ByteString] = None
+    ): Option[FastSyncBranchResolverActor.DiscardGuard] =
+      val weight = new DeepForkWeight(
+        weightOf = blockchainReader.getChainWeightByHash,
+        headerOf = blockchainReader.getBlockHeaderByHash,
+        onTheChain = header => blockchainReader.getCanonicalHashByNumber(header.number.value).contains(header.hash),
+        head = () =>
+          blockchainReader.getBestBlockHeader.flatMap(h => blockchainReader.getChainWeightByHash(h.hash).map(h -> _)),
+        messActiveAt = None,
+        messRefuses = (_, _, _) => false,
+        firstInvalidHeader = firstInvalid
+      )
+      guard(deepestCommonBlock).map(
+        _.copy(beyondReach = Some(FastSyncBranchResolverActor.BeyondReach(64, weight.verdict, escalatedAt)))
+      )
+
+    def start(
+        chains: Map[Peer, List[Block]],
+        discardGuard: Option[FastSyncBranchResolverActor.DiscardGuard]
+    ): TypedActorRef[FastSyncBranchResolverActor.Command] =
+      val networkPeerManager = TestProbe("network_peer_manager")
+      networkPeerManager.setAutoPilot(
+        new ChainServingAutoPilot(
+          infos.filter { case (peer, _) => chains.contains(peer) },
+          chains.map { case (peer, blocks) => peer.id -> blocks.map(b => b.number.value -> b).toMap },
+          peerEventBus
+        )
+      )
+      val resolver = creatFastSyncBranchResolver(sender.ref, networkPeerManager.ref, blacklist, discardGuard)
+      resolver ! StartBranchResolver
+      resolver
+
   trait TestSetup extends EphemBlockchainTestSetup with TestSyncConfig with TestSyncPeers:
 
-    protected val branchResolutionTimeout: FiniteDuration = syncConfig.peerResponseTimeout + 2.seconds
+    // The whole resolution, not one request: a cold JVM's first resolution (class loading, the first logger, the
+    // first IO runtime) can take most of 7 s (B-350). A longer wait only bounds a failing test.
+    protected val branchResolutionTimeout: FiniteDuration = syncConfig.peerResponseTimeout + 25.seconds
 
     def peerId(number: Int): PeerId = PeerId(s"peer_$number")
     def getPeer(id: PeerId): Peer =
@@ -327,17 +823,9 @@ class FastSyncBranchResolverActorSpec
         blockchainWriter.save(block, Nil, ChainWeight.totalDifficultyOnly(1), saveAsBestBlock = true)
       )
 
-    def createNetworkPeerManager(peers: Map[Peer, PeerInfo], blocks: Map[Int, List[Block]])(implicit
-        ioRuntime: IORuntime
-    ): ActorRef =
+    def createNetworkPeerManager(peers: Map[Peer, PeerInfo], blocks: Map[Int, List[Block]]): ActorRef =
       val networkPeerManager = TestProbe("network_peer_manager")
-      val autoPilot =
-        new NetworkPeerManagerAutoPilot(
-          peersConnectedDeferred,
-          peers,
-          blocks,
-          peerEventBus
-        )
+      val autoPilot = new NetworkPeerManagerAutoPilot(peers, blocks, peerEventBus)
       networkPeerManager.setAutoPilot(autoPilot)
       networkPeerManager.ref
 
@@ -345,7 +833,10 @@ class FastSyncBranchResolverActorSpec
         fastSync: ActorRef,
         networkPeerManager: ActorRef,
         blacklist: Blacklist,
-        discardDiverged: Boolean = true
+        // the hash layout's guard, with no floor and no weighing: the search as it always was
+        discardGuard: Option[FastSyncBranchResolverActor.DiscardGuard] = Some(
+          FastSyncBranchResolverActor.DiscardGuard(deepestCommonBlock = 0, heavier = None, importLock = ImportLock())
+        )
     ): TypedActorRef[FastSyncBranchResolverActor.Command] =
       self.testKit.spawn(
         FastSyncBranchResolverActor(
@@ -356,7 +847,7 @@ class FastSyncBranchResolverActorSpec
           blockchainReader = blockchainReader,
           blacklist = blacklist,
           syncConfig = syncConfig,
-          discardDiverged = discardDiverged
+          discardGuard = discardGuard
         ),
         s"fast-sync-branch-resolver-${java.util.UUID.randomUUID()}"
       )
@@ -372,15 +863,39 @@ object FastSyncBranchResolverActorSpec extends Logger:
 
   private val BlacklistMaxElements: Int = 100
 
-  private val peersConnectedDeferred = Deferred.unsafe[IO, Unit]
+  /** Answers a request for headers with those of the asking peer's chain from the number asked for, as a peer does. */
+  class ChainServingAutoPilot(
+      peers: Map[Peer, PeerInfo],
+      chains: Map[PeerId, Map[BigInt, Block]],
+      peerEventBus: TypedActorRef[PeerEventBusActor.Command]
+  ) extends AutoPilot:
+    def run(sender: ActorRef, msg: Any): ChainServingAutoPilot =
+      msg match
+        case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) =>
+          replyTo ! NetworkPeerManagerActor.HandshakedPeers(peers)
+        case NetworkPeerManagerActor.SendMessageCmd(rawMsg, peerId) =>
+          rawMsg.underlyingMsg match
+            case ETHGetBlockHeaders(requestId, Left(from), amount, _, false) =>
+              val chain = chains.getOrElse(peerId, Map.empty)
+              val headers = (from until from + amount).toList.flatMap(n => chain.get(n).map(_.header))
+              peerEventBus ! PeerEventBusActor.PublishCmd(MessageFromPeer(ETHBlockHeaders(requestId, headers), peerId))
+            case other =>
+              throw new RuntimeException(s"Unexpected message sent to ChainServingAutoPilot: $other")
+        case _ => ()
+      this
 
+  /** Answers the requests for headers with `blocks`, the n-th request with the n-th entry, as the tests script them.
+    *
+    * It runs on the actor system's dispatcher and never waits on the tests' IO runtime (a timeout flake, B-511): it
+    * completed a Deferred with `unsafeRunSync` on every peer poll, parking a dispatcher thread until a compute thread
+    * of `IORuntime.global` ran it, while the tests parked a compute thread in `expectMsg` inside an `IO`. Each waited
+    * on the other's pool, and the resolver's peers arrived only once the test's `expectMsg` had timed out.
+    */
   class NetworkPeerManagerAutoPilot(
-      peersConnected: Deferred[IO, Unit],
       peers: Map[Peer, PeerInfo],
       blocks: Map[Int, List[Block]],
       peerEventBus: TypedActorRef[PeerEventBusActor.Command]
-  )(implicit ioRuntime: IORuntime)
-      extends AutoPilot:
+  ) extends AutoPilot:
 
     var blockIndex = 0
     lazy val blocksSetSize = blocks.size
@@ -388,8 +903,10 @@ object FastSyncBranchResolverActorSpec extends Logger:
     def run(sender: ActorRef, msg: Any): NetworkPeerManagerAutoPilot =
       msg match
         case NetworkPeerManagerActor.GetHandshakedPeersCmd(replyTo) =>
+          // Nothing more: a TestProbe's autopilot runs on the sender's thread, here the resolver's. It also completed a
+          // Deferred no test awaited, with unsafeRunSync, which on a cold JVM held the resolver's thread past the
+          // test's whole wait (B-350).
           replyTo ! NetworkPeerManagerActor.HandshakedPeers(peers)
-          peersConnected.complete(()).handleError(_ => ()).unsafeRunSync()
         case NetworkPeerManagerActor.SendMessageCmd(rawMsg, peerId) =>
           val response = rawMsg.underlyingMsg match
             case req: ETHGetBlockHeaders if !req.reverse =>

@@ -346,3 +346,21 @@ class SyncProgressMonitorSpec extends ScalaTestWithActorTestKit with AnyFlatSpec
 
       assertNonDecreasing("globalProgress", Seq(0, 50, 99, 100, 101, 250).map(at(_).globalProgress))
     }
+
+  // B-524: the completion line divided every count by the whole run's elapsed time, so the bytecodes, downloaded after
+  // the account phase, read at a fraction of their rate. Each count is now over the time it was moving.
+  "SyncProgressMonitor.completionSummary" should "give each count its rate over the time it was moving" taggedAs UnitTest in {
+    var now = 1_000_000L
+    val monitor = new SyncProgressMonitor(classicScheduler, () => now)
+    monitor.incrementAccountsSynced(1)
+    now += 100_000 // accounts move for 100 s
+    monitor.incrementAccountsSynced(999)
+    now += 400_000 // then nothing moves for 400 s
+    monitor.incrementBytecodesDownloaded(1)
+    now += 10_000 // bytecodes move for 10 s
+    monitor.incrementBytecodesDownloaded(4_999)
+    val line = monitor.completionSummary
+    line should include("accounts=1000 (10/s over 100s)")
+    line should include("bytecodes=5000 (500/s over 10s)")
+    line should include("slots=0 (-)") // never moved
+  }

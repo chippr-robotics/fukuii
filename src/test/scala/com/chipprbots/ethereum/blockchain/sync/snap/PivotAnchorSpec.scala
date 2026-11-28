@@ -491,6 +491,20 @@ class PivotAnchorSpec extends AnyFlatSpec with Matchers:
     peers.holds(a, began + PivotAnchor.BranchWaitMillis) shouldBe false
     peers.holds(b, began + PivotAnchor.BranchWaitMillis) shouldBe false
 
+  // B-320: a bootstrap that is not the pivot's holds the peers it found on another chain, and begins no wait
+  it should "hold the peers a bootstrap that is not the pivot's found, and count nothing towards the wait" taggedAs (
+    UnitTest,
+    ConsensusTest
+  ) in new Chain:
+    import com.chipprbots.ethereum.network.PeerId
+    val peers = new PivotAnchor.OffBranchPeers(() => appState)
+    val began = 1_763_300_000_000L
+    appState.putPivotOnBranch(branchAt8).commit()
+    peers.hold(Set(PeerId("b")), began)
+    peers.holds(PeerId("b"), began + 1) shouldBe true
+    peers.holds(PeerId("b"), began + PivotAnchor.OffBranchPeers.HeldMillis) shouldBe false
+    appState.getPivotOnBranch() shouldBe Some(branchAt8)
+
   // B-310 (forge): the download's gate, the check at the end of a sync and a hand-off also end a requirement
   it should "hold no peer once the requirement has ended elsewhere" taggedAs (UnitTest, ConsensusTest) in new Chain:
     import com.chipprbots.ethereum.network.PeerId

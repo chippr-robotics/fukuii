@@ -115,3 +115,25 @@ class RpcExposureCheckSpec extends AnyFlatSpec with Matchers:
       "admin"
     )
   }
+
+  "The exposure warning" should "evaluate the transport's apis only, not a namespace an identity rule grants (spec 030 FR-027)" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in {
+    // a rule grants admin and debug on a non-loopback HTTPS listener; the transport's own set is chain-only
+    val fukuii = com.typesafe.config.ConfigFactory
+      .parseString(
+        """network.rpc {
+          |  http.apis = "eth,net,web3"
+          |  client-identities = [ { name = "ops", match { san-dns = "ops.internal" }, apis = "eth,admin,debug" } ]
+          |}""".stripMargin
+      )
+      .withFallback(com.typesafe.config.ConfigFactory.load().getConfig("fukuii"))
+      .resolve()
+    val config = controllers.JsonRpcBaseController.JsonRpcConfig(
+      fukuii,
+      com.chipprbots.ethereum.tls.TlsStartupCheck.KnownApis.toList
+    )
+    config.httpApis shouldBe Seq("eth", "net", "web3")
+    RpcExposureCheck.warnings(Seq(http("0.0.0.0", config.httpApis))) shouldBe empty
+  }

@@ -87,7 +87,7 @@ class MessageCodec(
 
   val contextIdCounter = new AtomicInteger
 
-  log.info(
+  log.debug(
     "COMPRESSION_POLICY: peerClientId={}, peerP2pVersion={}, compressOutbound={}, expectInboundCompressed={}",
     remoteClientId,
     remotePeer2PeerVersion,
@@ -97,7 +97,7 @@ class MessageCodec(
 
   def enableInboundCompression(reason: String): Unit =
     if compressionPolicy.enableInboundCompression() then
-      log.info(
+      log.debug(
         "COMPRESSION_POLICY_UPDATE: peerClientId={}, peerP2pVersion={}, reason={}, expectInboundCompressed=true",
         remoteClientId,
         remotePeer2PeerVersion,
@@ -155,7 +155,7 @@ class MessageCodec(
           // Attempt decompression when compression is expected (p2pVersion >= 5)
           // If decompression fails, fall back to treating the data as uncompressed
           decompressData(frameData, frame).recoverWith { case ex =>
-            log.warn(
+            log.debug(
               "COMPRESSION_FALLBACK: Frame type 0x{}: Decompression failed - treating as uncompressed data. " +
                 "Peer sent uncompressed despite p2pVersion={}. firstByte=0x{}, size={}, error: {}",
               frame.`type`.toHexString,
@@ -230,7 +230,7 @@ class MessageCodec(
     result.recoverWith { case ex =>
       val hexData = truncateHex(data)
 
-      log.warn(
+      log.debug(
         "DECOMPRESSION_DEBUG: Failed to decompress frame - " +
           s"frameType: 0x${frame.`type`.toHexString}, " +
           s"frameSize: ${data.length}, " +

@@ -28,7 +28,7 @@ on:
       series:
         description: "Ubuntu series, space-separated"
         required: false
-        default: "noble jammy"
+        default: "resolute noble jammy"
       revision:
         description: "Debian revision; raise it to re-publish the same version (Launchpad never accepts a version twice)"
         required: false
@@ -43,7 +43,7 @@ permissions:
 
 env:
   PPA_API: "https://api.launchpad.net/1.0/~chipprbots/+archive/ubuntu/fukuii"
-  DEFAULT_SERIES: "noble jammy"
+  DEFAULT_SERIES: "resolute noble jammy"
 
 jobs:
   prepare:

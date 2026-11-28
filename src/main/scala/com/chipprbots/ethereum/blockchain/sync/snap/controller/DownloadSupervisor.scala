@@ -523,6 +523,16 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
       ctx.log.error(s"Account trie finalization failed ($error) — restarting SNAP sync with fresh pivot")
       progressMonitor.setFinalizingTrie(false)
       restartSnapSync(s"account trie finalization failed: $error")
+
+    case SnapStoreFaulted(where, error) =>
+      // B-488: a write of downloaded state failed here, not at a peer. Restarting on a fresh pivot clears a transient
+      // fault; a lasting one (a full or read-only disk) would restart without end, so it counts as a critical failure
+      // and the threshold sends SNAP dormant, as the validation retries do (StateValidationModule).
+      ctx.log.error(s"SNAP store fault in $where: $error")
+      progressMonitor.setFinalizingTrie(false)
+      if recordCriticalFailure(s"store fault in $where: $error") then
+        enterDormantMode(s"repeated store faults, the last in $where: $error")
+      else restartSnapSync(s"store fault in $where: $error")
   }
 
   /** A run of `commonSyncingArms` arms lifted into a class member (spec 016 lift before M11b, CQ-SNAP-016-32), bodies
@@ -704,7 +714,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
         .putSnapSyncStorageFilePath(info.filePath.toString)
         .and(stateIngest.appState.putSnapSyncStorageFileCount(Some(info.count)))
         .and(stateIngest.appState.removeSnapAccountResumeCheckpoint())
-        .commit()
+        .commitSync() // B-077: the coordinator fsynced the file before sending this; the pointer is durable too
       ctx.log.info(s"Persisted storage file path for recovery: ${info.filePath} (${info.count} entries)")
       Behaviors.same
 
@@ -720,7 +730,7 @@ private[snap] trait DownloadSupervisor extends AccountRangeStartApi with ByteCod
       stateIngest.appState
         .putSnapSyncCodeHashesPath(info.filePath.toString)
         .and(stateIngest.appState.putSnapSyncCodeHashesCount(Some(info.count)))
-        .commit()
+        .commitSync() // B-077: after the file's fsync, see above
       ctx.log.info(s"Persisted codeHashes file path for recovery: ${info.filePath} (${info.count} entries)")
       Behaviors.same
 

@@ -67,7 +67,7 @@ cause.
 
    **Where the CL runs.** Prefer the same host, or the same Docker network:
    - **Same host** — `interface = "localhost"`; the CL dials `http://localhost:8551`.
-   - **Docker Compose** — `interface = "0.0.0.0"` *inside the container*, and do
+   - **Docker Compose** — `interface = "0.0.0.0"` *inside the container* (0.13.0 and later refuse a plaintext non-loopback bind: set `allow-insecure-bind = true` beside it, or `tls { enabled = true, profile = ... }`; the JWT still authenticates each call), and do
      **not** publish 8551 on the host. The CL joins the same compose network and
      dials the service name, e.g. `http://fukuii-sepolia:8551` (see
      `ops/barad-dur/sepolia/docker-compose.yml`).

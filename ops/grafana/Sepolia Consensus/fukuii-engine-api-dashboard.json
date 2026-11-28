@@ -119,7 +119,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "app_engine_newpayload_valid{instance=~\".*fukuii.*\"}",
+          "expr": "app_engine_newpayload_valid_total{instance=~\".*fukuii.*\"}",
           "legendFormat": "valid",
           "refId": "A"
         }
@@ -145,7 +145,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "app_engine_newpayload_syncing{instance=~\".*fukuii.*\"}",
+          "expr": "app_engine_newpayload_syncing_total{instance=~\".*fukuii.*\"}",
           "legendFormat": "syncing",
           "refId": "A"
         }
@@ -171,7 +171,7 @@
       "type": "stat",
       "targets": [
         {
-          "expr": "app_engine_newpayload_invalid{instance=~\".*fukuii.*\"}",
+          "expr": "app_engine_newpayload_invalid_total{instance=~\".*fukuii.*\"}",
           "legendFormat": "invalid",
           "refId": "A"
         }

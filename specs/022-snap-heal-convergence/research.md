@@ -52,7 +52,7 @@ Paths are relative to `src/main/scala/com/chipprbots/ethereum/blockchain/sync/sn
 - **Hash heal [V]:** `rawNodeBuffer` → `storeRawNodes` → `ArchiveNodeStorage.update`, CF `n`. Flushes hold at least 1000 nodes (`rawFlushThreshold`, `TrieNodeHealingCoordinator.scala:338`) and are not aligned to chains.
 - **Atomicity [V]:** `RocksDbDataSource.scala:257-276` puts every `DataSourceUpdateOptimized` passed to one `update()` into a single WriteBatch, across CFs. WAL is on everywhere. The default is `setSync(false)`; `updateSync` fsyncs. `max-total-wal-size` is 512 MiB.
 - **#1549 is live on the heal path [V].** `flushRawNodesAsync` (`FrontierPersistence.scala:185-206`) clears the buffer before the Future writes. If the write fails, `FlushComplete` is never sent, `flushing` stays true, and the nodes are lost. The earlier fix covered storage download only (`StorageOrderedApply:448`).
-- **WAL recovery [V, slice 4, vault V10]:** `RocksDbDataSource` sets no `walRecoveryMode`, so RocksDB's default `kPointInTimeRecovery` applies: replay stops at the first inconsistent record, which is the prefix-consistent tail the bullets below assume, and a Path batch spanning two column families is one WAL record. No code change.
+- **WAL recovery [V, slice 4, vault V10]:** `RocksDbDataSource` set no `walRecoveryMode` (B-078 names it: `kPointInTimeRecovery`, RocksDB's default, set explicitly), so replay stops at the first inconsistent record, which is the prefix-consistent tail the bullets below assume, and a Path batch spanning two column families is one WAL record. No code change.
 - **Crash windows after D3 [I]:**
   - a kill between chain batches is harmless;
   - a SIGKILL keeps WAL records already handed to the OS;

@@ -38,7 +38,7 @@ Read `../CONVENTIONS.md` first. Almost every config change needs a restart → �
 | Fork dispatch | ETC uses `OlympiaOpCodes` / `forBlock()` (block-number forks); ETH/Sepolia uses `OsakaOpCodes` / `forTimestamp()` (timestamp forks). These code paths MUST NOT be mixed. |
 | Engine API | `network.engine-api.{enabled,interface,port,jwt-secret-path}` — ETH/Sepolia only; the CL connects here; default port 8551, disabled by default. Enable and set `jwt-secret-path` to connect a CL client. |
 | Mining | `mining.mining-enabled`, `mining.coinbase` (ETC/Mordor only → `fukuii-mining-operations`) |
-| TLS | `network.rpc.http.mode` + nested `network.rpc.http.certificate { keystore-path, keystore-type, password-file }` (→ `fukuii-tls-operations`) |
+| TLS | a profile under `tls.profiles` and `tls { enabled, profile, client-auth }` on `network.rpc.http`, `network.rpc.ws`, `network.engine-api` or `metrics`; a non-loopback `interface` needs TLS or `allow-insecure-bind = true` (→ `fukuii-tls-operations`). `mode = "https"` + `certificate` is deprecated, mapped to a profile until 0.13.0 |
 | P2P | `network.server-address.port`, `network.discovery.port` (default `30303`) |
 
 ## Procedure

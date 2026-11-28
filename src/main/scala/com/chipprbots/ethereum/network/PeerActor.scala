@@ -67,7 +67,9 @@ object PeerActor:
       case TooManyPeers => Some(baseDelay.max(TooManyPeersRetryFloor))
       case AlreadyConnected | ClientQuitting | DisconnectRequested | TcpSubsystemError | TimeoutOnReceivingAMessage =>
         Some(baseDelay)
-      case _ => None
+      // Not on the node allowlist (spec 030 FR-051): the verdict does not change until the list does, so never retry.
+      case RLPxConnectionHandler.NotOnAllowlist => None
+      case _                                    => None
 
   // =========================================================================
   // Command ADT — intentionally NOT sealed.
@@ -162,39 +164,11 @@ object PeerActor:
     }
   // scalastyle:on parameter.number method.length
 
-  /** Classic-callable factory. PeerManagerActor (still Classic) spawns this via PropsAdapter, getting back a Classic
-    * ActorRef. The spawned behavior is fully Typed; the parent-direction RLPx co-existence is preserved.
-    */
-  // scalastyle:off parameter.number
-  def props[R <: HandshakeResult](
-      peerAddress: InetSocketAddress,
-      peerConfiguration: PeerConfiguration,
-      peerEventBus: ActorRef[PeerEventBusCommand],
-      knownNodesManager: ActorRef[KnownNodesManager.Command],
-      incomingConnection: Boolean,
-      handshaker: Handshaker[R],
-      authHandshaker: AuthHandshaker,
-      capabilities: List[Capability],
-      peerScoringManager: Option[PeerScoringManager] = None
-  ): org.apache.pekko.actor.Props =
-    org.apache.pekko.actor.typed.scaladsl.adapter.PropsAdapter(
-      apply(
-        peerAddress,
-        rlpxConnectionFactory(authHandshaker, peerConfiguration.rlpxConfiguration, capabilities),
-        peerConfiguration,
-        peerEventBus,
-        knownNodesManager,
-        incomingConnection,
-        initHandshaker = handshaker,
-        peerScoringManager = peerScoringManager
-      )
-    )
-  // scalastyle:on parameter.number
-
   def rlpxConnectionFactory(
       authHandshaker: AuthHandshaker,
       rlpxConfiguration: RLPxConfiguration,
-      capabilities: List[Capability]
+      capabilities: List[Capability],
+      allowlist: NodeAllowlist = NodeAllowlist.Disabled
   ): ActorContext[Command] => ActorRef[RLPxConnectionHandler.Command] = ctx =>
     // RLPxConnectionHandler: default stop intentional — connection-scoped leaf actor,
     // restart would re-handshake from scratch; the PeerActor wrapper handles reconnect.
@@ -205,7 +179,8 @@ object PeerActor:
         RLPxConnectionHandler.ethMessageCodecFactory,
         rlpxConfiguration,
         RLPxConnectionHandler.HelloCodec.apply,
-        ctx.self
+        ctx.self,
+        allowlist = allowlist
       ),
       "rlpx-connection"
     )
@@ -349,7 +324,7 @@ object PeerActor:
       handshakeTimeout.foreach(_.cancel())
       rlpxConnection.uriOpt match
         case Some(uri) if numRetries < peerConfiguration.connectMaxRetries =>
-          log.info("Peer {} refused us transiently - retrying in {}", peerAddress, delay)
+          log.debug("Peer {} refused us transiently - retrying in {}", peerAddress, delay)
           schedule(delay, RetryConnectionTimeout)
           waitingForRetry(uri, numRetries)
         case _ =>
@@ -440,7 +415,9 @@ object PeerActor:
           stash.unstashAll(next)
 
         case Left(HandshakeFailure(reason)) =>
-          log.info(
+          // DEBUG: one per rejected connection attempt; counted by reason in the `Network [60s]` summary
+          // (disconnectFromPeer records the close below).
+          log.debug(
             "HANDSHAKE_FAILURE: Handshake failed with peer {}:{} - reason code: 0x{} ({}). Disconnecting.",
             peerAddress.getHostString,
             peerAddress.getPort,
@@ -490,7 +467,8 @@ object PeerActor:
     // -----------------------------------------------------------------------
 
     private def disconnectFromPeer(rlpxConnection: RLPxConnection, reason: Int): Behavior[Command] =
-      log.info(
+      PeerChurnStats.global.recordClosedByDisconnect(reason)
+      log.debug(
         "DISCONNECT_SENT: disconnecting {}:{} locally, reason 0x{} ({})",
         peerAddress.getHostString,
         peerAddress.getPort,
@@ -569,10 +547,10 @@ object PeerActor:
       * exhausted retries.
       */
     private def handleHandshakedTerminated(): Behavior[Command] =
-      // INFO, not DEBUG: this is the only trace that a handshaked peer vanished because its TCP connection closed (as
-      // opposed to a Disconnect frame or a local DisconnectPeer, both of which log). Without it a mass drop caused by a
-      // host stall is undiagnosable (plataberget soak, 2026-10-05).
-      log.info(
+      // Counted as `tcp-closed` in the `Network [60s]` summary, which is what keeps a mass drop caused by a host stall
+      // diagnosable (plataberget soak, 2026-10-05) now that the per-peer line is DEBUG.
+      PeerChurnStats.global.recordClosed(PeerChurnStats.TcpClosed)
+      log.debug(
         "TCP_CLOSED: underlying rlpx connection with handshaked peer {} closed without a Disconnect frame - stopping (no self-reconnect)",
         peerAddress
       )
@@ -584,12 +562,13 @@ object PeerActor:
         status: Status
     ): Behavior[Command] =
       import Disconnect.Reasons.*
-      log.info(
+      PeerChurnStats.global.recordClosedByDisconnect(d.reason)
+      log.debug(
         s"DISCONNECT_DEBUG: Received disconnect from ${peerAddress.getHostString}:${peerAddress.getPort} - reason code: 0x${d.reason.toHexString} (${Disconnect
             .reasonToString(d.reason)}), status: $status"
       )
       if d.reason == Other then
-        log.info(
+        log.debug(
           s"DISCONNECT_DEBUG: Subprotocol disconnect (0x10) from ${peerAddress.getHostString}:${peerAddress.getPort}. " +
             s"This typically indicates: ForkId mismatch, malformed message, or protocol incompatibility. " +
             s"Check peer logs or enable debug logging for RLP bytes."

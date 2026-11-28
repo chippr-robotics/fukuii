@@ -5,6 +5,7 @@ import org.scalatest.matchers.should.Matchers
 
 import com.chipprbots.ethereum.console.ops.ActionRequest
 import com.chipprbots.ethereum.console.ops.Actions
+import com.chipprbots.ethereum.console.ops.RiskClass
 import com.chipprbots.ethereum.testing.Tags.*
 
 /** The prompt's commands (spec 029 FR-007, contracts/operator.md): parsing, completion, the nearest command. */
@@ -116,6 +117,7 @@ class CommandsSpec extends AnyFlatSpec with Matchers:
     "rpc start http" -> act(Actions.RpcStart, "transport" -> "http"),
     "RPC Start WS" -> act(Actions.RpcStart, "transport" -> "ws"),
     "dbcheck" -> act(Actions.DbCheck),
+    "compact" -> act(Actions.Compact),
     "detect-ip" -> act(Actions.DetectIp),
     "bundle" -> act(Actions.Bundle),
     "quit" -> act(Actions.Quit)
@@ -167,7 +169,6 @@ class CommandsSpec extends AnyFlatSpec with Matchers:
     val words = Actions.all.filterNot(_ == Actions.Lookup).map(_.name.takeWhile(_ != ' ')).distinct
     for word <- words do Commands.Words should contain(word)
     for word <- Seq("block", "tx", "receipt", "account") do Commands.Words should contain(word)
-    Commands.Words should not contain "compact"
   }
 
   "loglevel" should "say how it is used for a level that is none, and for too many words" taggedAs (UnitTest) in {
@@ -351,14 +352,14 @@ class CommandsSpec extends AnyFlatSpec with Matchers:
       Commands.parse(s"threshold $key 1") shouldBe act(Actions.Threshold, "name" -> key, "value" -> "1")
   }
 
-  "compact" should "answer that it is not offered, and why" taggedAs (UnitTest) in {
+  "compact" should "be an action to confirm, however it is typed, and completed by the prompt (B-371)" taggedAs (
+    UnitTest
+  ) in {
     val answer = Commands.parse("compact")
-    answer shouldBe Command.Usage(
-      "compact is not offered: it holds the database lock for its whole run, so the node would import nothing until " +
-        "it ended, which on a large database may take hours and cannot be stopped (B-281)"
-    )
-    Commands.parse("compact now") shouldBe answer
+    answer shouldBe act(Actions.Compact)
     Commands.parse("COMPACT") shouldBe answer
+    Commands.Words should contain("compact")
+    Actions.Compact.risk shouldBe RiskClass.Disrupt
   }
 
   "A peer action with nothing after it" should "say how it is used, and not open a peer whose id starts with the verb" taggedAs (

@@ -20,6 +20,8 @@ import com.chipprbots.ethereum.blockchain.sync.EphemBlockchainTestSetup
 import com.chipprbots.ethereum.blockchain.sync.SyncController
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol
 import com.chipprbots.ethereum.blockchain.sync.SyncProtocol.Status.Progress
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceManager
+import com.chipprbots.ethereum.consensus.engine.ForkChoiceState
 import com.chipprbots.ethereum.consensus.mining.MiningConfigs
 import com.chipprbots.ethereum.consensus.mining.TestMining
 import com.chipprbots.ethereum.consensus.pow.blocks.PoWBlockGenerator
@@ -95,6 +97,14 @@ class EthServiceSpec
 
     response shouldEqual Right(SyncingResponse(None))
 
+  // B-319: a sync that stopped for good is neither syncing nor at the head: `false` would say it is synced
+  it should "answer with why when the sync stopped" taggedAs (UnitTest, RPCTest) in new TestSetup:
+    syncingController.setAutoPilot(syncStatusAutoPilot(SyncProtocol.Status.Stopped("the sample stopped it 3 times")))
+
+    val response: Either[JsonRpcError, SyncingResponse] = ethService.syncing(SyncingRequest()).unsafeRunSync()
+
+    response shouldEqual Left(JsonRpcError.LogicError("the sync stopped: the sample stopped it 3 times"))
+
   // spec 018 C4d part 4b: the adoption of a long branch on the unified layout moves the head block by block to the
   // branch's tip; meanwhile the node is syncing to it, whatever its sync controller says
   it should "return the adoption of a long branch as syncing, while it runs" taggedAs (
@@ -166,6 +176,60 @@ class EthServiceSpec
 
     response.unsafeRunSync() shouldEqual Right(CallResponse(ByteString("return_value")))
 
+  // B-489: eth_call at "safe" / "finalized" resolve through the fork choice it is given
+  it should "run eth_call at \"safe\" and \"finalized\" by the fork choice it is given" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+    val tx: TxArgs = TxArgs(
+      from = Some(Address("0xda714fe079751fa7a1ad80b76571ea6ec52a446c")),
+      to = Some(Address("0xabbb6bebfa05aa13e908eaa492bd7a8343760477")),
+      gas = Some(GasAmount(50000)),
+      value = Some(3)
+    )
+
+    // no fork choice (a PoW chain): not available
+    ethService.call(CallRequest(tx, BlockParam.Safe)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError.InvalidParams("safe block not available"))
+    ethService.call(CallRequest(tx, BlockParam.Finalized)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError.InvalidParams("finalized block not available"))
+
+    val forkChoice = new ForkChoiceManager(blockchainReader, blockchainWriter, blockchain)
+    val head = blockToRequest.hash.value
+    forkChoice.applyForkChoiceState(ForkChoiceState(head, head, head)) shouldBe Right(())
+    val withForkChoice = new EthInfoService(
+      blockchain,
+      blockchainReader,
+      blockchainConfig,
+      mining,
+      stxLedger,
+      keyStore,
+      syncingController.ref.toTyped[SyncController.Command],
+      Capability.ETH63,
+      Timeouts.shortTimeout,
+      system.scheduler,
+      _forkChoiceManagerOpt = Some(forkChoice)
+    )
+    val worldStateProxy: InMemoryWorldStateProxy = InMemoryWorldStateProxy(
+      storagesInstance.storages.evmCodeStorage,
+      blockchain.getBackingMptStorage(-1),
+      (number: BigInt) => blockchainReader.getBlockHeaderByNumber(number).map(_.hash.value),
+      UInt256.Zero,
+      ByteString.empty,
+      noEmptyAccounts = false,
+      ethCompatibleStorage = true
+    )
+    val txResult: TxResult = TxResult(worldStateProxy, 123, Nil, ByteString("return_value"), None)
+    stxLedger.simulateCall
+      .expects(*, *, *, *, *)
+      .returning(Right(StxLedger.CallOutcome(txResult, codeDepositShortfall = false)))
+      .twice()
+    for tag <- Seq(BlockParam.Safe, BlockParam.Finalized) do
+      withForkChoice.call(CallRequest(tx, tag)).unsafeRunSync() shouldEqual
+        Right(CallResponse(ByteString("return_value")))
+
   // go-ethereum `applyMessageWithEVM` (internal/ethapi/api.go:838-840) wraps every error `core.ApplyMessage` returns
   // before the frame runs (preCheck, buyGas, intrinsic gas, the floor, the top-frame transfer check) as
   // `err: %w (supplied gas %d)`, the gas being the message's gas limit after CallDefaults. eth_call (`DoCall`) is the
@@ -186,6 +250,33 @@ class EthServiceSpec
     )
     ethService.call(CallRequest(tx, BlockParam.Latest)).unsafeRunSync() shouldEqual
       Left(JsonRpcError(-32000, s"err: $refused (supplied gas 50000)", None))
+
+  // B-173: the gas in "(supplied gas N)" is the message's gas after CallDefaults, not the request's: a call that names
+  // no gas runs with the RPC gas cap (transaction_args.go CallDefaults: `globalGasCap`), and one that names more is
+  // lowered to it, so that is the gas the message carries and the error names.
+  it should "name the defaulted gas, the RPC gas cap, in a refused call that supplied none" taggedAs (
+    UnitTest,
+    RPCTest
+  ) in new TestSetup:
+    blockchainWriter.storeBlock(blockToRequest).commit()
+    blockchainWriter.saveBestKnownBlocks(blockToRequest.hash, blockToRequest.number.value)
+    val refused: String = "insufficient funds for transfer: address 0xdA714fE079751FA7a1aD80b76571EA6Ec52a446c"
+    val cap: BigInt = CallTxBuilder.DefaultGasCap
+    stxLedger.simulateCall
+      .expects(where { (stx: SignedTransactionWithSender, _: BlockHeader, _, _, _) =>
+        stx.tx.tx.gasLimit.value == cap
+      })
+      .returning(Left(StxLedger.CallPreCheckError(refused)))
+      .twice()
+    val tx: TxArgs = TxArgs(
+      from = Some(Address("0xda714fe079751fa7a1ad80b76571ea6ec52a446c")),
+      to = Some(Address("0xabbb6bebfa05aa13e908eaa492bd7a8343760477")),
+      value = Some(3)
+    )
+    ethService.call(CallRequest(tx, BlockParam.Latest)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError(-32000, s"err: $refused (supplied gas $cap)", None))
+    ethService.call(CallRequest(tx.copy(gas = Some(GasAmount(cap + 1))), BlockParam.Latest)).unsafeRunSync() shouldEqual
+      Left(JsonRpcError(-32000, s"err: $refused (supplied gas $cap)", None))
 
   // A pre-Homestead creation that runs its init code but cannot pay its code deposit succeeds in the frame (ETC blocks
   // 0-1,149,999: no code, gas and state kept, `vmError` None). go-ethereum's and core-geth's `create` return

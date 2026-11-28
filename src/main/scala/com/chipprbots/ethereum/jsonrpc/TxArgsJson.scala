@@ -238,9 +238,11 @@ object TxArgsJson:
           else Right(BigInt(digits, 16))
       }
 
-    val big: Dec[BigInt] = number(64, "hex number > 256 bits", "hexutil.Big")
+    // the Go type geth names is reflect.TypeOf of the decoder's receiver: `bigT` is `*hexutil.Big` and `u256T` is
+    // `*uint256.Int` (common/hexutil/json.go), where `uint64T` and `bytesT` are not pointers
+    val big: Dec[BigInt] = number(64, "hex number > 256 bits", "*hexutil.Big")
     val uint64: Dec[BigInt] = number(16, "hex number > 64 bits", "hexutil.Uint64")
-    val u256: Dec[BigInt] = number(64, "hex number > 256 bits", "hexutil.U256")
+    val u256: Dec[BigInt] = number(64, "hex number > 256 bits", "*uint256.Int")
 
     val bytes: Dec[ByteString] = (v, field) =>
       str(v, field, "hexutil.Bytes").flatMap { s =>

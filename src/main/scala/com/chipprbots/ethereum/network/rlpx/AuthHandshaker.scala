@@ -110,7 +110,7 @@ case class AuthHandshaker(
       try rlp.decode[AuthResponseMessageV4](plaintext)
       catch
         case ex: Throwable =>
-          AuthHandshaker.log.warn(
+          AuthHandshaker.log.debug(
             "[RLPx] AUTH_RESPONSE_DECODE_FAILED peer={} sizePrefix={} cipherLen={} plaintextLen={} plaintextHex={}",
             peerLabel,
             Hex.toHexString(sizeBytes.toArray[Byte]),

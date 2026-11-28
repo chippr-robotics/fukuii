@@ -114,7 +114,7 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 | EIP | Title | Status | Notes |
 |-----|-------|--------|-------|
 | EIP-1559 | Fee market change | ✅ Implemented | Via ETC Olympia (ECIP-1111) — baseFee, Type-2 transactions |
-| EIP-3198 | BASEFEE opcode | ✅ Implemented | Via ETC Olympia (ECIP-1112) — Opcode 0x48 |
+| EIP-3198 | BASEFEE opcode | ✅ Implemented | Via ETC Olympia (ECIP-1111) — Opcode 0x48 |
 | EIP-3529 | Reduce refunds | ✅ Implemented | SELFDESTRUCT refund = 0 |
 | EIP-3541 | Reject new contracts starting with 0xEF | ✅ Implemented | EOF preparation |
 
@@ -136,11 +136,11 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 ### Cancun (Block 19,426,587)
 | EIP | Title | Status | Notes |
 |-----|-------|--------|-------|
-| EIP-1153 | Transient storage opcodes | ✅ Implemented | Via ETC Olympia (ECIP-1112) — TLOAD, TSTORE |
+| EIP-1153 | Transient storage opcodes | ✅ Implemented | Via ETC Olympia (ECIP-1121) — TLOAD, TSTORE |
 | EIP-4788 | Beacon block root in EVM | ❌ N/A | Beacon chain not applicable to ETC (PoW) |
 | EIP-4844 | Shard Blob Transactions | ❌ N/A | Proto-danksharding not in ETC scope |
-| EIP-5656 | MCOPY instruction | ✅ Implemented | Via ETC Olympia (ECIP-1112) — Opcode 0x5E |
-| EIP-6780 | SELFDESTRUCT changes | ✅ Implemented | Via ETC Olympia (ECIP-1112) — same-transaction only |
+| EIP-5656 | MCOPY instruction | ✅ Implemented | Via ETC Olympia (ECIP-1121) — Opcode 0x5E |
+| EIP-6780 | SELFDESTRUCT changes | ✅ Implemented | Via ETC Olympia (ECIP-1121) — same-transaction only |
 | EIP-7516 | BLOBBASEFEE opcode | ❌ N/A | Blob transactions not in ETC scope |
 
 ### Prague/Pectra (Execution: Prague, Consensus: Fusaka - Activated May 7, 2025)
@@ -150,8 +150,8 @@ This document provides a comprehensive analysis of the Ethereum Improvement Prop
 | EIP | Title | Status | Notes |
 |-----|-------|--------|-------|
 | **Execution Layer EIPs** | | | |
-| EIP-2537 | BLS12-381 precompiles | ⚠️ Stubs | Via ETC Olympia (ECIP-1112) — gas-consuming stubs, full crypto TBD |
-| EIP-2935 | Serve historical block hashes from state | ✅ Implemented | Via ETC Olympia (ECIP-1112) — system contract, 8191 history window |
+| EIP-2537 | BLS12-381 precompiles | ⚠️ Stubs | Via ETC Olympia (ECIP-1121) — gas-consuming stubs, full crypto TBD |
+| EIP-2935 | Serve historical block hashes from state | ✅ Implemented | Via ETC Olympia (ECIP-1121), unmodified — system contract, 8191 history window; deployed by EIP-2935's deploy transaction before Olympia ([runbook](../runbooks/olympia-eip2935-deployment.md)) |
 | EIP-6110 | Supply validator deposits on chain | ❌ N/A | Validator deposits not applicable to ETC (PoW) |
 | EIP-7002 | Execution layer triggerable exits | ❌ N/A | Validator exits not applicable to ETC (PoW) |
 | EIP-7251 | Increase MAX_EFFECTIVE_BALANCE | ❌ N/A | Validator economics not applicable to ETC (PoW) |
@@ -199,7 +199,7 @@ Slot 10388992    │ Prague (Pectra/Fusaka) ← Account abstraction, MaxEB, EL r
 Implemented via ETC Olympia (ECIP-1111). BaseFee header field, Type-2 transactions, base fee adjustment algorithm. On ETC, base fee is redirected to treasury (not burned).
 
 #### ~~2. EIP-3198: BASEFEE Opcode~~ ✅ IMPLEMENTED
-Implemented via ETC Olympia (ECIP-1112). Opcode 0x48 returns current block baseFee.
+Implemented via ETC Olympia (ECIP-1111). Opcode 0x48 returns current block baseFee.
 
 #### 3. EIP-4399: Supplant DIFFICULTY with PREVRANDAO
 **Priority**: 🔴 Critical (post-Merge)  
@@ -236,10 +236,10 @@ Implemented via ETC Olympia (ECIP-1112). Opcode 0x48 returns current block baseF
 - Withdrawal index tracking
 
 #### ~~6. EIP-1153: Transient Storage Opcodes~~ ✅ IMPLEMENTED
-Implemented via ETC Olympia (ECIP-1112). TLOAD (0x5C) and TSTORE (0x5D) opcodes. Per-transaction, per-address transient storage cleared at end of transaction. 100 gas per operation.
+Implemented via ETC Olympia (ECIP-1121). TLOAD (0x5C) and TSTORE (0x5D) opcodes. Per-transaction, per-address transient storage cleared at end of transaction. 100 gas per operation.
 
 #### ~~7. EIP-5656: MCOPY Instruction~~ ✅ IMPLEMENTED
-Implemented via ETC Olympia (ECIP-1112). MCOPY (0x5E) memory copy opcode.
+Implemented via ETC Olympia (ECIP-1121). MCOPY (0x5E) memory copy opcode.
 
 **New Opcode**:
 | Opcode | Name | Description |
@@ -252,7 +252,7 @@ gas = G_verylow + G_copy * ceil(size / 32) + memory_expansion_cost
 ```
 
 #### ~~8. EIP-6780: SELFDESTRUCT Only in Same Transaction~~ ✅ IMPLEMENTED
-Implemented via ETC Olympia (ECIP-1112). Post-Olympia, SELFDESTRUCT only deletes the account if called in the same transaction as contract creation. Otherwise, only transfers balance.
+Implemented via ETC Olympia (ECIP-1121). Post-Olympia, SELFDESTRUCT only deletes the account if called in the same transaction as contract creation. Otherwise, only transfers balance.
 
 ### Medium Priority (Required for Complete Compliance)
 
@@ -295,7 +295,7 @@ Implemented via ETC Olympia (ECIP-1112). Post-Olympia, SELFDESTRUCT only deletes
 ### Lower Priority (Future Enhancements)
 
 #### ~~12. EIP-2537: BLS12-381 Curve Operations~~ ⚠️ STUBS ONLY
-Registered as gas-consuming stubs via ETC Olympia (ECIP-1112). Full crypto implementation TBD.
+Registered as gas-consuming stubs via ETC Olympia (ECIP-1121). Full crypto implementation TBD.
 **Priority**: 🟡 Medium (stubs deployed, full implementation deferred)
 **Complexity**: High
 **Impact**: Precompiled contracts
@@ -323,7 +323,7 @@ Registered as gas-consuming stubs via ETC Olympia (ECIP-1112). Full crypto imple
 ### Prague/Pectra (Fusaka) EIPs - Activated May 7, 2025
 
 #### ~~13. EIP-2935: Serve Historical Block Hashes from State~~ ✅ IMPLEMENTED
-Implemented via ETC Olympia (ECIP-1112). System contract at `0x...002935` stores block hashes in a ring buffer (8191 history window). Deployed at fork activation.
+Implemented via ETC Olympia (ECIP-1121), which adopts EIP-2935 unmodified. From Olympia each block stores its parent hash in the system contract at `0x0000F90827F1C53a10cb7A02335B175320002935` (ring buffer, 8191 history window). The client does not deploy the contract (B-528): EIP-2935's own deploy transaction must land on each ETC network before Olympia, or the history stays empty until it does; see [Olympia: deploying the EIP-2935 history contract](../runbooks/olympia-eip2935-deployment.md).
 
 #### 14. EIP-6110: Supply Validator Deposits on Chain
 **Priority**: 🔴 Critical (Execution-Consensus Integration)  
@@ -508,7 +508,7 @@ Implemented via ETC Olympia (ECIP-1121). Type-4 transactions with authorization 
 | 0x45 | GASLIMIT | 2 | ✅ | |
 | 0x46 | CHAINID | 2 | ✅ | |
 | 0x47 | SELFBALANCE | 5 | ✅ | |
-| 0x48 | BASEFEE | 2 | ✅ | EIP-3198 via Olympia (ECIP-1112) |
+| 0x48 | BASEFEE | 2 | ✅ | EIP-3198 via Olympia (ECIP-1111) |
 
 #### Stack, Memory, Storage, Flow Operations (0x50-0x5F)
 | Opcode | Name | Gas | Status |
@@ -525,9 +525,9 @@ Implemented via ETC Olympia (ECIP-1121). Type-4 transactions with authorization 
 | 0x59 | MSIZE | 2 | ✅ |
 | 0x5A | GAS | 2 | ✅ |
 | 0x5B | JUMPDEST | 1 | ✅ |
-| 0x5C | TLOAD | 100 | ✅ | EIP-1153 via Olympia (ECIP-1112) |
-| 0x5D | TSTORE | 100 | ✅ | EIP-1153 via Olympia (ECIP-1112) |
-| 0x5E | MCOPY | 3* | ✅ | EIP-5656 via Olympia (ECIP-1112) |
+| 0x5C | TLOAD | 100 | ✅ | EIP-1153 via Olympia (ECIP-1121) |
+| 0x5D | TSTORE | 100 | ✅ | EIP-1153 via Olympia (ECIP-1121) |
+| 0x5E | MCOPY | 3* | ✅ | EIP-5656 via Olympia (ECIP-1121) |
 | 0x5F | PUSH0 | 2 | ✅ | EIP-3855 |
 
 #### Push Operations (0x60-0x7F)
@@ -554,7 +554,7 @@ All LOG0-LOG4 opcodes: ✅ Implemented
 | 0xFA | STATICCALL | 100-2600* | ✅ |
 | 0xFD | REVERT | 0* | ✅ |
 | 0xFE | INVALID | all gas | ✅ |
-| 0xFF | SELFDESTRUCT | 5000* | ✅ | EIP-6780 restrictions via Olympia (ECIP-1112) |
+| 0xFF | SELFDESTRUCT | 5000* | ✅ | EIP-6780 restrictions via Olympia (ECIP-1121) |
 
 ### Missing Opcodes Summary
 
@@ -579,11 +579,11 @@ All LOG0-LOG4 opcodes: ✅ Implemented
 | 0x07 | BN128MUL | EIP-196 | ✅ |
 | 0x08 | BN128PAIRING | EIP-197 | ✅ |
 | 0x09 | BLAKE2F | EIP-152 | ✅ |
-| 0x0100 | P256VERIFY | EIP-7951 | ✅ | Via Olympia (ECIP-1112) |
+| 0x0100 | P256VERIFY | EIP-7951 | ✅ | Via Olympia (ECIP-1121) |
 
 ### BLS12-381 Precompiles (Stubs)
 
-Via ETC Olympia (ECIP-1112). Registered as gas-consuming stubs that return failure. Full cryptographic implementation requires a JVM-compatible BLS library (Milagro or Blst JNI bindings).
+Via ETC Olympia (ECIP-1121). Registered as gas-consuming stubs that return failure. Full cryptographic implementation requires a JVM-compatible BLS library (Milagro or Blst JNI bindings).
 
 | Address | Name | EIP | Status |
 |---------|------|-----|--------|

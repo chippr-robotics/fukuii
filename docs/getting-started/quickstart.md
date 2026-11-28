@@ -65,21 +65,22 @@ docker run -d \
   --restart unless-stopped \
   -p 30303:30303/tcp \
   -p 30303:30303/udp \
-  -p 127.0.0.1:8546:8546 \
   -v fukuii-data:/app/data \
   ghcr.io/chippr-robotics/fukuii:<version>
 ```
 
-The image runs ETC mainnet. For Mordor, append `mordor` after the image name.
+The image runs ETC mainnet. For Mordor, append `mordor` after the image name. JSON-RPC stays on the container's
+loopback, so run the checks under [Verify your node](#verify-your-node) with `docker exec fukuii` in front of `curl`.
 
 !!! note "Images up to v0.12.79"
-    Release images up to v0.12.79 do not read `FUKUII_DATADIR` or `FUKUII_RPC_INTERFACE`. With one of those, append
-    `-Dfukuii.datadir=/app/data -Dfukuii.network.rpc.http.interface=0.0.0.0` after the image name, or the chain is
-    written inside the container and the published RPC port answers nothing.
+    Release images up to v0.12.79 do not read `FUKUII_DATADIR`. With one of those, append
+    `-Dfukuii.datadir=/app/data` after the image name, or the chain is written inside the container.
 
 !!! warning "Security Notice"
-    Publish JSON-RPC only on the host's loopback (`127.0.0.1:8546:8546`). Reach it from elsewhere through an SSH tunnel
-    or an authenticating TLS proxy.
+    Since 0.13.0 a plaintext listener on a non-loopback interface refuses the start. To publish JSON-RPC, set
+    `-e FUKUII_RPC_INTERFACE=0.0.0.0` and either enable TLS or opt into plaintext deliberately, and publish the port
+    only on the host's loopback (`127.0.0.1:8546:8546`). See
+    [Exposing JSON-RPC](../deployment/docker.md#exposing-json-rpc).
 
 See the [Docker Guide](../deployment/docker.md) for Compose, image variants and Kubernetes.
 

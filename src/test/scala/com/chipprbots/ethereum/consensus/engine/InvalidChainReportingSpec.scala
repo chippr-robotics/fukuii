@@ -261,9 +261,10 @@ class InvalidChainReportingSpec
     UnitTest,
     ConsensusTest
   ) in new ConsensusSetup:
-    // The hive GasUsed P8 shape: blocks before the bad one execute, so this is a PARTIAL batch, which
-    // ConsensusAdapter maps to BlockImportedToTop and BlockImporter never sees. Before this change a gas-used
-    // mismatch here was reported by nobody. With the receipts-proof marker, ConsensusImpl reports it itself.
+    // The hive GasUsed P8 shape: blocks before the bad one execute, so this is a PARTIAL batch, which ConsensusAdapter
+    // then mapped to BlockImportedToTop, so BlockImporter never saw it (ImportedPartially since B-338). Before this
+    // change a gas-used mismatch here was reported by nobody. With the receipts-proof marker, ConsensusImpl reports it
+    // itself.
     val branch: List[Block] = BlockHelpers.generateChain(3, initialBestBlock)
     failAt(
       branch(1),
@@ -811,7 +812,7 @@ class InvalidChainReportingSpec
     val p10: ExecutionPayload = payloadOfUnexecutableChild(p9.hash.value)
 
     /** Drive one fetched batch through the production path, then apply BlockImporter's gas-used report rule to the
-      * result exactly as `handleBlocksImport` does on that arm: `importedBlocks` is `Nil` for a `BlockImportFailed`, so
+      * result exactly as `handleBlocksImport` does on that arm: nothing of the batch became the head (B-505), so
       * `notImportedBlocks` is the whole batch, and `findMissingContractCode` finds nothing (the hive recipient's code
       * is present).
       */
@@ -825,7 +826,9 @@ class InvalidChainReportingSpec
       val adapter = adapterWith(Some(engineApi.invalidChainReporter))
       val result = adapter.evaluateBranch(NonEmptyList.fromListUnsafe(batch)).unsafeRunSync()
 
-      // The shape BlockImporter sees: a failure it routes to the gas-used arm, naming P8'.
+      // The shape BlockImporter sees: a failure it routes to the gas-used arm, naming P8'. The batch is the consensus
+      // layer's branch, which the hash layout adopts only if all of it is valid (B-505): no prefix became the head, so
+      // this is no partial import (B-338), and nothing of the batch is counted as imported.
       result shouldBe a[BlockImportFailedAt]
       result.asInstanceOf[BlockImportFailedAt].failingBlockHash shouldBe p8.hash.value
       result.toString should include(InvalidChainReporter.GasUsedMismatchMarker)

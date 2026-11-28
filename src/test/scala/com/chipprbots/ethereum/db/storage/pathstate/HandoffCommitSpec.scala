@@ -272,7 +272,10 @@ class HandoffCommitSpec extends AnyFlatSpec with Matchers:
   it should "refuse on a store that failed closed" taggedAs UnitTest in {
     val s = new Synced
     s.state.failClosed("a test")
+    withClue("the fault is recorded, synced, and nothing else is written (B-252): ")(
+      s.source.writes shouldBe Vector(s"synced[+${StateFaultMark.Key}]")
+    )
     a[RuntimeException] should be thrownBy s.state.commitHandoff(s.pivot, s.best)
     s.state.anchor shouldBe None
-    s.source.writes shouldBe Vector.empty
+    s.source.writes shouldBe Vector(s"synced[+${StateFaultMark.Key}]")
   }

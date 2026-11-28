@@ -126,14 +126,15 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger:
 
     // Try to simulate transaction, on world with updated stateRootHash, but not updated storages
     assertThrows[MPTException] {
-      stxLedger.simulateTransaction(signedTransactionWithAddress, pendBlockAndState.pendingBlock.block.header, None)
+      val header = pendBlockAndState.pendingBlock.block.header
+      stxLedger.simulateTransaction(signedTransactionWithAddress, header, stxLedger.worldAt(header))
     }
 
     // Try to simulate transaction, on world with all changes stored in caches
     val simulationResult: TxResult = stxLedger.simulateTransaction(
       signedTransactionWithAddress,
       pendBlockAndState.pendingBlock.block.header,
-      Some(pendBlockAndState.worldState)
+      pendBlockAndState.worldState
     )
 
     // Check if transaction was valid
@@ -231,7 +232,6 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger:
       accountStartNonce = UInt256.Zero,
       daoForkConfig = None,
       bootstrapNodes = Set(),
-      gasTieBreaker = false,
       ethCompatibleStorage = true,
       forkBlockNumbers = ForkBlockNumbers.Empty.copy(
         frontierBlockNumber = 0,
@@ -308,7 +308,6 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger:
       accountStartNonce = UInt256.Zero,
       daoForkConfig = None,
       bootstrapNodes = Set(),
-      gasTieBreaker = false,
       ethCompatibleStorage = true
     )
 
@@ -620,7 +619,6 @@ class BlockGeneratorSpec extends AnyFlatSpec with Matchers with Logger:
       accountStartNonce = UInt256.Zero,
       daoForkConfig = None,
       bootstrapNodes = Set(),
-      gasTieBreaker = false,
       ethCompatibleStorage = true
     )
     implicit override lazy val blockchainConfig: BlockchainConfig = baseBlockchainConfig

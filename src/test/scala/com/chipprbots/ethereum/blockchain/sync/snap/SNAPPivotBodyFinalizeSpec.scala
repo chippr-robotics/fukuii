@@ -32,6 +32,7 @@ import com.chipprbots.ethereum.blockchain.sync.TestSyncConfig
 import com.chipprbots.ethereum.domain.Block
 import com.chipprbots.ethereum.domain.BlockBody
 import com.chipprbots.ethereum.domain.BlockHeader
+import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.domain.ChainWeight
 import com.chipprbots.ethereum.domain.TrieRoot
 import com.chipprbots.ethereum.network.NetworkPeerManagerActor
@@ -137,3 +138,14 @@ class SNAPPivotBodyFinalizeSpec extends ScalaTestWithActorTestKit() with AnyFlat
   it should "remove a placeholder body an earlier run left under the pivot" taggedAs UnitTest in new Fixture:
     finalizeWith(Some(BlockBody.empty))
     blockchainReader.getBlockBodyByHash(pivotHeader.hash) shouldBe None
+
+  // B-351: the hash layout's hand-off deletes the entries of the index above the pivot. After a re-SNAP for a heavier
+  // chain below the fork recovery's floor (B-346), the chain this node left answered there up to its old head, which no
+  // record names by then; an earlier, higher pivot's bootstrap leaves one too. They were kept.
+  it should "delete the index above the pivot at the hand-off, on a chain whose pivot no consensus layer pins (B-351)" taggedAs UnitTest in new Fixture:
+    val left: Seq[BlockHeader] =
+      (1 to 3).map(i => pivotHeader.copy(number = BlockNumber(pivot + i), extraData = ByteString(s"the chain left $i")))
+    left.foreach(header => blockchainWriter.storeBlockHeader(header).commit())
+    finalizeWith(Some(pivotBody))
+    left.foreach(header => blockchainReader.getCanonicalHashByNumber(header.number.value) shouldBe None)
+    blockchainReader.getBlockHeaderByHash(left.last.hash).map(_.number.value) shouldBe Some(pivot + 3) // only the index
