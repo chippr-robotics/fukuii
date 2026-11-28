@@ -6469,3 +6469,13 @@ items:
     refs: ["#2166 r4725013099"]
     links: {}
     notes: Copilot on the 0.13.0 promotion (B-468 follow-up). Open captures stay in LogCapture.openCaptures for the JVM.
+  - id: B-586
+    title: "Ship 0.13.1: v0.13.0 artifacts were built from staging before main's Docker fixes (#2144) were back-merged"
+    priority: P1
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-28
+    refs: ["#2166"]
+    links: {}
+    notes: The minor bump on staging auto-dispatched release.yml at 01:43; tag-release on main found v0.13.0 tagged and skipped. Back-merge main into staging, bump to 0.13.1, promote.
