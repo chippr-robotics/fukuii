@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" class="bt" viewBox="0 0 720 470" width="100%" style="max-width:720px" role="img" aria-labelledby="bt-title bt-desc">
 <title id="bt-title">Backlog burn-down and burn-up</title>
-<desc id="bt-desc">Backlog items not done, per day from 2026-11-08 to 2026-11-28; latest 125 not done (P0-P1 5, P2-P3 120), scope 542, done 417.</desc>
+<desc id="bt-desc">Backlog items not done, per day from 2026-11-08 to 2026-11-28; latest 127 not done (P0-P1 5, P2-P3 122), scope 544, done 417.</desc>
 <style>.bt{--bt-ink:var(--md-default-fg-color--light,#52514e);--bt-muted:var(--md-default-fg-color--lighter,#898781);--bt-grid:var(--md-default-fg-color--lightest,#e1e0d9);--bt-surface:var(--md-default-bg-color,#fcfcfb);--bt-1:#2a78d6;--bt-2:#eb6834;--bt-3:#1baf7a}[data-md-color-scheme=slate] .bt{--bt-1:#3987e5;--bt-2:#d95926;--bt-3:#199e70}@media (prefers-color-scheme:dark){svg.bt:root{--bt-ink:#c3c2b7;--bt-muted:#898781;--bt-grid:#2c2c2a;--bt-surface:#1a1a19;--bt-1:#3987e5;--bt-2:#d95926;--bt-3:#199e70}}.bt .bg{fill:none}svg.bt:root .bg{fill:var(--bt-surface)}.bt text{font:12px system-ui,-apple-system,'Segoe UI',sans-serif;fill:var(--bt-ink)}.bt .t{font-size:14px;font-weight:600}.bt .ax{fill:var(--bt-muted);font-variant-numeric:tabular-nums}.bt .grid{stroke:var(--bt-grid);stroke-width:1}.bt .base{stroke:var(--bt-muted);stroke-width:1}.bt .ln{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}.bt .s0{stroke:var(--bt-ink)}.bt .s1{stroke:var(--bt-1)}.bt .s2{stroke:var(--bt-2)}.bt .s3{stroke:var(--bt-3)}.bt .f0{fill:var(--bt-ink)}.bt .f1{fill:var(--bt-1)}.bt .f2{fill:var(--bt-2)}.bt .f3{fill:var(--bt-3)}.bt .dash{stroke-dasharray:6 4}.bt .dot{stroke:var(--bt-surface);stroke-width:2}.bt .hit{fill:transparent}.bt .hit:hover{fill:var(--bt-grid);fill-opacity:.45}</style>
 <rect class="bg" width="720" height="470" rx="6"/>
 <text class="t" x="48" y="18">Burn-down: items not done</text>
@@ -28,14 +28,14 @@
 <text class="ax" x="379.2" y="218" text-anchor="middle">Nov 20</text>
 <text class="ax" x="489.6" y="218" text-anchor="middle">Nov 24</text>
 <text class="ax" x="600" y="218" text-anchor="end">Nov 28</text>
-<polyline class="ln s0" points="48,113 75.6,105.9 103.2,103.5 130.8,97 158.4,85.7 186,84.6 213.6,74.5 241.2,65 268.8,59.1 296.4,78 324,68 351.6,72.1 379.2,74.5 406.8,70.9 434.4,68.6 462,68.6 489.6,118.9 517.2,118.9 544.8,118.9 572.4,126 600,126"/>
-<circle class="dot f0" cx="600" cy="126" r="4"/>
+<polyline class="ln s0" points="48,113 75.6,105.9 103.2,103.5 130.8,97 158.4,85.7 186,84.6 213.6,74.5 241.2,65 268.8,59.1 296.4,78 324,68 351.6,72.1 379.2,74.5 406.8,70.9 434.4,68.6 462,68.6 489.6,118.9 517.2,118.9 544.8,118.9 572.4,126 600,124.8"/>
+<circle class="dot f0" cx="600" cy="124.8" r="4"/>
 <polyline class="ln s1" points="48,192.9 75.6,195.9 103.2,195.9 130.8,195.9 158.4,195.9 186,195.9 213.6,194.7 241.2,189.3 268.8,189.3 296.4,192.3 324,195.9 351.6,195.3 379.2,193.5 406.8,193.5 434.4,194.1 462,194.1 489.6,195.3 517.2,196.4 544.8,197 572.4,197 600,197"/>
 <circle class="dot f1" cx="600" cy="197" r="4"/>
-<polyline class="ln s2" points="48,120.1 75.6,110 103.2,107.6 130.8,101.1 158.4,89.9 186,88.7 213.6,79.8 241.2,75.7 268.8,69.8 296.4,85.7 324,72.1 351.6,76.9 379.2,81 406.8,77.5 434.4,74.5 462,74.5 489.6,123.6 517.2,122.4 544.8,121.9 572.4,129 600,129"/>
-<circle class="dot f2" cx="600" cy="129" r="4"/>
-<text x="612" y="130">Total 125</text>
-<text x="612" y="145">P2–P3 120</text>
+<polyline class="ln s2" points="48,120.1 75.6,110 103.2,107.6 130.8,101.1 158.4,89.9 186,88.7 213.6,79.8 241.2,75.7 268.8,69.8 296.4,85.7 324,72.1 351.6,76.9 379.2,81 406.8,77.5 434.4,74.5 462,74.5 489.6,123.6 517.2,122.4 544.8,121.9 572.4,129 600,127.8"/>
+<circle class="dot f2" cx="600" cy="127.8" r="4"/>
+<text x="612" y="128.8">Total 127</text>
+<text x="612" y="143.8">P2–P3 122</text>
 <text x="612" y="201">P0–P1 5</text>
 <rect class="hit" x="48" y="52" width="13.8" height="148"><title>2026-11-08: 147 not done (P0–P1 12, P2–P3 135)</title></rect>
 <rect class="hit" x="61.8" y="52" width="27.6" height="148"><title>2026-11-09: 159 not done (P0–P1 7, P2–P3 152)</title></rect>
@@ -57,7 +57,7 @@
 <rect class="hit" x="503.4" y="52" width="27.6" height="148"><title>2026-11-25: 137 not done (P0–P1 6, P2–P3 131)</title></rect>
 <rect class="hit" x="531" y="52" width="27.6" height="148"><title>2026-11-26: 137 not done (P0–P1 5, P2–P3 132)</title></rect>
 <rect class="hit" x="558.6" y="52" width="27.6" height="148"><title>2026-11-27: 125 not done (P0–P1 5, P2–P3 120)</title></rect>
-<rect class="hit" x="586.2" y="52" width="13.8" height="148"><title>2026-11-28: 125 not done (P0–P1 5, P2–P3 120)</title></rect>
+<rect class="hit" x="586.2" y="52" width="13.8" height="148"><title>2026-11-28: 127 not done (P0–P1 5, P2–P3 122)</title></rect>
 <text class="t" x="48" y="258">Burn-up: scope and done</text>
 <line class="ln s0 dash" x1="48" y1="274" x2="66" y2="274"/>
 <text x="72" y="278">Scope</text>
@@ -77,11 +77,11 @@
 <text class="ax" x="379.2" y="458" text-anchor="middle">Nov 20</text>
 <text class="ax" x="489.6" y="458" text-anchor="middle">Nov 24</text>
 <text class="ax" x="600" y="458" text-anchor="end">Nov 28</text>
-<polyline class="ln s0 dash" points="48,401 75.6,394.4 103.2,392.1 130.8,387.2 158.4,381.8 186,379.8 213.6,371.7 241.2,365.8 268.8,361.6 296.4,360.6 324,349.5 351.6,345.5 379.2,343.8 406.8,341.1 434.4,338.1 462,334.7 489.6,318.6 517.2,311.2 544.8,309.8 572.4,306.3 600,306.3"/>
-<circle class="dot f0" cx="600" cy="306.3" r="4"/>
+<polyline class="ln s0 dash" points="48,401 75.6,394.4 103.2,392.1 130.8,387.2 158.4,381.8 186,379.8 213.6,371.7 241.2,365.8 268.8,361.6 296.4,360.6 324,349.5 351.6,345.5 379.2,343.8 406.8,341.1 434.4,338.1 462,334.7 489.6,318.6 517.2,311.2 544.8,309.8 572.4,306.3 600,305.8"/>
+<circle class="dot f0" cx="600" cy="305.8" r="4"/>
 <polyline class="ln s3" points="48,437.3 75.6,433.6 103.2,432.4 130.8,430.1 158.4,429.4 186,427.9 213.6,424 241.2,422 268.8,420.3 296.4,411.4 324,404.5 351.6,398.8 379.2,396.1 406.8,394.9 434.4,392.9 462,389.4 489.6,352.4 517.2,345 544.8,343.6 572.4,337.1 600,337.1"/>
 <circle class="dot f3" cx="600" cy="337.1" r="4"/>
-<text x="612" y="310.3">Scope 542</text>
+<text x="612" y="309.8">Scope 544</text>
 <text x="612" y="341.1">Done 417</text>
 <rect class="hit" x="48" y="292" width="13.8" height="148"><title>2026-11-08: scope 158 (items not dropped), done 11</title></rect>
 <rect class="hit" x="61.8" y="292" width="27.6" height="148"><title>2026-11-09: scope 185 (items not dropped), done 26</title></rect>
@@ -103,5 +103,5 @@
 <rect class="hit" x="503.4" y="292" width="27.6" height="148"><title>2026-11-25: scope 522 (items not dropped), done 385</title></rect>
 <rect class="hit" x="531" y="292" width="27.6" height="148"><title>2026-11-26: scope 528 (items not dropped), done 391</title></rect>
 <rect class="hit" x="558.6" y="292" width="27.6" height="148"><title>2026-11-27: scope 542 (items not dropped), done 417</title></rect>
-<rect class="hit" x="586.2" y="292" width="13.8" height="148"><title>2026-11-28: scope 542 (items not dropped), done 417</title></rect>
+<rect class="hit" x="586.2" y="292" width="13.8" height="148"><title>2026-11-28: scope 544 (items not dropped), done 417</title></rect>
 </svg>
