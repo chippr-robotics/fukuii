@@ -154,6 +154,48 @@ class ExcludedAccountSeedingSpec extends AnyFlatSpec with Matchers:
     seeding(store, (_, _) => throw new RuntimeException("a code entry reads no node")).step(root).removed shouldBe 1
   }
 
+  // B-080 (T061a, Path run PA): the account the storage give-up named is also the one whose code is missing, so the set
+  // holds two entries, the account (S) and its own code hash (C). The background audit stores the code; the next
+  // start resolves the set again, with a new ExcludedAccountSeeding over the durable store and nothing in memory.
+  "An account entry and the entry of its own code hash (S=C)" should "both leave at the pass after the code was repaired, a restart between" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(
+      Seq(
+        ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned),
+        ExcludedAccount(codeHash, ExcludedReason.CodeMissing)
+      )
+    )
+    var stored = Set.empty[ByteString]
+
+    val before = seeding(store, present(storageRoot), code = stored).step(root)
+    withClue("one fetch of the one code, though two entries name it: ")(before.missingCode shouldBe Seq(codeHash))
+    before.removed shouldBe 0
+    store.hasExcluded shouldBe true
+
+    stored += codeHash // the audit repaired it, and the process ended
+
+    val restarted = seeding(store, present(storageRoot), code = stored)
+    restarted.step(root).removed shouldBe 2
+    store.hasExcluded shouldBe false
+    store.hasAnyExcluded shouldBe false
+    restarted.blocking shouldBe false
+  }
+
+  it should "leave only the account behind when the code is repaired and the storage root is still absent" taggedAs UnitTest in {
+    val store = freshStore()
+    store.recordExcluded(
+      Seq(
+        ExcludedAccount(accountHash, ExcludedReason.StorageAbandoned),
+        ExcludedAccount(codeHash, ExcludedReason.CodeMissing)
+      )
+    )
+    val step = seeding(store, reader(), code = _ => true).step(root)
+    step.removed shouldBe 1
+    step.missingCode shouldBe empty
+    step.seeds.map(_._2) shouldBe Seq(storageRoot)
+    store.excludedPage(None, 10).map(_.subject) shouldBe Seq(accountHash)
+  }
+
   // Spec 022 review item 4 (hunter W2): A to B to A, or a reorg. The decision stands for the account's storage whatever
   // this root holds, so "no such account" must not forget it.
   private val elsewhere: BranchNode = branch(((key(0) + 1) % 16) -> leafAtDepth3)

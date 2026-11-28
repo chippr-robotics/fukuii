@@ -13,9 +13,14 @@ import com.chipprbots.ethereum.FreeSpecBase
 import com.chipprbots.ethereum.domain.BlockNumber
 import com.chipprbots.ethereum.metrics.Metrics
 import com.chipprbots.ethereum.metrics.MetricsConfig
+import com.chipprbots.ethereum.network.PeerManagerActor
+import com.chipprbots.ethereum.network.discovery.Node
+import com.chipprbots.ethereum.sync.util.HandshakeItSpecSupport
 import com.chipprbots.ethereum.sync.util.RegularSyncItSpecUtils.ExecutedChain.*
 import com.chipprbots.ethereum.sync.util.RegularSyncItSpecUtils.FakePeer
+import com.chipprbots.ethereum.sync.util.SilentTcpServer
 import com.chipprbots.ethereum.sync.util.SyncCommonItSpec.*
+import com.chipprbots.ethereum.sync.util.SyncCommonItSpecUtils.retryUntilWithDelay
 import com.chipprbots.ethereum.testing.Tags.*
 import com.chipprbots.ethereum.utils.Config
 
@@ -33,7 +38,7 @@ import com.chipprbots.ethereum.utils.Config
   * @see
   *   Issue: E2E testing - test driven development for resolving p2p handshake, block exchange or storage issues
   */
-class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll:
+class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll with HandshakeItSpecSupport:
   implicit val testRuntime: IORuntime = IORuntime.global
 
   override def beforeAll(): Unit =
@@ -61,13 +66,11 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll:
         for
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
-          _ <- peer2.connectToPeers(Set(peer1.node))
-          // Wait for connection to be established
-          _ <- IO.sleep(2.seconds)
+          // Returns once both PeerManagers hold the other as a handshaked peer
+          held <- dialAndAwaitHandshake(peer2, peer1)
         yield
-        // Verify that peers are connected
-        // Connection should be established without handshake failures
-        succeed
+          val (outgoing, incoming) = held
+          assertOutgoingAndIncoming(outgoing, incoming, peer1)
       }
 
       "should handle multiple peer connections simultaneously" taggedAs (
@@ -75,16 +78,26 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll:
         SyncTest,
         NetworkTest
       ) in customTestCaseResourceM(
-        FakePeer.start2FakePeersRes()
-      ) { case (peer1, peer2) =>
+        FakePeer.start3FakePeersRes()
+      ) { case (peer1, peer2, peer3) =>
         for
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
-          // Connect peer1 to peer2 then wait to connect
-          _ <- peer1.connectToPeers(Set(peer2.node))
-          _ <- IO.sleep(2.seconds)
-        // Both connections should be established successfully
-        yield succeed
+          _ <- peer3.startRegularSync()
+          // Peer1 dials both at once
+          _ <- peer1.connectToPeers(Set(peer2.node, peer3.node))
+          dialed <- peer1.waitForHandshakedPeers(2)
+          accepted2 <- peer2.waitForHandshakedPeers(1)
+          accepted3 <- peer3.waitForHandshakedPeers(1)
+        yield
+          // Two live outgoing connections at peer1, one to each listener, and one incoming at each of them
+          dialed.map(_.incomingConnection).distinct shouldBe Seq(false)
+          dialed.map(_.remoteAddress.getPort).toSet shouldBe Set(
+            peer2.listenAddress.getPort,
+            peer3.listenAddress.getPort
+          )
+          accepted2.map(_.incomingConnection) shouldBe Seq(true)
+          accepted3.map(_.incomingConnection) shouldBe Seq(true)
       }
 
       "should recover from handshake timeout" taggedAs (
@@ -93,16 +106,28 @@ class E2ESyncSpec extends FreeSpecBase with Matchers with BeforeAndAfterAll:
         NetworkTest,
         SlowTest
       ) in customTestCaseResourceM(
-        FakePeer.start2FakePeersRes()
-      ) { case (peer1, peer2) =>
+        for
+          peers <- FakePeer.start2FakePeersRes()
+          silent <- SilentTcpServer.resource
+        yield (peers._1, peers._2, silent)
+      ) { case (peer1, peer2, silent) =>
         for
           _ <- peer1.startRegularSync()
           _ <- peer2.startRegularSync()
-          _ <- peer2.connectToPeers(Set(peer1.node))
-          // Wait for initial handshake
-          _ <- IO.sleep(3.seconds)
-        // Connection should be established and resilient
-        yield succeed
+          // A node that accepts the connection and never answers the RLPx handshake: peer2's attempt on it can only end
+          // by its own handshake timeout
+          _ <- IO(peer2.peerManager ! PeerManagerActor.DiscoveredNodesReceived(Set(silent.node)))
+          _ <- retryUntilWithDelay(IO(silent.accepted), 100.millis, 600)(_ >= 1)
+          // The stuck attempt does not hold peer2 back: a real peer handshakes while it is still pending
+          held <- dialAndAwaitHandshake(peer2, peer1)
+          // And the attempt is not left behind: once its timeout ends it, peer2 holds only the real peer
+          remaining <- retryUntilWithDelay(peer2.allPeers(), 500.millis, 240)(_.size == 1)
+        yield
+          val (outgoing, incoming) = held
+          assertOutgoingAndIncoming(outgoing, incoming, peer1)
+          remaining.map(_.remoteAddress.getPort) shouldBe Seq(peer1.listenAddress.getPort)
+          peer2.storagesInstance.storages.knownNodesStorage.getKnownNodes
+            .map(Node.fromUri(_).id) should not contain silent.node.id
       }
     }
 

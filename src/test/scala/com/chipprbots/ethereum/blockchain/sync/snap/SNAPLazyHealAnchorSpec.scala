@@ -477,11 +477,20 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       awaitFirstPoll()
       snap ! SNAPSyncController.Start
 
-      // 11 climbing heights (> MaxHealRepegNoRootAttempts), each re-tripping staleness (step 200 > margin*2=128)
-      // while staying low enough (<= 5000 = pivotBlockOffset) that refreshPivotInPlace's peer-fallback branch
-      // always resolves to None (target <= 0). Pre-fix, each of these would have counted, exhausting the budget
-      // (>=10) and handing off well before this loop even finishes.
-      (1 to 11).foreach { i =>
+      // Climbing heights, each re-tripping staleness (step 200 > margin*2=128) while staying low enough (<= 5000 =
+      // pivotBlockOffset) that refreshPivotInPlace's peer-fallback branch always resolves to None (target <= 0).
+      // Pre-fix, each re-peg here would have counted, exhausting the budget (>=10) and handing off well before this
+      // loop even finishes. The first height (200) is only 100 blocks past the root at 100, inside the re-peg age, so
+      // it does not re-peg: with 11 steps exactly MaxHealRepegNoRootAttempts did, and a count short by one would have
+      // gone unseen. The steps are twice the budget, and the number that really re-peg is taken from the production
+      // predicate, so the margin over the budget is checked rather than assumed (B-533).
+      val steps: Int = MaxHealRepegNoRootAttempts * 2
+      val repegSteps: Int =
+        (1 to steps).count(i => SNAPSyncController.healRootStale(true, BigInt(i * 200), Some(pivot0), None, HealMargin))
+      withClue("steps that re-peg, against the budget they must exceed with room to spare: ") {
+        repegSteps should be >= MaxHealRepegNoRootAttempts + 5
+      }
+      (1 to steps).foreach { i =>
         peers.set(peersAt(height = i * 200, snap = true))
         snap ! SNAPSyncController.PollHandshakedPeers
         awaitProcessed(snap)
@@ -491,13 +500,13 @@ class SNAPLazyHealAnchorSpec extends ScalaTestWithActorTestKit() with AnyFlatSpe
       }
 
       // Not yet handed off: pivotBlock/stateRoot/AppStateStorage are all still exactly what they were seeded
-      // with — none of the 11 "stale, no target" attempts above should have touched them or the budget.
+      // with — none of the "stale, no target" attempts above should have touched them or the budget.
       parent.expectNoMessage(500.millis)
       appStateStorage.getSnapSyncPivotBlock() shouldBe Some(pivot0)
       appStateStorage.getSnapSyncStateRoot() shouldBe Some(root0)
 
       // Now exhaust the budget for real: MaxHealRepegNoRootAttempts consecutive genuine "all peers stateless"
-      // failures (peers empty). If the 11 prior attempts had counted (pre-fix), the budget would already have
+      // failures (peers empty). If the prior attempts had counted (pre-fix), the budget would already have
       // been spent and this would either hand off immediately on far fewer sends or have already fired above.
       peers.set(Map.empty)
       snap ! SNAPSyncController.PollHandshakedPeers
