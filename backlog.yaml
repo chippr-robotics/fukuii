@@ -4069,19 +4069,15 @@ items:
   - id: B-403
     title: "Ephemery runbook: right after a reset, Lighthouse must genesis-sync; the public checkpoint server still serves the old iteration"
     priority: P3
-    status: review
+    status: done
     area: ops
     size: S
     opened: 2026-11-19
+    closed: 2026-11-28
     refs: []
     links:
       prs: [2161]
       spec: specs/028-builtin-ephemery-hoodi
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-27T23:33:34Z
-      heartbeat: 2026-11-28T00:06:02Z
     notes: "Seen at the 166 reset 2026-11-19: 'Snapshot state appears to be from the wrong network'. dev-node's companion script now checkpoint-syncs only when the server's genesis_time = MIN_GENESIS_TIME+GENESIS_DELAY. Document in docs/runbooks/ephemery.md."
   - id: B-404
     title: "Chocolatey 0.12.1 resubmission: moderator asked for a CDN iconUrl (and a copyright element)"
