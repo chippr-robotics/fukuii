@@ -6485,3 +6485,13 @@ items:
       since: 2026-11-28T13:15:47Z
       heartbeat: 2026-11-28T13:15:51Z
     notes: The minor bump on staging auto-dispatched release.yml at 01:43; tag-release on main found v0.13.0 tagged and skipped. Back-merge main into staging, bump to 0.13.1, promote.
+  - id: B-587
+    title: "release.yml: an images-only full-tier path for a version whose patch release is already published (immutable)"
+    priority: P1
+    status: open
+    area: ci
+    size: S
+    opened: 2026-11-28
+    refs: ["#2168 r4727332388"]
+    links: {}
+    notes: "0.13.1 full re-run failed: Cannot delete asset from an immutable release; Docker skipped."
