@@ -404,12 +404,25 @@ def check_blocked_by(doc: dict) -> None:
     blocked on a waiver that does not exist reads as blocked forever while naming
     nothing — a claim with no referent, which is the defect class this whole matrix
     exists to prevent.
+
+    B-564: this read `first_required_slice.gates` while the matrix keys the slice's
+    entries as `members`, so it walked nothing and could not fail. A slice whose
+    entries are not a `members` list is now a C14 failure itself, so a key renamed
+    on either side cannot silently disable the check again.
     """
     known = {w.get("id") for w in (doc.get("waivers") or []) if w.get("id")}
-    slice_ = doc.get("first_required_slice") or {}
-    entries = slice_.get("gates") if isinstance(slice_, dict) else None
-    for entry in entries or []:
+    slice_ = doc.get("first_required_slice")
+    if slice_ is None:
+        return
+    entries = slice_.get("members") if isinstance(slice_, dict) else None
+    if not isinstance(entries, list):
+        fail("C14", "first_required_slice has no `members` list, so its blocked_by entries "
+                    "cannot be checked. Declare the slice's gates under `members:`.")
+        return
+    for entry in entries:
         if not isinstance(entry, dict):
+            fail("C14", f"first_required_slice member {entry!r} is not a mapping "
+                        "with `gate` and `blocked_by`.")
             continue
         name = entry.get("gate", "<unnamed>")
         for ref in entry.get("blocked_by") or []:

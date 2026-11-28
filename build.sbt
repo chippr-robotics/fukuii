@@ -316,6 +316,8 @@ lazy val node = {
       Dependencies.blsDifferentialOracles
     ).flatten ++ malletDeps
 
+  // Inert since the Mantis build: these are bare expressions in this block, not settings of the project, so
+  // Evm / sourceDirectory stays src/evm (absent) and `Evm / compile` compiles nothing (B-082 follow-up).
   (Evm / test) := (Evm / test).dependsOn(solidityCompile).value
   (Evm / sourceDirectory) := baseDirectory.value / "src" / "evmTest"
 
@@ -380,6 +382,19 @@ lazy val node = {
     .settings(inConfig(Benchmark)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
     .settings(inConfig(Evm)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
     .settings(inConfig(Rpc)(Defaults.testSettings :+ (Test / parallelExecution := true)): _*)
+    // B-082: scalafmt for src/benchmark, src/evmTest and src/rpcTest. sbt-scalafmt sets up Compile and Test only;
+    // with these, the root's scalafmtAll and scalafmtCheckAll (and so formatAll, formatCheck and the autofix job)
+    // format and check the three configurations too, as IntegrationTest's settings above do for src/it.
+    .settings(inConfig(Benchmark)(org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings(Benchmark)): _*)
+    .settings(inConfig(Rpc)(org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings(Rpc)): _*)
+    .settings(inConfig(Evm)(org.scalafmt.sbt.ScalafmtPlugin.scalafmtConfigSettings(Evm)): _*)
+    // Evm's own source directory is src/evm, which does not exist (the two settings above `val node` are inert), so
+    // scalafmt is pointed at src/evmTest directly. Compiling it is a separate fix: src/evmTest predates GasAmount,
+    // CodeHash and the Scala 3 circe, and does not compile.
+    .settings(
+      Evm / scalafmt / unmanagedSourceDirectories := Seq(baseDirectory.value / "src" / "evmTest" / "scala"),
+      Evm / scalafmt / unmanagedSources := ((baseDirectory.value / "src" / "evmTest" / "scala") ** "*.scala").get
+    )
     .settings(
       // Packaging
       maintainer := "chippr-robotics@github.com",

@@ -275,6 +275,38 @@ class ClaimTests(GitCase):
         self.assertEqual(self.git("--git-dir", str(self.origin), "rev-parse", "tracker"), tip)  # nothing written
 
 
+    def test_note_on_an_unclaimed_item_leaves_status_and_claim(self):
+        a = self.clone("a")
+        r = self.cli(a, "note", "B-001", "--text", "repro:  run   the sync twice", by="fc")
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, "noted B-001"), r.stderr)
+        it = self.remote_item("B-001")
+        self.assertEqual((it["status"], it.get("claim")), ("open", None))
+        self.assertEqual(it["notes"], "2026-11-08 note by fc: repro: run the sync twice")
+        self.assertIn("tracker: note B-001 by fc", self.last_message())
+        before = self.remote_item("B-004")  # held by `busy`: anyone may note it, and the claim stays
+        r = self.cli(a, "note", "B-004", "--text", "see #1750", by="fc", now="2026-11-08T13:00:00Z")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        it = self.remote_item("B-004")
+        self.assertEqual((it["status"], it["claim"]), (before["status"], before["claim"]))
+        self.assertEqual(it["notes"], "2026-11-08 note by fc: see #1750")
+
+    def test_note_keeps_the_last_three_lines_and_refusals(self):
+        a = self.clone("a")
+        for n in range(4):
+            self.assertEqual(self.cli(a, "note", "B-001", "--text", f"n{n}", by="fc").returncode, 0)
+        self.assertEqual(self.remote_item("B-001")["notes"].split("\n"),
+                         [f"2026-11-08 note by fc: n{n}" for n in (1, 2, 3)])
+        tip = self.git("--git-dir", str(self.origin), "rev-parse", "tracker")
+        self.assertEqual(self.cli(a, "note", "B-001", "--text", "  ", by="fc").returncode, 3)
+        self.assertEqual(self.cli(a, "note", "B-001", by="fc").returncode, 2)  # --text is required
+        self.assertEqual(self.cli(a, "note", "B-001", "--text", "x").returncode, 1)  # no --by
+        self.assertEqual(self.git("--git-dir", str(self.origin), "rev-parse", "tracker"), tip)  # nothing written
+        self.assertEqual(self.cli(a, "drop", "B-002", "--reason", "dup", by="fc").returncode, 0)
+        r = self.cli(a, "note", "B-002", "--text", "x", by="fc")
+        self.assertEqual(r.returncode, 3)
+        self.assertIn("B-002 is dropped", r.stderr)
+
+
 class CheckTests(unittest.TestCase):
     def check(self, d: dict) -> subprocess.CompletedProcess:
         with tempfile.TemporaryDirectory() as t:

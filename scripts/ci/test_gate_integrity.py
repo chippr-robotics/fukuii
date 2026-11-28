@@ -326,6 +326,28 @@ def m_stale_status(root: Path) -> None:
                                                        "Stale Heading", 1), encoding="utf-8")
 
 
+def m_blocked_by_undeclared_waiver(root: Path) -> None:
+    """C14 — a first_required_slice member blocked on a waiver id that does not exist.
+
+    B-564: the check read `first_required_slice.gates` while the matrix keys the
+    entries as `members`, so it walked nothing and this case passed. The member
+    is picked from the data, not hardcoded, as in `_first_waiver`.
+    """
+    import yaml as _y
+    doc = _y.safe_load((root / ".github/gates.yml").read_text(encoding="utf-8"))
+    members = (doc.get("first_required_slice") or {}).get("members") or []
+    assert members, "gates.yml first_required_slice has no members — the C14 case has no subject"
+    m = members[0]
+    edit(root, ".github/gates.yml",
+         f"    - gate: {m['gate']}\n      item: {m['item']}\n      blocked_by: []\n",
+         f"    - gate: {m['gate']}\n      item: {m['item']}\n      blocked_by: [no-such-waiver]\n")
+
+
+def m_slice_without_members(root: Path) -> None:
+    """C14 — a slice whose entries are not under `members` cannot be walked, so it fails."""
+    edit(root, ".github/gates.yml", "\n  members:\n    - gate: ", "\n  gates:\n    - gate: ")
+
+
 def m_committed_keystore(root: Path) -> None:
     """C15 — a PKCS#12 keystore in the tree."""
     (root / "tls").mkdir(exist_ok=True)
@@ -394,6 +416,10 @@ def main() -> int:
     case("C11 dead badge fails", True, "C11", m_dead_badge)
     case("C12 over-claiming doc fails", True, "C12", m_overclaiming_doc)
     case("C13 stale status doc fails", True, "C13", m_stale_status)
+
+    print(" promotion-slice checks")
+    case("C14 blocked_by an undeclared waiver fails", True, "C14", m_blocked_by_undeclared_waiver)
+    case("C14 slice without a members list fails", True, "C14", m_slice_without_members)
 
     print(" committed key material")
     case("C15 committed keystore fails", True, "C15", m_committed_keystore)

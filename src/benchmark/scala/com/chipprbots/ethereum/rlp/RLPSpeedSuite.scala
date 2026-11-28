@@ -20,7 +20,7 @@ class RLPSpeedSuite
     with ScalaCheckPropertyChecks
     with ScalaCheckDrivenPropertyChecks
     with ObjectGenerators
-    with Logger {
+    with Logger:
 
   val rounds = 10000
 
@@ -55,24 +55,24 @@ class RLPSpeedSuite
     val ITERATIONS: Int = 10000000
     log.info("Starting " + ITERATIONS + " decoding iterations...")
     val start1: Long = System.currentTimeMillis
-    (1 to ITERATIONS).foreach { _ => RLP.rawDecode(payload); () }
+    (1 to ITERATIONS).foreach { _ =>
+      RLP.rawDecode(payload); ()
+    }
     val end1: Long = System.currentTimeMillis
     log.info("Result decode()\t: " + (end1 - start1) + "ms")
   }
 
-  def doTestSerialize[T](toSerialize: T, encode: T => Array[Byte], rounds: Int): Array[Byte] = {
+  def doTestSerialize[T](toSerialize: T, encode: T => Array[Byte], rounds: Int): Array[Byte] =
     (1 until rounds).foreach { _ =>
       encode(toSerialize)
     }
     encode(toSerialize)
-  }
 
-  def doTestDeserialize[T](serialized: Array[Byte], decode: Array[Byte] => T, rounds: Int): T = {
+  def doTestDeserialize[T](serialized: Array[Byte], decode: Array[Byte] => T, rounds: Int): T =
     (1 until rounds).foreach { _ =>
       decode(serialized)
     }
     decode(serialized)
-  }
 
   val validTransaction = SignedTransaction(
     LegacyTransaction(
@@ -88,11 +88,10 @@ class RLPSpeedSuite
     signature = ByteString(Hex.decode("57db8998114fae3c337e99dbd8573d4085691880f4576c6c1f6c5bbfe67d6cf0"))
   )
 
-  lazy val blockGen: Gen[Block] = for {
+  lazy val blockGen: Gen[Block] = for
     header <- blockHeaderGen
     uncles <- blockHeaderGen
-  } yield Block(
+  yield Block(
     header = header,
     BlockBody(transactionList = List.fill(10)(validTransaction), uncleNodesList = Seq(uncles))
   )
-}

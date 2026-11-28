@@ -6,11 +6,11 @@ import org.scalatest.freespec.AnyFreeSpec
 import com.chipprbots.ethereum.domain.UInt256
 
 // scalastyle:off magic.number
-class CallerSpec extends AnyFreeSpec with Matchers {
+class CallerSpec extends AnyFreeSpec with Matchers:
 
   "EVM running Caller contract" - {
 
-    "should handle a call to Callee" in new EvmTestEnv {
+    "should handle a call to Callee" in new EvmTestEnv:
       val (_, callee) = deployContract("Callee")
       val (_, caller) = deployContract("Caller")
 
@@ -18,7 +18,4 @@ class CallerSpec extends AnyFreeSpec with Matchers {
       callRes.error shouldBe None
 
       callee.getFoo().call().returnData shouldBe UInt256(123).bytes
-    }
   }
-
-}
