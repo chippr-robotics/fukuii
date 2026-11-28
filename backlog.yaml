@@ -6460,3 +6460,12 @@ items:
     refs: ["beacon N3 on #2160"]
     links: {}
     notes: Only visible on overrides with a pre-London number and a post-Cancun time.
+  - id: B-580
+    title: "gorgoroth logback files: <includeMdcKeyNames> wrapper and maxIndex 50 still warn on every start (as B-264 fixed in the shipped file)"
+    priority: P3
+    status: open
+    area: ops
+    size: S
+    opened: 2026-11-28
+    refs: ["PR #2161"]
+    links: {}
