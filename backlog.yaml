@@ -5890,18 +5890,14 @@ items:
   - id: B-533
     title: SNAPLazyHealAnchorSpec BUG-BC3 budget test has no slack after the 112 re-peg threshold (10 of 11 steps re-peg = MaxHealRepegNoRootAttempts)
     priority: P3
-    status: review
+    status: done
     area: tests
     size: S
     opened: 2026-11-25
+    closed: 2026-11-28
     refs: []
     links:
       prs: [2164]
-    claim:
-      by: cloud-719c6644
-      agent: main
-      since: 2026-11-27T23:33:11Z
-      heartbeat: 2026-11-28T00:49:16Z
     notes: wave 4C; widen the steps so the test keeps margin
   - id: B-534
     title: "B-031 rest: past-window root still dispatched; no roll at >=80% storage lets root age out; PoS no-target roll leaves probe flag set"
